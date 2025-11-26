@@ -28,8 +28,11 @@
 
 pub mod vector;
 
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
 // Re-export core types
-pub use vector::{Vector, VectorStore};
+pub use vector::{Vector, VectorStore, MetadataFilter};
 
 // Re-export seerdb-vector types
 pub use seerdb_vector::{config::SeerdbVectorConfig, CompressionTier, StorageTier, DistanceMetric};

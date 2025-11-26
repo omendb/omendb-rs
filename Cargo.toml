@@ -18,6 +18,7 @@ readme = "README.md"
 [lib]
 name = "omendb"
 path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 # Error handling
@@ -75,6 +76,7 @@ quickcheck = "1.0"
 
 [features]
 default = []
+ffi = []           # Enable C FFI bindings
 profile_search = []
 
 [profile.release]
