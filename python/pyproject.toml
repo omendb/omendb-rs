@@ -1,0 +1,58 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "omendb"
+version = "0.0.1a1"
+description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
+authors = [{ name = "OmenDB Team" }]
+license = { text = "AGPL-3.0" }
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+]
+dependencies = [
+    "numpy>=1.24.4",
+]
+
+[project.optional-dependencies]
+langchain = [
+    "langchain-core>=0.2.0",
+]
+llamaindex = [
+    "llama-index-core>=0.10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/omendb/omendb"
+Repository = "https://github.com/omendb/omendb"
+
+[tool.maturin]
+# Build options - mixed Rust/Python package
+module-name = "omendb.omendb"
+python-source = "."
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "soak: marks tests as soak tests (long-running, deselect with '-m \"not soak\"')",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-timeout>=2.3.0",
+    "chromadb>=1.0.0",
+    "langchain-core>=0.2.0",
+    "llama-index-core>=0.10.0",
+]

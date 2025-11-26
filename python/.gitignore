@@ -1,0 +1,6 @@
+data/*.hdf5
+
+# Test artifacts
+example_db.*
+*.hnsw
+*.vectors.bin
