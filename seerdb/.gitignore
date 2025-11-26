@@ -1,0 +1,13 @@
+/target
+fuzz_sstable.log
+
+# Coverage reports
+/coverage
+
+# Profiling artifacts
+flamegraph*.svg
+*.svg
+
+# Benchmark results
+/criterion
+ai/tmp/

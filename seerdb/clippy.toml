@@ -1,0 +1,5 @@
+# Deny panicking functions (unwrap only, expect allowed for now due to tracing macro conflicts)
+disallowed-methods = [
+    "std::option::Option::unwrap",
+    "std::result::Result::unwrap",
+]

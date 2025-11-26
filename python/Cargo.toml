@@ -1,0 +1,31 @@
+[package]
+name = "omendb-python"
+version = "0.1.0"
+edition = "2021"
+
+# Exclude from parent workspace
+[workspace]
+
+[lib]
+name = "omendb"
+# "cdylib" is necessary to produce a shared library for Python to import
+crate-type = ["cdylib"]
+
+[dependencies]
+# Parent crate (the Rust library)
+omendb = { path = ".." }
+
+# PyO3 for Python bindings (latest stable)
+pyo3 = { version = "0.27", features = ["extension-module"] }
+
+# For JSON serialization (metadata)
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+
+# Parallel processing
+rayon = "1.10"
+
+# Thread-safe locking
+parking_lot = "0.12"
