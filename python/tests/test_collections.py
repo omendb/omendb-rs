@@ -211,15 +211,15 @@ class TestCollections:
         for result in results:
             assert result["metadata"]["age"] >= 40
 
-    def test_in_memory_db_no_collections(self):
-        """Test that in-memory databases don't support collections."""
-        # Path not ending in 
+    def test_collection_support_all_dbs(self):
+        """Test that all databases support collections (seerdb is always persistent)."""
         with tempfile.TemporaryDirectory() as tmp:
             path = f"{tmp}/mydb"
             db = omendb.open(path, dimensions=128)
 
-            with pytest.raises(ValueError, match="persistent storage"):
-                db.collection("test")
+            # All databases now use seerdb persistent storage, so collections work
+            coll = db.collection("test")
+            assert coll is not None
 
     def test_collection_delete_and_recreate(self, db_path):
         """Test deleting and recreating a collection."""
