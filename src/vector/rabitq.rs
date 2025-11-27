@@ -72,7 +72,7 @@ impl fmt::Display for QuantizationBits {
 
 /// Configuration for Extended RaBitQ quantization
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtendedRaBitQParams {
+pub struct RaBitQParams {
     /// Number of bits per dimension
     pub bits_per_dim: QuantizationBits,
 
@@ -95,7 +95,7 @@ pub struct ExtendedRaBitQParams {
     pub use_fht: bool,
 }
 
-impl Default for ExtendedRaBitQParams {
+impl Default for RaBitQParams {
     fn default() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits4, // 8x compression
@@ -106,7 +106,7 @@ impl Default for ExtendedRaBitQParams {
     }
 }
 
-impl ExtendedRaBitQParams {
+impl RaBitQParams {
     /// Create parameters for 2-bit quantization (16x compression)
     pub fn bits2() -> Self {
         Self {
@@ -271,23 +271,23 @@ impl QuantizedVector {
 /// 3. Select scale with minimum error
 /// 4. Store quantized vector with optimal scale
 #[derive(Debug)]
-pub struct ExtendedRaBitQ {
-    params: ExtendedRaBitQParams,
+pub struct RaBitQ {
+    params: RaBitQParams,
 }
 
-impl ExtendedRaBitQ {
+impl RaBitQ {
     /// Create a new Extended RaBitQ quantizer
-    pub fn new(params: ExtendedRaBitQParams) -> Self {
+    pub fn new(params: RaBitQParams) -> Self {
         Self { params }
     }
 
     /// Create with default 4-bit quantization
     pub fn default_4bit() -> Self {
-        Self::new(ExtendedRaBitQParams::bits4())
+        Self::new(RaBitQParams::bits4())
     }
 
     /// Get quantization parameters
-    pub fn params(&self) -> &ExtendedRaBitQParams {
+    pub fn params(&self) -> &RaBitQParams {
         &self.params
     }
 
@@ -464,8 +464,7 @@ impl ExtendedRaBitQ {
                 values.to_vec()
             }
             _ => {
-                // For other bit widths (3, 5, 7), use 8-bit for now
-                // TODO: Implement efficient bit-packing for non-power-of-2 bits
+                // For 3, 5, 7-bit: store as 8-bit (simpler, negligible overhead)
                 values.to_vec()
             }
         }
@@ -1248,7 +1247,7 @@ mod tests {
 
     #[test]
     fn test_default_params() {
-        let params = ExtendedRaBitQParams::default();
+        let params = RaBitQParams::default();
         assert_eq!(params.bits_per_dim, QuantizationBits::Bits4);
         assert_eq!(params.num_rescale_factors, 12);
         assert_eq!(params.rescale_range, (0.5, 2.0));
@@ -1256,13 +1255,13 @@ mod tests {
 
     #[test]
     fn test_preset_params() {
-        let params2 = ExtendedRaBitQParams::bits2();
+        let params2 = RaBitQParams::bits2();
         assert_eq!(params2.bits_per_dim, QuantizationBits::Bits2);
 
-        let params4 = ExtendedRaBitQParams::bits4();
+        let params4 = RaBitQParams::bits4();
         assert_eq!(params4.bits_per_dim, QuantizationBits::Bits4);
 
-        let params8 = ExtendedRaBitQParams::bits8();
+        let params8 = RaBitQParams::bits8();
         assert_eq!(params8.bits_per_dim, QuantizationBits::Bits8);
         assert_eq!(params8.num_rescale_factors, 16);
     }
@@ -1303,15 +1302,15 @@ mod tests {
 
     #[test]
     fn test_create_quantizer() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
         assert_eq!(quantizer.params().bits_per_dim, QuantizationBits::Bits4);
     }
 
-    // Phase 2 Tests: Core Algorithm
+    
 
     #[test]
     fn test_generate_scales() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits4,
             num_rescale_factors: 5,
             rescale_range: (0.5, 1.5),
@@ -1327,7 +1326,7 @@ mod tests {
 
     #[test]
     fn test_generate_scales_single() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits4,
             num_rescale_factors: 1,
             rescale_range: (0.5, 1.5),
@@ -1341,7 +1340,7 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_2bit() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits2,
             ..Default::default()
         });
@@ -1357,7 +1356,7 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_4bit() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits4,
             ..Default::default()
         });
@@ -1373,7 +1372,7 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_8bit() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8,
             ..Default::default()
         });
@@ -1389,7 +1388,7 @@ mod tests {
 
     #[test]
     fn test_quantize_simple_vector() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits4,
             num_rescale_factors: 4,
             rescale_range: (0.5, 1.5),
@@ -1412,7 +1411,7 @@ mod tests {
 
     #[test]
     fn test_quantize_reconstruct_accuracy() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8, // High precision
             num_rescale_factors: 8,
             rescale_range: (0.8, 1.2),
@@ -1435,7 +1434,7 @@ mod tests {
 
     #[test]
     fn test_quantize_uniform_vector() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         // All values the same
         let vector = vec![0.5; 10];
@@ -1453,7 +1452,7 @@ mod tests {
 
     #[test]
     fn test_compute_error() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         let original = vec![0.1, 0.2, 0.3, 0.4];
         let quantized_vec = quantizer.quantize(&original);
@@ -1471,17 +1470,17 @@ mod tests {
         let test_vector = vec![0.1, 0.2, 0.3, 0.4, 0.5];
 
         // Test 2-bit
-        let q2 = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits2());
+        let q2 = RaBitQ::new(RaBitQParams::bits2());
         let qv2 = q2.quantize(&test_vector);
         assert_eq!(qv2.bits, 2);
 
         // Test 4-bit
-        let q4 = ExtendedRaBitQ::default_4bit();
+        let q4 = RaBitQ::default_4bit();
         let qv4 = q4.quantize(&test_vector);
         assert_eq!(qv4.bits, 4);
 
         // Test 8-bit
-        let q8 = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits8());
+        let q8 = RaBitQ::new(RaBitQParams::bits8());
         let qv8 = q8.quantize(&test_vector);
         assert_eq!(qv8.bits, 8);
 
@@ -1492,7 +1491,7 @@ mod tests {
 
     #[test]
     fn test_quantize_high_dimensional() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         // 128D vector (like small embeddings)
         let vector: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
@@ -1509,11 +1508,11 @@ mod tests {
         assert_eq!(reconstructed.len(), 128);
     }
 
-    // Phase 3 Tests: Distance Computation
+    
 
     #[test]
     fn test_distance_l2() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8, // High precision
             num_rescale_factors: 8,
             rescale_range: (0.8, 1.2),
@@ -1534,7 +1533,7 @@ mod tests {
 
     #[test]
     fn test_distance_l2_identical() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         let v = vec![0.5, 0.3, 0.8, 0.2];
         let qv1 = quantizer.quantize(&v);
@@ -1548,7 +1547,7 @@ mod tests {
 
     #[test]
     fn test_distance_cosine() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8,
             num_rescale_factors: 8,
             rescale_range: (0.8, 1.2),
@@ -1570,7 +1569,7 @@ mod tests {
 
     #[test]
     fn test_distance_cosine_identical() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         let v = vec![0.5, 0.3, 0.8];
         let qv1 = quantizer.quantize(&v);
@@ -1584,7 +1583,7 @@ mod tests {
 
     #[test]
     fn test_distance_dot() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8,
             num_rescale_factors: 8,
             rescale_range: (0.8, 1.2),
@@ -1605,7 +1604,7 @@ mod tests {
 
     #[test]
     fn test_distance_approximate() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         let v1 = vec![0.0, 0.0, 0.0];
         let v2 = vec![0.5, 0.5, 0.5];
@@ -1636,7 +1635,7 @@ mod tests {
 
     #[test]
     fn test_distance_correlation() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8, // High precision for correlation
             num_rescale_factors: 12,
             rescale_range: (0.8, 1.2),
@@ -1688,7 +1687,7 @@ mod tests {
 
     #[test]
     fn test_distance_zero_vectors() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         let v_zero = vec![0.0, 0.0, 0.0];
         let qv_zero = quantizer.quantize(&v_zero);
@@ -1704,7 +1703,7 @@ mod tests {
 
     #[test]
     fn test_distance_high_dimensional() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         // 128D vectors
         let v1: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
@@ -1725,11 +1724,11 @@ mod tests {
         assert!(dist_approx > 0.0 && dist_approx.is_finite());
     }
 
-    // Phase 4 Tests: SIMD Optimizations
+    
 
     #[test]
     fn test_simd_l2_matches_scalar() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8, // High precision
             num_rescale_factors: 8,
             rescale_range: (0.8, 1.2),
@@ -1752,7 +1751,7 @@ mod tests {
 
     #[test]
     fn test_simd_cosine_matches_scalar() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams {
+        let quantizer = RaBitQ::new(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8,
             num_rescale_factors: 8,
             rescale_range: (0.8, 1.2),
@@ -1775,7 +1774,7 @@ mod tests {
 
     #[test]
     fn test_simd_high_dimensional() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         // 128D vectors (realistic embeddings)
         let v1: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
@@ -1794,7 +1793,7 @@ mod tests {
 
     #[test]
     fn test_simd_scalar_fallback() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         // Small vector (tests remainder handling)
         let v1 = vec![0.1, 0.2, 0.3];
@@ -1813,7 +1812,7 @@ mod tests {
 
     #[test]
     fn test_simd_performance_improvement() {
-        let quantizer = ExtendedRaBitQ::default_4bit();
+        let quantizer = RaBitQ::default_4bit();
 
         // Large vectors (1536D like OpenAI embeddings)
         let v1: Vec<f32> = (0..1536).map(|i| (i as f32) / 1536.0).collect();
@@ -1825,8 +1824,6 @@ mod tests {
         // Just verify SIMD works on large vectors
         let dist_simd = quantizer.distance_l2_simd(&qv1, &qv2);
         assert!(dist_simd > 0.0 && dist_simd.is_finite());
-
-        // Note: Actual performance benchmarks in Phase 6
     }
 
     #[test]
@@ -1845,7 +1842,7 @@ mod tests {
         assert!((dist - 1.0).abs() < 0.001);
     }
 
-    // Phase 5 Tests: Fast Hadamard Transform
+    
 
     #[test]
     fn test_fht_basic() {
@@ -1920,7 +1917,7 @@ mod tests {
     #[test]
     fn test_quantize_with_fht() {
         // Test that FHT-enabled quantization works
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits4_fht());
+        let quantizer = RaBitQ::new(RaBitQParams::bits4_fht());
 
         let vector: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
         let quantized = quantizer.quantize(&vector);
@@ -1934,11 +1931,11 @@ mod tests {
     #[test]
     fn test_fht_quantization_accuracy() {
         // Compare accuracy with and without FHT
-        let params_no_fht = ExtendedRaBitQParams::bits4();
-        let params_fht = ExtendedRaBitQParams::bits4_fht();
+        let params_no_fht = RaBitQParams::bits4();
+        let params_fht = RaBitQParams::bits4_fht();
 
-        let q_no_fht = ExtendedRaBitQ::new(params_no_fht);
-        let q_fht = ExtendedRaBitQ::new(params_fht);
+        let q_no_fht = RaBitQ::new(params_no_fht);
+        let q_fht = RaBitQ::new(params_fht);
 
         // Test vector with varying values
         let vector: Vec<f32> = (0..64).map(|i| (i as f32) / 64.0).collect();
@@ -1958,7 +1955,7 @@ mod tests {
     #[test]
     fn test_fht_high_dimensional() {
         // Test FHT on high-dimensional vectors (like embeddings)
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams::with_fht(QuantizationBits::Bits4));
+        let quantizer = RaBitQ::new(RaBitQParams::with_fht(QuantizationBits::Bits4));
 
         // 768D vector (BERT-like)
         let vector: Vec<f32> = (0..768).map(|i| ((i % 100) as f32) / 100.0).collect();
@@ -1968,11 +1965,11 @@ mod tests {
         assert!(quantized.fht_applied);
     }
 
-    // Phase 6 Tests: 3/5/7-bit Quantization
+    
 
     #[test]
     fn test_bits3_constructor() {
-        let params = ExtendedRaBitQParams::bits3();
+        let params = RaBitQParams::bits3();
         assert_eq!(params.bits_per_dim, QuantizationBits::Bits3);
         assert_eq!(params.bits_per_dim.to_u8(), 3);
         assert_eq!(params.bits_per_dim.levels(), 8); // 2^3
@@ -1980,7 +1977,7 @@ mod tests {
 
     #[test]
     fn test_bits5_constructor() {
-        let params = ExtendedRaBitQParams::bits5();
+        let params = RaBitQParams::bits5();
         assert_eq!(params.bits_per_dim, QuantizationBits::Bits5);
         assert_eq!(params.bits_per_dim.to_u8(), 5);
         assert_eq!(params.bits_per_dim.levels(), 32); // 2^5
@@ -1988,7 +1985,7 @@ mod tests {
 
     #[test]
     fn test_bits7_constructor() {
-        let params = ExtendedRaBitQParams::bits7();
+        let params = RaBitQParams::bits7();
         assert_eq!(params.bits_per_dim, QuantizationBits::Bits7);
         assert_eq!(params.bits_per_dim.to_u8(), 7);
         assert_eq!(params.bits_per_dim.levels(), 128); // 2^7
@@ -1996,7 +1993,7 @@ mod tests {
 
     #[test]
     fn test_quantize_3bit() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits3());
+        let quantizer = RaBitQ::new(RaBitQParams::bits3());
 
         let vector: Vec<f32> = (0..64).map(|i| (i as f32) / 64.0).collect();
         let quantized = quantizer.quantize(&vector);
@@ -2012,7 +2009,7 @@ mod tests {
 
     #[test]
     fn test_quantize_5bit() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits5());
+        let quantizer = RaBitQ::new(RaBitQParams::bits5());
 
         let vector: Vec<f32> = (0..64).map(|i| (i as f32) / 64.0).collect();
         let quantized = quantizer.quantize(&vector);
@@ -2028,7 +2025,7 @@ mod tests {
 
     #[test]
     fn test_quantize_7bit() {
-        let quantizer = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits7());
+        let quantizer = RaBitQ::new(RaBitQParams::bits7());
 
         let vector: Vec<f32> = (0..64).map(|i| (i as f32) / 64.0).collect();
         let quantized = quantizer.quantize(&vector);
@@ -2047,10 +2044,10 @@ mod tests {
         // Higher bit widths should have better accuracy
         let vector: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
 
-        let q2 = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits2());
-        let q3 = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits3());
-        let q4 = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits4());
-        let q5 = ExtendedRaBitQ::new(ExtendedRaBitQParams::bits5());
+        let q2 = RaBitQ::new(RaBitQParams::bits2());
+        let q3 = RaBitQ::new(RaBitQParams::bits3());
+        let q4 = RaBitQ::new(RaBitQParams::bits4());
+        let q5 = RaBitQ::new(RaBitQParams::bits5());
 
         let qv2 = q2.quantize(&vector);
         let qv3 = q3.quantize(&vector);

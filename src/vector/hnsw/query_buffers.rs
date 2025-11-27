@@ -1,7 +1,7 @@
 // Thread-local query buffers for allocation-free search
 //
 // Reuses temporary buffers across queries to reduce allocations.
-// From Week 8 profiling: 7.3M allocations identified (76% in search operations).
+// From profiling: 7.3M allocations identified (76% in search operations).
 //
 // Thread-local storage ensures:
 // - No contention between threads

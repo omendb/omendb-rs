@@ -326,8 +326,8 @@ pub extern "C" fn omendb_search(
                 return -1;
             }
         };
-        // TODO: Parse filter JSON to MetadataFilter
-        // For now, ignore filter
+        // Filter parsing not yet implemented in FFI
+        // Filter is ignored
         let _ = filter_str;
         None
     } else {
@@ -335,7 +335,7 @@ pub extern "C" fn omendb_search(
     };
 
     let search_results = if let Some(_filter) = filter {
-        // TODO: Implement filtered search via FFI
+        // Filtered search not yet exposed via FFI (filter ignored)
         match db.store.knn_search(&query, k) {
             Ok(r) => r,
             Err(e) => {

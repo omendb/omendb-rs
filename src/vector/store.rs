@@ -8,7 +8,7 @@
 use super::hnsw_index::HNSWIndex;
 use super::storage::SeerDBStorage;
 use super::types::Vector;
-use super::extended_rabitq::{ExtendedRaBitQ, ExtendedRaBitQParams, QuantizedVector};
+use super::rabitq::{RaBitQ, RaBitQParams, QuantizedVector};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -91,7 +91,7 @@ pub struct VectorStore {
     dimensions: usize,
 
     /// Optional quantizer for memory-efficient storage (Extended RaBitQ)
-    quantizer: Option<ExtendedRaBitQ>,
+    quantizer: Option<RaBitQ>,
 
     /// Quantized vectors (parallel to vectors, None if quantizer not enabled)
     quantized_vectors: Vec<Option<QuantizedVector>>,
@@ -194,8 +194,8 @@ impl VectorStore {
     }
 
     /// Create new vector store with Extended RaBitQ quantization
-    pub fn new_with_quantization(dimensions: usize, params: ExtendedRaBitQParams) -> Self {
-        let quantizer = ExtendedRaBitQ::new(params);
+    pub fn new_with_quantization(dimensions: usize, params: RaBitQParams) -> Self {
+        let quantizer = RaBitQ::new(params);
 
         Self {
             vectors: Vec::new(),
@@ -1326,8 +1326,8 @@ impl VectorStore {
             let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists() {
                 // Load quantizer parameters
                 let params_json = fs::read_to_string(&params_path)?;
-                let params: ExtendedRaBitQParams = serde_json::from_str(&params_json)?;
-                let quantizer = ExtendedRaBitQ::new(params);
+                let params: RaBitQParams = serde_json::from_str(&params_json)?;
+                let quantizer = RaBitQ::new(params);
 
                 // Load quantized vectors
                 let quantized_data = fs::read(&quantized_path)?;
@@ -1410,8 +1410,8 @@ impl VectorStore {
             let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists() {
                 // Load quantizer parameters
                 let params_json = fs::read_to_string(&params_path)?;
-                let params: ExtendedRaBitQParams = serde_json::from_str(&params_json)?;
-                let quantizer = ExtendedRaBitQ::new(params);
+                let params: RaBitQParams = serde_json::from_str(&params_json)?;
+                let quantizer = RaBitQ::new(params);
 
                 // Load quantized vectors
                 let quantized_data = fs::read(&quantized_path)?;
@@ -1668,10 +1668,10 @@ mod tests {
 
     #[test]
     fn test_quantization_insert() {
-        use super::super::extended_rabitq::{ExtendedRaBitQParams};
+        use super::super::rabitq::{RaBitQParams};
 
         // Create store with 4-bit quantization
-        let params = ExtendedRaBitQParams::bits4();
+        let params = RaBitQParams::bits4();
         let mut store = VectorStore::new_with_quantization(128, params);
 
         // Insert vectors
@@ -1687,10 +1687,10 @@ mod tests {
 
     #[test]
     fn test_quantization_search_accuracy() {
-        use super::super::extended_rabitq::{ExtendedRaBitQParams};
+        use super::super::rabitq::{RaBitQParams};
 
         // Create store with 4-bit quantization
-        let params = ExtendedRaBitQParams::bits4();
+        let params = RaBitQParams::bits4();
         let mut store = VectorStore::new_with_quantization(128, params);
 
         // Insert vectors
@@ -1714,7 +1714,7 @@ mod tests {
     #[test]
     fn test_quantization_persistence() {
         use std::fs;
-        use super::super::extended_rabitq::{ExtendedRaBitQParams};
+        use super::super::rabitq::{RaBitQParams};
 
         let test_dir = "/tmp/omendb_test_quantization";
         let test_path = format!("{}/test_store", test_dir);
@@ -1723,7 +1723,7 @@ mod tests {
         let _ = fs::remove_dir_all(test_dir);
 
         // Create store with 4-bit quantization
-        let params = ExtendedRaBitQParams::bits4();
+        let params = RaBitQParams::bits4();
         let mut store = VectorStore::new_with_quantization(128, params);
 
         // Insert vectors
@@ -1756,10 +1756,10 @@ mod tests {
 
     #[test]
     fn test_quantization_batch_insert() {
-        use super::super::extended_rabitq::{ExtendedRaBitQParams};
+        use super::super::rabitq::{RaBitQParams};
 
         // Create store with 4-bit quantization
-        let params = ExtendedRaBitQParams::bits4();
+        let params = RaBitQParams::bits4();
         let mut store = VectorStore::new_with_quantization(128, params);
 
         // Batch insert vectors
@@ -1773,7 +1773,7 @@ mod tests {
         assert!(store.quantized_vectors.iter().all(|qv| qv.is_some()));
     }
 
-    // Week 21: Adaptive parameter selection tests
+    //  Adaptive parameter selection tests
 
     #[test]
     fn test_adaptive_params_small_scale() {
@@ -2285,5 +2285,41 @@ mod tests {
                 assert!(results[i].1 >= results[i-1].1, "Results should be sorted by distance");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+
+    #[test]
+    fn test_incremental_set_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+        
+        // Single item inserts
+        store.set_batch(vec![
+            ("vec1".to_string(), Vector::new(vec![1.0, 0.0, 0.0, 0.0]), serde_json::json!({}))
+        ]).unwrap();
+        
+        store.set_batch(vec![
+            ("vec2".to_string(), Vector::new(vec![0.0, 1.0, 0.0, 0.0]), serde_json::json!({}))
+        ]).unwrap();
+        
+        // Batch insert
+        store.set_batch(vec![
+            ("vec3".to_string(), Vector::new(vec![0.0, 0.0, 1.0, 0.0]), serde_json::json!({})),
+            ("vec4".to_string(), Vector::new(vec![0.0, 0.0, 0.0, 1.0]), serde_json::json!({})),
+        ]).unwrap();
+        
+        // Another batch
+        store.set_batch(vec![
+            ("vec5".to_string(), Vector::new(vec![0.5, 0.5, 0.0, 0.0]), serde_json::json!({})),
+            ("vec6".to_string(), Vector::new(vec![0.0, 0.5, 0.5, 0.0]), serde_json::json!({})),
+        ]).unwrap();
+        
+        let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 6, "Incremental inserts must all be searchable");
     }
 }

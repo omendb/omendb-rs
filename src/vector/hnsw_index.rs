@@ -9,7 +9,7 @@
 //! - Multiple distance functions (L2, cosine, dot product)
 //! - Optional binary quantization (32x memory reduction)
 
-use super::custom_hnsw::{
+use super::hnsw::{
     DistanceFunction,
     HNSWIndex as CoreHNSW,
     HNSWParams as CoreParams,
@@ -59,11 +59,6 @@ impl HNSWIndex {
     /// - 10K-100K: M=24, ef_construction=200 (balanced)
     /// - 100K+: M=32, ef_construction=400 (maximum recall, 98%+)
     ///
-    /// Based on Week 21 investigation and competitive analysis:
-    /// - ChromaDB uses M=16, ef_construction=100 (default)
-    /// - hnswlib/FAISS use M=16, ef_construction=200 (production)
-    /// - Our M=32 achieves 98% recall @ 100K (vs 68.8% with M=16)
-    ///
     /// # Example
     /// ```ignore
     /// use omen::vector::HNSWIndex;
@@ -84,8 +79,7 @@ impl HNSWIndex {
             // Better recall than small dataset params, faster than large
             (24, 200)
         } else {
-            // Large datasets (100K+): Maximum recall
-            // Week 21 investigation: M=32 achieves 98% recall vs 68.8% with M=16
+            // Large datasets (100K+): Maximum recall (M=32 achieves 98%+ recall)
             (32, 400)
         };
 
@@ -374,7 +368,7 @@ impl HNSWIndex {
     /// # Performance
     /// ~1.3-1.7x faster than inserting vectors one by one
     pub fn merge_from(&mut self, other: &HNSWIndex) -> Result<usize> {
-        use super::custom_hnsw::{GraphMerger, MergeConfig};
+        use super::hnsw::{GraphMerger, MergeConfig};
 
         if other.dimensions != self.dimensions {
             anyhow::bail!(
