@@ -780,8 +780,8 @@ fn open(path: String, dimensions: usize, config: Option<&Bound<'_, PyDict>>) -> 
     // Legacy paths are still supported for backward compatibility
     if !path.ends_with(".vectors.bin") && !path.ends_with(".hnsw") {
         // Use seerdb persistent storage (default for all new databases)
-        let mut store = if dimensions == 0 || dimensions == 128 {
-            // Try to load existing or create new
+        let mut store = if dimensions == 0 {
+            // Try to load existing (dimensions come from stored data)
             VectorStore::open(&path).map_err(convert_error)?
         } else {
             // Create with specified dimensions
