@@ -13,13 +13,13 @@
 //! # Architecture
 //!
 //! ```text
-//! OmenDB Cloud API
+//! OmenDB Vector Store API
 //!        ↓
-//! LSM-VEC Algorithm (omendb/lsm_vec)
+//! HNSW Index + ACORN-1 Filtering
 //!        ↓
 //! seerdb-vector Storage Layer (THIS CRATE)
 //!        ↓
-//! seerdb Core LSM Engine (public, Apache 2.0)
+//! seerdb Core LSM Engine
 //! ```
 //!
 //! # Compression Tiers
