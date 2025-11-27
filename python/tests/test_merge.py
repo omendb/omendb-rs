@@ -55,20 +55,24 @@ class TestMerge:
         assert result is not None
         assert result["metadata"]["source"] == "db2"
 
-    def test_merge_dimension_mismatch_empty_source(self, db_path1, db_path2):
-        """Test that merging from empty database with uninitialized dimensions fails gracefully."""
+    def test_merge_dimension_mismatch(self, db_path1, db_path2):
+        """Test that merging databases with different dimensions fails."""
         db1 = omendb.open(db_path1, dimensions=128)
-        db2 = omendb.open(db_path2, dimensions=128)
+        db2 = omendb.open(db_path2, dimensions=64)  # Different dimensions
 
-        # Populate only db1
+        # Populate both dbs
         db1.set([{
             "id": "vec1",
             "embedding": [0.1] * 128,
             "metadata": {}
         }])
+        db2.set([{
+            "id": "vec2",
+            "embedding": [0.1] * 64,
+            "metadata": {}
+        }])
 
-        # db2 is empty, so it has dimensions=0
-        # This should raise an error about dimension mismatch
+        # Different dimensions should raise an error
         with pytest.raises(RuntimeError, match="Dimension mismatch"):
             db1.merge_from(db2)
 
