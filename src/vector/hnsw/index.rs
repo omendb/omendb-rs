@@ -501,7 +501,6 @@ impl HNSWIndex {
 
         // Phase 1: Store all vectors and create nodes (fast, sequential)
         let storage_start = std::time::Instant::now();
-        let base_id = self.nodes.len() as u32;
         let mut node_ids = Vec::with_capacity(batch_size);
         let mut new_nodes = Vec::with_capacity(batch_size);
 
