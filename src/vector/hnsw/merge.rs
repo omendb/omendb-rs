@@ -342,7 +342,7 @@ impl Default for GraphMerger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::custom_hnsw::{HNSWParams, DistanceFunction};
+    use crate::vector::hnsw::{HNSWParams, DistanceFunction};
 
     fn create_test_index(num_vectors: usize, dim: usize) -> HNSWIndex {
         let params = HNSWParams {

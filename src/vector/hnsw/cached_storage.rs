@@ -210,7 +210,7 @@ impl NodeStorage for CachedStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::custom_hnsw::node_storage::MemoryStorage;
+    use crate::vector::hnsw::node_storage::MemoryStorage;
 
     #[test]
     fn test_cached_storage_basic() {

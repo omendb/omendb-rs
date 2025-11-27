@@ -352,17 +352,8 @@ impl DiskStorage {
                 .map_err(|e| HNSWError::Storage(format!("Failed to mmap {}: {}", path.display(), e)))?
         };
 
-        // Apply madvise for random access pattern
-        // TODO: Re-enable when adding nix dependency for production optimization
-        // #[cfg(unix)]
-        // {
-        //     use nix::sys::mman::{madvise, MmapAdvise};
-        //     use std::ptr::NonNull;
-        //     unsafe {
-        //         let ptr = NonNull::new_unchecked(mmap.as_ptr() as *mut _);
-        //         madvise(ptr, mmap.len(), MmapAdvise::MADV_RANDOM).ok(); // Ignore errors (not critical)
-        //     }
-        // }
+        // madvise(MADV_RANDOM) could improve random access patterns but requires nix crate.
+        // The OS handles this reasonably well by default for mmap workloads.
 
         Ok(mmap)
     }

@@ -8,9 +8,9 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::vector::custom_hnsw::cached_storage::CachedStorage;
-    use crate::vector::custom_hnsw::disk_storage::DiskStorage;
-    use crate::vector::custom_hnsw::node_storage::{MemoryStorage, NodeStorage};
+    use crate::vector::hnsw::cached_storage::CachedStorage;
+    use crate::vector::hnsw::disk_storage::DiskStorage;
+    use crate::vector::hnsw::node_storage::{MemoryStorage, NodeStorage};
     use std::num::NonZeroUsize;
     use tempfile::TempDir;
 
@@ -91,7 +91,7 @@ mod tests {
         assert!((hit_rate - 0.5).abs() < 0.01);
     }
 
-    /// Test storage with 10K nodes (Week 14 Day 5 requirement)
+    /// Test storage with 10K nodes
     #[test]
     fn test_storage_10k_nodes() {
         // Build a synthetic graph with 10K nodes

@@ -57,7 +57,7 @@ lazy_static = "1.4"
 once_cell = "1.19"
 
 # Storage
-seerdb = "0.0.1-beta"
+seerdb = "0.0.1"
 seerdb-vector = { path = "seerdb-vector" }
 
 # Async (for seerdb)

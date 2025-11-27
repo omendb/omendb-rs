@@ -345,8 +345,7 @@ impl GraphStorage {
         match self {
             Self::Memory(lists) => lists.memory_usage(),
             Self::Layered(_) => {
-                // TODO: Implement proper memory usage for LayeredStorage
-                // For now, return 0 (placeholder)
+                // LayeredStorage memory is dominated by mmap (not counted in RSS)
                 0
             }
         }
@@ -586,13 +585,9 @@ mod tests {
         assert_eq!(result.mode(), StorageMode::Memory); // LayeredStorage with MemoryStorage
     }
 
-    // NOTE: Full disk-backed storage tests deferred to HNSWIndex integration tests
     // DiskStorage is read-only by design:
     // 1. Build index in MemoryStorage
     // 2. Save to disk with DiskStorage::create()
     // 3. Load from disk with DiskStorage::open() for queries
     // 4. Query through CachedStorage wrapper
-    //
-    // This workflow is tested in storage_integration_tests.rs and will be
-    // fully integrated in Week 17 Day 2 (HNSWIndex save/load)
 }

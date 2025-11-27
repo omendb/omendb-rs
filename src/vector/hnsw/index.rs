@@ -505,7 +505,10 @@ impl HNSWIndex {
         let mut node_ids = Vec::with_capacity(batch_size);
         let mut new_nodes = Vec::with_capacity(batch_size);
 
-        for (_i, vector) in vectors.into_iter().enumerate() {
+        // Track highest level node in this batch for entry point update AFTER graph construction
+        let mut highest_level_node: Option<(u32, u8)> = None;
+
+        for vector in vectors {
             // Store vector
             let node_id = self.vectors.insert(vector).map_err(|e| {
                 error!(error = ?e, "Failed to store vector");
@@ -520,16 +523,19 @@ impl HNSWIndex {
             new_nodes.push(node);
             node_ids.push(node_id);
 
-            // Update entry point if this is the first node or has higher level
+            // Track highest level node (entry point update deferred until after graph construction)
             if self.entry_point.is_none() {
+                // First node ever - set entry point immediately
                 self.entry_point = Some(node_id);
-            } else if let Some(entry_id) = self.entry_point {
-                let entry_level = self.nodes.get(entry_id as usize)
-                    .or_else(|| new_nodes.get((entry_id - base_id) as usize))
-                    .map(|n| n.level)
-                    .unwrap_or(0);
-                if level > entry_level {
-                    self.entry_point = Some(node_id);
+                highest_level_node = Some((node_id, level));
+            } else {
+                // Track highest level for later update
+                match highest_level_node {
+                    None => highest_level_node = Some((node_id, level)),
+                    Some((_, prev_level)) if level > prev_level => {
+                        highest_level_node = Some((node_id, level));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -639,6 +645,17 @@ impl HNSWIndex {
         });
 
         result?;
+
+        // Update entry point AFTER graph construction (critical for incremental inserts)
+        // Only update if a new node has a higher level than current entry point
+        if let Some((new_entry, new_level)) = highest_level_node {
+            if let Some(current_entry) = self.entry_point {
+                let current_level = self.nodes[current_entry as usize].level;
+                if new_level > current_level {
+                    self.entry_point = Some(new_entry);
+                }
+            }
+        }
 
         let total_time = graph_start.elapsed().as_secs_f64();
         let final_rate = batch_size as f64 / total_time;
@@ -1371,7 +1388,7 @@ impl HNSWIndex {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use omendb::vector::custom_hnsw::*;
+    /// # use omendb::vector::hnsw::*;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let mut index = HNSWIndex::new(128, HNSWParams::default(), DistanceFunction::L2, false)?;
     /// // After building index...
@@ -2440,7 +2457,7 @@ mod tests {
     }
 
     // ========================================
-    // Hybrid Storage Mode Tests (Week 16)
+    // Hybrid Storage Mode Tests ()
     // ========================================
 
     #[test]

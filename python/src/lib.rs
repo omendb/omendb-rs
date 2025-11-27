@@ -87,70 +87,74 @@ impl VectorDatabase {
     ///
     /// Performance:
     ///     - Throughput: 20,000-28,000 vec/s @ 10K vectors
-    ///     - Batch operations are much more efficient than individual inserts
-    #[pyo3(name = "set")]
-    fn set_vectors(&self, py: Python<'_>, items: &Bound<'_, PyList>) -> PyResult<Vec<usize>> {
-        // Parse Python items to Rust batch (while holding GIL)
-        let mut batch = Vec::new();
-
-        for (idx, item) in items.iter().enumerate() {
-            let type_name = item.get_type().name().map(|n| n.to_string()).unwrap_or_else(|_| "unknown".to_string());
-            let dict = item.downcast::<PyDict>()
-                .map_err(|_| PyValueError::new_err(format!(
-                    "Item at index {} must be a dict, got {}",
-                    idx, type_name
-                )))?;
-
-            // Extract id with helpful error
-            let id: String = dict.get_item("id")?
-                .ok_or_else(|| PyValueError::new_err(format!(
-                    "Item at index {} missing required 'id' field. Expected: {{'id': str, 'embedding': list[float], 'metadata': dict (optional)}}",
-                    idx
-                )))?
-                .extract()?;
-
-            // Extract embedding with helpful error
-            let embedding: Vec<f32> = dict.get_item("embedding")?
-                .ok_or_else(|| PyValueError::new_err(format!(
-                    "Item '{}' (index {}) missing required 'embedding' field. Expected: {{'id': str, 'embedding': list[float], 'metadata': dict (optional)}}",
-                    id, idx
-                )))?
-                .extract()?;
-
-            // Extract metadata (optional, default to empty object)
-            let mut metadata_json = if let Some(metadata_dict) = dict.get_item("metadata")? {
-                pyobject_to_json(&metadata_dict)?
-            } else {
-                serde_json::json!({})
-            };
-
-            // Handle document field (ChromaDB compatibility)
-            // If "document" is provided, store it in metadata["document"]
-            if let Some(document) = dict.get_item("document")? {
-                let doc_type = document.get_type().name().map(|n| n.to_string()).unwrap_or_else(|_| "unknown".to_string());
-                let doc_str: String = document.extract()
-                    .map_err(|_| PyValueError::new_err(format!(
-                        "Item '{}' (index {}): 'document' must be a string, got {}",
-                        id, idx, doc_type
-                    )))?;
-                if let Some(obj) = metadata_json.as_object_mut() {
-                    obj.insert("document".to_string(), serde_json::json!(doc_str));
-                }
+    ///     - Batch operations are more efficient than individual inserts
+    ///
+    /// Flexible input formats:
+    ///     # Single item
+    ///     db.set("id", [0.1, 0.2, 0.3])
+    ///     db.set("id", [0.1, 0.2, 0.3], {"key": "value"})
+    ///
+    ///     # Batch (list of dicts)
+    ///     db.set([{"id": "a", "embedding": [...], "metadata": {...}}])
+    ///
+    ///     # ChromaDB-style kwargs
+    ///     db.set(ids=["a", "b"], embeddings=[[...], [...]], metadatas=[{...}, {...}])
+    #[pyo3(name = "set", signature = (id_or_items=None, embedding=None, metadata=None, *, ids=None, embeddings=None, metadatas=None))]
+    fn set_vectors(
+        &self,
+        _py: Python<'_>,
+        id_or_items: Option<&Bound<'_, PyAny>>,
+        embedding: Option<Vec<f32>>,
+        metadata: Option<&Bound<'_, PyDict>>,
+        ids: Option<Vec<String>>,
+        embeddings: Option<Vec<Vec<f32>>>,
+        metadatas: Option<&Bound<'_, PyList>>,
+    ) -> PyResult<Vec<usize>> {
+        let batch = if let (Some(ids), Some(embeddings)) = (&ids, &embeddings) {
+            // ChromaDB-style: ids=[], embeddings=[], metadatas=[]
+            if ids.len() != embeddings.len() {
+                return Err(PyValueError::new_err(format!(
+                    "ids and embeddings must have same length: {} vs {}",
+                    ids.len(), embeddings.len()
+                )));
             }
-
-            batch.push((id, Vector::new(embedding), metadata_json));
-        }
+            ids.iter().enumerate().map(|(i, id)| {
+                let meta = metadatas
+                    .and_then(|m| m.get_item(i).ok())
+                    .map(|m| pyobject_to_json(&m))
+                    .transpose()?
+                    .unwrap_or_else(|| serde_json::json!({}));
+                Ok((id.clone(), Vector::new(embeddings[i].clone()), meta))
+            }).collect::<PyResult<Vec<_>>>()?
+        } else if let Some(id_or_items) = id_or_items {
+            if let Ok(id_str) = id_or_items.extract::<String>() {
+                // Single item: set("id", [...], {...})
+                let emb = embedding.ok_or_else(|| PyValueError::new_err(
+                    "embedding required when id is a string"
+                ))?;
+                let meta = metadata
+                    .map(|m| pyobject_to_json(m.as_any()))
+                    .transpose()?
+                    .unwrap_or_else(|| serde_json::json!({}));
+                vec![(id_str, Vector::new(emb), meta)]
+            } else if let Ok(items) = id_or_items.downcast::<PyList>() {
+                // Batch: set([{...}, {...}])
+                parse_batch_items(items)?
+            } else {
+                return Err(PyValueError::new_err(
+                    "First argument must be a string (id) or list of dicts"
+                ));
+            }
+        } else {
+            return Err(PyValueError::new_err(
+                "set() requires either (id, embedding) or a list of items or (ids=, embeddings=)"
+            ));
+        };
 
         // Acquire write lock and perform set
         let mut inner = self.inner.write();
-
-        // Perform set (RwLock serializes concurrent access)
-        let result = inner.store.set_batch(batch)
-            .map_err(convert_error)?;
-
-        // Invalidate cache since id_to_index changed
+        let result = inner.store.set_batch(batch).map_err(convert_error)?;
         inner.cache_valid = false;
-
         Ok(result)
     }
 
@@ -858,7 +862,7 @@ fn open(path: String, dimensions: usize, config: Option<&Bound<'_, PyDict>>) -> 
 
 /// Helper: Create VectorStore with configuration
 fn create_store_with_config(dimensions: usize, config: &Bound<'_, PyDict>) -> PyResult<VectorStore> {
-    use ::omendb::vector::extended_rabitq::ExtendedRaBitQParams;
+    use ::omendb::vector::rabitq::RaBitQParams;
 
     // Parse HNSW configuration (if provided)
     if let Some(hnsw_dict) = config.get_item("hnsw")? {
@@ -887,9 +891,9 @@ fn create_store_with_config(dimensions: usize, config: &Bound<'_, PyDict>) -> Py
             .extract()?;
 
         let params = match bits {
-            2 => ExtendedRaBitQParams::bits2(),
-            4 => ExtendedRaBitQParams::bits4(),
-            8 => ExtendedRaBitQParams::bits8(),
+            2 => RaBitQParams::bits2(),
+            4 => RaBitQParams::bits4(),
+            8 => RaBitQParams::bits8(),
             _ => return Err(PyValueError::new_err("quantization.bits must be 2, 4, or 8")),
         };
 
@@ -1007,6 +1011,54 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
     } else {
         Ok(MetadataFilter::And(filters))
     }
+}
+
+/// Helper: Parse batch items from a list of dicts
+fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector, JsonValue)>> {
+    let mut batch = Vec::new();
+
+    for (idx, item) in items.iter().enumerate() {
+        let dict = item.downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err(format!(
+                "Item at index {} must be a dict", idx
+            )))?;
+
+        let id: String = dict.get_item("id")?
+            .ok_or_else(|| PyValueError::new_err(format!(
+                "Item at index {} missing 'id' field", idx
+            )))?
+            .extract()?;
+
+        // Support "embedding", "vector" (Qdrant/Milvus), or "values" (Pinecone)
+        let embedding: Vec<f32> = dict.get_item("embedding")?
+            .or(dict.get_item("vector")?)
+            .or(dict.get_item("values")?)
+            .ok_or_else(|| PyValueError::new_err(format!(
+                "Item '{}' missing 'embedding' (or 'vector'/'values') field", id
+            )))?
+            .extract()?;
+
+        let mut metadata_json = if let Some(metadata_dict) = dict.get_item("metadata")? {
+            pyobject_to_json(&metadata_dict)?
+        } else {
+            serde_json::json!({})
+        };
+
+        // Handle document field (ChromaDB compatibility)
+        if let Some(document) = dict.get_item("document")? {
+            let doc_str: String = document.extract()
+                .map_err(|_| PyValueError::new_err(format!(
+                    "Item '{}': 'document' must be a string", id
+                )))?;
+            if let Some(obj) = metadata_json.as_object_mut() {
+                obj.insert("document".to_string(), serde_json::json!(doc_str));
+            }
+        }
+
+        batch.push((id, Vector::new(embedding), metadata_json));
+    }
+
+    Ok(batch)
 }
 
 /// Helper: Convert Python object to serde_json::Value
