@@ -17,7 +17,7 @@ def benchmark_filtered_search(num_vectors=10_000, dimensions=128, num_queries=10
     """Benchmark ACORN-1 filtered search at different selectivity levels"""
 
     print(f"\n{'='*70}")
-    print(f"ACORN-1 Filtered Search Benchmark")
+    print("ACORN-1 Filtered Search Benchmark")
     print(f"{'='*70}")
     print(f"Dataset: {num_vectors:,} vectors, {dimensions}D")
     print(f"Queries: {num_queries} searches")
@@ -75,7 +75,7 @@ def benchmark_filtered_search(num_vectors=10_000, dimensions=128, num_queries=10
         # Benchmark
         t0 = time.time()
         for query in query_vectors:
-            results = db.search(query=query, k=10, filter=filter_dict)
+            _ = db.search(query=query, k=10, filter=filter_dict)
         elapsed = time.time() - t0
 
         qps = num_queries / elapsed

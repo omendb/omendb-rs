@@ -47,7 +47,7 @@ def query_workload(db, n_queries, k, dimensions, with_filter=False):
     # Benchmark
     start = time.time()
     for query in queries:
-        results = db.search(query, k=k, filter=filter_dict)
+        _ = db.search(query, k=k, filter=filter_dict)
     elapsed = time.time() - start
 
     qps = n_queries / elapsed
@@ -83,7 +83,7 @@ def profile_query_workload(db, n_queries, k, dimensions):
     profiler.enable()
 
     for query in queries:
-        results = db.search(query, k=k)
+        _ = db.search(query, k=k)
 
     profiler.disable()
 
@@ -161,7 +161,7 @@ def main():
         print("\n" + "="*60)
         print("PERFORMANCE ANALYSIS")
         print("="*60)
-        print(f"\nOur performance:")
+        print("\nOur performance:")
         print(f"  Build: {n_vectors/build_time:,.0f} vec/s")
         print(f"  Query (k=10): {qps_k10:,.0f} QPS @ {lat_k10:.3f}ms")
         print(f"  Query (k=100): {qps_k100:,.0f} QPS @ {lat_k100:.3f}ms")

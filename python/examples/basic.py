@@ -74,7 +74,7 @@ def main():
     results = db.search(query=query, k=3)
 
     print(f"   Query: {query}")
-    print(f"   Top 3 results:")
+    print("   Top 3 results:")
     for i, result in enumerate(results, 1):
         print(f"      {i}. {result['id']}: distance={result['distance']:.3f}, metadata={result['metadata']}")
     print()
@@ -82,7 +82,7 @@ def main():
     # 4. Get vector by ID
     print("4. Retrieving vector by ID...")
     vec = db.get("vec1")
-    print(f"   ID: vec1")
+    print("   ID: vec1")
     print(f"   Embedding: {vec['embedding']}")
     print(f"   Metadata: {vec['metadata']}\n")
 
@@ -98,7 +98,7 @@ def main():
     print("6. Searching again after update...")
     results = db.search(query=query, k=3)
     print(f"   Query: {query}")
-    print(f"   Top 3 results:")
+    print("   Top 3 results:")
     for i, result in enumerate(results, 1):
         print(f"      {i}. {result['id']}: distance={result['distance']:.3f}")
     print()
@@ -141,8 +141,8 @@ def main():
     # Search in larger database
     print("11. Searching in larger database...")
     results = db2.search(query=[0.5, 0.5, 0.5], k=5)
-    print(f"    Query: [0.5, 0.5, 0.5]")
-    print(f"    Top 5 results:")
+    print("    Query: [0.5, 0.5, 0.5]")
+    print("    Top 5 results:")
     for i, result in enumerate(results, 1):
         print(f"       {i}. {result['id']}: distance={result['distance']:.3f}")
 

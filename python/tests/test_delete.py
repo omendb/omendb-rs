@@ -1,7 +1,5 @@
 """Tests for delete operations"""
 
-import pytest
-import omendb
 
 
 def test_delete_single_vector(db_with_vectors):

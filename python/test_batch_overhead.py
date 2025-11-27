@@ -71,13 +71,13 @@ def test_rust_direct_comparison():
 
         throughput = n_vectors / elapsed
 
-        print(f"\nPython bindings (single 10K batch):")
+        print("\nPython bindings (single 10K batch):")
         print(f"  Throughput: {throughput:,.0f} vec/s")
         print(f"  Time: {elapsed:.2f}s")
 
-        print(f"\nRust benchmark (parallel batch_insert):")
-        print(f"  Throughput: 36,915 vec/s (from benchmark_parallel_hnsw)")
-        print(f"  Time: 0.27s")
+        print("\nRust benchmark (parallel batch_insert):")
+        print("  Throughput: 36,915 vec/s (from benchmark_parallel_hnsw)")
+        print("  Time: 0.27s")
 
         print(f"\nGap: {36915 / throughput:.1f}x slower through Python bindings")
 

@@ -53,7 +53,7 @@ def benchmark_search(db, n_queries, k, dimensions):
     # Benchmark search
     start = time.time()
     for query in queries:
-        results = db.search(query, k=k)
+        _ = db.search(query, k=k)
     elapsed = time.time() - start
 
     qps = n_queries / elapsed
@@ -124,7 +124,7 @@ def benchmark_persistence(dimensions, n_vectors):
 
         # Benchmark load
         start = time.time()
-        db2 = omendb.open(db_path, dimensions=dimensions)
+        _ = omendb.open(db_path, dimensions=dimensions)
         load_time = time.time() - start
 
         print(f"  Load time: {load_time:.2f}s")
@@ -136,7 +136,7 @@ def main():
     print("\n" + "="*60)
     print("OADB PYTHON BINDINGS PERFORMANCE BENCHMARK")
     print("="*60)
-    print(f"Target: 20K-30K vec/s @ 10K vectors (from Week 1 design)")
+    print("Target: 20K-30K vec/s @ 10K vectors (from Week 1 design)")
     print()
 
     dimensions = 128

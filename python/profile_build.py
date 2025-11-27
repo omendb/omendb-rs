@@ -6,9 +6,6 @@ import tempfile
 import os
 import time
 import numpy as np
-import cProfile
-import pstats
-from io import StringIO
 
 
 def profile_batch_sizes():

@@ -13,7 +13,6 @@ Demonstrates:
 import omendb
 import shutil
 from pathlib import Path
-from datetime import datetime
 
 def create_sample_data() -> list[dict]:
     """

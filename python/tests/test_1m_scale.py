@@ -54,20 +54,20 @@ def main():
         print(f"\n   INSERT COMPLETE: {total_vectors:,} in {insert_time:.1f}s ({insert_rate:,.0f} vec/s)")
 
         # Test search performance
-        print(f"\n3. Testing search performance...")
+        print("\n3. Testing search performance...")
         db.set_ef_search(100)
 
         num_queries = 100
         start = time.time()
         for q in range(num_queries):
             query = generate_random_vectors(1, dims, seed=9000 + q)[0]["embedding"]
-            results = db.search(query, k=10)
+            _ = db.search(query, k=10)
         search_time = time.time() - start
         qps = num_queries / search_time
         print(f"   SEARCH: {num_queries} queries in {search_time:.2f}s ({qps:,.0f} QPS)")
 
         # Test persistence
-        print(f"\n4. Testing persistence (save/load)...")
+        print("\n4. Testing persistence (save/load)...")
         start = time.time()
         db.save()
         save_time = time.time() - start
@@ -89,7 +89,7 @@ def main():
         start = time.time()
         for q in range(num_queries):
             query = generate_random_vectors(1, dims, seed=9000 + q)[0]["embedding"]
-            results = db2.search(query, k=10)
+            _ = db2.search(query, k=10)
         search_time_2 = time.time() - start
         qps_2 = num_queries / search_time_2
         print(f"   SEARCH AFTER LOAD: {qps_2:,.0f} QPS")

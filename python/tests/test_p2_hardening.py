@@ -19,8 +19,6 @@ import time
 import random
 import math
 import gc
-import sys
-import signal
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 
@@ -120,7 +118,7 @@ class TestGILDeadlock:
                 """Mix of read/write operations"""
                 for _ in range(10):
                     query = generate_random_vector(64, task_id)
-                    results = db.search(query, k=5)
+                    _ = db.search(query, k=5)
                     db.get(f"v{task_id % 500}")
                 return task_id
 
@@ -447,7 +445,7 @@ class TestSoakTest:
             errors = []
             vector_id_counter = 1000
 
-            print(f"\nStarting 5-minute soak test...")
+            print("\nStarting 5-minute soak test...")
 
             while time.time() - start < duration:
                 elapsed = time.time() - start
@@ -463,7 +461,7 @@ class TestSoakTest:
 
                     if op == "search":
                         query = generate_random_vector(64)
-                        results = db.search(query, k=10)
+                        _ = db.search(query, k=10)
                         ops["search"] += 1
 
                     elif op == "set":
@@ -500,7 +498,7 @@ class TestSoakTest:
             total_time = time.time() - start
             total_ops = sum(ops.values())
 
-            print(f"\nSoak test complete:")
+            print("\nSoak test complete:")
             print(f"  Duration: {total_time:.1f}s")
             print(f"  Total ops: {total_ops} ({total_ops/total_time:.0f} ops/s)")
             print(f"  Breakdown: {ops}")
@@ -556,7 +554,7 @@ class TestSoakTest:
             total_growth = sum(stat.size_diff for stat in top_stats if stat.size_diff > 0)
             total_growth_mb = total_growth / (1024 * 1024)
 
-            print(f"\nMemory stability test:")
+            print("\nMemory stability test:")
             print(f"  Duration: {time.time() - start:.1f}s")
             print(f"  Operations: {ops}")
             print(f"  Memory growth: {total_growth_mb:.2f}MB")

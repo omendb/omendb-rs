@@ -11,7 +11,6 @@ import numpy as np
 import time
 import tempfile
 import os
-from pathlib import Path
 
 # Small dataset for quick testing
 N_VECTORS = 1_000  # Small for speed
@@ -152,12 +151,12 @@ if __name__ == '__main__':
     print(f"  hnswlib:  {hnswlib_results['build_vps']:>10,.0f} ({hnswlib_results['build_vps']/omendb_results['build_vps']:.2f}x)")
 
     # Query comparison
-    print(f"\nQuery Performance (QPS):")
+    print("\nQuery Performance (QPS):")
     print(f"  OmenDB:     {omendb_results['qps']:>10,.0f}")
     print(f"  ChromaDB: {chroma_results['qps']:>10,.0f} ({chroma_results['qps']/omendb_results['qps']:.2f}x)")
     print(f"  hnswlib:  {hnswlib_results['qps']:>10,.0f} ({hnswlib_results['qps']/omendb_results['qps']:.2f}x)")
 
-    print(f"\nQuery Latency p95 (ms):")
+    print("\nQuery Latency p95 (ms):")
     print(f"  OmenDB:     {omendb_results['p95_ms']:>7.2f}")
     print(f"  ChromaDB: {chroma_results['p95_ms']:>7.2f}")
     print(f"  hnswlib:  {hnswlib_results['p95_ms']:>7.2f}")
@@ -183,4 +182,4 @@ if __name__ == '__main__':
     # Goal: match hnswlib (pure C++ HNSW)
     gap = hnswlib_results['qps'] / omendb_results['qps']
     print(f"\nGap to close: {gap:.2f}x to match C++ HNSW baseline")
-    print(f"Target after SOTA optimizations: 2-3x faster than hnswlib")
+    print("Target after SOTA optimizations: 2-3x faster than hnswlib")
