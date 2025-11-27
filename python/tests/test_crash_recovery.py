@@ -9,12 +9,10 @@ Key scenarios:
 
 import pytest
 import os
-import sys
 import signal
 import multiprocessing
 import tempfile
 import shutil
-import time
 
 
 def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str):

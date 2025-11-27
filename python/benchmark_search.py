@@ -13,7 +13,7 @@ dimensions = 128
 k = 10
 
 print(f"\n{'='*60}")
-print(f"Search Performance Benchmark")
+print("Search Performance Benchmark")
 print(f"{'='*60}")
 print(f"Dataset: {n_vectors:,} vectors ({dimensions}D)")
 print(f"Queries: {n_queries:,} searches (k={k})")
@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     p99 = latencies[int(len(latencies)*0.99)]
     avg = sum(latencies) / len(latencies)
 
-    print(f"  Latency (100 queries):")
+    print("  Latency (100 queries):")
     print(f"    p50: {p50:.2f}ms")
     print(f"    p95: {p95:.2f}ms")
     print(f"    p99: {p99:.2f}ms")
@@ -91,11 +91,11 @@ with tempfile.TemporaryDirectory() as tmpdir:
 
     # Compare to target
     print("Comparison to ChromaDB (Nov 2025 benchmark):")
-    print(f"  ChromaDB:  3,282 QPS, 0.30ms p50")
+    print("  ChromaDB:  3,282 QPS, 0.30ms p50")
     print(f"  OmenDB:      {qps:,.0f} QPS, {p50:.2f}ms p50")
     if qps < 3282:
         speedup_needed = 3282 / qps
         print(f"  Need {speedup_needed:.1f}x faster to match ChromaDB")
     else:
-        print(f"  ✅ Faster than ChromaDB!")
+        print("  ✅ Faster than ChromaDB!")
     print()

@@ -50,7 +50,7 @@ def verify_acorn1_correctness():
     print("Verifying data distribution:")
     print(f"  Categories: {num_categories}")
     print(f"  Vectors per category: {num_vectors // num_categories:,} (5% selectivity)")
-    print(f"  Expected matches for category=0: ~5,000 vectors\n")
+    print("  Expected matches for category=0: ~5,000 vectors\n")
 
     # Generate query
     query = np.random.randn(dimensions).astype(np.float32).tolist()
@@ -80,9 +80,9 @@ def verify_acorn1_correctness():
     print(f"  Filter accuracy: {len(results_filtered)-mismatches}/{len(results_filtered)} correct")
 
     if qps_filtered > qps_no_filter * 1.5:
-        print(f"  ✓ ACORN-1 showing speedup!")
+        print("  ✓ ACORN-1 showing speedup!")
     else:
-        print(f"  ⚠ No significant speedup (may need more queries for stable measurement)")
+        print("  ⚠ No significant speedup (may need more queries for stable measurement)")
 
     print()
 
@@ -110,14 +110,14 @@ def verify_acorn1_correctness():
     print(f"  Baseline (no filter): {qps_baseline:8.0f} QPS ({t_baseline/num_test_queries*1000:5.2f}ms per query)")
     print(f"  ACORN-1 (5% filter):  {qps_acorn:8.0f} QPS ({t_acorn/num_test_queries*1000:5.2f}ms per query)")
     print(f"  Speedup:              {qps_acorn/qps_baseline:5.2f}x")
-    print(f"  Expected:             ~6.3x at 5% selectivity")
+    print("  Expected:             ~6.3x at 5% selectivity")
 
     if qps_acorn / qps_baseline > 2.0:
-        print(f"  ✓ SIGNIFICANT SPEEDUP DETECTED!")
+        print("  ✓ SIGNIFICANT SPEEDUP DETECTED!")
     elif qps_acorn / qps_baseline > 1.2:
-        print(f"  ⚠ Modest speedup (may need larger dataset)")
+        print("  ⚠ Modest speedup (may need larger dataset)")
     else:
-        print(f"  ✗ No speedup - investigating...")
+        print("  ✗ No speedup - investigating...")
 
     print()
     print("="*70)

@@ -224,8 +224,8 @@ def main():
     )
 
     print(f"   Query: {query}")
-    print(f"   Filter: source=technical_guide.pdf")
-    print(f"   Results:")
+    print("   Filter: source=technical_guide.pdf")
+    print("   Results:")
     for i, result in enumerate(results, 1):
         print(f"      {i}. {result['metadata']['title']} (distance={result['distance']:.3f})")
 

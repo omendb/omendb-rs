@@ -1,7 +1,6 @@
 """Tests for insert/set operations"""
 
 import pytest
-import omendb
 
 
 def test_insert_single_vector(db):

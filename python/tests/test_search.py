@@ -1,7 +1,6 @@
 """Tests for search operations"""
 
 import pytest
-import omendb
 
 
 def test_search_empty_database(db):

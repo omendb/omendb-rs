@@ -9,7 +9,6 @@ db_path = "/tmp/test_persist.db"
 
 # Clean up if exists
 if os.path.exists(db_path):
-    import shutil
     for f in os.listdir(os.path.dirname(db_path)):
         if f.startswith(os.path.basename(db_path)):
             os.remove(os.path.join(os.path.dirname(db_path), f))
@@ -33,7 +32,7 @@ for r in results:
 
 print("Saving...")
 db.save()
-print(f"  Files created:")
+print("  Files created:")
 for f in sorted(os.listdir(os.path.dirname(db_path))):
     if f.startswith(os.path.basename(db_path)):
         full_path = os.path.join(os.path.dirname(db_path), f)

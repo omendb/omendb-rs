@@ -47,7 +47,7 @@ def test_acorn1_simple():
     insert_time = time.time() - t0
     print(f"✓ Inserted in {insert_time:.2f}s ({num_vectors/insert_time:.0f} vec/s)\n")
 
-    print(f"Actual distribution:")
+    print("Actual distribution:")
     print(f"  Category 0: {category_0_count:,} vectors ({actual_selectivity*100:.1f}% selectivity)")
     print()
 

@@ -34,14 +34,14 @@ with tempfile.TemporaryDirectory() as tmpdir:
     filename = os.path.basename(db_path)
     id_mapping_file = os.path.join(directory, f"{filename}.id_mapping.json")
 
-    print(f"\nid_mapping.json contents:")
+    print("\nid_mapping.json contents:")
     with open(id_mapping_file) as f:
         id_mapping = json.load(f)
         print(json.dumps(id_mapping, indent=2))
 
     deleted_file = os.path.join(directory, f"{filename}.deleted.json")
     if os.path.exists(deleted_file):
-        print(f"\ndeleted.json contents:")
+        print("\ndeleted.json contents:")
         with open(deleted_file) as f:
             deleted = json.load(f)
             print(json.dumps(deleted, indent=2))
