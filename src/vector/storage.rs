@@ -97,7 +97,7 @@ impl SeerDBStorage {
         // Forward mapping: string_id → index
         let key = format!("i:{}", string_id);
         let value = (index as u64).to_le_bytes();
-        self.db.put(&key, &value)?;
+        self.db.put(&key, value)?;
 
         // Reverse mapping: index → string_id (for rebuild on load)
         let reverse_key = format!("r:{}", index);
@@ -150,7 +150,7 @@ impl SeerDBStorage {
     /// Store configuration value
     pub fn put_config(&self, key: &str, value: u64) -> Result<()> {
         let full_key = format!("cfg:{}", key);
-        self.db.put(&full_key, &value.to_le_bytes())?;
+        self.db.put(&full_key, value.to_le_bytes())?;
         Ok(())
     }
 
@@ -243,7 +243,7 @@ impl SeerDBStorage {
     /// Mark a vector as deleted (tombstone)
     pub fn put_deleted(&self, id: usize) -> Result<()> {
         let key = format!("d:{}", id);
-        self.db.put(&key, &[1])?;
+        self.db.put(&key, [1])?;
         Ok(())
     }
 
@@ -337,7 +337,7 @@ impl SeerDBStorage {
             // Forward ID mapping: string_id → index
             let key = format!("i:{}", string_id);
             let value = (*idx as u64).to_le_bytes();
-            batch.put(key.as_bytes(), &value);
+            batch.put(key.as_bytes(), value);
 
             // Reverse ID mapping: index → string_id
             let key = format!("r:{}", idx);
@@ -348,7 +348,7 @@ impl SeerDBStorage {
         let current_count = self.get_config("count")?.unwrap_or(0) as usize;
         let new_count = current_count + items.len();
         let key = b"cfg:count";
-        batch.put(key, &(new_count as u64).to_le_bytes());
+        batch.put(key, (new_count as u64).to_le_bytes());
 
         // Commit all writes atomically
         batch.commit()?;

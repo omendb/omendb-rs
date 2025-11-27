@@ -229,7 +229,7 @@ impl DistanceFunction {
 }
 
 // Re-export SIMD distance functions for convenience
-pub use super::simd_distance::{l2_distance, l2_distance_squared, cosine_distance, cosine_distance_normalized, dot_product};
+pub use super::simd_distance::{l2_distance, l2_distance_squared, cosine_distance, dot_product};
 
 /// Candidate during search (node ID + distance)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

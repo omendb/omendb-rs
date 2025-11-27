@@ -670,19 +670,6 @@ impl RaBitQ {
 
         simd_cosine_distance(&v1, &v2)
     }
-
-    /// Apply Fast Hadamard Transform for random rotation
-    ///
-    /// FHT provides O(D log D) rotation vs O(D²) for matrix multiply.
-    /// The input is modified in place and must have power-of-2 length.
-    fn apply_fht(&self, data: &mut [f32]) {
-        fast_hadamard_transform_inplace(data);
-    }
-
-    /// Apply inverse FHT (same as forward FHT for Hadamard matrices)
-    fn apply_inverse_fht(&self, data: &mut [f32]) {
-        fast_hadamard_transform_inplace(data);
-    }
 }
 
 // Fast Hadamard Transform implementation
@@ -724,7 +711,26 @@ pub fn fast_hadamard_transform_inplace(data: &mut [f32]) {
         return;
     }
 
-    // Butterfly algorithm
+    // Dispatch to SIMD implementation if available
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && n >= 8 {
+            // SAFETY: We checked for AVX2 support above
+            unsafe { fast_hadamard_transform_avx2(data) };
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if n >= 4 {
+            // SAFETY: NEON is always available on aarch64
+            unsafe { fast_hadamard_transform_neon(data) };
+            return;
+        }
+    }
+
+    // Scalar fallback
     let mut h = 1;
     while h < n {
         for i in (0..n).step_by(h * 2) {

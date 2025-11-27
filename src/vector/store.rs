@@ -44,30 +44,30 @@ impl MetadataFilter {
     pub fn matches(&self, metadata: &JsonValue) -> bool {
         match self {
             MetadataFilter::Eq(field, value) => {
-                metadata.get(field).map_or(false, |v| v == value)
+                metadata.get(field) == Some(value)
             }
             MetadataFilter::Ne(field, value) => {
-                metadata.get(field).map_or(true, |v| v != value)
+                metadata.get(field) != Some(value)
             }
             MetadataFilter::Gte(field, threshold) => {
-                metadata.get(field).and_then(|v| v.as_f64()).map_or(false, |v| v >= *threshold)
+                metadata.get(field).and_then(|v| v.as_f64()).is_some_and(|v| v >= *threshold)
             }
             MetadataFilter::Lt(field, threshold) => {
-                metadata.get(field).and_then(|v| v.as_f64()).map_or(false, |v| v < *threshold)
+                metadata.get(field).and_then(|v| v.as_f64()).is_some_and(|v| v < *threshold)
             }
             MetadataFilter::Gt(field, threshold) => {
-                metadata.get(field).and_then(|v| v.as_f64()).map_or(false, |v| v > *threshold)
+                metadata.get(field).and_then(|v| v.as_f64()).is_some_and(|v| v > *threshold)
             }
             MetadataFilter::Lte(field, threshold) => {
-                metadata.get(field).and_then(|v| v.as_f64()).map_or(false, |v| v <= *threshold)
+                metadata.get(field).and_then(|v| v.as_f64()).is_some_and(|v| v <= *threshold)
             }
             MetadataFilter::In(field, values) => {
-                metadata.get(field).map_or(false, |v| values.contains(v))
+                metadata.get(field).is_some_and(|v| values.contains(v))
             }
             MetadataFilter::Contains(field, substring) => {
                 metadata.get(field)
                     .and_then(|v| v.as_str())
-                    .map_or(false, |s| s.contains(substring))
+                    .is_some_and(|s| s.contains(substring))
             }
             MetadataFilter::And(filters) => {
                 filters.iter().all(|f| f.matches(metadata))
