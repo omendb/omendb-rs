@@ -217,25 +217,24 @@ impl HNSWIndex {
         level.min(self.params.max_level - 1)
     }
 
-    /// Compute distance between two vectors
-    fn distance(&self, id_a: u32, id_b: u32) -> Result<f32> {
+    /// Distance between nodes for ordering comparisons
+    #[inline]
+    fn distance_between_cmp(&self, id_a: u32, id_b: u32) -> Result<f32> {
         let vec_a = self.vectors.get(id_a).ok_or(HNSWError::VectorNotFound(id_a))?;
         let vec_b = self.vectors.get(id_b).ok_or(HNSWError::VectorNotFound(id_b))?;
-        Ok(self.distance_fn.distance(vec_a, vec_b))
+        Ok(self.distance_fn.distance_for_comparison(vec_a, vec_b))
     }
 
-    /// Compute distance between query and vector (for internal comparisons)
-    ///
-    /// Uses optimized comparison distance (squared L2 for L2 metric).
-    /// This is ~10-15% faster in search_layer.
+    /// Distance from query to node for ordering comparisons
     #[inline]
-    fn distance_to_query_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
+    fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance_for_comparison(query, vec))
     }
 
-    /// Compute actual distance between query and vector (for final results)
-    fn distance_to_query(&self, query: &[f32], id: u32) -> Result<f32> {
+    /// Actual distance (with sqrt for L2)
+    #[inline]
+    fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance(query, vec))
     }
@@ -760,7 +759,7 @@ impl HNSWIndex {
         let mut sorted_candidates: Vec<_> = candidates
             .iter()
             .map(|&id| {
-                let dist = self.distance_to_query(query_vector, id)?;
+                let dist = self.distance_cmp(query_vector, id)?;
                 Ok((id, dist))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -779,7 +778,7 @@ impl HNSWIndex {
             // Check if candidate is closer to query than to existing neighbors
             let mut good = true;
             for &result_id in &result {
-                let dist_to_result = self.distance(*candidate_id, result_id)?;
+                let dist_to_result = self.distance_between_cmp(*candidate_id, result_id)?;
                 if dist_to_result < *candidate_dist {
                     good = false;
                     break;
@@ -864,7 +863,7 @@ impl HNSWIndex {
         let mut results: Vec<SearchResult> = candidates
             .iter()
             .map(|&id| {
-                let distance = self.distance_to_query(query, id)?;
+                let distance = self.distance_exact(query, id)?;
                 Ok(SearchResult::new(id, distance))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1014,7 +1013,7 @@ impl HNSWIndex {
         let mut results: Vec<SearchResult> = candidates
             .iter()
             .map(|&id| {
-                let distance = self.distance_to_query(query, id)?;
+                let distance = self.distance_exact(query, id)?;
                 Ok(SearchResult::new(id, distance))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1127,7 +1126,7 @@ impl HNSWIndex {
                     continue;
                 }
 
-                let dist = self.distance_to_query(query, ep)?;
+                let dist = self.distance_cmp(query, ep)?;
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -1190,7 +1189,7 @@ impl HNSWIndex {
                         continue;
                     }
 
-                    let dist = self.distance_to_query(query, neighbor_id)?;
+                    let dist = self.distance_cmp(query, neighbor_id)?;
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     // If neighbor is closer than farthest in working set, or working set not full, add it
@@ -1242,7 +1241,7 @@ impl HNSWIndex {
 
             // Initialize with entry points
             for &ep in entry_points {
-                let dist = self.distance_to_query(query, ep)?;
+                let dist = self.distance_cmp(query, ep)?;
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -1280,7 +1279,7 @@ impl HNSWIndex {
 
                     visited.insert(neighbor_id);
 
-                    let dist = self.distance_to_query(query, neighbor_id)?;
+                    let dist = self.distance_cmp(query, neighbor_id)?;
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     // If neighbor is closer than farthest in working set, or working set not full, add it

@@ -84,6 +84,7 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// This skips the expensive norm calculations (2 dot products + 2 sqrts).
 /// Use when you control normalization on insert.
 #[inline]
+#[allow(dead_code)] // Future optimization for auto-normalized vectors
 pub fn cosine_distance_normalized(a: &[f32], b: &[f32]) -> f32 {
     1.0 - dot_product(a, b)
 }

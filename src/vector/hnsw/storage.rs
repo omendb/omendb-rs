@@ -166,7 +166,6 @@ impl NeighborLists {
             }
         } else {
             // Same node - invalid operation, skip
-            return;
         }
     }
 
