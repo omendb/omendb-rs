@@ -55,4 +55,5 @@ dev = [
     "chromadb>=1.0.0",
     "langchain-core>=0.2.0",
     "llama-index-core>=0.10.0",
+    "sentence-transformers>=5.1.2",
 ]
