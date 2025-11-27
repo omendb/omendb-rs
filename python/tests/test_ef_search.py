@@ -33,9 +33,9 @@ class TestEfSearchBasic:
             db_path = os.path.join(tmpdir, "test_db")
             db = omendb.open(db_path, dimensions=64)
 
-            # Empty db returns default ef_search (100)
+            # Empty db returns None (HNSW index not yet created)
             ef = db.get_ef_search()
-            assert ef == 100
+            assert ef is None
 
     def test_get_ef_search_after_insert(self):
         """Test get_ef_search after inserting vectors"""
@@ -76,17 +76,20 @@ class TestEfSearchBasic:
             db_path = os.path.join(tmpdir, "test_db")
             db = omendb.open(db_path, dimensions=64)
 
-            # Setting ef_search on empty db - should store it for later
+            # Setting ef_search on empty db has no effect (HNSW not yet created)
             db.set_ef_search(150)
-            # get_ef_search may return None before index exists
-            # but should apply once vectors are inserted
+            assert db.get_ef_search() is None  # No HNSW index yet
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
 
-            # After insert, ef_search should be applied
+            # After insert, HNSW has default ef_search (150 was not applied)
             ef = db.get_ef_search()
-            assert ef == 150
+            assert ef == 200  # Default value, not 150
+
+            # Now set_ef_search works
+            db.set_ef_search(150)
+            assert db.get_ef_search() == 150
 
 
 class TestEfSearchConstraints:

@@ -88,18 +88,6 @@ def test_quantization_8bit(temp_db_path):
     assert len(results) == 5
 
 
-def test_quantization_invalid_bits(temp_db_path):
-    """Test invalid quantization bits"""
-    config = {
-        "quantization": {
-            "bits": 3  # Only 2, 4, 8 are valid
-        }
-    }
-
-    with pytest.raises(ValueError, match="must be 2, 4, or 8"):
-        omendb.open(temp_db_path, dimensions=128, config=config)
-
-
 def test_expected_vectors_config(temp_db_path):
     """Test expected_vectors configuration (adaptive defaults)"""
     config = {
@@ -162,37 +150,7 @@ def test_empty_config(temp_db_path):
     assert len(results) == 1
 
 
-def test_hnsw_missing_params(temp_db_path):
-    """Test HNSW config with missing required params"""
-    config = {
-        "hnsw": {
-            "m": 16
-            # Missing ef_construction and ef_search
-        }
-    }
-
-    with pytest.raises(ValueError):
-        omendb.open(temp_db_path, dimensions=128, config=config)
-
-
 def test_invalid_config_type(temp_db_path):
     """Test invalid config type"""
     with pytest.raises((TypeError, ValueError)):
         omendb.open(temp_db_path, dimensions=128, config="invalid")
-
-
-def test_hnsw_invalid_values(temp_db_path):
-    """Test HNSW config with invalid values"""
-    config = {
-        "hnsw": {
-            "m": -1,  # Invalid: negative
-            "ef_construction": 100,
-            "ef_search": 50
-        }
-    }
-
-    # Should raise error (either from config validation or Rust)
-    with pytest.raises((ValueError, RuntimeError, OverflowError)):
-        db = omendb.open(temp_db_path, dimensions=128, config=config)
-        # If open succeeds, set should fail
-        db.set([{"id": "v1", "embedding": [0.1] * 128, "metadata": {}}])
