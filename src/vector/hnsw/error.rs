@@ -7,10 +7,7 @@ use thiserror::Error;
 pub enum HNSWError {
     /// Vector dimension doesn't match index dimensions
     #[error("Dimension mismatch: expected {expected}, got {actual}")]
-    DimensionMismatch {
-        expected: usize,
-        actual: usize,
-    },
+    DimensionMismatch { expected: usize, actual: usize },
 
     /// Vector not found in storage
     #[error("Vector not found: id {0}")]
@@ -22,10 +19,7 @@ pub enum HNSWError {
 
     /// Invalid level (exceeds max_levels)
     #[error("Invalid level: {level} exceeds max_levels {max_levels}")]
-    InvalidLevel {
-        level: usize,
-        max_levels: usize,
-    },
+    InvalidLevel { level: usize, max_levels: usize },
 
     /// Index is empty (no vectors inserted yet)
     #[error("Index is empty (no entry point)")]
@@ -33,10 +27,7 @@ pub enum HNSWError {
 
     /// Invalid search parameters
     #[error("Invalid search parameters: k={k}, ef={ef}. Requirements: k > 0, ef >= k")]
-    InvalidSearchParams {
-        k: usize,
-        ef: usize,
-    },
+    InvalidSearchParams { k: usize, ef: usize },
 
     /// Vector contains invalid values (NaN or Infinity)
     #[error("Vector contains invalid values (NaN or Infinity)")]
@@ -95,10 +86,7 @@ impl HNSWError {
 
     /// Check if this indicates a bug in the implementation
     pub fn is_internal_bug(&self) -> bool {
-        matches!(
-            self,
-            Self::Internal(_) | Self::VectorNotFound(_)
-        )
+        matches!(self, Self::Internal(_) | Self::VectorNotFound(_))
     }
 }
 
@@ -108,7 +96,10 @@ mod tests {
 
     #[test]
     fn test_error_messages() {
-        let err = HNSWError::DimensionMismatch { expected: 128, actual: 256 };
+        let err = HNSWError::DimensionMismatch {
+            expected: 128,
+            actual: 256,
+        };
         assert_eq!(err.to_string(), "Dimension mismatch: expected 128, got 256");
 
         let err = HNSWError::VectorNotFound(42);
@@ -120,7 +111,10 @@ mod tests {
 
     #[test]
     fn test_error_classification() {
-        let recoverable = HNSWError::DimensionMismatch { expected: 128, actual: 256 };
+        let recoverable = HNSWError::DimensionMismatch {
+            expected: 128,
+            actual: 256,
+        };
         assert!(recoverable.is_recoverable());
         assert!(!recoverable.is_internal_bug());
 

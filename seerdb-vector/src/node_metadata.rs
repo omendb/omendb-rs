@@ -24,25 +24,24 @@ impl NodeMetadataStorage {
     pub fn new(path: PathBuf, config: &SeerdbVectorConfig) -> Result<Self> {
         let options = DBOptions {
             data_dir: path,
-            
+
             // Configurable durability
             wal_sync_policy: if config.sync_writes {
                 SyncPolicy::SyncData
             } else {
                 SyncPolicy::None
             },
-            
+
             // Smaller memtable for metadata (default 16MB or derived from config)
             // We use 1/8th of the main config capacity for metadata
             memtable_capacity: config.memtable_capacity / 8,
-            
+
             background_compaction: config.background_compaction,
-            
+
             ..Default::default()
         };
 
-        let db =
-            DB::open(options).map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+        let db = DB::open(options).map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }
@@ -70,7 +69,7 @@ impl NodeMetadataStorage {
     pub fn set_max_level(&self, node_id: u64, max_level: u8) -> Result<()> {
         let key = Self::encode_key(node_id);
         self.db
-            .put(&key, &[max_level])
+            .put(key, [max_level])
             .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
         Ok(())
     }
@@ -81,7 +80,7 @@ impl NodeMetadataStorage {
 
         for &(node_id, max_level) in levels {
             let key = Self::encode_key(node_id);
-            batch.put(&key, &[max_level]);
+            batch.put(key, [max_level]);
         }
 
         batch
@@ -98,7 +97,7 @@ impl NodeMetadataStorage {
 
         match self
             .db
-            .get(&key)
+            .get(key)
             .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?
         {
             Some(value) => {
@@ -118,7 +117,7 @@ impl NodeMetadataStorage {
     pub fn remove_node(&self, node_id: u64) -> Result<()> {
         let key = Self::encode_key(node_id);
         self.db
-            .delete(&key)
+            .delete(key)
             .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
         Ok(())
     }
@@ -129,7 +128,7 @@ impl NodeMetadataStorage {
 
         for &node_id in node_ids {
             let key = Self::encode_key(node_id);
-            batch.delete(&key);
+            batch.delete(key);
         }
 
         batch
@@ -155,7 +154,11 @@ mod tests {
     #[test]
     fn test_set_and_get_max_level() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = NodeMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         storage.set_max_level(42, 3).unwrap();
 
@@ -166,7 +169,11 @@ mod tests {
     #[test]
     fn test_get_nonexistent_node() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = NodeMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         let level = storage.get_max_level(999).unwrap();
         assert_eq!(level, None);
@@ -175,7 +182,11 @@ mod tests {
     #[test]
     fn test_update_max_level() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = NodeMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         storage.set_max_level(42, 2).unwrap();
         assert_eq!(storage.get_max_level(42).unwrap(), Some(2));
@@ -187,7 +198,11 @@ mod tests {
     #[test]
     fn test_remove_node() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = NodeMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         storage.set_max_level(42, 3).unwrap();
         assert_eq!(storage.get_max_level(42).unwrap(), Some(3));
@@ -199,7 +214,11 @@ mod tests {
     #[test]
     fn test_batch_operations() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = NodeMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         // Batch set
         let levels = vec![(1, 0), (2, 1), (3, 2), (4, 3)];
@@ -225,7 +244,8 @@ mod tests {
 
         // Create storage and set level
         {
-            let storage = NodeMetadataStorage::new(path.clone(), &SeerdbVectorConfig::default()).unwrap();
+            let storage =
+                NodeMetadataStorage::new(path.clone(), &SeerdbVectorConfig::default()).unwrap();
             storage.set_max_level(42, 3).unwrap();
             storage.flush().unwrap();
         }

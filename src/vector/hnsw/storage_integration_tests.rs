@@ -54,7 +54,11 @@ mod tests {
             .map(|node_id| {
                 let num_levels = memory_storage.num_levels(node_id as u32).unwrap();
                 (0..num_levels)
-                    .map(|level| memory_storage.read_neighbors(node_id as u32, level as u8).unwrap())
+                    .map(|level| {
+                        memory_storage
+                            .read_neighbors(node_id as u32, level as u8)
+                            .unwrap()
+                    })
                     .collect()
             })
             .collect();
@@ -128,7 +132,11 @@ mod tests {
             .map(|node_id| {
                 let num_levels = memory_storage.num_levels(node_id as u32).unwrap();
                 (0..num_levels)
-                    .map(|level| memory_storage.read_neighbors(node_id as u32, level as u8).unwrap())
+                    .map(|level| {
+                        memory_storage
+                            .read_neighbors(node_id as u32, level as u8)
+                            .unwrap()
+                    })
                     .collect()
             })
             .collect();
@@ -188,8 +196,8 @@ mod tests {
 
         // Create initial storage
         let nodes = vec![
-            vec![vec![1, 2, 3]], // Node 0: 1 level
-            vec![vec![0, 2], vec![0]], // Node 1: 2 levels
+            vec![vec![1, 2, 3]],                      // Node 0: 1 level
+            vec![vec![0, 2], vec![0]],                // Node 1: 2 levels
             vec![vec![0, 1, 3], vec![0, 1], vec![0]], // Node 2: 3 levels
         ];
 
@@ -273,7 +281,9 @@ mod tests {
         let mut memory_storage = MemoryStorage::new(8);
         let initial_mem = memory_storage.memory_usage();
 
-        memory_storage.write_neighbors(0, 0, &[1, 2, 3, 4, 5]).unwrap();
+        memory_storage
+            .write_neighbors(0, 0, &[1, 2, 3, 4, 5])
+            .unwrap();
         let after_mem = memory_storage.memory_usage();
 
         assert!(after_mem > initial_mem);

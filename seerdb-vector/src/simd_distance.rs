@@ -1,19 +1,19 @@
-///! SIMD-accelerated distance calculations for HNSW
-///!
-///! Uses std::simd (portable SIMD) for cross-platform SIMD support.
-///! Automatically compiles to optimal SIMD instructions (AVX2, SSE2, NEON).
-///!
-///! ## Performance
-///!
-///! - 8 lanes (AVX2): 3-4x speedup over scalar
-///! - 4 lanes (SSE2/NEON): 2-3x speedup over scalar
-///!
-///! ## Implementation
-///!
-///! Uses generic SIMD implementation with lane count (8, 4, or scalar fallback).
-///! Compiler automatically selects best instruction set for target platform.
+//! SIMD-accelerated distance calculations for HNSW
+//!
+//! Uses std::simd (portable SIMD) for cross-platform SIMD support.
+//! Automatically compiles to optimal SIMD instructions (AVX2, SSE2, NEON).
+//!
+//! ## Performance
+//!
+//! - 8 lanes (AVX2): 3-4x speedup over scalar
+//! - 4 lanes (SSE2/NEON): 2-3x speedup over scalar
+//!
+//! ## Implementation
+//!
+//! Uses generic SIMD implementation with lane count (8, 4, or scalar fallback).
+//! Compiler automatically selects best instruction set for target platform.
 
-use std::simd::{LaneCount, Simd, SupportedLaneCount, num::SimdFloat};
+use std::simd::{num::SimdFloat, LaneCount, Simd, SupportedLaneCount};
 
 /// L2 distance (Euclidean) with SIMD acceleration
 ///
@@ -25,8 +25,7 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
 
     // Try 8 lanes (AVX2), then 4 lanes (SSE2/NEON), then scalar
     l2_distance_simd::<8>(a, b)
-        .unwrap_or_else(|| l2_distance_simd::<4>(a, b)
-            .unwrap_or_else(|| l2_distance_scalar(a, b)))
+        .unwrap_or_else(|| l2_distance_simd::<4>(a, b).unwrap_or_else(|| l2_distance_scalar(a, b)))
 }
 
 /// Dot product with SIMD acceleration
@@ -39,8 +38,7 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 
     // Try 8 lanes (AVX2), then 4 lanes (SSE2/NEON), then scalar
     dot_product_simd::<8>(a, b)
-        .unwrap_or_else(|| dot_product_simd::<4>(a, b)
-            .unwrap_or_else(|| dot_product_scalar(a, b)))
+        .unwrap_or_else(|| dot_product_simd::<4>(a, b).unwrap_or_else(|| dot_product_scalar(a, b)))
 }
 
 /// Cosine distance with SIMD acceleration
@@ -164,10 +162,7 @@ fn l2_distance_scalar(a: &[f32], b: &[f32]) -> f32 {
 /// Used when vector too small for SIMD or on unsupported platforms.
 #[inline]
 fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| x * y)
-        .sum()
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 // ============================================================================
@@ -242,7 +237,11 @@ mod tests {
 
         // Relaxed tolerance for SIMD vs scalar (different accumulation order)
         let relative_error = (simd_result - scalar_result).abs() / scalar_result.abs();
-        assert!(relative_error < 1e-5, "Relative error {} too large", relative_error);
+        assert!(
+            relative_error < 1e-5,
+            "Relative error {} too large",
+            relative_error
+        );
     }
 
     #[test]

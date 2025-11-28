@@ -145,7 +145,7 @@ impl QueryBuffers {
 
     /// Clear all buffers for reuse
     pub fn clear(&mut self) {
-        self.visited.clear();  // O(1) now!
+        self.visited.clear(); // O(1) now!
         self.candidates.clear();
         self.working.clear();
         self.entry_points.clear();

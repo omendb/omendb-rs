@@ -6,13 +6,13 @@
 //! Optional Extended RaBitQ quantization for memory-efficient storage.
 
 use super::hnsw_index::HNSWIndex;
+use super::rabitq::{QuantizedVector, RaBitQ, RaBitQParams};
 use super::storage::SeerDBStorage;
 use super::types::Vector;
-use super::rabitq::{RaBitQ, RaBitQParams, QuantizedVector};
 use anyhow::Result;
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::Path;
-use serde_json::Value as JsonValue;
 
 /// Metadata filter for vector search (MongoDB-style operators)
 #[derive(Debug, Clone)]
@@ -43,38 +43,33 @@ impl MetadataFilter {
     /// Evaluate filter against metadata
     pub fn matches(&self, metadata: &JsonValue) -> bool {
         match self {
-            MetadataFilter::Eq(field, value) => {
-                metadata.get(field) == Some(value)
-            }
-            MetadataFilter::Ne(field, value) => {
-                metadata.get(field) != Some(value)
-            }
-            MetadataFilter::Gte(field, threshold) => {
-                metadata.get(field).and_then(|v| v.as_f64()).is_some_and(|v| v >= *threshold)
-            }
-            MetadataFilter::Lt(field, threshold) => {
-                metadata.get(field).and_then(|v| v.as_f64()).is_some_and(|v| v < *threshold)
-            }
-            MetadataFilter::Gt(field, threshold) => {
-                metadata.get(field).and_then(|v| v.as_f64()).is_some_and(|v| v > *threshold)
-            }
-            MetadataFilter::Lte(field, threshold) => {
-                metadata.get(field).and_then(|v| v.as_f64()).is_some_and(|v| v <= *threshold)
-            }
+            MetadataFilter::Eq(field, value) => metadata.get(field) == Some(value),
+            MetadataFilter::Ne(field, value) => metadata.get(field) != Some(value),
+            MetadataFilter::Gte(field, threshold) => metadata
+                .get(field)
+                .and_then(|v| v.as_f64())
+                .is_some_and(|v| v >= *threshold),
+            MetadataFilter::Lt(field, threshold) => metadata
+                .get(field)
+                .and_then(|v| v.as_f64())
+                .is_some_and(|v| v < *threshold),
+            MetadataFilter::Gt(field, threshold) => metadata
+                .get(field)
+                .and_then(|v| v.as_f64())
+                .is_some_and(|v| v > *threshold),
+            MetadataFilter::Lte(field, threshold) => metadata
+                .get(field)
+                .and_then(|v| v.as_f64())
+                .is_some_and(|v| v <= *threshold),
             MetadataFilter::In(field, values) => {
                 metadata.get(field).is_some_and(|v| values.contains(v))
             }
-            MetadataFilter::Contains(field, substring) => {
-                metadata.get(field)
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| s.contains(substring))
-            }
-            MetadataFilter::And(filters) => {
-                filters.iter().all(|f| f.matches(metadata))
-            }
-            MetadataFilter::Or(filters) => {
-                filters.iter().any(|f| f.matches(metadata))
-            }
+            MetadataFilter::Contains(field, substring) => metadata
+                .get(field)
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.contains(substring)),
+            MetadataFilter::And(filters) => filters.iter().all(|f| f.matches(metadata)),
+            MetadataFilter::Or(filters) => filters.iter().any(|f| f.matches(metadata)),
         }
     }
 }
@@ -295,7 +290,11 @@ impl VectorStore {
 
         // Build HNSW index if we have vectors
         let hnsw_index = if !vectors.is_empty() {
-            eprintln!("📂 Loading {} vectors from {}...", vectors.len(), path.as_ref().display());
+            eprintln!(
+                "📂 Loading {} vectors from {}...",
+                vectors.len(),
+                path.as_ref().display()
+            );
             let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions);
             for vector in &vectors {
                 index.insert(&vector.data)?;
@@ -411,7 +410,10 @@ impl VectorStore {
     ) -> Result<usize> {
         // Check if ID already exists
         if self.id_to_index.contains_key(&id) {
-            anyhow::bail!("Vector with ID '{}' already exists. Use set() to update.", id);
+            anyhow::bail!(
+                "Vector with ID '{}' already exists. Use set() to update.",
+                id
+            );
         }
 
         // Insert vector using existing insert method
@@ -435,12 +437,7 @@ impl VectorStore {
     /// This is the recommended method for most use cases.
     /// If the ID exists, updates the vector and metadata.
     /// If the ID doesn't exist, inserts a new vector.
-    pub fn set(
-        &mut self,
-        id: String,
-        vector: Vector,
-        metadata: JsonValue,
-    ) -> Result<usize> {
+    pub fn set(&mut self, id: String, vector: Vector, metadata: JsonValue) -> Result<usize> {
         // Check if ID already exists
         if let Some(&index) = self.id_to_index.get(&id) {
             // Update existing vector
@@ -474,10 +471,7 @@ impl VectorStore {
     /// ];
     /// let indices = store.set_batch(batch)?;
     /// ```
-    pub fn set_batch(
-        &mut self,
-        batch: Vec<(String, Vector, JsonValue)>,
-    ) -> Result<Vec<usize>> {
+    pub fn set_batch(&mut self, batch: Vec<(String, Vector, JsonValue)>) -> Result<Vec<usize>> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
@@ -530,9 +524,8 @@ impl VectorStore {
             }
 
             // Extract vectors for batch HNSW insertion
-            let vectors_data: Vec<Vec<f32>> = inserts.iter()
-                .map(|(_, v, _)| v.data.clone())
-                .collect();
+            let vectors_data: Vec<Vec<f32>> =
+                inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
             // Batch insert into HNSW
             let base_index = self.vectors.len();
@@ -552,7 +545,12 @@ impl VectorStore {
                     .iter()
                     .enumerate()
                     .map(|(i, (id, vector, metadata))| {
-                        (base_index + i, id.clone(), vector.data.clone(), metadata.clone())
+                        (
+                            base_index + i,
+                            id.clone(),
+                            vector.data.clone(),
+                            metadata.clone(),
+                        )
                     })
                     .collect();
 
@@ -649,18 +647,22 @@ impl VectorStore {
         vector: Option<Vector>,
         metadata: Option<JsonValue>,
     ) -> Result<()> {
-        let index = self.id_to_index.get(id).copied().ok_or_else(|| {
-            anyhow::anyhow!("Vector with ID '{}' not found", id)
-        })?;
+        let index = self
+            .id_to_index
+            .get(id)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("Vector with ID '{}' not found", id))?;
 
         self.update_by_index(index, vector, metadata)
     }
 
     /// Delete vector by string ID (marks as deleted, uses tombstone)
     pub fn delete(&mut self, id: &str) -> Result<()> {
-        let index = self.id_to_index.get(id).copied().ok_or_else(|| {
-            anyhow::anyhow!("Vector with ID '{}' not found", id)
-        })?;
+        let index = self
+            .id_to_index
+            .get(id)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("Vector with ID '{}' not found", id))?;
 
         // Mark as deleted
         self.deleted.insert(index, true);
@@ -696,9 +698,9 @@ impl VectorStore {
                 return None;
             }
             // Return vector and metadata
-            self.vectors.get(index).and_then(|vec| {
-                self.metadata.get(&index).map(|meta| (vec, meta))
-            })
+            self.vectors
+                .get(index)
+                .and_then(|vec| self.metadata.get(&index).map(|meta| (vec, meta)))
         })
     }
 
@@ -746,10 +748,7 @@ impl VectorStore {
         // Process in chunks for better memory management and progress tracking
         for (chunk_idx, chunk) in vectors.chunks(CHUNK_SIZE).enumerate() {
             // Extract vector data for HNSW
-            let vector_data: Vec<Vec<f32>> = chunk
-                .iter()
-                .map(|v| v.data.clone())
-                .collect();
+            let vector_data: Vec<Vec<f32>> = chunk.iter().map(|v| v.data.clone()).collect();
 
             // Parallel insert this chunk
             if let Some(ref mut index) = self.hnsw_index {
@@ -799,7 +798,10 @@ impl VectorStore {
             return Ok(());
         }
 
-        eprintln!("🔨 Rebuilding HNSW index for {} vectors...", self.vectors.len());
+        eprintln!(
+            "🔨 Rebuilding HNSW index for {} vectors...",
+            self.vectors.len()
+        );
         let start = std::time::Instant::now();
 
         // Create new HNSW index
@@ -822,7 +824,10 @@ impl VectorStore {
             }
         }
 
-        eprintln!("✅ HNSW index rebuilt in {:.2}s", start.elapsed().as_secs_f64());
+        eprintln!(
+            "✅ HNSW index rebuilt in {:.2}s",
+            start.elapsed().as_secs_f64()
+        );
         Ok(())
     }
 
@@ -869,7 +874,9 @@ impl VectorStore {
         // Copy vectors and metadata, handling ID conflicts
         for (other_idx, vector) in other.vectors.iter().enumerate() {
             // Check for string ID conflict
-            let has_conflict = other.id_to_index.iter()
+            let has_conflict = other
+                .id_to_index
+                .iter()
                 .find(|(_, &idx)| idx == other_idx)
                 .map(|(string_id, _)| self.id_to_index.contains_key(string_id))
                 .unwrap_or(false);
@@ -883,12 +890,16 @@ impl VectorStore {
 
             // Copy metadata if present
             if let Some(meta) = other.metadata.get(&other_idx) {
-                self.metadata.insert(base_index + merged_count, meta.clone());
+                self.metadata
+                    .insert(base_index + merged_count, meta.clone());
             }
 
             // Copy string ID mapping
-            if let Some((string_id, _)) = other.id_to_index.iter().find(|(_, &idx)| idx == other_idx) {
-                self.id_to_index.insert(string_id.clone(), base_index + merged_count);
+            if let Some((string_id, _)) =
+                other.id_to_index.iter().find(|(_, &idx)| idx == other_idx)
+            {
+                self.id_to_index
+                    .insert(string_id.clone(), base_index + merged_count);
             }
 
             // Copy quantized vector if present
@@ -902,7 +913,9 @@ impl VectorStore {
         }
 
         // Merge HNSW indexes using IGTM
-        if let (Some(ref mut self_index), Some(ref other_index)) = (&mut self.hnsw_index, &other.hnsw_index) {
+        if let (Some(ref mut self_index), Some(ref other_index)) =
+            (&mut self.hnsw_index, &other.hnsw_index)
+        {
             self_index.merge_from(other_index)?;
         } else {
             // Fallback: rebuild index if other didn't have one
@@ -933,8 +946,8 @@ impl VectorStore {
         }
 
         // Check if we have any data (either in vectors or in HNSW)
-        let has_data = !self.vectors.is_empty() ||
-                      (self.hnsw_index.is_some() && !self.hnsw_index.as_ref().unwrap().is_empty());
+        let has_data = !self.vectors.is_empty()
+            || (self.hnsw_index.is_some() && !self.hnsw_index.as_ref().unwrap().is_empty());
 
         if !has_data {
             return Ok(Vec::new());
@@ -943,7 +956,10 @@ impl VectorStore {
         // CRITICAL FIX: Rebuild index if missing but vectors exist
         // This handles the case where vectors were loaded from disk but index wasn't persisted
         if self.hnsw_index.is_none() && self.vectors.len() > 100 {
-            eprintln!("⚠️  HNSW index missing for {} vectors - rebuilding...", self.vectors.len());
+            eprintln!(
+                "⚠️  HNSW index missing for {} vectors - rebuilding...",
+                self.vectors.len()
+            );
             self.rebuild_index()?;
         }
 
@@ -954,7 +970,10 @@ impl VectorStore {
         }
 
         // Fallback to brute-force if no index (small datasets only)
-        eprintln!("ℹ️  Using brute-force search for {} vectors", self.vectors.len());
+        eprintln!(
+            "ℹ️  Using brute-force search for {} vectors",
+            self.vectors.len()
+        );
         self.knn_search_brute_force(query, k)
     }
 
@@ -987,7 +1006,8 @@ impl VectorStore {
                 }
 
                 // Get metadata (default to empty object if none)
-                let metadata = metadata_map.get(&index)
+                let metadata = metadata_map
+                    .get(&index)
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
 
@@ -1002,7 +1022,9 @@ impl VectorStore {
             let filtered_results: Vec<(usize, f32, JsonValue)> = search_results
                 .into_iter()
                 .map(|(index, distance)| {
-                    let metadata = self.metadata.get(&index)
+                    let metadata = self
+                        .metadata
+                        .get(&index)
                         .cloned()
                         .unwrap_or(serde_json::json!({}));
                     (index, distance, metadata)
@@ -1013,7 +1035,8 @@ impl VectorStore {
         }
 
         // Fallback: Brute-force search with filtering (no HNSW index)
-        let mut all_results: Vec<(usize, f32, JsonValue)> = self.vectors
+        let mut all_results: Vec<(usize, f32, JsonValue)> = self
+            .vectors
             .iter()
             .enumerate()
             .filter_map(|(index, vec)| {
@@ -1023,7 +1046,9 @@ impl VectorStore {
                 }
 
                 // Get metadata and check filter
-                let metadata = self.metadata.get(&index)
+                let metadata = self
+                    .metadata
+                    .get(&index)
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
 
@@ -1064,7 +1089,9 @@ impl VectorStore {
                         return None;
                     }
                     // Get metadata (default to empty object)
-                    let metadata = self.metadata.get(&index)
+                    let metadata = self
+                        .metadata
+                        .get(&index)
                         .cloned()
                         .unwrap_or(serde_json::json!({}));
                     Some((index, distance, metadata))
@@ -1088,7 +1115,8 @@ impl VectorStore {
 
         // Phase 1: Fast filtering with quantized vectors (oversample 3x)
         let oversample = (k * 3).min(self.vectors.len());
-        let mut distances: Vec<(usize, f32)> = self.quantized_vectors
+        let mut distances: Vec<(usize, f32)> = self
+            .quantized_vectors
             .iter()
             .enumerate()
             .filter_map(|(id, qv_opt)| {
@@ -1101,7 +1129,11 @@ impl VectorStore {
 
         // Sort by quantized distance and take top candidates
         distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let candidates: Vec<usize> = distances.into_iter().take(oversample).map(|(id, _)| id).collect();
+        let candidates: Vec<usize> = distances
+            .into_iter()
+            .take(oversample)
+            .map(|(id, _)| id)
+            .collect();
 
         // Phase 2: Rerank with original vectors
         let mut reranked: Vec<(usize, f32)> = candidates
@@ -1323,7 +1355,8 @@ impl VectorStore {
             let params_path = directory.join(format!("{}.quantizer.json", filename));
             let quantized_path = directory.join(format!("{}.quantized.bin", filename));
 
-            let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists() {
+            let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists()
+            {
                 // Load quantizer parameters
                 let params_json = fs::read_to_string(&params_path)?;
                 let params: RaBitQParams = serde_json::from_str(&params_json)?;
@@ -1331,9 +1364,13 @@ impl VectorStore {
 
                 // Load quantized vectors
                 let quantized_data = fs::read(&quantized_path)?;
-                let quantized_vectors: Vec<Option<QuantizedVector>> = bincode::deserialize(&quantized_data)?;
+                let quantized_vectors: Vec<Option<QuantizedVector>> =
+                    bincode::deserialize(&quantized_data)?;
 
-                eprintln!("  Loaded Extended RaBitQ quantization ({} quantized vectors)", quantized_vectors.len());
+                eprintln!(
+                    "  Loaded Extended RaBitQ quantization ({} quantized vectors)",
+                    quantized_vectors.len()
+                );
 
                 (Some(quantizer), quantized_vectors)
             } else {
@@ -1407,7 +1444,8 @@ impl VectorStore {
             let params_path = directory.join(format!("{}.quantizer.json", filename));
             let quantized_path = directory.join(format!("{}.quantized.bin", filename));
 
-            let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists() {
+            let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists()
+            {
                 // Load quantizer parameters
                 let params_json = fs::read_to_string(&params_path)?;
                 let params: RaBitQParams = serde_json::from_str(&params_json)?;
@@ -1415,9 +1453,13 @@ impl VectorStore {
 
                 // Load quantized vectors
                 let quantized_data = fs::read(&quantized_path)?;
-                let quantized_vectors: Vec<Option<QuantizedVector>> = bincode::deserialize(&quantized_data)?;
+                let quantized_vectors: Vec<Option<QuantizedVector>> =
+                    bincode::deserialize(&quantized_data)?;
 
-                eprintln!("  Loaded Extended RaBitQ quantization ({} quantized vectors)", quantized_vectors.len());
+                eprintln!(
+                    "  Loaded Extended RaBitQ quantization ({} quantized vectors)",
+                    quantized_vectors.len()
+                );
 
                 (Some(quantizer), quantized_vectors)
             } else {
@@ -1619,7 +1661,10 @@ mod tests {
         // Verify loaded store
         assert_eq!(loaded_store.len(), 100);
         assert_eq!(loaded_store.dimensions, 128);
-        assert!(loaded_store.hnsw_index.is_some(), "HNSW index should be rebuilt");
+        assert!(
+            loaded_store.hnsw_index.is_some(),
+            "HNSW index should be rebuilt"
+        );
 
         // Verify vectors are identical
         for i in 0..100 {
@@ -1668,7 +1713,7 @@ mod tests {
 
     #[test]
     fn test_quantization_insert() {
-        use super::super::rabitq::{RaBitQParams};
+        use super::super::rabitq::RaBitQParams;
 
         // Create store with 4-bit quantization
         let params = RaBitQParams::bits4();
@@ -1687,7 +1732,7 @@ mod tests {
 
     #[test]
     fn test_quantization_search_accuracy() {
-        use super::super::rabitq::{RaBitQParams};
+        use super::super::rabitq::RaBitQParams;
 
         // Create store with 4-bit quantization
         let params = RaBitQParams::bits4();
@@ -1713,8 +1758,8 @@ mod tests {
 
     #[test]
     fn test_quantization_persistence() {
+        use super::super::rabitq::RaBitQParams;
         use std::fs;
-        use super::super::rabitq::{RaBitQParams};
 
         let test_dir = "/tmp/omendb_test_quantization";
         let test_path = format!("{}/test_store", test_dir);
@@ -1756,7 +1801,7 @@ mod tests {
 
     #[test]
     fn test_quantization_batch_insert() {
-        use super::super::rabitq::{RaBitQParams};
+        use super::super::rabitq::RaBitQParams;
 
         // Create store with 4-bit quantization
         let params = RaBitQParams::bits4();
@@ -1885,11 +1930,9 @@ mod tests {
             "year": 2024
         });
 
-        let index = store.insert_with_metadata(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            metadata.clone()
-        ).unwrap();
+        let index = store
+            .insert_with_metadata("doc1".to_string(), random_vector(128, 0), metadata.clone())
+            .unwrap();
 
         assert_eq!(index, 0);
         assert!(store.id_to_index.contains_key("doc1"));
@@ -1903,11 +1946,9 @@ mod tests {
         let metadata = serde_json::json!({"title": "Doc 1"});
 
         // First set should insert
-        let index = store.set(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            metadata.clone()
-        ).unwrap();
+        let index = store
+            .set("doc1".to_string(), random_vector(128, 0), metadata.clone())
+            .unwrap();
 
         assert_eq!(index, 0);
         assert_eq!(store.len(), 1);
@@ -1918,18 +1959,22 @@ mod tests {
         let mut store = VectorStore::new(128);
 
         // Insert initial document
-        store.set(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            serde_json::json!({"title": "Original"})
-        ).unwrap();
+        store
+            .set(
+                "doc1".to_string(),
+                random_vector(128, 0),
+                serde_json::json!({"title": "Original"}),
+            )
+            .unwrap();
 
         // Upsert with same ID should update
-        let index = store.set(
-            "doc1".to_string(),
-            random_vector(128, 1),
-            serde_json::json!({"title": "Updated"})
-        ).unwrap();
+        let index = store
+            .set(
+                "doc1".to_string(),
+                random_vector(128, 1),
+                serde_json::json!({"title": "Updated"}),
+            )
+            .unwrap();
 
         assert_eq!(index, 0);
         assert_eq!(store.len(), 1); // Still only 1 vector
@@ -1943,11 +1988,13 @@ mod tests {
     fn test_delete() {
         let mut store = VectorStore::new(128);
 
-        store.insert_with_metadata(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            serde_json::json!({"title": "Doc 1"})
-        ).unwrap();
+        store
+            .insert_with_metadata(
+                "doc1".to_string(),
+                random_vector(128, 0),
+                serde_json::json!({"title": "Doc 1"}),
+            )
+            .unwrap();
 
         // Delete the document
         store.delete("doc1").unwrap();
@@ -1964,18 +2011,22 @@ mod tests {
     fn test_update() {
         let mut store = VectorStore::new(128);
 
-        store.insert_with_metadata(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            serde_json::json!({"title": "Original"})
-        ).unwrap();
+        store
+            .insert_with_metadata(
+                "doc1".to_string(),
+                random_vector(128, 0),
+                serde_json::json!({"title": "Original"}),
+            )
+            .unwrap();
 
         // Update metadata only
-        store.update(
-            "doc1",
-            None,
-            Some(serde_json::json!({"title": "Updated", "author": "Bob"}))
-        ).unwrap();
+        store
+            .update(
+                "doc1",
+                None,
+                Some(serde_json::json!({"title": "Updated", "author": "Bob"})),
+            )
+            .unwrap();
 
         let (_, metadata) = store.get_by_id("doc1").unwrap();
         assert_eq!(metadata.get("title").unwrap(), "Updated");
@@ -2025,23 +2076,29 @@ mod tests {
         let mut store = VectorStore::new(128);
 
         // Insert vectors with metadata
-        store.set(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            serde_json::json!({"author": "Alice", "year": 2024})
-        ).unwrap();
+        store
+            .set(
+                "doc1".to_string(),
+                random_vector(128, 0),
+                serde_json::json!({"author": "Alice", "year": 2024}),
+            )
+            .unwrap();
 
-        store.set(
-            "doc2".to_string(),
-            random_vector(128, 1),
-            serde_json::json!({"author": "Bob", "year": 2023})
-        ).unwrap();
+        store
+            .set(
+                "doc2".to_string(),
+                random_vector(128, 1),
+                serde_json::json!({"author": "Bob", "year": 2023}),
+            )
+            .unwrap();
 
-        store.set(
-            "doc3".to_string(),
-            random_vector(128, 2),
-            serde_json::json!({"author": "Alice", "year": 2022})
-        ).unwrap();
+        store
+            .set(
+                "doc3".to_string(),
+                random_vector(128, 2),
+                serde_json::json!({"author": "Alice", "year": 2022}),
+            )
+            .unwrap();
 
         // Search with filter for Alice's documents
         let filter = MetadataFilter::Eq("author".to_string(), serde_json::json!("Alice"));
@@ -2068,17 +2125,21 @@ mod tests {
         // Create store with metadata
         let mut store = VectorStore::new(128);
 
-        store.set(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            serde_json::json!({"title": "Doc 1", "year": 2024})
-        ).unwrap();
+        store
+            .set(
+                "doc1".to_string(),
+                random_vector(128, 0),
+                serde_json::json!({"title": "Doc 1", "year": 2024}),
+            )
+            .unwrap();
 
-        store.set(
-            "doc2".to_string(),
-            random_vector(128, 1),
-            serde_json::json!({"title": "Doc 2", "year": 2023})
-        ).unwrap();
+        store
+            .set(
+                "doc2".to_string(),
+                random_vector(128, 1),
+                serde_json::json!({"title": "Doc 2", "year": 2023}),
+            )
+            .unwrap();
 
         // Save to disk
         store.save_to_disk(&test_path).unwrap();
@@ -2110,11 +2171,9 @@ mod tests {
         let vector = random_vector(128, 0);
         let metadata = serde_json::json!({"title": "Test"});
 
-        store.insert_with_metadata(
-            "doc1".to_string(),
-            vector.clone(),
-            metadata.clone()
-        ).unwrap();
+        store
+            .insert_with_metadata("doc1".to_string(), vector.clone(), metadata.clone())
+            .unwrap();
 
         // Get by ID
         let (retrieved_vector, retrieved_metadata) = store.get_by_id("doc1").unwrap();
@@ -2141,17 +2200,21 @@ mod tests {
         assert_eq!(store.len(), 0);
 
         // Insert some vectors
-        store.set(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            serde_json::json!({"title": "Doc 1"})
-        ).unwrap();
+        store
+            .set(
+                "doc1".to_string(),
+                random_vector(128, 0),
+                serde_json::json!({"title": "Doc 1"}),
+            )
+            .unwrap();
 
-        store.set(
-            "doc2".to_string(),
-            random_vector(128, 1),
-            serde_json::json!({"title": "Doc 2"})
-        ).unwrap();
+        store
+            .set(
+                "doc2".to_string(),
+                random_vector(128, 1),
+                serde_json::json!({"title": "Doc 2"}),
+            )
+            .unwrap();
 
         assert_eq!(store.len(), 2);
         assert!(store.get_by_id("doc1").is_some());
@@ -2168,23 +2231,29 @@ mod tests {
         {
             let mut store = VectorStore::open(&db_path).unwrap();
 
-            store.set(
-                "vec1".to_string(),
-                random_vector(128, 10),
-                serde_json::json!({"category": "A", "score": 0.95})
-            ).unwrap();
+            store
+                .set(
+                    "vec1".to_string(),
+                    random_vector(128, 10),
+                    serde_json::json!({"category": "A", "score": 0.95}),
+                )
+                .unwrap();
 
-            store.set(
-                "vec2".to_string(),
-                random_vector(128, 20),
-                serde_json::json!({"category": "B", "score": 0.85})
-            ).unwrap();
+            store
+                .set(
+                    "vec2".to_string(),
+                    random_vector(128, 20),
+                    serde_json::json!({"category": "B", "score": 0.85}),
+                )
+                .unwrap();
 
-            store.set(
-                "vec3".to_string(),
-                random_vector(128, 30),
-                serde_json::json!({"category": "A", "score": 0.75})
-            ).unwrap();
+            store
+                .set(
+                    "vec3".to_string(),
+                    random_vector(128, 30),
+                    serde_json::json!({"category": "A", "score": 0.75}),
+                )
+                .unwrap();
 
             // Flush to ensure data is on disk
             store.flush().unwrap();
@@ -2223,8 +2292,20 @@ mod tests {
         {
             let mut store = VectorStore::open(&db_path).unwrap();
 
-            store.set("keep".to_string(), random_vector(128, 1), serde_json::json!({})).unwrap();
-            store.set("delete_me".to_string(), random_vector(128, 2), serde_json::json!({})).unwrap();
+            store
+                .set(
+                    "keep".to_string(),
+                    random_vector(128, 1),
+                    serde_json::json!({}),
+                )
+                .unwrap();
+            store
+                .set(
+                    "delete_me".to_string(),
+                    random_vector(128, 2),
+                    serde_json::json!({}),
+                )
+                .unwrap();
 
             assert_eq!(store.len(), 2);
 
@@ -2257,11 +2338,13 @@ mod tests {
             let mut store = VectorStore::open(&db_path).unwrap();
 
             for i in 0..100 {
-                store.set(
-                    format!("vec{}", i),
-                    random_vector(128, i),
-                    serde_json::json!({"index": i})
-                ).unwrap();
+                store
+                    .set(
+                        format!("vec{}", i),
+                        random_vector(128, i),
+                        serde_json::json!({"index": i}),
+                    )
+                    .unwrap();
             }
 
             store.flush().unwrap();
@@ -2282,7 +2365,10 @@ mod tests {
 
             // Verify results are sorted by distance
             for i in 1..results.len() {
-                assert!(results[i].1 >= results[i-1].1, "Results should be sorted by distance");
+                assert!(
+                    results[i].1 >= results[i - 1].1,
+                    "Results should be sorted by distance"
+                );
             }
         }
     }
@@ -2296,30 +2382,199 @@ mod incremental_tests {
     fn test_incremental_set_batch() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
-        
+
         // Single item inserts
-        store.set_batch(vec![
-            ("vec1".to_string(), Vector::new(vec![1.0, 0.0, 0.0, 0.0]), serde_json::json!({}))
-        ]).unwrap();
-        
-        store.set_batch(vec![
-            ("vec2".to_string(), Vector::new(vec![0.0, 1.0, 0.0, 0.0]), serde_json::json!({}))
-        ]).unwrap();
-        
+        store
+            .set_batch(vec![(
+                "vec1".to_string(),
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        store
+            .set_batch(vec![(
+                "vec2".to_string(),
+                Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
         // Batch insert
-        store.set_batch(vec![
-            ("vec3".to_string(), Vector::new(vec![0.0, 0.0, 1.0, 0.0]), serde_json::json!({})),
-            ("vec4".to_string(), Vector::new(vec![0.0, 0.0, 0.0, 1.0]), serde_json::json!({})),
-        ]).unwrap();
-        
+        store
+            .set_batch(vec![
+                (
+                    "vec3".to_string(),
+                    Vector::new(vec![0.0, 0.0, 1.0, 0.0]),
+                    serde_json::json!({}),
+                ),
+                (
+                    "vec4".to_string(),
+                    Vector::new(vec![0.0, 0.0, 0.0, 1.0]),
+                    serde_json::json!({}),
+                ),
+            ])
+            .unwrap();
+
         // Another batch
-        store.set_batch(vec![
-            ("vec5".to_string(), Vector::new(vec![0.5, 0.5, 0.0, 0.0]), serde_json::json!({})),
-            ("vec6".to_string(), Vector::new(vec![0.0, 0.5, 0.5, 0.0]), serde_json::json!({})),
-        ]).unwrap();
-        
+        store
+            .set_batch(vec![
+                (
+                    "vec5".to_string(),
+                    Vector::new(vec![0.5, 0.5, 0.0, 0.0]),
+                    serde_json::json!({}),
+                ),
+                (
+                    "vec6".to_string(),
+                    Vector::new(vec![0.0, 0.5, 0.5, 0.0]),
+                    serde_json::json!({}),
+                ),
+            ])
+            .unwrap();
+
         let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
         let results = store.knn_search(&query, 10).unwrap();
-        assert_eq!(results.len(), 6, "Incremental inserts must all be searchable");
+        assert_eq!(
+            results.len(),
+            6,
+            "Incremental inserts must all be searchable"
+        );
+    }
+
+    /// INC-2: Interleave inserts and searches
+    #[test]
+    fn test_interleaved_insert_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+
+        let mut total_inserted = 0;
+
+        // Insert 10 batches of 10 vectors, searching after each batch
+        for batch in 0..10 {
+            let vectors: Vec<_> = (0..10)
+                .map(|i| {
+                    let id = batch * 10 + i;
+                    let mut v = vec![0.0; 4];
+                    v[id % 4] = 1.0 + (id as f32 * 0.01);
+                    (format!("vec{}", id), Vector::new(v), serde_json::json!({}))
+                })
+                .collect();
+
+            store.set_batch(vectors).unwrap();
+            total_inserted += 10;
+
+            // Search after each batch
+            let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+            let results = store.knn_search(&query, total_inserted + 10).unwrap();
+            assert_eq!(
+                results.len(),
+                total_inserted,
+                "After batch {}, expected {} results but got {}",
+                batch,
+                total_inserted,
+                results.len()
+            );
+        }
+
+        // Final verification
+        let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+        let results = store.knn_search(&query, 200).unwrap();
+        assert_eq!(results.len(), 100, "All 100 vectors must be searchable");
+    }
+
+    /// INC-3: Insert batch, search, single insert, search
+    #[test]
+    fn test_batch_then_single_insert() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+
+        // Batch insert
+        let batch: Vec<_> = (0..50)
+            .map(|i| {
+                let mut v = vec![0.0; 4];
+                v[i % 4] = 1.0;
+                (format!("batch{}", i), Vector::new(v), serde_json::json!({}))
+            })
+            .collect();
+        store.set_batch(batch).unwrap();
+
+        // Search to "activate" the index
+        let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+        let results = store.knn_search(&query, 100).unwrap();
+        assert_eq!(results.len(), 50, "Batch vectors must be searchable");
+
+        // Single insert after search
+        store
+            .set_batch(vec![(
+                "single".to_string(),
+                Vector::new(vec![0.99, 0.01, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Search again - new vector must be reachable
+        let results = store.knn_search(&query, 100).unwrap();
+        assert_eq!(
+            results.len(),
+            51,
+            "New vector after search must be reachable"
+        );
+
+        // The new vector should appear in search results
+        // Index 50 is the single insert (0-49 were batch)
+        let found = results.iter().any(|(idx, _)| *idx == 50);
+        assert!(found, "Newly inserted vector must appear in search results");
+    }
+
+    /// INC-4: Empty index -> insert -> search -> insert -> search cycle
+    #[test]
+    fn test_insert_search_cycle_from_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+
+        let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+
+        // Search empty index
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 0, "Empty index should return no results");
+
+        // First insert
+        store
+            .set_batch(vec![(
+                "first".to_string(),
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Search should find first vector
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 1, "Should find first vector");
+
+        // Second insert
+        store
+            .set_batch(vec![(
+                "second".to_string(),
+                Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Search should find both
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 2, "Should find both vectors");
+
+        // Third insert
+        store
+            .set_batch(vec![(
+                "third".to_string(),
+                Vector::new(vec![0.5, 0.5, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Search should find all three
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 3, "Should find all three vectors");
     }
 }

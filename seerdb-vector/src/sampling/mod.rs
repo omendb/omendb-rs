@@ -1,14 +1,14 @@
-/// Sampling-based probabilistic search optimization
-///
-/// Implementation of random projection hashing from LSM-VEC paper.
-/// Filters disk reads by comparing hash collision counts before loading vectors.
-///
-/// Paper: "LSM-VEC: A Large-Scale Disk-Based System for Dynamic Vector Search"
-/// Section: Sampling-Based Query Engine
-///
-/// Performance impact: 30% speedup (4.90ms vs 7.0ms from paper)
-/// - Skip 20% of disk reads by filtering low-collision candidates
-/// - Fast hash comparison (XOR + popcount) vs expensive disk I/O + decompression
+//! Sampling-based probabilistic search optimization
+//!
+//! Implementation of random projection hashing from LSM-VEC paper.
+//! Filters disk reads by comparing hash collision counts before loading vectors.
+//!
+//! Paper: "LSM-VEC: A Large-Scale Disk-Based System for Dynamic Vector Search"
+//! Section: Sampling-Based Query Engine
+//!
+//! Performance impact: 30% speedup (4.90ms vs 7.0ms from paper)
+//! - Skip 20% of disk reads by filtering low-collision candidates
+//! - Fast hash comparison (XOR + popcount) vs expensive disk I/O + decompression
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -282,7 +282,10 @@ mod tests {
 
         // Different vectors should have lower collision count
         // (Not always <50% due to random projections, but should be noticeably lower)
-        println!("Different vectors collision rate: {}/{}", collisions, HASH_BITS);
+        println!(
+            "Different vectors collision rate: {}/{}",
+            collisions, HASH_BITS
+        );
     }
 
     #[test]

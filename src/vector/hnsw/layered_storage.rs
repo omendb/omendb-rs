@@ -445,9 +445,7 @@ mod tests {
 
         // Write all nodes to layer 0
         for node_id in 0..num_nodes {
-            storage
-                .write_neighbors(node_id, 0, &[1, 2, 3, 4])
-                .unwrap();
+            storage.write_neighbors(node_id, 0, &[1, 2, 3, 4]).unwrap();
         }
 
         // Write ~50% to layer 1

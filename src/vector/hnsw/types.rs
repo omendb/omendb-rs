@@ -229,7 +229,7 @@ impl DistanceFunction {
 }
 
 // Re-export SIMD distance functions for convenience
-pub use super::simd_distance::{l2_distance, l2_distance_squared, cosine_distance, dot_product};
+pub use super::simd_distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
 
 /// Candidate during search (node ID + distance)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -323,7 +323,7 @@ mod tests {
         let b = vec![4.0, 5.0, 6.0];
 
         let dist = l2_distance(&a, &b);
-        let expected = ((3.0_f32.powi(2) * 3.0)).sqrt(); // sqrt(9 + 9 + 9) = sqrt(27)
+        let expected = (3.0_f32.powi(2) * 3.0).sqrt(); // sqrt(9 + 9 + 9) = sqrt(27)
 
         assert!((dist - expected).abs() < 1e-6);
     }

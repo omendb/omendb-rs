@@ -13,10 +13,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 
 /// Number of bits per dimension for quantization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +127,7 @@ impl RaBitQParams {
     pub fn bits8() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits8,
-            num_rescale_factors: 16, // More factors for higher precision
+            num_rescale_factors: 16,   // More factors for higher precision
             rescale_range: (0.7, 1.5), // Narrower range for 8-bit
             use_fht: false,
         }
@@ -240,7 +240,13 @@ impl QuantizedVector {
     }
 
     /// Create a new quantized vector with FHT flag
-    pub fn new_with_fht(data: Vec<u8>, scale: f32, bits: u8, dimensions: usize, fht_applied: bool) -> Self {
+    pub fn new_with_fht(
+        data: Vec<u8>,
+        scale: f32,
+        bits: u8,
+        dimensions: usize,
+        fht_applied: bool,
+    ) -> Self {
         Self {
             data,
             scale,
@@ -562,11 +568,7 @@ impl RaBitQ {
     ///
     /// This reconstructs both vectors and computes standard L2 distance.
     /// For maximum accuracy, use this with original vectors for reranking.
-    pub fn distance_l2(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_l2(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
 
@@ -580,11 +582,7 @@ impl RaBitQ {
     /// Compute cosine distance between two quantized vectors
     ///
     /// Cosine distance = 1 - cosine similarity
-    pub fn distance_cosine(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_cosine(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
 
@@ -601,11 +599,7 @@ impl RaBitQ {
     }
 
     /// Compute dot product between two quantized vectors
-    pub fn distance_dot(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_dot(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
 
@@ -617,11 +611,7 @@ impl RaBitQ {
     ///
     /// This computes distance in the quantized space without full reconstruction.
     /// Faster but less accurate than distance_l2.
-    pub fn distance_approximate(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_approximate(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         // Unpack to quantized values (u8)
         let v1 = self.unpack_quantized(&qv1.data, qv1.bits, qv1.dimensions);
         let v2 = self.unpack_quantized(&qv2.data, qv2.bits, qv2.dimensions);
@@ -645,11 +635,7 @@ impl RaBitQ {
     /// - x86_64: AVX2 > SSE2 > scalar
     /// - aarch64: NEON > scalar
     #[inline]
-    pub fn distance_l2_simd(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_l2_simd(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         // Reconstruct to f32 vectors
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -660,11 +646,7 @@ impl RaBitQ {
 
     /// Compute cosine distance using SIMD acceleration
     #[inline]
-    pub fn distance_cosine_simd(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_cosine_simd(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
 
@@ -755,71 +737,73 @@ pub fn fast_hadamard_transform_inplace(data: &mut [f32]) {
 /// Fast Hadamard Transform with SIMD acceleration
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn fast_hadamard_transform_avx2(data: &mut [f32]) { unsafe {
-    let n = data.len();
-    if n == 0 || !n.is_power_of_two() {
-        return;
-    }
-
-    // Use SIMD for large blocks, scalar for small
-    let mut h = 1;
-
-    // Scalar phase for h < 8 (can't vectorize efficiently)
-    while h < 8 && h < n {
-        for i in (0..n).step_by(h * 2) {
-            for j in 0..h {
-                let a = data[i + j];
-                let b = data[i + j + h];
-                data[i + j] = a + b;
-                data[i + j + h] = a - b;
-            }
+unsafe fn fast_hadamard_transform_avx2(data: &mut [f32]) {
+    unsafe {
+        let n = data.len();
+        if n == 0 || !n.is_power_of_two() {
+            return;
         }
-        h *= 2;
-    }
 
-    // AVX2 phase for h >= 8
-    while h < n {
-        for i in (0..n).step_by(h * 2) {
-            // Process 8 elements at a time
-            let mut j = 0;
-            while j + 8 <= h {
-                let a = _mm256_loadu_ps(data.as_ptr().add(i + j));
-                let b = _mm256_loadu_ps(data.as_ptr().add(i + j + h));
-                let sum = _mm256_add_ps(a, b);
-                let diff = _mm256_sub_ps(a, b);
-                _mm256_storeu_ps(data.as_mut_ptr().add(i + j), sum);
-                _mm256_storeu_ps(data.as_mut_ptr().add(i + j + h), diff);
-                j += 8;
+        // Use SIMD for large blocks, scalar for small
+        let mut h = 1;
+
+        // Scalar phase for h < 8 (can't vectorize efficiently)
+        while h < 8 && h < n {
+            for i in (0..n).step_by(h * 2) {
+                for j in 0..h {
+                    let a = data[i + j];
+                    let b = data[i + j + h];
+                    data[i + j] = a + b;
+                    data[i + j + h] = a - b;
+                }
             }
-            // Handle remainder
-            while j < h {
-                let a = data[i + j];
-                let b = data[i + j + h];
-                data[i + j] = a + b;
-                data[i + j + h] = a - b;
-                j += 1;
-            }
+            h *= 2;
         }
-        h *= 2;
-    }
 
-    // Normalize
-    let norm = (n as f32).sqrt();
-    let inv_norm = 1.0 / norm;
-    let inv_norm_vec = _mm256_set1_ps(inv_norm);
+        // AVX2 phase for h >= 8
+        while h < n {
+            for i in (0..n).step_by(h * 2) {
+                // Process 8 elements at a time
+                let mut j = 0;
+                while j + 8 <= h {
+                    let a = _mm256_loadu_ps(data.as_ptr().add(i + j));
+                    let b = _mm256_loadu_ps(data.as_ptr().add(i + j + h));
+                    let sum = _mm256_add_ps(a, b);
+                    let diff = _mm256_sub_ps(a, b);
+                    _mm256_storeu_ps(data.as_mut_ptr().add(i + j), sum);
+                    _mm256_storeu_ps(data.as_mut_ptr().add(i + j + h), diff);
+                    j += 8;
+                }
+                // Handle remainder
+                while j < h {
+                    let a = data[i + j];
+                    let b = data[i + j + h];
+                    data[i + j] = a + b;
+                    data[i + j + h] = a - b;
+                    j += 1;
+                }
+            }
+            h *= 2;
+        }
 
-    let mut i = 0;
-    while i + 8 <= n {
-        let v = _mm256_loadu_ps(data.as_ptr().add(i));
-        let scaled = _mm256_mul_ps(v, inv_norm_vec);
-        _mm256_storeu_ps(data.as_mut_ptr().add(i), scaled);
-        i += 8;
+        // Normalize
+        let norm = (n as f32).sqrt();
+        let inv_norm = 1.0 / norm;
+        let inv_norm_vec = _mm256_set1_ps(inv_norm);
+
+        let mut i = 0;
+        while i + 8 <= n {
+            let v = _mm256_loadu_ps(data.as_ptr().add(i));
+            let scaled = _mm256_mul_ps(v, inv_norm_vec);
+            _mm256_storeu_ps(data.as_mut_ptr().add(i), scaled);
+            i += 8;
+        }
+        while i < n {
+            data[i] *= inv_norm;
+            i += 1;
+        }
     }
-    while i < n {
-        data[i] *= inv_norm;
-        i += 1;
-    }
-}}
+}
 
 /// Fast Hadamard Transform with NEON acceleration
 #[cfg(target_arch = "aarch64")]
@@ -995,158 +979,170 @@ fn cosine_distance_scalar(v1: &[f32], v2: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
-unsafe fn l2_distance_avx2(v1: &[f32], v2: &[f32]) -> f32 { unsafe {
-    let len = v1.len().min(v2.len());
-    let mut sum = _mm256_setzero_ps();
+unsafe fn l2_distance_avx2(v1: &[f32], v2: &[f32]) -> f32 {
+    unsafe {
+        let len = v1.len().min(v2.len());
+        let mut sum = _mm256_setzero_ps();
 
-    let chunks = len / 8;
-    for i in 0..chunks {
-        let a = _mm256_loadu_ps(v1.as_ptr().add(i * 8));
-        let b = _mm256_loadu_ps(v2.as_ptr().add(i * 8));
-        let diff = _mm256_sub_ps(a, b);
-        sum = _mm256_fmadd_ps(diff, diff, sum);
+        let chunks = len / 8;
+        for i in 0..chunks {
+            let a = _mm256_loadu_ps(v1.as_ptr().add(i * 8));
+            let b = _mm256_loadu_ps(v2.as_ptr().add(i * 8));
+            let diff = _mm256_sub_ps(a, b);
+            sum = _mm256_fmadd_ps(diff, diff, sum);
+        }
+
+        // Horizontal sum
+        let sum_high = _mm256_extractf128_ps(sum, 1);
+        let sum_low = _mm256_castps256_ps128(sum);
+        let sum128 = _mm_add_ps(sum_low, sum_high);
+        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        let mut result = _mm_cvtss_f32(sum32);
+
+        // Handle remainder
+        for i in (chunks * 8)..len {
+            let diff = v1[i] - v2[i];
+            result += diff * diff;
+        }
+
+        result.sqrt()
     }
-
-    // Horizontal sum
-    let sum_high = _mm256_extractf128_ps(sum, 1);
-    let sum_low = _mm256_castps256_ps128(sum);
-    let sum128 = _mm_add_ps(sum_low, sum_high);
-    let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
-    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-    let mut result = _mm_cvtss_f32(sum32);
-
-    // Handle remainder
-    for i in (chunks * 8)..len {
-        let diff = v1[i] - v2[i];
-        result += diff * diff;
-    }
-
-    result.sqrt()
-}}
+}
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
-unsafe fn cosine_distance_avx2(v1: &[f32], v2: &[f32]) -> f32 { unsafe {
-    let len = v1.len().min(v2.len());
-    let mut dot_sum = _mm256_setzero_ps();
-    let mut norm1_sum = _mm256_setzero_ps();
-    let mut norm2_sum = _mm256_setzero_ps();
+unsafe fn cosine_distance_avx2(v1: &[f32], v2: &[f32]) -> f32 {
+    unsafe {
+        let len = v1.len().min(v2.len());
+        let mut dot_sum = _mm256_setzero_ps();
+        let mut norm1_sum = _mm256_setzero_ps();
+        let mut norm2_sum = _mm256_setzero_ps();
 
-    let chunks = len / 8;
-    for i in 0..chunks {
-        let a = _mm256_loadu_ps(v1.as_ptr().add(i * 8));
-        let b = _mm256_loadu_ps(v2.as_ptr().add(i * 8));
-        dot_sum = _mm256_fmadd_ps(a, b, dot_sum);
-        norm1_sum = _mm256_fmadd_ps(a, a, norm1_sum);
-        norm2_sum = _mm256_fmadd_ps(b, b, norm2_sum);
+        let chunks = len / 8;
+        for i in 0..chunks {
+            let a = _mm256_loadu_ps(v1.as_ptr().add(i * 8));
+            let b = _mm256_loadu_ps(v2.as_ptr().add(i * 8));
+            dot_sum = _mm256_fmadd_ps(a, b, dot_sum);
+            norm1_sum = _mm256_fmadd_ps(a, a, norm1_sum);
+            norm2_sum = _mm256_fmadd_ps(b, b, norm2_sum);
+        }
+
+        // Horizontal sums
+        let mut dot = horizontal_sum_avx2(dot_sum);
+        let mut norm1 = horizontal_sum_avx2(norm1_sum);
+        let mut norm2 = horizontal_sum_avx2(norm2_sum);
+
+        // Handle remainder
+        for i in (chunks * 8)..len {
+            dot += v1[i] * v2[i];
+            norm1 += v1[i] * v1[i];
+            norm2 += v2[i] * v2[i];
+        }
+
+        if norm1 < 1e-10 || norm2 < 1e-10 {
+            return 1.0;
+        }
+
+        let cosine_sim = dot / (norm1.sqrt() * norm2.sqrt());
+        1.0 - cosine_sim
     }
-
-    // Horizontal sums
-    let mut dot = horizontal_sum_avx2(dot_sum);
-    let mut norm1 = horizontal_sum_avx2(norm1_sum);
-    let mut norm2 = horizontal_sum_avx2(norm2_sum);
-
-    // Handle remainder
-    for i in (chunks * 8)..len {
-        dot += v1[i] * v2[i];
-        norm1 += v1[i] * v1[i];
-        norm2 += v2[i] * v2[i];
-    }
-
-    if norm1 < 1e-10 || norm2 < 1e-10 {
-        return 1.0;
-    }
-
-    let cosine_sim = dot / (norm1.sqrt() * norm2.sqrt());
-    1.0 - cosine_sim
-}}
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-unsafe fn horizontal_sum_avx2(v: __m256) -> f32 { unsafe {
-    let sum_high = _mm256_extractf128_ps(v, 1);
-    let sum_low = _mm256_castps256_ps128(v);
-    let sum128 = _mm_add_ps(sum_low, sum_high);
-    let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
-    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-    _mm_cvtss_f32(sum32)
-}}
+unsafe fn horizontal_sum_avx2(v: __m256) -> f32 {
+    unsafe {
+        let sum_high = _mm256_extractf128_ps(v, 1);
+        let sum_low = _mm256_castps256_ps128(v);
+        let sum128 = _mm_add_ps(sum_low, sum_high);
+        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        _mm_cvtss_f32(sum32)
+    }
+}
 
 // SSE2 implementations (x86_64 fallback)
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-unsafe fn l2_distance_sse2(v1: &[f32], v2: &[f32]) -> f32 { unsafe {
-    let len = v1.len().min(v2.len());
-    let mut sum = _mm_setzero_ps();
+unsafe fn l2_distance_sse2(v1: &[f32], v2: &[f32]) -> f32 {
+    unsafe {
+        let len = v1.len().min(v2.len());
+        let mut sum = _mm_setzero_ps();
 
-    let chunks = len / 4;
-    for i in 0..chunks {
-        let a = _mm_loadu_ps(v1.as_ptr().add(i * 4));
-        let b = _mm_loadu_ps(v2.as_ptr().add(i * 4));
-        let diff = _mm_sub_ps(a, b);
-        sum = _mm_add_ps(sum, _mm_mul_ps(diff, diff));
+        let chunks = len / 4;
+        for i in 0..chunks {
+            let a = _mm_loadu_ps(v1.as_ptr().add(i * 4));
+            let b = _mm_loadu_ps(v2.as_ptr().add(i * 4));
+            let diff = _mm_sub_ps(a, b);
+            sum = _mm_add_ps(sum, _mm_mul_ps(diff, diff));
+        }
+
+        // Horizontal sum
+        let sum64 = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        let mut result = _mm_cvtss_f32(sum32);
+
+        // Handle remainder
+        for i in (chunks * 4)..len {
+            let diff = v1[i] - v2[i];
+            result += diff * diff;
+        }
+
+        result.sqrt()
     }
-
-    // Horizontal sum
-    let sum64 = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
-    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-    let mut result = _mm_cvtss_f32(sum32);
-
-    // Handle remainder
-    for i in (chunks * 4)..len {
-        let diff = v1[i] - v2[i];
-        result += diff * diff;
-    }
-
-    result.sqrt()
-}}
+}
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-unsafe fn cosine_distance_sse2(v1: &[f32], v2: &[f32]) -> f32 { unsafe {
-    let len = v1.len().min(v2.len());
-    let mut dot_sum = _mm_setzero_ps();
-    let mut norm1_sum = _mm_setzero_ps();
-    let mut norm2_sum = _mm_setzero_ps();
+unsafe fn cosine_distance_sse2(v1: &[f32], v2: &[f32]) -> f32 {
+    unsafe {
+        let len = v1.len().min(v2.len());
+        let mut dot_sum = _mm_setzero_ps();
+        let mut norm1_sum = _mm_setzero_ps();
+        let mut norm2_sum = _mm_setzero_ps();
 
-    let chunks = len / 4;
-    for i in 0..chunks {
-        let a = _mm_loadu_ps(v1.as_ptr().add(i * 4));
-        let b = _mm_loadu_ps(v2.as_ptr().add(i * 4));
-        dot_sum = _mm_add_ps(dot_sum, _mm_mul_ps(a, b));
-        norm1_sum = _mm_add_ps(norm1_sum, _mm_mul_ps(a, a));
-        norm2_sum = _mm_add_ps(norm2_sum, _mm_mul_ps(b, b));
+        let chunks = len / 4;
+        for i in 0..chunks {
+            let a = _mm_loadu_ps(v1.as_ptr().add(i * 4));
+            let b = _mm_loadu_ps(v2.as_ptr().add(i * 4));
+            dot_sum = _mm_add_ps(dot_sum, _mm_mul_ps(a, b));
+            norm1_sum = _mm_add_ps(norm1_sum, _mm_mul_ps(a, a));
+            norm2_sum = _mm_add_ps(norm2_sum, _mm_mul_ps(b, b));
+        }
+
+        // Horizontal sums
+        let mut dot = horizontal_sum_sse2(dot_sum);
+        let mut norm1 = horizontal_sum_sse2(norm1_sum);
+        let mut norm2 = horizontal_sum_sse2(norm2_sum);
+
+        // Handle remainder
+        for i in (chunks * 4)..len {
+            dot += v1[i] * v2[i];
+            norm1 += v1[i] * v1[i];
+            norm2 += v2[i] * v2[i];
+        }
+
+        if norm1 < 1e-10 || norm2 < 1e-10 {
+            return 1.0;
+        }
+
+        let cosine_sim = dot / (norm1.sqrt() * norm2.sqrt());
+        1.0 - cosine_sim
     }
-
-    // Horizontal sums
-    let mut dot = horizontal_sum_sse2(dot_sum);
-    let mut norm1 = horizontal_sum_sse2(norm1_sum);
-    let mut norm2 = horizontal_sum_sse2(norm2_sum);
-
-    // Handle remainder
-    for i in (chunks * 4)..len {
-        dot += v1[i] * v2[i];
-        norm1 += v1[i] * v1[i];
-        norm2 += v2[i] * v2[i];
-    }
-
-    if norm1 < 1e-10 || norm2 < 1e-10 {
-        return 1.0;
-    }
-
-    let cosine_sim = dot / (norm1.sqrt() * norm2.sqrt());
-    1.0 - cosine_sim
-}}
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-unsafe fn horizontal_sum_sse2(v: __m128) -> f32 { unsafe {
-    let sum64 = _mm_add_ps(v, _mm_movehl_ps(v, v));
-    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-    _mm_cvtss_f32(sum32)
-}}
+unsafe fn horizontal_sum_sse2(v: __m128) -> f32 {
+    unsafe {
+        let sum64 = _mm_add_ps(v, _mm_movehl_ps(v, v));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        _mm_cvtss_f32(sum32)
+    }
+}
 
 // NEON implementations (aarch64)
 
@@ -1311,8 +1307,6 @@ mod tests {
         let quantizer = RaBitQ::default_4bit();
         assert_eq!(quantizer.params().bits_per_dim, QuantizationBits::Bits4);
     }
-
-    
 
     #[test]
     fn test_generate_scales() {
@@ -1514,8 +1508,6 @@ mod tests {
         assert_eq!(reconstructed.len(), 128);
     }
 
-    
-
     #[test]
     fn test_distance_l2() {
         let quantizer = RaBitQ::new(RaBitQParams {
@@ -1656,10 +1648,8 @@ mod tests {
         ];
 
         // Quantize all
-        let quantized: Vec<QuantizedVector> = vectors
-            .iter()
-            .map(|v| quantizer.quantize(v))
-            .collect();
+        let quantized: Vec<QuantizedVector> =
+            vectors.iter().map(|v| quantizer.quantize(v)).collect();
 
         // Ground truth L2 distances
         let ground_truth_01 = vectors[0]
@@ -1730,8 +1720,6 @@ mod tests {
         assert!(dist_approx > 0.0 && dist_approx.is_finite());
     }
 
-    
-
     #[test]
     fn test_simd_l2_matches_scalar() {
         let quantizer = RaBitQ::new(RaBitQParams {
@@ -1752,7 +1740,12 @@ mod tests {
 
         // SIMD should match scalar within floating point precision
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(diff < 0.01, "SIMD vs scalar: {} vs {}", dist_simd, dist_scalar);
+        assert!(
+            diff < 0.01,
+            "SIMD vs scalar: {} vs {}",
+            dist_simd,
+            dist_scalar
+        );
     }
 
     #[test]
@@ -1775,7 +1768,12 @@ mod tests {
 
         // SIMD should match scalar within floating point precision
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(diff < 0.01, "SIMD vs scalar: {} vs {}", dist_simd, dist_scalar);
+        assert!(
+            diff < 0.01,
+            "SIMD vs scalar: {} vs {}",
+            dist_simd,
+            dist_scalar
+        );
     }
 
     #[test]
@@ -1794,7 +1792,12 @@ mod tests {
 
         // Should be close (allow for quantization + FP variance)
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(diff < 0.1, "High-D SIMD vs scalar: {} vs {}", dist_simd, dist_scalar);
+        assert!(
+            diff < 0.1,
+            "High-D SIMD vs scalar: {} vs {}",
+            dist_simd,
+            dist_scalar
+        );
     }
 
     #[test]
@@ -1847,8 +1850,6 @@ mod tests {
         let dist = cosine_distance_scalar(&v1, &v2);
         assert!((dist - 1.0).abs() < 0.001);
     }
-
-    
 
     #[test]
     fn test_fht_basic() {
@@ -1916,7 +1917,9 @@ mod tests {
 
         // Magnitudes should be preserved
         for &val in &data {
-            assert!([1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0].iter().any(|&v| (val - v).abs() < 0.001));
+            assert!([1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0]
+                .iter()
+                .any(|&v| (val - v).abs() < 0.001));
         }
     }
 
@@ -1970,8 +1973,6 @@ mod tests {
         assert_eq!(quantized.dimensions, 768);
         assert!(quantized.fht_applied);
     }
-
-    
 
     #[test]
     fn test_bits3_constructor() {
@@ -2068,7 +2069,13 @@ mod tests {
 
         // Higher bits should generally have lower error
         // (may not be strictly monotonic due to quantization effects, but trend should hold)
-        assert!(err4 <= err2 * 2.0, "4-bit should be more accurate than 2-bit");
-        assert!(err5 <= err3 * 2.0, "5-bit should be more accurate than 3-bit");
+        assert!(
+            err4 <= err2 * 2.0,
+            "4-bit should be more accurate than 2-bit"
+        );
+        assert!(
+            err5 <= err3 * 2.0,
+            "5-bit should be more accurate than 3-bit"
+        );
     }
 }

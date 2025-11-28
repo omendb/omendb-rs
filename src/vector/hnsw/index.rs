@@ -209,7 +209,10 @@ impl HNSWIndex {
     /// This ensures most nodes are at level 0, fewer at higher levels.
     fn random_level(&mut self) -> u8 {
         // Simple LCG for deterministic random numbers
-        self.rng_state = self.rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        self.rng_state = self
+            .rng_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
         let rand_val = (self.rng_state >> 32) as f32 / u32::MAX as f32;
 
         // Exponential distribution: -ln(uniform) / ln(M)
@@ -220,8 +223,14 @@ impl HNSWIndex {
     /// Distance between nodes for ordering comparisons
     #[inline]
     fn distance_between_cmp(&self, id_a: u32, id_b: u32) -> Result<f32> {
-        let vec_a = self.vectors.get(id_a).ok_or(HNSWError::VectorNotFound(id_a))?;
-        let vec_b = self.vectors.get(id_b).ok_or(HNSWError::VectorNotFound(id_b))?;
+        let vec_a = self
+            .vectors
+            .get(id_a)
+            .ok_or(HNSWError::VectorNotFound(id_a))?;
+        let vec_b = self
+            .vectors
+            .get(id_b)
+            .ok_or(HNSWError::VectorNotFound(id_b))?;
         Ok(self.distance_fn.distance_for_comparison(vec_a, vec_b))
     }
 
@@ -286,7 +295,9 @@ impl HNSWIndex {
         self.insert_into_graph(node_id, &vector, level)?;
 
         // Update entry point if this node has higher level than current entry point
-        let entry_point_id = self.entry_point.ok_or_else(|| HNSWError::internal("Entry point should exist after first insert"))?;
+        let entry_point_id = self
+            .entry_point
+            .ok_or_else(|| HNSWError::internal("Entry point should exist after first insert"))?;
         let entry_level = self.nodes[entry_point_id as usize].level;
         if level > entry_level {
             self.entry_point = Some(node_id);
@@ -342,9 +353,10 @@ impl HNSWIndex {
         }
 
         // Store vector and get ID
-        let node_id = self.vectors.insert(vector.clone()).map_err(|e| {
-            HNSWError::Storage(e.to_string())
-        })?;
+        let node_id = self
+            .vectors
+            .insert(vector.clone())
+            .map_err(|e| HNSWError::Storage(e.to_string()))?;
 
         // Assign random level
         let level = self.random_level();
@@ -368,14 +380,18 @@ impl HNSWIndex {
 
         // If no valid hints, fall back to standard insertion
         if valid_hints.is_empty() {
-            return self.insert_into_graph(node_id, &vector, level).map(|_| node_id);
+            return self
+                .insert_into_graph(node_id, &vector, level)
+                .map(|_| node_id);
         }
 
         // Use hints as starting points for graph insertion
         self.insert_into_graph_with_hints(node_id, &vector, level, &valid_hints, ef)?;
 
         // Update entry point if this node has higher level
-        let entry_point_id = self.entry_point.ok_or(HNSWError::internal("Entry point should exist"))?;
+        let entry_point_id = self
+            .entry_point
+            .ok_or(HNSWError::internal("Entry point should exist"))?;
         let entry_level = self.nodes[entry_point_id as usize].level;
         if level > entry_level {
             self.entry_point = Some(node_id);
@@ -412,7 +428,8 @@ impl HNSWIndex {
 
             // Add bidirectional links
             for &neighbor_id in &neighbors {
-                self.neighbors.add_bidirectional_link(node_id, neighbor_id, lc)?;
+                self.neighbors
+                    .add_bidirectional_link(node_id, neighbor_id, lc)?;
             }
 
             // Update neighbor counts
@@ -422,16 +439,19 @@ impl HNSWIndex {
             for &neighbor_id in &neighbors {
                 let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, lc)?;
                 if neighbor_neighbors.len() > m {
-                    let neighbor_vec = self.vectors.get(neighbor_id)
+                    let neighbor_vec = self
+                        .vectors
+                        .get(neighbor_id)
                         .ok_or(HNSWError::VectorNotFound(neighbor_id))?;
                     let pruned = self.select_neighbors_heuristic(
                         neighbor_id,
                         &neighbor_neighbors,
                         m,
                         lc,
-                        &neighbor_vec,
+                        neighbor_vec,
                     )?;
-                    self.neighbors.set_neighbors(neighbor_id, lc, pruned.clone())?;
+                    self.neighbors
+                        .set_neighbors(neighbor_id, lc, pruned.clone())?;
                     self.nodes[neighbor_id as usize].set_neighbor_count(lc, pruned.len());
                 }
             }
@@ -569,7 +589,8 @@ impl HNSWIndex {
         // Parallel graph construction
         // Note: We need to handle the case where we're building incrementally
         // (adding to existing graph) vs building from scratch
-        let nodes_to_insert: Vec<(u32, u8)> = node_ids.iter()
+        let nodes_to_insert: Vec<(u32, u8)> = node_ids
+            .iter()
             .map(|&id| {
                 let level = self.nodes[id as usize].level;
                 (id, level)
@@ -578,12 +599,18 @@ impl HNSWIndex {
 
         // Use atomic counter for progress tracking
         let progress_counter = AtomicU32::new(0);
-        let progress_interval = if batch_size >= 1000 { batch_size / 10 } else { batch_size };
+        let progress_interval = if batch_size >= 1000 {
+            batch_size / 10
+        } else {
+            batch_size
+        };
 
         // Parallel insertion into graph
         let result: Result<()> = nodes_to_insert.par_iter().try_for_each(|(node_id, level)| {
             // Get vector for this node
-            let vector = self.vectors.get(*node_id)
+            let vector = self
+                .vectors
+                .get(*node_id)
                 .ok_or(HNSWError::VectorNotFound(*node_id))?;
 
             // Build graph connections for all nodes (including node_id=0)
@@ -595,13 +622,14 @@ impl HNSWIndex {
             // Search for nearest neighbors at each level above target level
             let mut nearest = vec![entry_point];
             for lc in ((*level + 1)..=entry_level).rev() {
-                nearest = self.search_layer(&vector, &nearest, 1, lc)?;
+                nearest = self.search_layer(vector, &nearest, 1, lc)?;
             }
 
             // Insert at levels 0..=level
             for lc in (0..=*level).rev() {
                 // Find ef_construction nearest neighbors at this level
-                let candidates = self.search_layer(&vector, &nearest, self.params.ef_construction, lc)?;
+                let candidates =
+                    self.search_layer(vector, &nearest, self.params.ef_construction, lc)?;
 
                 // Select M best neighbors using heuristic
                 let m = if lc == 0 {
@@ -610,11 +638,13 @@ impl HNSWIndex {
                     self.params.m
                 };
 
-                let neighbors = self.select_neighbors_heuristic(*node_id, &candidates, m, lc, &vector)?;
+                let neighbors =
+                    self.select_neighbors_heuristic(*node_id, &candidates, m, lc, vector)?;
 
                 // Add bidirectional links (thread-safe via RwLock parallel methods)
                 for &neighbor_id in &neighbors {
-                    self.neighbors.add_bidirectional_link_parallel(*node_id, neighbor_id, lc);
+                    self.neighbors
+                        .add_bidirectional_link_parallel(*node_id, neighbor_id, lc);
                 }
 
                 // NOTE: Pruning is deferred to after parallel loop for performance
@@ -627,7 +657,7 @@ impl HNSWIndex {
 
             // Progress tracking
             let count = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
-            if count % progress_interval as u32 == 0 {
+            if count.is_multiple_of(progress_interval as u32) {
                 let elapsed = graph_start.elapsed().as_secs_f64();
                 let rate = count as f64 / elapsed;
                 info!(
@@ -678,12 +708,7 @@ impl HNSWIndex {
     /// Insert node into graph structure
     ///
     /// Implements HNSW insertion algorithm (Malkov & Yashunin 2018)
-    fn insert_into_graph(
-        &mut self,
-        node_id: u32,
-        vector: &[f32],
-        level: u8,
-    ) -> Result<()> {
+    fn insert_into_graph(&mut self, node_id: u32, vector: &[f32], level: u8) -> Result<()> {
         let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
         let entry_level = self.nodes[entry_point as usize].level;
 
@@ -696,7 +721,8 @@ impl HNSWIndex {
         // Insert at levels 0..=level (iterate from top to bottom)
         for lc in (0..=level).rev() {
             // Find ef_construction nearest neighbors at this level
-            let candidates = self.search_layer(vector, &nearest, self.params.ef_construction, lc)?;
+            let candidates =
+                self.search_layer(vector, &nearest, self.params.ef_construction, lc)?;
 
             // Select M best neighbors using heuristic
             let m = if lc == 0 {
@@ -709,7 +735,8 @@ impl HNSWIndex {
 
             // Add bidirectional links
             for &neighbor_id in &neighbors {
-                self.neighbors.add_bidirectional_link(node_id, neighbor_id, lc)?;
+                self.neighbors
+                    .add_bidirectional_link(node_id, neighbor_id, lc)?;
             }
 
             // Update neighbor counts
@@ -719,7 +746,10 @@ impl HNSWIndex {
             for &neighbor_id in &neighbors {
                 let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, lc)?;
                 if neighbor_neighbors.len() > m {
-                    let neighbor_vec = self.vectors.get(neighbor_id).ok_or(HNSWError::VectorNotFound(neighbor_id))?;
+                    let neighbor_vec = self
+                        .vectors
+                        .get(neighbor_id)
+                        .ok_or(HNSWError::VectorNotFound(neighbor_id))?;
                     let pruned = self.select_neighbors_heuristic(
                         neighbor_id,
                         &neighbor_neighbors,
@@ -729,7 +759,8 @@ impl HNSWIndex {
                     )?;
 
                     // Clear and reset neighbors
-                    self.neighbors.set_neighbors(neighbor_id, lc, pruned.clone())?;
+                    self.neighbors
+                        .set_neighbors(neighbor_id, lc, pruned.clone())?;
                     self.nodes[neighbor_id as usize].set_neighbor_count(lc, pruned.len());
                 }
             }
@@ -976,19 +1007,13 @@ impl HNSWIndex {
             all_results.retain(|r| filter_fn(r.id));
             all_results.truncate(k);
 
-            debug!(
-                num_results = all_results.len(),
-                "Post-filtering complete"
-            );
+            debug!(num_results = all_results.len(), "Post-filtering complete");
 
             return Ok(all_results);
         }
 
         // Filter is selective (<60% match): use ACORN-1
-        debug!(
-            selectivity,
-            "Using ACORN-1 filtered search"
-        );
+        debug!(selectivity, "Using ACORN-1 filtered search");
 
         let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
         let entry_level = self.nodes[entry_point as usize].level;
@@ -998,7 +1023,8 @@ impl HNSWIndex {
 
         // Greedy search at each layer (find 1 nearest that matches filter)
         for level in (1..=entry_level).rev() {
-            nearest = self.search_layer_with_filter(query, &nearest, 1, level, &filter_fn, selectivity)?;
+            nearest =
+                self.search_layer_with_filter(query, &nearest, 1, level, &filter_fn, selectivity)?;
             if nearest.is_empty() {
                 // No matching nodes found at this level, try standard search
                 debug!(level, "No matches at this level, falling back");
@@ -1007,7 +1033,8 @@ impl HNSWIndex {
         }
 
         // Beam search at layer 0 (find ef nearest that match filter)
-        let candidates = self.search_layer_with_filter(query, &nearest, ef.max(k), 0, &filter_fn, selectivity)?;
+        let candidates =
+            self.search_layer_with_filter(query, &nearest, ef.max(k), 0, &filter_fn, selectivity)?;
 
         // Convert to SearchResult and return k nearest
         let mut results: Vec<SearchResult> = candidates
@@ -1260,13 +1287,14 @@ impl HNSWIndex {
 
                 // Collect unvisited neighbors into pre-allocated buffer (no allocation!)
                 unvisited.clear();
-                self.neighbors.with_neighbors(current.node_id, level, |neighbors| {
-                    for &id in neighbors {
-                        if !visited.contains(&id) {
-                            unvisited.push(id);
+                self.neighbors
+                    .with_neighbors(current.node_id, level, |neighbors| {
+                        for &id in neighbors {
+                            if !visited.contains(&id) {
+                                unvisited.push(id);
+                            }
                         }
-                    }
-                })?;
+                    })?;
 
                 // Process unvisited neighbors with prefetching
                 // Prefetch next neighbor's vector data while computing distance to current
@@ -1335,7 +1363,11 @@ impl HNSWIndex {
         let mut total_neighbors = 0;
         let mut max_neighbors = 0;
         for node in &self.nodes {
-            let neighbor_count = self.neighbors.get_neighbors(node.id, 0).unwrap_or_default().len();
+            let neighbor_count = self
+                .neighbors
+                .get_neighbors(node.id, 0)
+                .unwrap_or_default()
+                .len();
             total_neighbors += neighbor_count;
             max_neighbors = max_neighbors.max(neighbor_count);
         }
@@ -1387,7 +1419,7 @@ impl HNSWIndex {
     ///
     /// ```rust,no_run
     /// # use omendb::vector::hnsw::*;
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     /// # let mut index = HNSWIndex::new(128, HNSWParams::default(), DistanceFunction::L2, false)?;
     /// // After building index...
     /// let edges = index.get_all_edges();
@@ -1443,10 +1475,11 @@ impl HNSWIndex {
             .map(|n| {
                 // Compute actual max level from neighbor_counts
                 // neighbor_counts[i] > 0 means node has edges at level i
-                let max_level = n.neighbor_counts
+                let max_level = n
+                    .neighbor_counts
                     .iter()
                     .enumerate()
-                    .rev()  // Start from highest level
+                    .rev() // Start from highest level
                     .find(|(_, count)| **count > 0)
                     .map(|(level, _)| level as u8)
                     .unwrap_or(0);
@@ -1611,7 +1644,10 @@ impl HNSWIndex {
         reader.read_exact(&mut magic)?;
         if &magic != b"HNSWIDX\0" {
             error!(magic = ?magic, "Invalid magic bytes in index file");
-            return Err(HNSWError::Storage(format!("Invalid magic bytes: {:?}", magic)));
+            return Err(HNSWError::Storage(format!(
+                "Invalid magic bytes: {:?}",
+                magic
+            )));
         }
 
         // Read version
@@ -1620,7 +1656,10 @@ impl HNSWIndex {
         let version = u32::from_le_bytes(version_bytes);
         if version != 1 {
             error!(version, "Unsupported index file version");
-            return Err(HNSWError::Storage(format!("Unsupported version: {}", version)));
+            return Err(HNSWError::Storage(format!(
+                "Unsupported version: {}",
+                version
+            )));
         }
 
         // Read dimensions
@@ -1774,7 +1813,8 @@ impl HNSWIndex {
             // Collect neighbors for all levels
             let mut neighbors_per_level = Vec::new();
             for level in 0..=node.level as usize {
-                let neighbors = self.neighbors
+                let neighbors = self
+                    .neighbors
                     .get_neighbors(node_id as u32, level as u8)
                     .unwrap_or_else(|_| Vec::new());
                 neighbors_per_level.push(neighbors);
@@ -2117,7 +2157,11 @@ mod tests {
 
         // Check that no node has more than M*2 neighbors at level 0
         for node in &index.nodes {
-            let neighbor_count = index.neighbors.get_neighbors(node.id, 0).unwrap_or_default().len();
+            let neighbor_count = index
+                .neighbors
+                .get_neighbors(node.id, 0)
+                .unwrap_or_default()
+                .len();
             assert!(neighbor_count <= params.m * 2);
         }
     }
@@ -2272,12 +2316,8 @@ mod tests {
         // Verify quantization is preserved
         match (&index.vectors, &loaded.vectors) {
             (
-                VectorStorage::BinaryQuantized {
-                    thresholds: t1, ..
-                },
-                VectorStorage::BinaryQuantized {
-                    thresholds: t2, ..
-                },
+                VectorStorage::BinaryQuantized { thresholds: t1, .. },
+                VectorStorage::BinaryQuantized { thresholds: t2, .. },
             ) => {
                 assert_eq!(t1, t2);
             }
@@ -2449,9 +2489,13 @@ mod tests {
 
         // Test NegativeDotProduct
         let params = HNSWParams::default();
-        let index_dot = HNSWIndex::new(3, params, DistanceFunction::NegativeDotProduct, false).unwrap();
+        let index_dot =
+            HNSWIndex::new(3, params, DistanceFunction::NegativeDotProduct, false).unwrap();
         let stats = index_dot.stats();
-        assert!(matches!(stats.distance_function, DistanceFunction::NegativeDotProduct));
+        assert!(matches!(
+            stats.distance_function,
+            DistanceFunction::NegativeDotProduct
+        ));
     }
 
     // ========================================
@@ -2689,7 +2733,6 @@ mod tests {
 
     #[test]
     fn test_save_graph_to_disk() {
-        
         use tempfile::tempdir;
 
         // Build small index
@@ -2698,7 +2741,9 @@ mod tests {
 
         // Insert vectors
         for i in 0..100 {
-            index.insert(vec![i as f32, i as f32 + 1.0, i as f32 + 2.0]).unwrap();
+            index
+                .insert(vec![i as f32, i as f32 + 1.0, i as f32 + 2.0])
+                .unwrap();
         }
 
         // Save graph to disk
@@ -2744,7 +2789,6 @@ mod tests {
 
     #[test]
     fn test_load_with_disk_graph() {
-        
         use tempfile::tempdir;
 
         // Build and save index
@@ -2753,7 +2797,9 @@ mod tests {
 
         // Insert vectors
         for i in 0..100 {
-            index.insert(vec![i as f32, i as f32 + 1.0, i as f32 + 2.0]).unwrap();
+            index
+                .insert(vec![i as f32, i as f32 + 1.0, i as f32 + 2.0])
+                .unwrap();
         }
 
         let temp_dir = tempdir().unwrap();
@@ -2831,14 +2877,25 @@ mod tests {
         let dim = 128;
         let queries = 1000;
 
-        println!("\n=== HNSW Raw Search Benchmark ({} vectors, {} queries) ===\n", n, queries);
+        println!(
+            "\n=== HNSW Raw Search Benchmark ({} vectors, {} queries) ===\n",
+            n, queries
+        );
 
         // Generate random vectors
         let vectors: Vec<Vec<f32>> = (0..n)
-            .map(|i| (0..dim).map(|d| ((i * dim + d) % 1000) as f32 / 1000.0).collect())
+            .map(|i| {
+                (0..dim)
+                    .map(|d| ((i * dim + d) % 1000) as f32 / 1000.0)
+                    .collect()
+            })
             .collect();
         let query_vecs: Vec<Vec<f32>> = (0..queries)
-            .map(|i| (0..dim).map(|d| ((i * dim + d + 500) % 1000) as f32 / 1000.0).collect())
+            .map(|i| {
+                (0..dim)
+                    .map(|d| ((i * dim + d + 500) % 1000) as f32 / 1000.0)
+                    .collect()
+            })
             .collect();
 
         // Create index
@@ -2849,7 +2906,11 @@ mod tests {
         let start = Instant::now();
         index.batch_insert(vectors.clone()).unwrap();
         let insert_time = start.elapsed();
-        println!("Batch insert: {:?} ({:.0} vec/s)", insert_time, n as f64 / insert_time.as_secs_f64());
+        println!(
+            "Batch insert: {:?} ({:.0} vec/s)",
+            insert_time,
+            n as f64 / insert_time.as_secs_f64()
+        );
 
         // Warm up
         for _ in 0..10 {
@@ -2865,7 +2926,10 @@ mod tests {
         let qps = queries as f64 / search_time.as_secs_f64();
 
         println!("Search: {:?} ({:.0} QPS)", search_time, qps);
-        println!("\nPer-query: {:.3}ms", search_time.as_secs_f64() * 1000.0 / queries as f64);
+        println!(
+            "\nPer-query: {:.3}ms",
+            search_time.as_secs_f64() * 1000.0 / queries as f64
+        );
     }
 
     #[test]
@@ -2878,25 +2942,50 @@ mod tests {
         let dim = 128;
         let queries = 1000;
 
-        println!("\n=== VectorStore Search Benchmark ({} vectors, {} queries) ===\n", n, queries);
+        println!(
+            "\n=== VectorStore Search Benchmark ({} vectors, {} queries) ===\n",
+            n, queries
+        );
 
         // Generate vectors
         let vectors: Vec<Vec<f32>> = (0..n)
-            .map(|i| (0..dim).map(|d| ((i * dim + d) % 1000) as f32 / 1000.0).collect())
+            .map(|i| {
+                (0..dim)
+                    .map(|d| ((i * dim + d) % 1000) as f32 / 1000.0)
+                    .collect()
+            })
             .collect();
         let query_vecs: Vec<Vector> = (0..queries)
-            .map(|i| Vector::new((0..dim).map(|d| ((i * dim + d + 500) % 1000) as f32 / 1000.0).collect()))
+            .map(|i| {
+                Vector::new(
+                    (0..dim)
+                        .map(|d| ((i * dim + d + 500) % 1000) as f32 / 1000.0)
+                        .collect(),
+                )
+            })
             .collect();
 
         // Create store with batch insert
         let mut store = VectorStore::new(dim);
         let start = Instant::now();
-        let batch: Vec<(String, Vector, serde_json::Value)> = vectors.iter().enumerate()
-            .map(|(i, v)| (i.to_string(), Vector::new(v.clone()), serde_json::json!({"idx": i})))
+        let batch: Vec<(String, Vector, serde_json::Value)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                (
+                    i.to_string(),
+                    Vector::new(v.clone()),
+                    serde_json::json!({"idx": i}),
+                )
+            })
             .collect();
         store.set_batch(batch).unwrap();
         let insert_time = start.elapsed();
-        println!("Batch insert: {:?} ({:.0} vec/s)", insert_time, n as f64 / insert_time.as_secs_f64());
+        println!(
+            "Batch insert: {:?} ({:.0} vec/s)",
+            insert_time,
+            n as f64 / insert_time.as_secs_f64()
+        );
 
         // Warm up
         for _ in 0..10 {
@@ -2910,7 +2999,10 @@ mod tests {
         }
         let knn_time = start.elapsed();
         let knn_qps = queries as f64 / knn_time.as_secs_f64();
-        println!("knn_search (no metadata): {:?} ({:.0} QPS)", knn_time, knn_qps);
+        println!(
+            "knn_search (no metadata): {:?} ({:.0} QPS)",
+            knn_time, knn_qps
+        );
 
         // Benchmark search (with metadata lookup)
         let start = Instant::now();
@@ -2919,12 +3011,26 @@ mod tests {
         }
         let search_time = start.elapsed();
         let search_qps = queries as f64 / search_time.as_secs_f64();
-        println!("search (with metadata): {:?} ({:.0} QPS)", search_time, search_qps);
+        println!(
+            "search (with metadata): {:?} ({:.0} QPS)",
+            search_time, search_qps
+        );
 
         println!("\n=== Summary ===");
-        println!("knn_search QPS: {:.0} ({:.3}ms/query)", knn_qps, knn_time.as_secs_f64() * 1000.0 / queries as f64);
-        println!("search QPS: {:.0} ({:.3}ms/query)", search_qps, search_time.as_secs_f64() * 1000.0 / queries as f64);
-        println!("Metadata overhead: {:.1}%", (1.0 - search_qps/knn_qps) * 100.0);
+        println!(
+            "knn_search QPS: {:.0} ({:.3}ms/query)",
+            knn_qps,
+            knn_time.as_secs_f64() * 1000.0 / queries as f64
+        );
+        println!(
+            "search QPS: {:.0} ({:.3}ms/query)",
+            search_qps,
+            search_time.as_secs_f64() * 1000.0 / queries as f64
+        );
+        println!(
+            "Metadata overhead: {:.1}%",
+            (1.0 - search_qps / knn_qps) * 100.0
+        );
     }
 
     /// Profile seerdb storage to identify optimization targets.
@@ -2944,11 +3050,11 @@ mod tests {
     #[test]
     #[ignore]
     fn profile_seerdb_comprehensive() {
+        use crate::vector::{Vector, VectorStore};
+        use rand::Rng;
         use std::fs::File;
         use std::io::Write;
         use std::time::Instant;
-        use rand::Rng;
-        use crate::vector::{VectorStore, Vector};
 
         let n = 10_000;
         let dim = 128;
@@ -2974,11 +3080,21 @@ mod tests {
         let docs: Vec<(String, Vector, serde_json::Value)> = vectors
             .iter()
             .enumerate()
-            .map(|(i, v)| (i.to_string(), Vector::new(v.clone()), serde_json::json!({"idx": i})))
+            .map(|(i, v)| {
+                (
+                    i.to_string(),
+                    Vector::new(v.clone()),
+                    serde_json::json!({"idx": i}),
+                )
+            })
             .collect();
         inmem_store.set_batch(docs).unwrap();
         let inmem_insert = start.elapsed();
-        println!("Insert: {:?} ({:.0} vec/s)", inmem_insert, n as f64 / inmem_insert.as_secs_f64());
+        println!(
+            "Insert: {:?} ({:.0} vec/s)",
+            inmem_insert,
+            n as f64 / inmem_insert.as_secs_f64()
+        );
 
         // Search (knn_search - no metadata)
         let start = Instant::now();
@@ -2996,7 +3112,10 @@ mod tests {
         }
         let inmem_search = start.elapsed();
         let inmem_search_qps = queries as f64 / inmem_search.as_secs_f64();
-        println!("search (metadata): {:?} ({:.0} QPS)", inmem_search, inmem_search_qps);
+        println!(
+            "search (metadata): {:?} ({:.0} QPS)",
+            inmem_search, inmem_search_qps
+        );
 
         // === TEST 2: Persistent (seerdb) ===
         println!("\n=== 2. Persistent Mode (seerdb) ===");
@@ -3009,11 +3128,21 @@ mod tests {
         let docs: Vec<(String, Vector, serde_json::Value)> = vectors
             .iter()
             .enumerate()
-            .map(|(i, v)| (i.to_string(), Vector::new(v.clone()), serde_json::json!({"idx": i})))
+            .map(|(i, v)| {
+                (
+                    i.to_string(),
+                    Vector::new(v.clone()),
+                    serde_json::json!({"idx": i}),
+                )
+            })
             .collect();
         persist_store.set_batch(docs).unwrap();
         let persist_insert = start.elapsed();
-        println!("Insert: {:?} ({:.0} vec/s)", persist_insert, n as f64 / persist_insert.as_secs_f64());
+        println!(
+            "Insert: {:?} ({:.0} vec/s)",
+            persist_insert,
+            n as f64 / persist_insert.as_secs_f64()
+        );
 
         // Flush
         let start = Instant::now();
@@ -3037,7 +3166,10 @@ mod tests {
         }
         let persist_search = start.elapsed();
         let persist_search_qps = queries as f64 / persist_search.as_secs_f64();
-        println!("search (metadata): {:?} ({:.0} QPS)", persist_search, persist_search_qps);
+        println!(
+            "search (metadata): {:?} ({:.0} QPS)",
+            persist_search, persist_search_qps
+        );
 
         // Get seerdb stats for metadata lookups
         let stats = persist_store.storage().unwrap().stats();
@@ -3058,33 +3190,49 @@ mod tests {
         }
         let reload_knn = start.elapsed();
         let reload_knn_qps = queries as f64 / reload_knn.as_secs_f64();
-        println!("knn_search (post-reload): {:?} ({:.0} QPS)", reload_knn, reload_knn_qps);
+        println!(
+            "knn_search (post-reload): {:?} ({:.0} QPS)",
+            reload_knn, reload_knn_qps
+        );
 
         // === SUMMARY ===
         println!("\n=== Summary: seerdb Impact ===");
         println!("| Operation | In-Memory | seerdb | Overhead |");
         println!("|-----------|-----------|--------|----------|");
-        println!("| Insert ({} vec) | {:?} | {:?} | {:.1}x |",
-            n, inmem_insert, persist_insert,
-            persist_insert.as_secs_f64() / inmem_insert.as_secs_f64());
-        println!("| knn_search | {:.0} QPS | {:.0} QPS | {:.1}% |",
-            inmem_knn_qps, persist_knn_qps,
-            (1.0 - persist_knn_qps / inmem_knn_qps) * 100.0);
-        println!("| search (metadata) | {:.0} QPS | {:.0} QPS | {:.1}% |",
-            inmem_search_qps, persist_search_qps,
-            (1.0 - persist_search_qps / inmem_search_qps) * 100.0);
+        println!(
+            "| Insert ({} vec) | {:?} | {:?} | {:.1}x |",
+            n,
+            inmem_insert,
+            persist_insert,
+            persist_insert.as_secs_f64() / inmem_insert.as_secs_f64()
+        );
+        println!(
+            "| knn_search | {:.0} QPS | {:.0} QPS | {:.1}% |",
+            inmem_knn_qps,
+            persist_knn_qps,
+            (1.0 - persist_knn_qps / inmem_knn_qps) * 100.0
+        );
+        println!(
+            "| search (metadata) | {:.0} QPS | {:.0} QPS | {:.1}% |",
+            inmem_search_qps,
+            persist_search_qps,
+            (1.0 - persist_search_qps / inmem_search_qps) * 100.0
+        );
         println!("| Cold start | N/A | {:?} | - |", reload_time);
         println!("| Flush | N/A | {:?} | - |", flush_time);
 
         println!("\n=== seerdb Stats ===");
         println!("Cache hit rate: {:.1}%", stats.cache_hit_rate * 100.0);
-        println!("Cache hits: {}, misses: {}", stats.cache_hits, stats.cache_misses);
+        println!(
+            "Cache hits: {}, misses: {}",
+            stats.cache_hits, stats.cache_misses
+        );
         println!("Total gets: {}", stats.total_gets);
         println!("SSTables: {:?}", stats.sstables_per_level);
 
         // Write comprehensive results
         let results = format!(
-r#"# seerdb Profile Results (Comprehensive)
+            r#"# seerdb Profile Results (Comprehensive)
 
 **Date**: {}
 **Dataset**: {} vectors, {} dimensions
@@ -3154,41 +3302,61 @@ Total gets: {}
 | **seerdb** | Optimized, durable | Slight insert overhead |
 "#,
             chrono::Local::now().format("%Y-%m-%d"),
-            n, dim, queries,
-            n, inmem_insert, persist_insert, persist_insert.as_secs_f64() / inmem_insert.as_secs_f64(),
-            inmem_knn_qps, persist_knn_qps, (1.0 - persist_knn_qps / inmem_knn_qps) * 100.0,
-            inmem_search_qps, persist_search_qps, (1.0 - persist_search_qps / inmem_search_qps) * 100.0,
-            reload_time, flush_time,
+            n,
+            dim,
+            queries,
+            n,
+            inmem_insert,
+            persist_insert,
+            persist_insert.as_secs_f64() / inmem_insert.as_secs_f64(),
+            inmem_knn_qps,
+            persist_knn_qps,
+            (1.0 - persist_knn_qps / inmem_knn_qps) * 100.0,
+            inmem_search_qps,
+            persist_search_qps,
+            (1.0 - persist_search_qps / inmem_search_qps) * 100.0,
+            reload_time,
+            flush_time,
             (1.0 - persist_knn_qps / inmem_knn_qps) * 100.0,
             persist_insert.as_secs_f64() / inmem_insert.as_secs_f64(),
             n as f64 / persist_insert.as_secs_f64(),
-            reload_time, n,
+            reload_time,
+            n,
             stats.cache_hit_rate * 100.0,
             stats.total_gets,
-            stats.cache_hits, stats.cache_misses, stats.cache_hit_rate * 100.0,
-            stats.sstables_per_level, stats.total_gets,
+            stats.cache_hits,
+            stats.cache_misses,
+            stats.cache_hit_rate * 100.0,
+            stats.sstables_per_level,
+            stats.total_gets,
             persist_insert.as_secs_f64() / inmem_insert.as_secs_f64(),
-            reload_time, n,
+            reload_time,
+            n,
         );
 
-        let output_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("SEERDB_PROFILE_RESULTS.md");
+        let output_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("SEERDB_PROFILE_RESULTS.md");
         let mut file = File::create(&output_path).expect("Failed to create results file");
-        file.write_all(results.as_bytes()).expect("Failed to write results");
+        file.write_all(results.as_bytes())
+            .expect("Failed to write results");
         println!("\n✓ Results written to: {}", output_path.display());
     }
 
     fn profile_seerdb_impl(n: usize) {
+        use crate::vector::{Vector, VectorStore};
+        use rand::Rng;
         use std::fs::File;
         use std::io::Write;
         use std::time::Instant;
-        use rand::Rng;
-        use crate::vector::{VectorStore, Vector};
 
         let n = 100_000;
         let dim = 128;
         let queries = 100;
 
-        println!("\n=== seerdb Profile ({} vectors, {} queries) ===\n", n, queries);
+        println!(
+            "\n=== seerdb Profile ({} vectors, {} queries) ===\n",
+            n, queries
+        );
 
         // Generate random vectors
         let mut rng = rand::thread_rng();
@@ -3213,7 +3381,11 @@ Total gets: {}
             .collect();
         store.set_batch(docs).unwrap();
         let insert_time = start.elapsed();
-        println!("Insert: {:?} ({:.0} vec/s)", insert_time, n as f64 / insert_time.as_secs_f64());
+        println!(
+            "Insert: {:?} ({:.0} vec/s)",
+            insert_time,
+            n as f64 / insert_time.as_secs_f64()
+        );
 
         // Flush to disk
         let start = Instant::now();
@@ -3227,7 +3399,10 @@ Total gets: {}
         }
 
         // Get stats after warmup (snapshot)
-        let stats_after_warmup = store.storage().expect("Store should have persistent storage").stats();
+        let stats_after_warmup = store
+            .storage()
+            .expect("Store should have persistent storage")
+            .stats();
 
         // Benchmark search
         let start = Instant::now();
@@ -3239,7 +3414,10 @@ Total gets: {}
         let ms_per_query = search_time.as_secs_f64() * 1000.0 / queries as f64;
 
         // Get post-search stats
-        let stats_after = store.storage().expect("Store should have persistent storage").stats();
+        let stats_after = store
+            .storage()
+            .expect("Store should have persistent storage")
+            .stats();
 
         // Calculate delta for this search batch
         let search_gets = stats_after.total_gets - stats_after_warmup.total_gets;
@@ -3256,7 +3434,11 @@ Total gets: {}
         println!("Total search time: {:?}", search_time);
         println!("Per-query: {:.2}ms", ms_per_query);
         println!("QPS: {:.0}", qps);
-        println!("Edge lookups (seerdb gets): {} ({:.1} per query)", search_gets, search_gets as f64 / queries as f64);
+        println!(
+            "Edge lookups (seerdb gets): {} ({:.1} per query)",
+            search_gets,
+            search_gets as f64 / queries as f64
+        );
 
         println!("\n=== Cache Stats (Search Batch) ===");
         println!("Cache hits: {}", search_cache_hits);
@@ -3266,12 +3448,18 @@ Total gets: {}
         println!("\n=== Cache Stats (Cumulative) ===");
         println!("Total cache hits: {}", stats_after.cache_hits);
         println!("Total cache misses: {}", stats_after.cache_misses);
-        println!("Overall hit rate: {:.1}%", stats_after.cache_hit_rate * 100.0);
+        println!(
+            "Overall hit rate: {:.1}%",
+            stats_after.cache_hit_rate * 100.0
+        );
 
         println!("\n=== LSM Tree Health ===");
         println!("SSTables per level: {:?}", stats_after.sstables_per_level);
         println!("Total SSTables: {}", stats_after.total_sstables);
-        println!("Total disk bytes: {} KB", stats_after.total_disk_bytes / 1024);
+        println!(
+            "Total disk bytes: {} KB",
+            stats_after.total_disk_bytes / 1024
+        );
 
         println!("\n=== Latency Percentiles ===");
         println!("Get p50: {}us", stats_after.get_latency_p50_us);
@@ -3281,7 +3469,7 @@ Total gets: {}
 
         // Write results to file
         let results = format!(
-r#"# seerdb Profile Results
+            r#"# seerdb Profile Results
 
 **Date**: {}
 **Dataset**: {} vectors, {} dimensions
@@ -3316,14 +3504,16 @@ r#"# seerdb Profile Results
 - LSM health: {}
 "#,
             chrono::Local::now().format("%Y-%m-%d"),
-            n, dim,
+            n,
+            dim,
             ms_per_query,
             qps,
             search_gets as f64 / queries as f64,
             search_hit_rate * 100.0,
             search_cache_hits,
             search_cache_misses,
-            n, flush_time,
+            n,
+            flush_time,
             stats_after.sstables_per_level,
             stats_after.total_sstables,
             stats_after.total_disk_bytes / 1024,
@@ -3332,14 +3522,24 @@ r#"# seerdb Profile Results
             stats_after.get_latency_p99_us,
             stats_after.get_latency_p999_us,
             if search_hit_rate > 0.7 { ">" } else { "<" },
-            if search_hit_rate > 0.7 { "GOOD (>70%)" } else { "NEEDS TUNING (<70%)" },
-            if stats_after.sstables_per_level.first().copied().unwrap_or(0) < 20 { "GOOD (L0 < 20)" } else { "COMPACTION FALLING BEHIND" },
+            if search_hit_rate > 0.7 {
+                "GOOD (>70%)"
+            } else {
+                "NEEDS TUNING (<70%)"
+            },
+            if stats_after.sstables_per_level.first().copied().unwrap_or(0) < 20 {
+                "GOOD (L0 < 20)"
+            } else {
+                "COMPACTION FALLING BEHIND"
+            },
         );
 
         // Write to SEERDB_PROFILE_RESULTS.md
-        let output_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("SEERDB_PROFILE_RESULTS.md");
+        let output_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("SEERDB_PROFILE_RESULTS.md");
         let mut file = File::create(&output_path).expect("Failed to create results file");
-        file.write_all(results.as_bytes()).expect("Failed to write results");
+        file.write_all(results.as_bytes())
+            .expect("Failed to write results");
         println!("\n✓ Results written to: {}", output_path.display());
     }
 }

@@ -6,32 +6,30 @@
 // - SIMD-ready (AVX2/AVX512 distance calculations)
 // - SOTA features support (Extended RaBitQ, delta encoding)
 
-mod types;
-mod storage;
-mod node_storage;
-mod disk_storage;
 mod cached_storage;
-mod storage_tiering;
-mod layered_storage;
-mod graph_storage;
-mod storage_integration_tests;
-mod index;
-mod simd_distance;
+mod disk_storage;
 mod error;
-mod query_buffers;
+mod graph_storage;
+mod index;
+mod layered_storage;
 mod merge;
+mod node_storage;
+mod query_buffers;
+mod simd_distance;
+mod storage;
+mod storage_integration_tests;
+mod storage_tiering;
+mod types;
 
 // Public API exports
-pub use types::{
-    HNSWParams, HNSWNode, DistanceFunction, Candidate, SearchResult,
-};
+pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
 
 // Re-export SIMD-enabled distance functions
-pub use simd_distance::{l2_distance, cosine_distance, dot_product};
+pub use simd_distance::{cosine_distance, dot_product, l2_distance};
 
 pub use storage::{NeighborLists, VectorStorage};
 
-pub use node_storage::{NodeStorage, MemoryStorage, NodeId, Level};
+pub use node_storage::{Level, MemoryStorage, NodeId, NodeStorage};
 
 pub use disk_storage::{DiskStorage, WritableDiskStorage};
 
@@ -41,7 +39,7 @@ pub use storage_tiering::{StorageMode, TieringConfig};
 
 pub use layered_storage::LayeredStorage;
 
-pub use graph_storage::{GraphStorage, DiskConfig};
+pub use graph_storage::{DiskConfig, GraphStorage};
 
 pub use index::{HNSWIndex, IndexStats};
 

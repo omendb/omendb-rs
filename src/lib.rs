@@ -19,7 +19,7 @@ pub mod vector;
 pub mod ffi;
 
 // Re-export core types
-pub use vector::{Vector, VectorStore, MetadataFilter};
+pub use vector::{MetadataFilter, Vector, VectorStore};
 
 // Re-export seerdb-vector types
-pub use seerdb_vector::{config::SeerdbVectorConfig, CompressionTier, StorageTier, DistanceMetric};
+pub use seerdb_vector::{config::SeerdbVectorConfig, CompressionTier, DistanceMetric, StorageTier};

@@ -1,4 +1,4 @@
-#![feature(portable_simd)]  // Required for SIMD distance calculations
+#![feature(portable_simd)] // Required for SIMD distance calculations
 
 //! seerdb-vector: Vector-optimized storage layer
 //!
@@ -41,27 +41,27 @@
 //!     .with_compression_tiers(true);
 //! ```
 
+pub mod compression; // RaBitQ compression (Phase 2)
 pub mod config;
-pub mod types;
 pub mod edge_storage;
 pub mod node_metadata;
-pub mod vector_metadata;
-pub mod simd_distance;  // SIMD-accelerated distance calculations (Phase 1)
-pub mod compression;    // RaBitQ compression (Phase 2)
-pub mod sampling;       // Sampling-based search (Phase 2b)
+pub mod sampling;
+pub mod simd_distance; // SIMD-accelerated distance calculations (Phase 1)
+pub mod types;
+pub mod vector_metadata; // Sampling-based search (Phase 2b)
 
 // Future modules (to be implemented):
 // pub mod vector_storage;  // Vector data with SIMD alignment
 
+pub use compression::{QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams};
 pub use config::*;
-pub use types::*;
 pub use edge_storage::EdgeStorage;
 pub use node_metadata::NodeMetadataStorage;
+pub use types::*;
 pub use vector_metadata::VectorMetadataStorage;
-pub use compression::{RaBitQ, RaBitQParams, QuantizedVector, QuantizationBits};
 
 // Re-export sampling functions
 pub use sampling::{
-    compute_hash, count_collisions, should_read_vector, default_threshold,
-    init_random_projections, HASH_BITS, HASH_BYTES,
+    compute_hash, count_collisions, default_threshold, init_random_projections, should_read_vector,
+    HASH_BITS, HASH_BYTES,
 };

@@ -561,8 +561,7 @@ mod tests {
 
     #[test]
     fn test_disk_config_with_populate() {
-        let config = DiskConfig::new(PathBuf::from("/tmp/test.bin"), 10_000)
-            .with_populate();
+        let config = DiskConfig::new(PathBuf::from("/tmp/test.bin"), 10_000).with_populate();
 
         assert_eq!(config.populate, true);
     }
@@ -577,8 +576,7 @@ mod tests {
 
     #[test]
     fn test_from_mode_with_disk_hybrid_no_config() {
-        let result =
-            GraphStorage::from_mode_with_disk(StorageMode::Hybrid, 8, None).unwrap();
+        let result = GraphStorage::from_mode_with_disk(StorageMode::Hybrid, 8, None).unwrap();
 
         // Falls back to in-memory layered
         assert!(result.is_layered_mode());
