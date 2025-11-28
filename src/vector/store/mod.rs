@@ -1,9 +1,9 @@
 //! Vector storage with HNSW indexing
 //!
-//! VectorStore manages a collection of vectors and provides k-NN search
+//! `VectorStore` manages a collection of vectors and provides k-NN search
 //! using HNSW (Hierarchical Navigable Small World) algorithm.
 //!
-//! Optional Extended RaBitQ quantization for memory-efficient storage.
+//! Optional Extended `RaBitQ` quantization for memory-efficient storage.
 
 use super::hnsw_index::HNSWIndex;
 use super::rabitq::{QuantizedVector, RaBitQ, RaBitQParams};
@@ -44,25 +44,26 @@ pub enum MetadataFilter {
 
 impl MetadataFilter {
     /// Evaluate filter against metadata
+    #[must_use]
     pub fn matches(&self, metadata: &JsonValue) -> bool {
         match self {
             MetadataFilter::Eq(field, value) => metadata.get(field) == Some(value),
             MetadataFilter::Ne(field, value) => metadata.get(field) != Some(value),
             MetadataFilter::Gte(field, threshold) => metadata
                 .get(field)
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .is_some_and(|v| v >= *threshold),
             MetadataFilter::Lt(field, threshold) => metadata
                 .get(field)
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .is_some_and(|v| v < *threshold),
             MetadataFilter::Gt(field, threshold) => metadata
                 .get(field)
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .is_some_and(|v| v > *threshold),
             MetadataFilter::Lte(field, threshold) => metadata
                 .get(field)
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .is_some_and(|v| v <= *threshold),
             MetadataFilter::In(field, values) => {
                 metadata.get(field).is_some_and(|v| values.contains(v))
@@ -88,7 +89,7 @@ pub struct VectorStore {
     /// Vector dimensionality
     dimensions: usize,
 
-    /// Optional quantizer for memory-efficient storage (Extended RaBitQ)
+    /// Optional quantizer for memory-efficient storage (Extended `RaBitQ`)
     quantizer: Option<RaBitQ>,
 
     /// Quantized vectors (parallel to vectors, None if quantizer not enabled)
@@ -109,6 +110,7 @@ pub struct VectorStore {
 
 impl VectorStore {
     /// Create new vector store without quantization
+    #[must_use]
     pub fn new(dimensions: usize) -> Self {
         Self {
             vectors: Vec::new(),
@@ -125,11 +127,11 @@ impl VectorStore {
 
     /// Create new vector store with adaptive HNSW parameters based on expected capacity
     ///
-    /// Automatically selects optimal M, ef_construction, and ef_search parameters
+    /// Automatically selects optimal M, `ef_construction`, and `ef_search` parameters
     /// based on the expected number of vectors:
     ///
-    /// - < 50K vectors: M=16, ef_construction=200, ef_search=100 (fast & efficient)
-    /// - 50K-500K vectors: M=32, ef_construction=400, ef_search=100 (balanced, 98% recall)
+    /// - < 50K vectors: M=16, `ef_construction=200`, `ef_search=100` (fast & efficient)
+    /// - 50K-500K vectors: M=32, `ef_construction=400`, `ef_search=100` (balanced, 98% recall)
     /// - > 500K vectors: M=48, ef_construction=600, ef_search=150 (high recall, 99%)
     ///
     /// # Arguments
@@ -144,6 +146,7 @@ impl VectorStore {
     ///
     /// # Performance Characteristics
     /// See `ai/research/WEEK21_100K_RECALL_INVESTIGATION.md` for detailed benchmarks
+    #[must_use]
     pub fn new_with_capacity(dimensions: usize, expected_vectors: usize) -> Self {
         let (m, ef_construction, ef_search) = Self::adaptive_hnsw_params(expected_vectors);
 
@@ -174,11 +177,11 @@ impl VectorStore {
 
     /// Compute adaptive HNSW parameters based on expected vector count
     ///
-    /// Optimized for balanced speed/recall tradeoff (similar to ChromaDB defaults):
-    /// - ef_search=100 provides ~98% recall with high QPS (2000+ QPS)
-    /// - ef_construction kept high for quality graph
+    /// Optimized for balanced speed/recall tradeoff (similar to `ChromaDB` defaults):
+    /// - `ef_search=100` provides ~98% recall with high QPS (2000+ QPS)
+    /// - `ef_construction` kept high for quality graph
     ///
-    /// Returns: (M, ef_construction, ef_search)
+    /// Returns: (M, `ef_construction`, `ef_search`)
     fn adaptive_hnsw_params(expected_vectors: usize) -> (usize, usize, usize) {
         if expected_vectors < 50_000 {
             // Fast & efficient (10K-50K scale)
@@ -195,7 +198,8 @@ impl VectorStore {
         }
     }
 
-    /// Create new vector store with Extended RaBitQ quantization
+    /// Create new vector store with Extended `RaBitQ` quantization
+    #[must_use]
     pub fn new_with_quantization(dimensions: usize, params: RaBitQParams) -> Self {
         let quantizer = RaBitQ::new(params);
 
@@ -309,7 +313,9 @@ impl VectorStore {
 
         // Build HNSW index with ALL vectors to maintain index alignment
         // (deleted vectors are filtered at search time, not index time)
-        let hnsw_index = if !vectors.is_empty() {
+        let hnsw_index = if vectors.is_empty() {
+            None
+        } else {
             let count = vectors.len() - deleted.len();
             eprintln!(
                 "📂 Loading {} vectors from {}...",
@@ -320,10 +326,8 @@ impl VectorStore {
             for vector in &vectors {
                 index.insert(&vector.data)?;
             }
-            eprintln!("✅ HNSW index built for {} vectors", count);
+            eprintln!("✅ HNSW index built for {count} vectors");
             Some(index)
-        } else {
-            None
         };
 
         Ok(Self {
@@ -431,10 +435,7 @@ impl VectorStore {
     ) -> Result<usize> {
         // Check if ID already exists
         if self.id_to_index.contains_key(&id) {
-            anyhow::bail!(
-                "Vector with ID '{}' already exists. Use set() to update.",
-                id
-            );
+            anyhow::bail!("Vector with ID '{id}' already exists. Use set() to update.");
         }
 
         // Insert vector using existing insert method
@@ -473,7 +474,7 @@ impl VectorStore {
     /// Batch set vectors (insert or update multiple vectors at once)
     ///
     /// This is the recommended method for bulk operations. It provides significant
-    /// performance improvements over calling set() repeatedly by:
+    /// performance improvements over calling `set()` repeatedly by:
     /// - Reducing function call overhead
     /// - Batching HNSW insertions
     /// - Amortizing metadata operations
@@ -610,10 +611,10 @@ impl VectorStore {
     ) -> Result<()> {
         // Check if vector exists and is not deleted
         if index >= self.vectors.len() {
-            anyhow::bail!("Vector index {} does not exist", index);
+            anyhow::bail!("Vector index {index} does not exist");
         }
         if self.deleted.contains_key(&index) {
-            anyhow::bail!("Vector index {} has been deleted", index);
+            anyhow::bail!("Vector index {index} has been deleted");
         }
 
         // Update vector if provided
@@ -672,7 +673,7 @@ impl VectorStore {
             .id_to_index
             .get(id)
             .copied()
-            .ok_or_else(|| anyhow::anyhow!("Vector with ID '{}' not found", id))?;
+            .ok_or_else(|| anyhow::anyhow!("Vector with ID '{id}' not found"))?;
 
         self.update_by_index(index, vector, metadata)
     }
@@ -683,7 +684,7 @@ impl VectorStore {
             .id_to_index
             .get(id)
             .copied()
-            .ok_or_else(|| anyhow::anyhow!("Vector with ID '{}' not found", id))?;
+            .ok_or_else(|| anyhow::anyhow!("Vector with ID '{id}' not found"))?;
 
         // Mark as deleted
         self.deleted.insert(index, true);
@@ -728,7 +729,7 @@ impl VectorStore {
     /// Insert batch of vectors in parallel
     ///
     /// Automatically chunks vectors into optimal batch sizes for parallel insertion.
-    /// Uses hnsw_rs's parallel_insert with Rayon for multi-threaded building.
+    /// Uses `hnsw_rs`'s `parallel_insert` with Rayon for multi-threaded building.
     ///
     /// Chunk size of 10,000 balances:
     /// - Parallelization overhead (want batches large enough)
@@ -737,6 +738,10 @@ impl VectorStore {
     ///
     /// Returns Vec of IDs for inserted vectors
     pub fn batch_insert(&mut self, vectors: Vec<Vector>) -> Result<Vec<usize>> {
+        // Chunk size for parallel insertion (recommended: 1000 × num_threads)
+        // Using 10,000 as a good default (works well for 4-16 core machines)
+        const CHUNK_SIZE: usize = 10_000;
+
         if vectors.is_empty() {
             return Ok(Vec::new());
         }
@@ -761,10 +766,6 @@ impl VectorStore {
 
         let _start_id = self.vectors.len();
         let mut all_ids = Vec::with_capacity(vectors.len());
-
-        // Chunk size for parallel insertion (recommended: 1000 × num_threads)
-        // Using 10,000 as a good default (works well for 4-16 core machines)
-        const CHUNK_SIZE: usize = 10_000;
 
         // Process in chunks for better memory management and progress tracking
         for (chunk_idx, chunk) in vectors.chunks(CHUNK_SIZE).enumerate() {
@@ -852,13 +853,13 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Merge another VectorStore into this one using IGTM algorithm
+    /// Merge another `VectorStore` into this one using IGTM algorithm
     ///
     /// Uses Iterative Greedy Tree Merging for 1.3-1.7x faster batch inserts
     /// compared to naive insertion.
     ///
     /// # Arguments
-    /// * `other` - VectorStore to merge from (vectors and metadata will be copied)
+    /// * `other` - `VectorStore` to merge from (vectors and metadata will be copied)
     ///
     /// # Returns
     /// Number of vectors merged
@@ -899,8 +900,7 @@ impl VectorStore {
                 .id_to_index
                 .iter()
                 .find(|(_, &idx)| idx == other_idx)
-                .map(|(string_id, _)| self.id_to_index.contains_key(string_id))
-                .unwrap_or(false);
+                .is_some_and(|(string_id, _)| self.id_to_index.contains_key(string_id));
 
             if has_conflict {
                 continue; // Skip vectors with conflicting string IDs
@@ -1128,7 +1128,7 @@ impl VectorStore {
     ///
     /// Note: Currently unused (quantization is storage-only), but kept for future hybrid search
     #[allow(dead_code)]
-    fn knn_search_with_reranking(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
+    fn knn_search_with_reranking(&self, query: &Vector, k: usize) -> Vec<(usize, f32)> {
         let quantizer = self.quantizer.as_ref().unwrap();
 
         // Quantize query
@@ -1169,7 +1169,7 @@ impl VectorStore {
 
         // Sort by exact distance and return top-k
         reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
-        Ok(reranked.into_iter().take(k).collect())
+        reranked.into_iter().take(k).collect()
     }
 
     /// Brute-force K-NN search (fallback, mainly for testing)
@@ -1232,21 +1232,23 @@ impl VectorStore {
         self.memory_usage() as f32 / self.vectors.len() as f32
     }
 
-    /// Set HNSW ef_search parameter (runtime tuning)
+    /// Set HNSW `ef_search` parameter (runtime tuning)
     pub fn set_ef_search(&mut self, ef_search: usize) {
         if let Some(ref mut index) = self.hnsw_index {
             index.set_ef_search(ef_search);
         }
     }
 
-    /// Get HNSW ef_search parameter
+    /// Get HNSW `ef_search` parameter
     pub fn get_ef_search(&self) -> Option<usize> {
-        self.hnsw_index.as_ref().map(|idx| idx.get_ef_search())
+        self.hnsw_index
+            .as_ref()
+            .map(super::hnsw_index::HNSWIndex::get_ef_search)
     }
 
     /// Save vector store to disk with HNSW graph serialization
     ///
-    /// Uses hnsw_rs file_dump() to persist both vectors and graph structure.
+    /// Uses `hnsw_rs` `file_dump()` to persist both vectors and graph structure.
     /// This enables fast loading (<1s) without rebuilding the index.
     ///
     /// File format:
@@ -1263,25 +1265,25 @@ impl VectorStore {
         let filename = path
             .file_name()
             .and_then(|f| f.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid path: no filename in '{}'", base_path))?;
+            .ok_or_else(|| anyhow::anyhow!("Invalid path: no filename in '{base_path}'"))?;
 
         // Create directory if needed
         fs::create_dir_all(directory)?;
 
         // Always save vectors array (needed for get/len/verification)
-        let vectors_path = directory.join(format!("{}.vectors.bin", filename));
+        let vectors_path = directory.join(format!("{filename}.vectors.bin"));
         let vectors_data: Vec<Vec<f32>> = self.vectors.iter().map(|v| v.data.clone()).collect();
         let encoded = bincode::serialize(&vectors_data)?;
         fs::write(&vectors_path, encoded)?;
 
         // Save quantized vectors if quantization is enabled
         if self.quantizer.is_some() && !self.quantized_vectors.is_empty() {
-            let quantized_path = directory.join(format!("{}.quantized.bin", filename));
+            let quantized_path = directory.join(format!("{filename}.quantized.bin"));
             let encoded = bincode::serialize(&self.quantized_vectors)?;
             fs::write(&quantized_path, encoded)?;
 
             // Save quantizer parameters
-            let params_path = directory.join(format!("{}.quantizer.json", filename));
+            let params_path = directory.join(format!("{filename}.quantizer.json"));
             let quantizer = self.quantizer.as_ref().unwrap();
             let params_json = serde_json::to_string_pretty(&quantizer.params())?;
             fs::write(&params_path, params_json)?;
@@ -1289,21 +1291,21 @@ impl VectorStore {
 
         // Save metadata if present
         if !self.metadata.is_empty() {
-            let metadata_path = directory.join(format!("{}.metadata.json", filename));
+            let metadata_path = directory.join(format!("{filename}.metadata.json"));
             let metadata_json = serde_json::to_string_pretty(&self.metadata)?;
             fs::write(&metadata_path, metadata_json)?;
         }
 
         // Save ID to index mapping if present
         if !self.id_to_index.is_empty() {
-            let id_mapping_path = directory.join(format!("{}.id_mapping.json", filename));
+            let id_mapping_path = directory.join(format!("{filename}.id_mapping.json"));
             let id_mapping_json = serde_json::to_string_pretty(&self.id_to_index)?;
             fs::write(&id_mapping_path, id_mapping_json)?;
         }
 
         // Save deleted vectors tombstones if present
         if !self.deleted.is_empty() {
-            let deleted_path = directory.join(format!("{}.deleted.json", filename));
+            let deleted_path = directory.join(format!("{filename}.deleted.json"));
             let deleted_json = serde_json::to_string_pretty(&self.deleted)?;
             fs::write(&deleted_path, deleted_json)?;
         }
@@ -1311,7 +1313,7 @@ impl VectorStore {
         // Check if HNSW index exists
         if let Some(ref index) = self.hnsw_index {
             // Save HNSW index using our fast binary format
-            let hnsw_path = directory.join(format!("{}.hnsw", filename));
+            let hnsw_path = directory.join(format!("{filename}.hnsw"));
             index.save(&hnsw_path)?;
 
             let quantization_status = if self.quantizer.is_some() {
@@ -1355,10 +1357,10 @@ impl VectorStore {
         let filename = path
             .file_name()
             .and_then(|f| f.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid path: no filename in '{}'", base_path))?;
+            .ok_or_else(|| anyhow::anyhow!("Invalid path: no filename in '{base_path}'"))?;
 
         // Check if HNSW index file exists
-        let hnsw_path = directory.join(format!("{}.hnsw", filename));
+        let hnsw_path = directory.join(format!("{filename}.hnsw"));
 
         if hnsw_path.exists() {
             // Fast path: Load HNSW index directly (<1s)
@@ -1367,7 +1369,7 @@ impl VectorStore {
             let hnsw_index = HNSWIndex::load(&hnsw_path)?;
 
             // Load vectors array (needed for get/len/verification)
-            let vectors_path = directory.join(format!("{}.vectors.bin", filename));
+            let vectors_path = directory.join(format!("{filename}.vectors.bin"));
             let vectors = if vectors_path.exists() {
                 let vectors_data = fs::read(&vectors_path)?;
                 let vectors_raw: Vec<Vec<f32>> = bincode::deserialize(&vectors_data)?;
@@ -1379,8 +1381,8 @@ impl VectorStore {
             };
 
             // Try to load quantizer parameters and quantized vectors
-            let params_path = directory.join(format!("{}.quantizer.json", filename));
-            let quantized_path = directory.join(format!("{}.quantized.bin", filename));
+            let params_path = directory.join(format!("{filename}.quantizer.json"));
+            let quantized_path = directory.join(format!("{filename}.quantized.bin"));
 
             let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists()
             {
@@ -1405,7 +1407,7 @@ impl VectorStore {
             };
 
             // Try to load metadata
-            let metadata_path = directory.join(format!("{}.metadata.json", filename));
+            let metadata_path = directory.join(format!("{filename}.metadata.json"));
             let metadata = if metadata_path.exists() {
                 let metadata_json = fs::read_to_string(&metadata_path)?;
                 serde_json::from_str(&metadata_json)?
@@ -1414,7 +1416,7 @@ impl VectorStore {
             };
 
             // Try to load ID to index mapping
-            let id_mapping_path = directory.join(format!("{}.id_mapping.json", filename));
+            let id_mapping_path = directory.join(format!("{filename}.id_mapping.json"));
             let id_to_index = if id_mapping_path.exists() {
                 let id_mapping_json = fs::read_to_string(&id_mapping_path)?;
                 serde_json::from_str(&id_mapping_json)?
@@ -1423,7 +1425,7 @@ impl VectorStore {
             };
 
             // Try to load deleted tombstones
-            let deleted_path = directory.join(format!("{}.deleted.json", filename));
+            let deleted_path = directory.join(format!("{filename}.deleted.json"));
             let deleted = if deleted_path.exists() {
                 let deleted_json = fs::read_to_string(&deleted_path)?;
                 serde_json::from_str(&deleted_json)?
@@ -1452,9 +1454,9 @@ impl VectorStore {
             // Fallback: Load vectors and rebuild HNSW
             eprintln!("📂 HNSW index not found, loading vectors and rebuilding...");
 
-            let vectors_path = directory.join(format!("{}.vectors.bin", filename));
+            let vectors_path = directory.join(format!("{filename}.vectors.bin"));
             if !vectors_path.exists() {
-                anyhow::bail!("Vector file not found: {:?}", vectors_path);
+                anyhow::bail!("Vector file not found: {}", vectors_path.display());
             }
 
             let vectors_data = fs::read(&vectors_path)?;
@@ -1468,8 +1470,8 @@ impl VectorStore {
             );
 
             // Try to load quantizer parameters
-            let params_path = directory.join(format!("{}.quantizer.json", filename));
-            let quantized_path = directory.join(format!("{}.quantized.bin", filename));
+            let params_path = directory.join(format!("{filename}.quantizer.json"));
+            let quantized_path = directory.join(format!("{filename}.quantized.bin"));
 
             let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists()
             {
@@ -1494,7 +1496,7 @@ impl VectorStore {
             };
 
             // Try to load metadata
-            let metadata_path = directory.join(format!("{}.metadata.json", filename));
+            let metadata_path = directory.join(format!("{filename}.metadata.json"));
             let metadata = if metadata_path.exists() {
                 let metadata_json = fs::read_to_string(&metadata_path)?;
                 serde_json::from_str(&metadata_json)?
@@ -1503,7 +1505,7 @@ impl VectorStore {
             };
 
             // Try to load ID to index mapping
-            let id_mapping_path = directory.join(format!("{}.id_mapping.json", filename));
+            let id_mapping_path = directory.join(format!("{filename}.id_mapping.json"));
             let id_to_index = if id_mapping_path.exists() {
                 let id_mapping_json = fs::read_to_string(&id_mapping_path)?;
                 serde_json::from_str(&id_mapping_json)?
@@ -1512,7 +1514,7 @@ impl VectorStore {
             };
 
             // Try to load deleted tombstones
-            let deleted_path = directory.join(format!("{}.deleted.json", filename));
+            let deleted_path = directory.join(format!("{filename}.deleted.json"));
             let deleted = if deleted_path.exists() {
                 let deleted_json = fs::read_to_string(&deleted_path)?;
                 serde_json::from_str(&deleted_json)?

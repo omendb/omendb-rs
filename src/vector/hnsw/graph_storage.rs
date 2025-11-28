@@ -1,8 +1,8 @@
 //! Graph storage abstraction for HNSW index
 //!
 //! Provides a unified API over different storage backends:
-//! - Memory: Fast in-memory storage (NeighborLists)
-//! - Layered: Hybrid disk+cache storage (LayeredStorage)
+//! - Memory: Fast in-memory storage (`NeighborLists`)
+//! - Layered: Hybrid disk+cache storage (`LayeredStorage`)
 //!
 //! This enum dispatch pattern allows:
 //! - Serialization support (Memory mode)
@@ -22,7 +22,7 @@ use tracing::warn;
 
 /// Configuration for disk-backed storage
 ///
-/// Used when creating a LayeredStorage with DiskStorage backend
+/// Used when creating a `LayeredStorage` with `DiskStorage` backend
 /// for layer 0 (hybrid or disk-heavy mode).
 #[derive(Debug, Clone)]
 pub struct DiskConfig {
@@ -48,6 +48,7 @@ pub struct DiskConfig {
 
 impl DiskConfig {
     /// Create disk config with default cache capacity (30% of nodes)
+    #[must_use]
     pub fn new(path: PathBuf, num_nodes: usize) -> Self {
         let cache_capacity = (num_nodes as f64 * 0.3).max(1000.0) as usize;
         Self {
@@ -58,6 +59,7 @@ impl DiskConfig {
     }
 
     /// Create disk config with custom cache capacity
+    #[must_use]
     pub fn with_cache(path: PathBuf, cache_capacity: NonZeroUsize) -> Self {
         Self {
             path,
@@ -67,6 +69,7 @@ impl DiskConfig {
     }
 
     /// Enable mmap populate (pre-fault pages)
+    #[must_use]
     pub fn with_populate(mut self) -> Self {
         self.populate = true;
         self
@@ -77,7 +80,7 @@ impl DiskConfig {
 ///
 /// Dispatches to appropriate storage implementation based on mode.
 ///
-/// **Note**: Not Clone due to LayeredStorage containing trait objects.
+/// **Note**: Not Clone due to `LayeredStorage` containing trait objects.
 /// Use persistence APIs (save/load) instead of cloning.
 #[derive(Debug)]
 pub enum GraphStorage {
@@ -93,25 +96,28 @@ pub enum GraphStorage {
     /// - Layer 0: Mode-dependent (disk + cache)
     /// - Layers 1-N: Always in memory
     /// - Suitable for 10M-1B vectors
-    /// - **Not serializable** (use save_to_disk() instead)
+    /// - **Not serializable** (use `save_to_disk()` instead)
     Layered(Box<LayeredStorage>),
 }
 
 impl GraphStorage {
     /// Create memory storage (default)
+    #[must_use]
     pub fn new_memory(max_levels: usize) -> Self {
         Self::Memory(NeighborLists::new(max_levels))
     }
 
     /// Create memory storage with capacity
+    #[must_use]
     pub fn new_memory_with_capacity(num_nodes: usize, max_levels: usize, m: usize) -> Self {
         Self::Memory(NeighborLists::with_capacity(num_nodes, max_levels, m))
     }
 
     /// Create layered storage (hybrid/disk-heavy mode)
     ///
-    /// **Note**: Uses MemoryStorage for layer 0 (architectural validation).
+    /// **Note**: Uses `MemoryStorage` for layer 0 (architectural validation).
     /// For actual disk storage, use `new_layered_with_disk()`.
+    #[must_use]
     pub fn new_layered(max_levels: usize) -> Self {
         Self::Layered(Box::new(LayeredStorage::new_memory(max_levels)))
     }
@@ -137,7 +143,7 @@ impl GraphStorage {
     /// - File I/O errors
     /// - Invalid disk path
     /// - mmap failures
-    pub fn new_layered_with_disk(disk_config: DiskConfig, max_levels: usize) -> Result<Self> {
+    pub fn new_layered_with_disk(disk_config: &DiskConfig, max_levels: usize) -> Result<Self> {
         let layered = LayeredStorage::new_hybrid(
             &disk_config.path,
             disk_config.cache_capacity,
@@ -149,8 +155,9 @@ impl GraphStorage {
 
     /// Create from storage mode
     ///
-    /// **Note**: Without disk config, Hybrid/DiskHeavy modes use MemoryStorage.
+    /// **Note**: Without disk config, Hybrid/DiskHeavy modes use `MemoryStorage`.
     /// For actual disk storage, use `from_mode_with_disk()`.
+    #[must_use]
     pub fn from_mode(mode: StorageMode, max_levels: usize) -> Self {
         match mode {
             StorageMode::Memory => Self::new_memory(max_levels),
@@ -160,7 +167,7 @@ impl GraphStorage {
 
     /// Create from storage mode with optional disk config
     ///
-    /// If disk_config is Some and mode is Hybrid/DiskHeavy, creates disk-backed storage.
+    /// If `disk_config` is Some and mode is Hybrid/DiskHeavy, creates disk-backed storage.
     /// Otherwise falls back to `from_mode()`.
     pub fn from_mode_with_disk(
         mode: StorageMode,
@@ -169,7 +176,7 @@ impl GraphStorage {
     ) -> Result<Self> {
         match (mode, disk_config) {
             (StorageMode::Memory, _) => Ok(Self::new_memory(max_levels)),
-            (StorageMode::Hybrid | StorageMode::DiskHeavy, Some(config)) => {
+            (StorageMode::Hybrid | StorageMode::DiskHeavy, Some(ref config)) => {
                 Self::new_layered_with_disk(config, max_levels)
             }
             (StorageMode::Hybrid | StorageMode::DiskHeavy, None) => {
@@ -179,6 +186,7 @@ impl GraphStorage {
     }
 
     /// Get storage mode
+    #[must_use]
     pub fn mode(&self) -> StorageMode {
         match self {
             Self::Memory(_) => StorageMode::Memory,
@@ -192,8 +200,8 @@ impl GraphStorage {
     /// Owned Vec (allows both memory and disk backends)
     ///
     /// # Errors
-    /// - NodeNotFound: Node doesn't exist
-    /// - InvalidLevel: Level exceeds max_levels
+    /// - `NodeNotFound`: Node doesn't exist
+    /// - `InvalidLevel`: Level exceeds `max_levels`
     /// - Storage errors from disk I/O
     pub fn get_neighbors(&self, node_id: u32, level: u8) -> Result<Vec<u32>> {
         match self {
@@ -226,7 +234,7 @@ impl GraphStorage {
     /// Set neighbors for a node at a specific level
     ///
     /// # Errors
-    /// - InvalidLevel: Level exceeds max_levels
+    /// - `InvalidLevel`: Level exceeds `max_levels`
     /// - Storage errors from disk I/O
     pub fn set_neighbors(&mut self, node_id: u32, level: u8, neighbors: Vec<u32>) -> Result<()> {
         match self {
@@ -293,7 +301,7 @@ impl GraphStorage {
 
     /// Remove unidirectional link (parallel version - assumes nodes pre-allocated)
     ///
-    /// Removes link from node_a to node_b (NOT bidirectional).
+    /// Removes link from `node_a` to `node_b` (NOT bidirectional).
     /// Thread-safe version for parallel graph construction.
     /// Only works with Memory mode. Panics if used with Layered mode.
     pub fn remove_link_parallel(&self, node_a: u32, node_b: u32, level: u8) {
@@ -322,7 +330,8 @@ impl GraphStorage {
         }
     }
 
-    /// Get M_max (max neighbors)
+    /// Get `M_max` (max neighbors)
+    #[must_use]
     pub fn m_max(&self) -> usize {
         match self {
             Self::Memory(lists) => lists.m_max(),
@@ -331,16 +340,19 @@ impl GraphStorage {
     }
 
     /// Check if storage is in memory mode
+    #[must_use]
     pub fn is_memory_mode(&self) -> bool {
         matches!(self, Self::Memory(_))
     }
 
     /// Check if storage is in layered mode
+    #[must_use]
     pub fn is_layered_mode(&self) -> bool {
         matches!(self, Self::Layered(_))
     }
 
     /// Get memory usage in bytes (approximate)
+    #[must_use]
     pub fn memory_usage(&self) -> usize {
         match self {
             Self::Memory(lists) => lists.memory_usage(),
@@ -353,7 +365,7 @@ impl GraphStorage {
 
     /// Reorder graph nodes using BFS for cache locality
     ///
-    /// Returns a mapping from old_id -> new_id
+    /// Returns a mapping from `old_id` -> `new_id`
     ///
     /// **Note**: Only supported in Memory mode. Returns identity mapping for Layered mode.
     pub fn reorder_bfs(&mut self, entry_point: u32, start_level: u8) -> Vec<u32> {

@@ -1,7 +1,7 @@
 //! LRU-cached storage wrapper for HNSW-IF
 //!
-//! Implements the CachedStorage layer that wraps any NodeStorage backend
-//! (MemoryStorage or DiskStorage) with an LRU cache.
+//! Implements the `CachedStorage` layer that wraps any `NodeStorage` backend
+//! (`MemoryStorage` or `DiskStorage`) with an LRU cache.
 //!
 //! Key design decisions (from Gorgeous 2025 paper):
 //! - **Cache adjacency lists only** (not full nodes): 88% hit rate vs 10%
@@ -10,7 +10,7 @@
 //! - **LRU eviction**: Simple and effective for HNSW access patterns
 //!
 //! Automatic tiering:
-//! - <10M vectors: MemoryStorage (no cache needed)
+//! - <10M vectors: `MemoryStorage` (no cache needed)
 //! - 10M-100M: CachedStorage(DiskStorage) with 30% cache
 //! - 100M+: CachedStorage(DiskStorage) with 10% cache
 
@@ -20,7 +20,7 @@ use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-/// Cache key: (node_id, level)
+/// Cache key: (`node_id`, level)
 ///
 /// We cache individual adjacency lists, not full nodes.
 /// This gives 88% hit rate vs 10% for full nodes (Gorgeous 2025).
@@ -28,7 +28,7 @@ type CacheKey = (NodeId, Level);
 
 /// Cached storage wrapper with LRU eviction
 ///
-/// Wraps any NodeStorage backend (MemoryStorage or DiskStorage) with an LRU cache.
+/// Wraps any `NodeStorage` backend (`MemoryStorage` or `DiskStorage`) with an LRU cache.
 ///
 /// # Example
 /// ```ignore
@@ -50,11 +50,11 @@ pub struct CachedStorage {
 
     /// LRU cache for adjacency lists
     ///
-    /// Key: (node_id, level)
+    /// Key: (`node_id`, level)
     /// Value: Vec<NodeId> (neighbor list)
     ///
-    /// Mutex because LRU cache needs mutable access for get() (updates LRU order).
-    /// Alternative: RwLock + separate dirty tracking, but more complex.
+    /// Mutex because LRU cache needs mutable access for `get()` (updates LRU order).
+    /// Alternative: `RwLock` + separate dirty tracking, but more complex.
     cache: Arc<Mutex<LruCache<CacheKey, Vec<NodeId>>>>,
 
     /// Cache statistics
@@ -66,7 +66,7 @@ impl CachedStorage {
     /// Create new cached storage wrapper
     ///
     /// # Arguments
-    /// * `backend` - Underlying storage (MemoryStorage or DiskStorage)
+    /// * `backend` - Underlying storage (`MemoryStorage` or `DiskStorage`)
     /// * `capacity` - Maximum number of cached adjacency lists
     ///
     /// # Capacity Guidelines
@@ -80,6 +80,7 @@ impl CachedStorage {
     /// let capacity = NonZeroUsize::new(10_000_000 * 3 * 30 / 100).unwrap();
     /// let cached = CachedStorage::new(Box::new(disk_storage), capacity);
     /// ```
+    #[must_use]
     pub fn new(backend: Box<dyn NodeStorage>, capacity: NonZeroUsize) -> Self {
         Self {
             backend,
@@ -91,7 +92,8 @@ impl CachedStorage {
 
     /// Get cache statistics
     ///
-    /// Returns (hits, misses, hit_rate)
+    /// Returns (hits, misses, `hit_rate`)
+    #[must_use]
     pub fn cache_stats(&self) -> (usize, usize, f64) {
         let hits = *self.hits.lock().unwrap();
         let misses = *self.misses.lock().unwrap();
@@ -116,11 +118,13 @@ impl CachedStorage {
     }
 
     /// Get cache size (current number of entries)
+    #[must_use]
     pub fn cache_size(&self) -> usize {
         self.cache.lock().unwrap().len()
     }
 
     /// Get cache capacity (max entries)
+    #[must_use]
     pub fn cache_capacity(&self) -> usize {
         self.cache.lock().unwrap().cap().get()
     }

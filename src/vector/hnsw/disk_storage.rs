@@ -5,13 +5,13 @@
 //!
 //! Features:
 //! - Memory-mapped file I/O (OS handles paging)
-//! - madvise for access pattern hints (MADV_RANDOM)
+//! - madvise for access pattern hints (`MADV_RANDOM`)
 //! - Optional pre-population (populate parameter)
 //! - Versioned binary format for forward compatibility
 //!
 //! File format:
 //! - metadata.bin: Graph metadata (entry point, params, version)
-//! - layer_0.graph: Node neighbor lists (mmap-friendly format)
+//! - `layer_0.graph`: Node neighbor lists (mmap-friendly format)
 
 use super::error::{HNSWError, Result};
 use super::node_storage::{Level, NodeId, NodeStorage};
@@ -43,7 +43,7 @@ pub struct DiskStorage {
     /// Memory-mapped graph file (neighbor lists)
     graph_mmap: Arc<Mmap>,
 
-    /// Memory-mapped offset index (node_id → file offset)
+    /// Memory-mapped offset index (`node_id` → file offset)
     ///
     /// Optional: If present, enables O(1) node access.
     /// If absent, falls back to O(n) scanning.
@@ -86,16 +86,16 @@ struct GraphMetadata {
     /// M0 parameter (max neighbors at base layer)
     m0: u32,
 
-    /// ef_construction parameter
+    /// `ef_construction` parameter
     ef_construction: u32,
 }
 
 /// Node entry in graph file
 ///
 /// Variable-size format:
-/// - num_levels: u32 (4 bytes)
-/// - For each level (0..num_levels):
-///   - neighbor_count: u32 (4 bytes)
+/// - `num_levels`: u32 (4 bytes)
+/// - For each level (`0..num_levels)`:
+///   - `neighbor_count`: u32 (4 bytes)
 ///   - neighbors: [u32; count] (count * 4 bytes)
 struct NodeEntry {
     num_levels: u32,
@@ -161,7 +161,7 @@ impl DiskStorage {
 
     /// Create new disk storage from in-memory data
     ///
-    /// This is called during save() to write in-memory graph to disk.
+    /// This is called during `save()` to write in-memory graph to disk.
     ///
     /// # Arguments
     /// * `path` - Path to storage directory
@@ -201,11 +201,11 @@ impl DiskStorage {
     fn load_metadata(path: &Path) -> Result<GraphMetadata> {
         let metadata_path = path.join("metadata.bin");
         let mut file = File::open(&metadata_path)
-            .map_err(|e| HNSWError::Storage(format!("Failed to open metadata.bin: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Failed to open metadata.bin: {e}")))?;
 
         let mut buffer = vec![0u8; METADATA_HEADER_SIZE];
         file.read_exact(&mut buffer)
-            .map_err(|e| HNSWError::Storage(format!("Failed to read metadata: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Failed to read metadata: {e}")))?;
 
         // Validate magic number
         if &buffer[0..8] != MAGIC_NUMBER {
@@ -249,7 +249,7 @@ impl DiskStorage {
             .create(true)
             .truncate(true)
             .open(&metadata_path)
-            .map_err(|e| HNSWError::Storage(format!("Failed to create metadata.bin: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Failed to create metadata.bin: {e}")))?;
 
         let mut buffer = vec![0u8; METADATA_HEADER_SIZE];
 
@@ -280,12 +280,12 @@ impl DiskStorage {
         // Reserved bytes (48..64) remain zero
 
         file.write_all(&buffer)
-            .map_err(|e| HNSWError::Storage(format!("Failed to write metadata: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Failed to write metadata: {e}")))?;
 
         Ok(())
     }
 
-    /// Save graph to layer_0.graph
+    /// Save graph to `layer_0.graph`
     fn save_graph(path: &Path, nodes: &[Vec<Vec<NodeId>>]) -> Result<()> {
         let graph_path = path.join("layer_0.graph");
         let file = OpenOptions::new()
@@ -293,7 +293,7 @@ impl DiskStorage {
             .create(true)
             .truncate(true)
             .open(&graph_path)
-            .map_err(|e| HNSWError::Storage(format!("Failed to create layer_0.graph: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Failed to create layer_0.graph: {e}")))?;
 
         // Use BufWriter to batch writes (100-1000x speedup vs unbuffered I/O)
         let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file); // 8MB buffer
@@ -325,7 +325,7 @@ impl DiskStorage {
 
     /// Open memory-mapped file
     ///
-    /// Applies madvise(MADV_RANDOM) for random access patterns
+    /// Applies `madvise(MADV_RANDOM)` for random access patterns
     fn open_mmap(path: &Path, populate: bool) -> Result<Mmap> {
         let file = OpenOptions::new()
             .read(true)
@@ -359,7 +359,7 @@ impl DiskStorage {
     /// * `node_id` - Node ID to look up
     ///
     /// # Errors
-    /// Returns error if node_id is out of bounds
+    /// Returns error if `node_id` is out of bounds
     fn get_offset(&self, node_id: NodeId) -> Result<usize> {
         if let Some(offset_mmap) = &self.offset_mmap {
             // O(1) lookup from mmap
@@ -559,7 +559,7 @@ impl NodeStorage for DiskStorage {
 /// Writable disk storage for incremental graph building
 ///
 /// Supports append-only writes during HNSW construction, then converts
-/// to read-only DiskStorage via finalize().
+/// to read-only `DiskStorage` via `finalize()`.
 ///
 /// # Usage
 /// ```ignore
@@ -582,7 +582,7 @@ pub struct WritableDiskStorage {
     /// Buffered writer for graph file (append-only)
     file: BufWriter<File>,
 
-    /// Offset index: node_id → byte offset in file
+    /// Offset index: `node_id` → byte offset in file
     offset_index: Vec<u64>,
 
     /// Current write position in file
@@ -613,7 +613,7 @@ impl WritableDiskStorage {
             .create(true)
             .truncate(true)
             .open(&graph_path)
-            .map_err(|e| HNSWError::Storage(format!("Failed to create layer_0.graph: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Failed to create layer_0.graph: {e}")))?;
 
         let file = BufWriter::with_capacity(8 * 1024 * 1024, file); // 8MB buffer
 
@@ -672,7 +672,7 @@ impl WritableDiskStorage {
         let num_levels = neighbors_per_level.len() as u32;
         self.file
             .write_all(&num_levels.to_le_bytes())
-            .map_err(|e| HNSWError::Storage(format!("Write failed: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Write failed: {e}")))?;
         self.current_offset += 4;
 
         // Write each level's neighbors
@@ -681,14 +681,14 @@ impl WritableDiskStorage {
             let count = neighbors.len() as u32;
             self.file
                 .write_all(&count.to_le_bytes())
-                .map_err(|e| HNSWError::Storage(format!("Write failed: {}", e)))?;
+                .map_err(|e| HNSWError::Storage(format!("Write failed: {e}")))?;
             self.current_offset += 4;
 
             // Write neighbor IDs
             for &neighbor_id in neighbors {
                 self.file
                     .write_all(&neighbor_id.to_le_bytes())
-                    .map_err(|e| HNSWError::Storage(format!("Write failed: {}", e)))?;
+                    .map_err(|e| HNSWError::Storage(format!("Write failed: {e}")))?;
                 self.current_offset += 4;
             }
         }
@@ -696,13 +696,13 @@ impl WritableDiskStorage {
         Ok(())
     }
 
-    /// Finalize writes and convert to read-only DiskStorage
+    /// Finalize writes and convert to read-only `DiskStorage`
     ///
     /// This:
     /// 1. Flushes remaining writes
     /// 2. Saves offset index to disk
     /// 3. Updates metadata
-    /// 4. Opens as read-only DiskStorage
+    /// 4. Opens as read-only `DiskStorage`
     ///
     /// # Errors
     /// Returns error if flush, offset save, or open fails
@@ -710,7 +710,7 @@ impl WritableDiskStorage {
         // Flush and close file before accessing other fields
         self.file
             .flush()
-            .map_err(|e| HNSWError::Storage(format!("Flush failed: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Flush failed: {e}")))?;
 
         // Extract fields we need before moving self.file
         let path = self.path.clone();
@@ -727,19 +727,19 @@ impl WritableDiskStorage {
             .create(true)
             .truncate(true)
             .open(&offset_path)
-            .map_err(|e| HNSWError::Storage(format!("Failed to create offset index: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Failed to create offset index: {e}")))?;
 
         let mut writer = BufWriter::new(file);
 
         for &offset in &offset_index {
             writer
                 .write_all(&offset.to_le_bytes())
-                .map_err(|e| HNSWError::Storage(format!("Failed to write offset: {}", e)))?;
+                .map_err(|e| HNSWError::Storage(format!("Failed to write offset: {e}")))?;
         }
 
         writer
             .flush()
-            .map_err(|e| HNSWError::Storage(format!("Failed to flush offset index: {}", e)))?;
+            .map_err(|e| HNSWError::Storage(format!("Failed to flush offset index: {e}")))?;
 
         // Update and save metadata
         metadata.num_nodes = offset_index.len() as u64;
@@ -750,11 +750,13 @@ impl WritableDiskStorage {
     }
 
     /// Get number of nodes written so far
+    #[must_use]
     pub fn len(&self) -> usize {
         self.offset_index.len()
     }
 
     /// Check if empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.offset_index.is_empty()
     }
@@ -812,7 +814,7 @@ impl NodeStorage for WritableDiskStorage {
     fn flush(&mut self) -> Result<()> {
         self.file
             .flush()
-            .map_err(|e| HNSWError::Storage(format!("Flush failed: {}", e)))
+            .map_err(|e| HNSWError::Storage(format!("Flush failed: {e}")))
     }
 }
 

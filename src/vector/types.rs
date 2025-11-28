@@ -7,20 +7,22 @@
 
 use anyhow::{anyhow, Result};
 
-/// High-dimensional vector (1536 dimensions for OpenAI embeddings)
+/// High-dimensional vector (1536 dimensions for `OpenAI` embeddings)
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vector {
-    /// Vector dimensions (typically 1536 for OpenAI, 768 for other models)
+    /// Vector dimensions (typically 1536 for `OpenAI`, 768 for other models)
     pub data: Vec<f32>,
 }
 
 impl Vector {
     /// Create new vector from f32 array
+    #[must_use]
     pub fn new(data: Vec<f32>) -> Self {
         Self { data }
     }
 
     /// Get dimensionality
+    #[must_use]
     pub fn dim(&self) -> usize {
         self.data.len()
     }
@@ -83,6 +85,7 @@ impl Vector {
     }
 
     /// Compute L2 norm (magnitude) of vector
+    #[must_use]
     pub fn l2_norm(&self) -> f32 {
         self.data.iter().map(|x| x * x).sum::<f32>().sqrt()
     }

@@ -21,7 +21,7 @@ use super::types::Candidate;
 /// Fast visited list using generation markers (like hnswlib)
 ///
 /// O(1) insert, O(1) contains, O(1) clear (just increment generation)
-/// Much faster than HashSet for HNSW traversal.
+/// Much faster than `HashSet` for HNSW traversal.
 pub struct VisitedList {
     /// visited[i] = generation when node i was last visited
     visited: Vec<u32>,
@@ -57,8 +57,8 @@ impl VisitedList {
 
     /// Check if node was visited this generation
     #[inline]
-    pub fn contains(&self, id: &u32) -> bool {
-        self.visited.get(*id as usize).copied() == Some(self.generation)
+    pub fn contains(&self, id: u32) -> bool {
+        self.visited.get(id as usize).copied() == Some(self.generation)
     }
 
     /// Mark node as visited
@@ -196,16 +196,16 @@ mod tests {
     fn test_visited_list_basic() {
         let mut visited = VisitedList::new();
 
-        assert!(!visited.contains(&0));
-        assert!(!visited.contains(&100));
+        assert!(!visited.contains(0));
+        assert!(!visited.contains(100));
 
         visited.insert(42);
-        assert!(visited.contains(&42));
-        assert!(!visited.contains(&0));
+        assert!(visited.contains(42));
+        assert!(!visited.contains(0));
 
         visited.insert(100);
-        assert!(visited.contains(&42));
-        assert!(visited.contains(&100));
+        assert!(visited.contains(42));
+        assert!(visited.contains(100));
     }
 
     #[test]
@@ -216,21 +216,21 @@ mod tests {
         visited.insert(2);
         visited.insert(3);
 
-        assert!(visited.contains(&1));
-        assert!(visited.contains(&2));
-        assert!(visited.contains(&3));
+        assert!(visited.contains(1));
+        assert!(visited.contains(2));
+        assert!(visited.contains(3));
 
         // Clear should reset in O(1)
         visited.clear();
 
-        assert!(!visited.contains(&1));
-        assert!(!visited.contains(&2));
-        assert!(!visited.contains(&3));
+        assert!(!visited.contains(1));
+        assert!(!visited.contains(2));
+        assert!(!visited.contains(3));
 
         // Should be able to reuse
         visited.insert(1);
-        assert!(visited.contains(&1));
-        assert!(!visited.contains(&2));
+        assert!(visited.contains(1));
+        assert!(!visited.contains(2));
     }
 
     #[test]
@@ -240,9 +240,9 @@ mod tests {
         // Multiple clear cycles should work correctly
         for _ in 0..10 {
             visited.insert(42);
-            assert!(visited.contains(&42));
+            assert!(visited.contains(42));
             visited.clear();
-            assert!(!visited.contains(&42));
+            assert!(!visited.contains(42));
         }
     }
 
@@ -266,7 +266,7 @@ mod tests {
         // Clear
         buffers.clear();
 
-        assert!(!buffers.visited.contains(&1));
+        assert!(!buffers.visited.contains(1));
         assert!(buffers.entry_points.is_empty());
     }
 
@@ -275,12 +275,12 @@ mod tests {
         // Use buffers
         with_buffers(|buffers| {
             buffers.visited.insert(42);
-            assert!(buffers.visited.contains(&42));
+            assert!(buffers.visited.contains(42));
         });
 
         // Buffers should be cleared after use
         with_buffers(|buffers| {
-            assert!(!buffers.visited.contains(&42));
+            assert!(!buffers.visited.contains(42));
         });
     }
 
@@ -297,7 +297,7 @@ mod tests {
         let handle = thread::spawn(|| {
             with_buffers(|buffers| {
                 // Should not see main thread's data
-                assert!(!buffers.visited.contains(&1));
+                assert!(!buffers.visited.contains(1));
                 buffers.visited.insert(2);
             });
         });
@@ -306,7 +306,7 @@ mod tests {
 
         // Main thread should not see spawned thread's data
         with_buffers(|buffers| {
-            assert!(!buffers.visited.contains(&2));
+            assert!(!buffers.visited.contains(2));
         });
     }
 }

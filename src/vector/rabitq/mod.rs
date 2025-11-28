@@ -1,6 +1,6 @@
-//! Extended RaBitQ Quantization
+//! Extended `RaBitQ` Quantization
 //!
-//! Extended RaBitQ (SIGMOD 2025) extends RaBitQ to support arbitrary compression
+//! Extended `RaBitQ` (SIGMOD 2025) extends `RaBitQ` to support arbitrary compression
 //! rates (2-9 bits per dimension) with significantly better accuracy than standard
 //! scalar quantization.
 //!
@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
+use std::arch::aarch64::{
+    vaddq_f32, vaddvq_f32, vdupq_n_f32, vfmaq_f32, vld1q_f32, vmulq_f32, vst1q_f32, vsubq_f32,
+};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
@@ -37,6 +39,7 @@ pub enum QuantizationBits {
 
 impl QuantizationBits {
     /// Convert to number of bits
+    #[must_use]
     pub fn to_u8(self) -> u8 {
         match self {
             QuantizationBits::Bits2 => 2,
@@ -49,16 +52,19 @@ impl QuantizationBits {
     }
 
     /// Get number of quantization levels (2^bits)
+    #[must_use]
     pub fn levels(self) -> usize {
         1 << self.to_u8()
     }
 
-    /// Get compression ratio vs f32 (32 bits / bits_per_dim)
+    /// Get compression ratio vs f32 (32 bits / `bits_per_dim`)
+    #[must_use]
     pub fn compression_ratio(self) -> f32 {
         32.0 / self.to_u8() as f32
     }
 
     /// Get number of values that fit in one byte
+    #[must_use]
     pub fn values_per_byte(self) -> usize {
         8 / self.to_u8() as usize
     }
@@ -70,7 +76,7 @@ impl fmt::Display for QuantizationBits {
     }
 }
 
-/// Configuration for Extended RaBitQ quantization
+/// Configuration for Extended `RaBitQ` quantization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaBitQParams {
     /// Number of bits per dimension
@@ -108,6 +114,7 @@ impl Default for RaBitQParams {
 
 impl RaBitQParams {
     /// Create parameters for 2-bit quantization (16x compression)
+    #[must_use]
     pub fn bits2() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits2,
@@ -116,6 +123,7 @@ impl RaBitQParams {
     }
 
     /// Create parameters for 4-bit quantization (8x compression, recommended)
+    #[must_use]
     pub fn bits4() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits4,
@@ -124,6 +132,7 @@ impl RaBitQParams {
     }
 
     /// Create parameters for 8-bit quantization (4x compression, highest quality)
+    #[must_use]
     pub fn bits8() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits8,
@@ -139,6 +148,7 @@ impl RaBitQParams {
     /// - O(D log D) random rotation vs O(D²) for matrix multiply
     /// - 10-80x faster encoding for high-dimensional vectors
     /// - Better distribution of information across dimensions
+    #[must_use]
     pub fn with_fht(bits: QuantizationBits) -> Self {
         Self {
             bits_per_dim: bits,
@@ -149,6 +159,7 @@ impl RaBitQParams {
     }
 
     /// Create 4-bit parameters with FHT (recommended for production)
+    #[must_use]
     pub fn bits4_fht() -> Self {
         Self::with_fht(QuantizationBits::Bits4)
     }
@@ -157,6 +168,7 @@ impl RaBitQParams {
     ///
     /// Provides a balance between 2-bit (84% recall) and 4-bit (100% recall).
     /// Target: ~92-95% recall at 10.67x compression.
+    #[must_use]
     pub fn bits3() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits3,
@@ -170,6 +182,7 @@ impl RaBitQParams {
     ///
     /// Higher precision than 4-bit for applications requiring better accuracy.
     /// Target: ~99-100% recall at 6.4x compression.
+    #[must_use]
     pub fn bits5() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits5,
@@ -183,6 +196,7 @@ impl RaBitQParams {
     ///
     /// Near-lossless compression for high-precision requirements.
     /// Target: ~100% recall at 4.57x compression.
+    #[must_use]
     pub fn bits7() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits7,
@@ -203,7 +217,7 @@ impl RaBitQParams {
 pub struct QuantizedVector {
     /// Packed quantized values
     ///
-    /// Format depends on bits_per_dim:
+    /// Format depends on `bits_per_dim`:
     /// - 2-bit: 4 values per byte
     /// - 3-bit: Not byte-aligned, needs special packing
     /// - 4-bit: 2 values per byte
@@ -229,6 +243,7 @@ pub struct QuantizedVector {
 
 impl QuantizedVector {
     /// Create a new quantized vector
+    #[must_use]
     pub fn new(data: Vec<u8>, scale: f32, bits: u8, dimensions: usize) -> Self {
         Self {
             data,
@@ -240,6 +255,7 @@ impl QuantizedVector {
     }
 
     /// Create a new quantized vector with FHT flag
+    #[must_use]
     pub fn new_with_fht(
         data: Vec<u8>,
         scale: f32,
@@ -257,11 +273,13 @@ impl QuantizedVector {
     }
 
     /// Get memory usage in bytes
+    #[must_use]
     pub fn memory_bytes(&self) -> usize {
         std::mem::size_of::<Self>() + self.data.len()
     }
 
     /// Get compression ratio vs original f32 vector
+    #[must_use]
     pub fn compression_ratio(&self) -> f32 {
         let original_bytes = self.dimensions * 4; // f32 = 4 bytes
         let compressed_bytes = self.data.len() + 4 + 1; // data + scale + bits
@@ -269,9 +287,9 @@ impl QuantizedVector {
     }
 }
 
-/// Extended RaBitQ quantizer
+/// Extended `RaBitQ` quantizer
 ///
-/// Implements the Extended RaBitQ algorithm from SIGMOD 2025:
+/// Implements the Extended `RaBitQ` algorithm from SIGMOD 2025:
 /// 1. Try multiple rescaling factors
 /// 2. For each scale, quantize to grid and compute error
 /// 3. Select scale with minimum error
@@ -282,22 +300,25 @@ pub struct RaBitQ {
 }
 
 impl RaBitQ {
-    /// Create a new Extended RaBitQ quantizer
+    /// Create a new Extended `RaBitQ` quantizer
+    #[must_use]
     pub fn new(params: RaBitQParams) -> Self {
         Self { params }
     }
 
     /// Create with default 4-bit quantization
+    #[must_use]
     pub fn default_4bit() -> Self {
         Self::new(RaBitQParams::bits4())
     }
 
     /// Get quantization parameters
+    #[must_use]
     pub fn params(&self) -> &RaBitQParams {
         &self.params
     }
 
-    /// Quantize a vector using Extended RaBitQ algorithm
+    /// Quantize a vector using Extended `RaBitQ` algorithm
     ///
     /// Algorithm:
     /// 1. (Optional) Apply FHT for random rotation
@@ -305,10 +326,11 @@ impl RaBitQ {
     /// 3. For each scale, quantize to grid and compute error
     /// 4. Select scale with minimum error
     /// 5. Return quantized vector with optimal scale
+    #[must_use]
     pub fn quantize(&self, vector: &[f32]) -> QuantizedVector {
         // Apply FHT if enabled (O(D log D) random rotation)
         let working_vector = if self.params.use_fht {
-            self.apply_fht_to_vector(vector)
+            Self::apply_fht_to_vector(vector)
         } else {
             vector.to_vec()
         };
@@ -342,61 +364,61 @@ impl RaBitQ {
     }
 
     /// Apply FHT to a vector for random rotation
-    fn apply_fht_to_vector(&self, vector: &[f32]) -> Vec<f32> {
-        let n = vector.len();
-        if n == 0 {
+    fn apply_fht_to_vector(vector: &[f32]) -> Vec<f32> {
+        let len = vector.len();
+        if len == 0 {
             return vec![];
         }
 
         // Pad to power of 2
-        let padded_len = n.next_power_of_two();
+        let padded_len = len.next_power_of_two();
         let mut data = vec![0.0f32; padded_len];
-        data[..n].copy_from_slice(vector);
+        data[..len].copy_from_slice(vector);
 
         // Apply random signs (using dimension as seed for reproducibility)
-        apply_random_signs(&mut data, n as u64);
+        apply_random_signs(&mut data, len as u64);
 
         // Apply FHT
         fast_hadamard_transform_inplace(&mut data);
 
         // Truncate and return
-        data.truncate(n);
+        data.truncate(len);
         data
     }
 
     /// Apply inverse FHT to reconstruct original vector
-    fn apply_inverse_fht_to_vector(&self, vector: &[f32]) -> Vec<f32> {
-        let n = vector.len();
-        if n == 0 {
+    fn apply_inverse_fht_to_vector(vector: &[f32]) -> Vec<f32> {
+        let len = vector.len();
+        if len == 0 {
             return vec![];
         }
 
         // Pad to power of 2
-        let padded_len = n.next_power_of_two();
+        let padded_len = len.next_power_of_two();
         let mut data = vec![0.0f32; padded_len];
-        data[..n].copy_from_slice(vector);
+        data[..len].copy_from_slice(vector);
 
         // Apply inverse FHT (same as forward for Hadamard)
         fast_hadamard_transform_inplace(&mut data);
 
         // Apply same random signs to reverse (xor with self = identity)
-        apply_random_signs(&mut data, n as u64);
+        apply_random_signs(&mut data, len as u64);
 
         // Truncate and return
-        data.truncate(n);
+        data.truncate(len);
         data
     }
 
     /// Generate rescaling factors to try
     ///
     /// Returns a vector of scale factors evenly spaced between
-    /// rescale_range.0 and rescale_range.1
+    /// `rescale_range.0` and `rescale_range.1`
     fn generate_scales(&self) -> Vec<f32> {
         let (min_scale, max_scale) = self.params.rescale_range;
         let n = self.params.num_rescale_factors;
 
         if n == 1 {
-            return vec![(min_scale + max_scale) / 2.0];
+            return vec![f32::midpoint(min_scale, max_scale)];
         }
 
         let step = (max_scale - min_scale) / (n - 1) as f32;
@@ -429,7 +451,7 @@ impl RaBitQ {
             .collect();
 
         // Pack into bytes
-        self.pack_quantized(&quantized, bits)
+        Self::pack_quantized(&quantized, bits)
     }
 
     /// Pack quantized values into bytes
@@ -438,7 +460,7 @@ impl RaBitQ {
     /// - 2-bit: 4 values per byte (00 00 00 00)
     /// - 4-bit: 2 values per byte (0000 0000)
     /// - 8-bit: 1 value per byte
-    fn pack_quantized(&self, values: &[u8], bits: u8) -> Vec<u8> {
+    fn pack_quantized(values: &[u8], bits: u8) -> Vec<u8> {
         match bits {
             2 => {
                 // 4 values per byte
@@ -477,6 +499,7 @@ impl RaBitQ {
     }
 
     /// Unpack quantized bytes into individual values
+    #[must_use]
     pub fn unpack_quantized(&self, packed: &[u8], bits: u8, dimensions: usize) -> Vec<u8> {
         match bits {
             2 => {
@@ -533,6 +556,7 @@ impl RaBitQ {
     /// 1. Unpack bytes to quantized values [0, 2^bits-1]
     /// 2. Denormalize: v' = q / (2^bits - 1)
     /// 3. Unscale: v = v' / scale
+    #[must_use]
     pub fn reconstruct(&self, quantized: &[u8], scale: f32, dimensions: usize) -> Vec<f32> {
         let bits = self.params.bits_per_dim.to_u8();
         let levels = self.params.bits_per_dim.levels() as f32;
@@ -553,12 +577,13 @@ impl RaBitQ {
     }
 
     /// Reconstruct a quantized vector, applying inverse FHT if needed
+    #[must_use]
     pub fn reconstruct_full(&self, qv: &QuantizedVector) -> Vec<f32> {
         let mut result = self.reconstruct(&qv.data, qv.scale, qv.dimensions);
 
         // Apply inverse FHT if the vector was quantized with FHT
         if qv.fht_applied {
-            result = self.apply_inverse_fht_to_vector(&result);
+            result = Self::apply_inverse_fht_to_vector(&result);
         }
 
         result
@@ -568,6 +593,7 @@ impl RaBitQ {
     ///
     /// This reconstructs both vectors and computes standard L2 distance.
     /// For maximum accuracy, use this with original vectors for reranking.
+    #[must_use]
     pub fn distance_l2(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -582,6 +608,7 @@ impl RaBitQ {
     /// Compute cosine distance between two quantized vectors
     ///
     /// Cosine distance = 1 - cosine similarity
+    #[must_use]
     pub fn distance_cosine(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -599,6 +626,7 @@ impl RaBitQ {
     }
 
     /// Compute dot product between two quantized vectors
+    #[must_use]
     pub fn distance_dot(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -610,7 +638,8 @@ impl RaBitQ {
     /// Compute approximate distance using quantized values directly (fast path)
     ///
     /// This computes distance in the quantized space without full reconstruction.
-    /// Faster but less accurate than distance_l2.
+    /// Faster but less accurate than `distance_l2`.
+    #[must_use]
     pub fn distance_approximate(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         // Unpack to quantized values (u8)
         let v1 = self.unpack_quantized(&qv1.data, qv1.bits, qv1.dimensions);
@@ -632,9 +661,10 @@ impl RaBitQ {
     /// Compute L2 distance using SIMD acceleration
     ///
     /// Uses runtime CPU detection to select the best SIMD implementation:
-    /// - x86_64: AVX2 > SSE2 > scalar
+    /// - `x86_64`: AVX2 > SSE2 > scalar
     /// - aarch64: NEON > scalar
     #[inline]
+    #[must_use]
     pub fn distance_l2_simd(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         // Reconstruct to f32 vectors
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
@@ -646,6 +676,7 @@ impl RaBitQ {
 
     /// Compute cosine distance using SIMD acceleration
     #[inline]
+    #[must_use]
     pub fn distance_cosine_simd(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -664,6 +695,7 @@ impl RaBitQ {
 ///
 /// For non-power-of-2 dimensions, the vector is padded to the next
 /// power of 2, transformed, then truncated back.
+#[must_use]
 pub fn fast_hadamard_transform(data: &[f32]) -> Vec<f32> {
     let n = data.len();
     if n == 0 {
@@ -1214,7 +1246,6 @@ unsafe fn cosine_distance_neon(v1: &[f32], v2: &[f32]) -> f32 {
         1.0 - cosine_sim
     }
 }
-
 
 #[cfg(test)]
 mod tests;

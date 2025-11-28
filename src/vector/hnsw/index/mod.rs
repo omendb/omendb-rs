@@ -60,7 +60,7 @@ pub struct IndexStats {
 /// Hierarchical graph index for approximate nearest neighbor search.
 /// Optimized for cache locality and memory efficiency.
 ///
-/// **Note**: Not Clone due to GraphStorage containing non-cloneable backends.
+/// **Note**: Not Clone due to `GraphStorage` containing non-cloneable backends.
 /// Use persistence APIs (save/load) instead of cloning.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HNSWIndex {
@@ -113,7 +113,7 @@ impl HNSWIndex {
     /// * `params` - HNSW construction parameters
     /// * `distance_fn` - Distance function (L2, Cosine, Dot)
     /// * `use_quantization` - Whether to use binary quantization
-    /// * `storage_mode` - Storage mode (Memory, Hybrid, DiskHeavy)
+    /// * `storage_mode` - Storage mode (Memory, Hybrid, `DiskHeavy`)
     ///
     /// # Storage Modes
     /// * `Memory` (<10M vectors): Pure in-memory storage, fully serializable
@@ -155,16 +155,19 @@ impl HNSWIndex {
     }
 
     /// Get number of vectors in index
+    #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
     /// Check if index is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
     /// Get dimensions
+    #[must_use]
     pub fn dimensions(&self) -> usize {
         self.vectors.dimensions()
     }
@@ -172,16 +175,19 @@ impl HNSWIndex {
     /// Get a vector by ID (full precision)
     ///
     /// Returns None if the ID is invalid or out of bounds.
+    #[must_use]
     pub fn get_vector(&self, id: u32) -> Option<&[f32]> {
         self.vectors.get(id)
     }
 
     /// Get entry point
+    #[must_use]
     pub fn entry_point(&self) -> Option<u32> {
         self.entry_point
     }
 
     /// Get node level
+    #[must_use]
     pub fn node_level(&self, node_id: u32) -> Option<u8> {
         self.nodes.get(node_id as usize).map(|n| n.level)
     }
@@ -192,6 +198,7 @@ impl HNSWIndex {
     }
 
     /// Get HNSW parameters
+    #[must_use]
     pub fn params(&self) -> &HNSWParams {
         &self.params
     }
@@ -211,7 +218,7 @@ impl HNSWIndex {
         // Simple LCG for deterministic random numbers
         self.rng_state = self
             .rng_state
-            .wrapping_mul(6364136223846793005)
+            .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1);
         let rand_val = (self.rng_state >> 32) as f32 / u32::MAX as f32;
 
@@ -252,7 +259,7 @@ impl HNSWIndex {
     ///
     /// Returns the node ID assigned to this vector.
     #[instrument(skip(self, vector), fields(dimensions = vector.len(), index_size = self.len()))]
-    pub fn insert(&mut self, vector: Vec<f32>) -> Result<u32> {
+    pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
         // Validate dimensions
         if vector.len() != self.dimensions() {
             error!(
@@ -273,9 +280,9 @@ impl HNSWIndex {
         }
 
         // Store vector and get ID
-        let node_id = self.vectors.insert(vector.clone()).map_err(|e| {
+        let node_id = self.vectors.insert(vector.to_owned()).map_err(|e| {
             error!(error = ?e, "Failed to store vector");
-            HNSWError::Storage(e.to_string())
+            HNSWError::Storage(e.clone())
         })?;
 
         // Assign random level
@@ -292,7 +299,7 @@ impl HNSWIndex {
         }
 
         // Insert into graph
-        self.insert_into_graph(node_id, &vector, level)?;
+        self.insert_into_graph(node_id, vector, level)?;
 
         // Update entry point if this node has higher level than current entry point
         let entry_point_id = self
@@ -335,7 +342,7 @@ impl HNSWIndex {
     #[instrument(skip(self, vector, entry_hints), fields(dimensions = vector.len(), hints = entry_hints.len()))]
     pub fn insert_with_hints(
         &mut self,
-        vector: Vec<f32>,
+        vector: &[f32],
         entry_hints: &[u32],
         ef: usize,
     ) -> Result<u32> {
@@ -355,8 +362,8 @@ impl HNSWIndex {
         // Store vector and get ID
         let node_id = self
             .vectors
-            .insert(vector.clone())
-            .map_err(|e| HNSWError::Storage(e.to_string()))?;
+            .insert(vector.to_owned())
+            .map_err(|e| HNSWError::Storage(e.clone()))?;
 
         // Assign random level
         let level = self.random_level();
@@ -381,12 +388,12 @@ impl HNSWIndex {
         // If no valid hints, fall back to standard insertion
         if valid_hints.is_empty() {
             return self
-                .insert_into_graph(node_id, &vector, level)
-                .map(|_| node_id);
+                .insert_into_graph(node_id, vector, level)
+                .map(|()| node_id);
         }
 
         // Use hints as starting points for graph insertion
-        self.insert_into_graph_with_hints(node_id, &vector, level, &valid_hints, ef)?;
+        self.insert_into_graph_with_hints(node_id, vector, level, &valid_hints, ef)?;
 
         // Update entry point if this node has higher level
         let entry_point_id = self
@@ -470,7 +477,7 @@ impl HNSWIndex {
     /// 2. Building the HNSW graph in parallel using RwLock-protected neighbor lists
     ///
     /// # Performance
-    /// - Small batches (<100): Use insert() for simplicity
+    /// - Small batches (<100): Use `insert()` for simplicity
     /// - Medium batches (100-10K): 8-12x speedup expected
     /// - Large batches (10K+): 20-50x speedup expected (matches ChromaDB/LanceDB)
     ///
@@ -539,7 +546,7 @@ impl HNSWIndex {
             // Store vector
             let node_id = self.vectors.insert(vector).map_err(|e| {
                 error!(error = ?e, "Failed to store vector");
-                HNSWError::Storage(e.to_string())
+                HNSWError::Storage(e.clone())
             })?;
 
             // Assign level (deterministic from RNG state)
@@ -985,7 +992,7 @@ impl HNSWIndex {
         }
 
         // Estimate filter selectivity
-        let selectivity = self.estimate_selectivity(&filter_fn)?;
+        let selectivity = self.estimate_selectivity(&filter_fn);
         debug!(selectivity, "Estimated filter selectivity");
 
         // Adaptive threshold: bypass ACORN-1 if filter is too permissive
@@ -1092,14 +1099,14 @@ impl HNSWIndex {
     ///
     /// Samples up to 100 random nodes to estimate what fraction matches the filter.
     /// Returns value in [0.0, 1.0] where 1.0 means all nodes match.
-    fn estimate_selectivity<F>(&self, filter_fn: &F) -> Result<f32>
+    fn estimate_selectivity<F>(&self, filter_fn: &F) -> f32
     where
         F: Fn(u32) -> bool,
     {
         const SAMPLE_SIZE: usize = 100;
 
         if self.is_empty() {
-            return Ok(1.0);
+            return 1.0;
         }
 
         let sample_size = SAMPLE_SIZE.min(self.len());
@@ -1113,18 +1120,18 @@ impl HNSWIndex {
             }
         }
 
-        Ok(matches as f32 / sample_size as f32)
+        matches as f32 / sample_size as f32
     }
 
     /// Search for nearest neighbors at a specific level with metadata filtering (ACORN-1)
     ///
-    /// Key differences from standard search_layer:
+    /// Key differences from standard `search_layer`:
     /// 1. Only calculates distance for nodes matching the filter
     /// 2. Uses 2-hop exploration when filter is very selective (<10% match rate)
     /// 3. Expands search more aggressively to compensate for graph sparsity
     ///
     /// Optimized (Nov 25, 2025):
-    /// - Uses VisitedList with O(1) clear (generation-based, like hnswlib)
+    /// - Uses `VisitedList` with O(1) clear (generation-based, like hnswlib)
     /// - Reuses pre-allocated unvisited buffer to avoid per-iteration allocation
     #[allow(clippy::too_many_arguments)]
     fn search_layer_with_filter<F>(
@@ -1189,7 +1196,7 @@ impl HNSWIndex {
                 let neighbors = self.neighbors.get_neighbors(current.node_id, level)?;
 
                 for &neighbor_id in &neighbors {
-                    if visited.contains(&neighbor_id) {
+                    if visited.contains(neighbor_id) {
                         continue;
                     }
 
@@ -1199,7 +1206,7 @@ impl HNSWIndex {
                     if use_two_hop && !filter_fn(neighbor_id) {
                         if let Ok(second_hop) = self.neighbors.get_neighbors(neighbor_id, level) {
                             for &second_hop_id in &second_hop {
-                                if !visited.contains(&second_hop_id) {
+                                if !visited.contains(second_hop_id) {
                                     neighbors_to_explore.push(second_hop_id);
                                 }
                             }
@@ -1215,7 +1222,7 @@ impl HNSWIndex {
                         self.vectors.prefetch(neighbors_slice[i + 1]);
                     }
 
-                    if visited.contains(&neighbor_id) {
+                    if visited.contains(neighbor_id) {
                         continue;
                     }
                     visited.insert(neighbor_id);
@@ -1258,7 +1265,7 @@ impl HNSWIndex {
     /// Returns node IDs of up to ef nearest neighbors.
     ///
     /// Optimized (Nov 25, 2025):
-    /// - Uses VisitedList with O(1) clear (generation-based, like hnswlib)
+    /// - Uses `VisitedList` with O(1) clear (generation-based, like hnswlib)
     /// - Reuses pre-allocated unvisited buffer to avoid per-iteration allocation
     fn search_layer(
         &self,
@@ -1299,7 +1306,7 @@ impl HNSWIndex {
                 self.neighbors
                     .with_neighbors(current.node_id, level, |neighbors| {
                         for &id in neighbors {
-                            if !visited.contains(&id) {
+                            if !visited.contains(id) {
                                 unvisited.push(id);
                             }
                         }
@@ -1345,6 +1352,7 @@ impl HNSWIndex {
     }
 
     /// Get memory usage in bytes (approximate)
+    #[must_use]
     pub fn memory_usage(&self) -> usize {
         let nodes_size = self.nodes.len() * std::mem::size_of::<HNSWNode>();
         let neighbors_size = self.neighbors.memory_usage();
@@ -1417,12 +1425,12 @@ impl HNSWIndex {
 
     /// Extract all edges from the HNSW graph
     ///
-    /// Returns edges in format: Vec<(node_id, level, neighbors)>
+    /// Returns edges in format: Vec<(`node_id`, level, neighbors)>
     /// Useful for persisting the graph structure to disk (LSM-VEC flush operation).
     ///
     /// # Returns
     ///
-    /// Vector of tuples (node_id: u32, level: u8, neighbors: Vec<u32>)
+    /// Vector of tuples (`node_id`: u32, level: u8, neighbors: Vec<u32>)
     ///
     /// # Example
     ///
@@ -1438,6 +1446,7 @@ impl HNSWIndex {
     /// # Ok(())
     /// # }
     /// ```
+    #[must_use]
     pub fn get_all_edges(&self) -> Vec<(u32, u8, Vec<u32>)> {
         let mut edges = Vec::new();
 
@@ -1461,15 +1470,15 @@ impl HNSWIndex {
 
     /// Get all node max levels
     ///
-    /// Returns a vector of (node_id, max_level) pairs for all nodes in the index.
+    /// Returns a vector of (`node_id`, `max_level`) pairs for all nodes in the index.
     /// Useful for LSM-VEC to persist node metadata during flush operations.
     ///
-    /// **Important**: Computes max_level from actual edge data, not from node.level.
+    /// **Important**: Computes `max_level` from actual edge data, not from node.level.
     /// This is because bidirectional edges can create connections at layers higher
     /// than the node's originally assigned level.
     ///
     /// # Returns
-    /// Vector of tuples (node_id: u32, max_level: u8)
+    /// Vector of tuples (`node_id`: u32, `max_level`: u8)
     ///
     /// # Example
     /// ```ignore
@@ -1478,6 +1487,7 @@ impl HNSWIndex {
     ///     println!("Node {} has max level {}", node_id, max_level);
     /// }
     /// ```
+    #[must_use]
     pub fn get_all_node_levels(&self) -> Vec<(u32, u8)> {
         self.nodes
             .iter()
@@ -1490,8 +1500,7 @@ impl HNSWIndex {
                     .enumerate()
                     .rev() // Start from highest level
                     .find(|(_, count)| **count > 0)
-                    .map(|(level, _)| level as u8)
-                    .unwrap_or(0);
+                    .map_or(0, |(level, _)| level as u8);
                 (n.id, max_level)
             })
             .collect()
@@ -1564,12 +1573,12 @@ impl HNSWIndex {
     /// - Dimensions: u32 (4 bytes)
     /// - Num nodes: u32 (4 bytes)
     /// - Entry point: Option<u32> (1 + 4 bytes)
-    /// - Distance function: DistanceFunction (bincode)
-    /// - Params: HNSWParams (bincode)
+    /// - Distance function: `DistanceFunction` (bincode)
+    /// - Params: `HNSWParams` (bincode)
     /// - RNG state: u64 (8 bytes)
-    /// - Nodes: Vec<HNSWNode> (raw bytes, 64 * num_nodes)
-    /// - Neighbors: NeighborLists (bincode)
-    /// - Vectors: VectorStorage (bincode)
+    /// - Nodes: Vec<HNSWNode> (raw bytes, 64 * `num_nodes`)
+    /// - Neighbors: `NeighborLists` (bincode)
+    /// - Vectors: `VectorStorage` (bincode)
     #[instrument(skip(self, path), fields(index_size = self.len(), dimensions = self.dimensions()))]
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         info!("Starting index save");
@@ -1617,7 +1626,7 @@ impl HNSWIndex {
         if !self.nodes.is_empty() {
             let nodes_bytes = unsafe {
                 std::slice::from_raw_parts(
-                    self.nodes.as_ptr() as *const u8,
+                    self.nodes.as_ptr().cast::<u8>(),
                     self.nodes.len() * std::mem::size_of::<HNSWNode>(),
                 )
             };
@@ -1654,8 +1663,7 @@ impl HNSWIndex {
         if &magic != b"HNSWIDX\0" {
             error!(magic = ?magic, "Invalid magic bytes in index file");
             return Err(HNSWError::Storage(format!(
-                "Invalid magic bytes: {:?}",
-                magic
+                "Invalid magic bytes: {magic:?}"
             )));
         }
 
@@ -1666,8 +1674,7 @@ impl HNSWIndex {
         if version != 1 {
             error!(version, "Unsupported index file version");
             return Err(HNSWError::Storage(format!(
-                "Unsupported version: {}",
-                version
+                "Unsupported version: {version}"
             )));
         }
 
@@ -1708,7 +1715,7 @@ impl HNSWIndex {
         if num_nodes > 0 {
             let nodes_bytes = unsafe {
                 std::slice::from_raw_parts_mut(
-                    nodes.as_mut_ptr() as *mut u8,
+                    nodes.as_mut_ptr().cast::<u8>(),
                     nodes.len() * std::mem::size_of::<HNSWNode>(),
                 )
             };
@@ -1759,19 +1766,19 @@ impl HNSWIndex {
 
     /// Save graph to disk for disk-backed queries
     ///
-    /// Uses WritableDiskStorage for incremental writes with offset index.
+    /// Uses `WritableDiskStorage` for incremental writes with offset index.
     ///
     /// # Workflow
     /// 1. Build index with Memory mode
-    /// 2. save() - Save full index to file
-    /// 3. save_graph_to_disk() - Also save graph to disk directory
-    /// 4. load_with_disk_graph() - Load for queries with disk-backed graph
+    /// 2. `save()` - Save full index to file
+    /// 3. `save_graph_to_disk()` - Also save graph to disk directory
+    /// 4. `load_with_disk_graph()` - Load for queries with disk-backed graph
     ///
     /// # Arguments
     /// * `disk_path` - Path to disk storage directory (will be created)
     ///
     /// # Errors
-    /// - Returns error if GraphStorage is not Memory mode
+    /// - Returns error if `GraphStorage` is not Memory mode
     /// - Returns error if directory creation or file writing fails
     ///
     /// # Example
@@ -1849,15 +1856,15 @@ impl HNSWIndex {
 
     /// Load index with disk-backed graph storage for memory-efficient queries
     ///
-    /// Loads index from save file, but replaces GraphStorage with disk-backed
-    /// version using DiskStorage + CachedStorage.
+    /// Loads index from save file, but replaces `GraphStorage` with disk-backed
+    /// version using `DiskStorage` + `CachedStorage`.
     ///
     /// # Memory Savings
     /// - Memory mode: ~1.2 GB graph for 1M vectors
     /// - Disk mode (30% cache): ~400 MB graph (67% savings!)
     ///
     /// # Arguments
-    /// * `index_path` - Path to saved index file (from save())
+    /// * `index_path` - Path to saved index file (from `save()`)
     /// * `disk_config` - Disk storage configuration (path + cache size)
     ///
     /// # Errors

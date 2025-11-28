@@ -15,28 +15,29 @@ use serde::{Deserialize, Serialize};
 /// Neighbors are stored separately from nodes to improve cache utilization.
 /// Only fetch neighbors when traversing the graph.
 ///
-/// Thread-safety: RwLock allows multiple concurrent readers (search) and
+/// Thread-safety: `RwLock` allows multiple concurrent readers (search) and
 /// exclusive writers (edge addition). Critical for parallel HNSW construction.
 #[derive(Debug)]
 pub struct NeighborLists {
-    /// Neighbor storage: neighbors[node_id][level] = RwLock<Vec<neighbor_ids>>
+    /// Neighbor storage: neighbors[`node_id`][level] = `RwLock`<Vec<`neighbor_ids`>>
     ///
-    /// RwLock enables:
+    /// `RwLock` enables:
     /// - Parallel reads during search (multiple threads can read simultaneously)
     /// - Exclusive writes during edge addition (one thread modifies at a time)
-    /// - Deadlock prevention via ordered locking (always lock lower node_id first)
+    /// - Deadlock prevention via ordered locking (always lock lower `node_id` first)
     neighbors: Vec<Vec<RwLock<Vec<u32>>>>,
 
     /// Maximum levels supported
     max_levels: usize,
 
-    /// M_max (max neighbors = M * 2)
+    /// `M_max` (max neighbors = M * 2)
     /// Used for pre-allocating neighbor lists to reduce reallocations
     m_max: usize,
 }
 
 impl NeighborLists {
     /// Create empty neighbor lists
+    #[must_use]
     pub fn new(max_levels: usize) -> Self {
         Self {
             neighbors: Vec::new(),
@@ -46,6 +47,7 @@ impl NeighborLists {
     }
 
     /// Create with pre-allocated capacity and M parameter
+    #[must_use]
     pub fn with_capacity(num_nodes: usize, max_levels: usize, m: usize) -> Self {
         Self {
             neighbors: Vec::with_capacity(num_nodes),
@@ -54,7 +56,8 @@ impl NeighborLists {
         }
     }
 
-    /// Get M_max (max neighbors)
+    /// Get `M_max` (max neighbors)
+    #[must_use]
     pub fn m_max(&self) -> usize {
         self.m_max
     }
@@ -63,6 +66,7 @@ impl NeighborLists {
     ///
     /// Returns a cloned Vec to release the read lock quickly.
     /// Small performance cost (clone) for thread-safety benefit.
+    #[must_use]
     pub fn get_neighbors(&self, node_id: u32, level: u8) -> Vec<u32> {
         let node_idx = node_id as usize;
         let level_idx = level as usize;
@@ -125,7 +129,7 @@ impl NeighborLists {
     /// Add a bidirectional link between two nodes at a level
     ///
     /// Thread-safe with deadlock prevention via ordered locking.
-    /// Always locks lower node_id first to prevent circular waits.
+    /// Always locks lower `node_id` first to prevent circular waits.
     pub fn add_bidirectional_link(&mut self, node_a: u32, node_b: u32, level: u8) {
         let node_a_idx = node_a as usize;
         let node_b_idx = node_b as usize;
@@ -142,36 +146,40 @@ impl NeighborLists {
         }
 
         // Deadlock prevention: always lock in ascending node_id order
-        if node_a_idx < node_b_idx {
-            // Lock node_a first, then node_b
-            let mut lock_a = self.neighbors[node_a_idx][level_idx].write();
-            let mut lock_b = self.neighbors[node_b_idx][level_idx].write();
+        match node_a_idx.cmp(&node_b_idx) {
+            std::cmp::Ordering::Less => {
+                // Lock node_a first, then node_b
+                let mut lock_a = self.neighbors[node_a_idx][level_idx].write();
+                let mut lock_b = self.neighbors[node_b_idx][level_idx].write();
 
-            if !lock_a.contains(&node_b) {
-                lock_a.push(node_b);
+                if !lock_a.contains(&node_b) {
+                    lock_a.push(node_b);
+                }
+                if !lock_b.contains(&node_a) {
+                    lock_b.push(node_a);
+                }
             }
-            if !lock_b.contains(&node_a) {
-                lock_b.push(node_a);
-            }
-        } else if node_a_idx > node_b_idx {
-            // Lock node_b first, then node_a
-            let mut lock_b = self.neighbors[node_b_idx][level_idx].write();
-            let mut lock_a = self.neighbors[node_a_idx][level_idx].write();
+            std::cmp::Ordering::Greater => {
+                // Lock node_b first, then node_a
+                let mut lock_b = self.neighbors[node_b_idx][level_idx].write();
+                let mut lock_a = self.neighbors[node_a_idx][level_idx].write();
 
-            if !lock_b.contains(&node_a) {
-                lock_b.push(node_a);
+                if !lock_b.contains(&node_a) {
+                    lock_b.push(node_a);
+                }
+                if !lock_a.contains(&node_b) {
+                    lock_a.push(node_b);
+                }
             }
-            if !lock_a.contains(&node_b) {
-                lock_a.push(node_b);
+            std::cmp::Ordering::Equal => {
+                // Same node - invalid operation, skip
             }
-        } else {
-            // Same node - invalid operation, skip
         }
     }
 
     /// Add bidirectional link (thread-safe version for parallel construction)
     ///
-    /// Assumes nodes are already allocated. Uses RwLock for thread-safety.
+    /// Assumes nodes are already allocated. Uses `RwLock` for thread-safety.
     /// Only for use during parallel graph construction where all nodes pre-exist.
     pub fn add_bidirectional_link_parallel(&self, node_a: u32, node_b: u32, level: u8) {
         let node_a_idx = node_a as usize;
@@ -184,34 +192,39 @@ impl NeighborLists {
         }
 
         // Deadlock prevention: always lock in ascending node_id order
-        if node_a_idx < node_b_idx {
-            let mut lock_a = self.neighbors[node_a_idx][level_idx].write();
-            let mut lock_b = self.neighbors[node_b_idx][level_idx].write();
+        match node_a_idx.cmp(&node_b_idx) {
+            std::cmp::Ordering::Less => {
+                let mut lock_a = self.neighbors[node_a_idx][level_idx].write();
+                let mut lock_b = self.neighbors[node_b_idx][level_idx].write();
 
-            if !lock_a.contains(&node_b) {
-                lock_a.push(node_b);
+                if !lock_a.contains(&node_b) {
+                    lock_a.push(node_b);
+                }
+                if !lock_b.contains(&node_a) {
+                    lock_b.push(node_a);
+                }
             }
-            if !lock_b.contains(&node_a) {
-                lock_b.push(node_a);
-            }
-        } else if node_a_idx > node_b_idx {
-            let mut lock_b = self.neighbors[node_b_idx][level_idx].write();
-            let mut lock_a = self.neighbors[node_a_idx][level_idx].write();
+            std::cmp::Ordering::Greater => {
+                let mut lock_b = self.neighbors[node_b_idx][level_idx].write();
+                let mut lock_a = self.neighbors[node_a_idx][level_idx].write();
 
-            if !lock_b.contains(&node_a) {
-                lock_b.push(node_a);
+                if !lock_b.contains(&node_a) {
+                    lock_b.push(node_a);
+                }
+                if !lock_a.contains(&node_b) {
+                    lock_a.push(node_b);
+                }
             }
-            if !lock_a.contains(&node_b) {
-                lock_a.push(node_b);
+            std::cmp::Ordering::Equal => {
+                // Same node - skip
             }
         }
-        // If node_a == node_b, skip (same node)
     }
 
     /// Remove unidirectional link (thread-safe version for parallel construction)
     ///
-    /// Removes link from node_a to node_b (NOT bidirectional).
-    /// Assumes nodes are already allocated. Uses RwLock for thread-safety.
+    /// Removes link from `node_a` to `node_b` (NOT bidirectional).
+    /// Assumes nodes are already allocated. Uses `RwLock` for thread-safety.
     pub fn remove_link_parallel(&self, node_a: u32, node_b: u32, level: u8) {
         let node_a_idx = node_a as usize;
         let level_idx = level as usize;
@@ -228,7 +241,7 @@ impl NeighborLists {
 
     /// Set neighbors (thread-safe version for parallel construction)
     ///
-    /// Assumes node is already allocated. Uses RwLock for thread-safety.
+    /// Assumes node is already allocated. Uses `RwLock` for thread-safety.
     pub fn set_neighbors_parallel(&self, node_id: u32, level: u8, neighbors_list: Vec<u32>) {
         let node_idx = node_id as usize;
         let level_idx = level as usize;
@@ -243,6 +256,7 @@ impl NeighborLists {
     }
 
     /// Get total number of neighbor entries
+    #[must_use]
     pub fn total_neighbors(&self) -> usize {
         self.neighbors
             .iter()
@@ -252,6 +266,7 @@ impl NeighborLists {
     }
 
     /// Get memory usage in bytes (approximate)
+    #[must_use]
     pub fn memory_usage(&self) -> usize {
         let mut total = 0;
 
@@ -277,7 +292,7 @@ impl NeighborLists {
     /// This improves cache performance by placing frequently-accessed neighbors
     /// close together in memory. Uses BFS from the entry point to determine ordering.
     ///
-    /// Returns a mapping from old_id -> new_id
+    /// Returns a mapping from `old_id` -> `new_id`
     pub fn reorder_bfs(&mut self, entry_point: u32, start_level: u8) -> Vec<u32> {
         use std::collections::{HashSet, VecDeque};
 
@@ -352,6 +367,7 @@ impl NeighborLists {
     }
 
     /// Get number of nodes
+    #[must_use]
     pub fn num_nodes(&self) -> usize {
         self.neighbors.len()
     }
@@ -446,6 +462,7 @@ pub enum VectorStorage {
 
 impl VectorStorage {
     /// Create empty full precision storage
+    #[must_use]
     pub fn new_full_precision(dimensions: usize) -> Self {
         Self::FullPrecision {
             vectors: Vec::new(),
@@ -454,6 +471,7 @@ impl VectorStorage {
     }
 
     /// Create empty binary quantized storage
+    #[must_use]
     pub fn new_binary_quantized(dimensions: usize, keep_original: bool) -> Self {
         Self::BinaryQuantized {
             quantized: Vec::new(),
@@ -468,6 +486,7 @@ impl VectorStorage {
     }
 
     /// Get number of vectors stored
+    #[must_use]
     pub fn len(&self) -> usize {
         match self {
             Self::FullPrecision { vectors, .. } => vectors.len(),
@@ -476,15 +495,18 @@ impl VectorStorage {
     }
 
     /// Check if empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Get dimensions
+    #[must_use]
     pub fn dimensions(&self) -> usize {
         match self {
-            Self::FullPrecision { dimensions, .. } => *dimensions,
-            Self::BinaryQuantized { dimensions, .. } => *dimensions,
+            Self::FullPrecision { dimensions, .. } | Self::BinaryQuantized { dimensions, .. } => {
+                *dimensions
+            }
         }
     }
 
@@ -536,12 +558,15 @@ impl VectorStorage {
     }
 
     /// Get a vector by ID (full precision)
+    #[must_use]
     pub fn get(&self, id: u32) -> Option<&[f32]> {
         match self {
-            Self::FullPrecision { vectors, .. } => vectors.get(id as usize).map(|v| v.as_slice()),
+            Self::FullPrecision { vectors, .. } => {
+                vectors.get(id as usize).map(std::vec::Vec::as_slice)
+            }
             Self::BinaryQuantized { original, .. } => original
                 .as_ref()
-                .and_then(|o| o.get(id as usize).map(|v| v.as_slice())),
+                .and_then(|o| o.get(id as usize).map(std::vec::Vec::as_slice)),
         }
     }
 
@@ -560,10 +585,12 @@ impl VectorStorage {
     #[inline]
     pub fn prefetch(&self, id: u32) {
         let ptr = match self {
-            Self::FullPrecision { vectors, .. } => vectors.get(id as usize).map(|v| v.as_ptr()),
+            Self::FullPrecision { vectors, .. } => {
+                vectors.get(id as usize).map(std::vec::Vec::as_ptr)
+            }
             Self::BinaryQuantized { original, .. } => original
                 .as_ref()
-                .and_then(|o| o.get(id as usize).map(|v| v.as_ptr())),
+                .and_then(|o| o.get(id as usize).map(std::vec::Vec::as_ptr)),
         };
 
         if let Some(ptr) = ptr {
@@ -633,7 +660,7 @@ impl VectorStorage {
 
                     let median = if values.len().is_multiple_of(2) {
                         let mid = values.len() / 2;
-                        (values[mid - 1] + values[mid]) / 2.0
+                        f32::midpoint(values[mid - 1], values[mid])
                     } else {
                         values[values.len() / 2]
                     };
@@ -650,6 +677,7 @@ impl VectorStorage {
     }
 
     /// Get memory usage in bytes (approximate)
+    #[must_use]
     pub fn memory_usage(&self) -> usize {
         match self {
             Self::FullPrecision {
@@ -665,8 +693,7 @@ impl VectorStorage {
                 let quantized_size = quantized.len() * (dimensions + 7) / 8;
                 let original_size = original
                     .as_ref()
-                    .map(|o| o.len() * dimensions * std::mem::size_of::<f32>())
-                    .unwrap_or(0);
+                    .map_or(0, |o| o.len() * dimensions * std::mem::size_of::<f32>());
                 let thresholds_size = thresholds.len() * std::mem::size_of::<f32>();
                 quantized_size + original_size + thresholds_size
             }
@@ -675,7 +702,7 @@ impl VectorStorage {
 
     /// Reorder vectors based on node ID mapping
     ///
-    /// old_to_new[old_id] = new_id
+    /// `old_to_new`[`old_id`] = `new_id`
     /// This reorders vectors to match the BFS-reordered neighbor lists.
     pub fn reorder(&mut self, old_to_new: &[u32]) {
         match self {
