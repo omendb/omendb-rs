@@ -12,7 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Core storage engine
-seerdb = "0.0.1-beta"
+seerdb = "0.0.2"
 
 # Error handling
 anyhow = "1.0"

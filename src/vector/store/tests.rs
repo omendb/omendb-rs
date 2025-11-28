@@ -1,0 +1,1038 @@
+use super::*;
+
+fn random_vector(dim: usize, seed: usize) -> Vector {
+    let data: Vec<f32> = (0..dim).map(|i| ((seed + i) as f32) * 0.1).collect();
+    Vector::new(data)
+}
+
+#[test]
+fn test_vector_store_insert() {
+    let mut store = VectorStore::new(128);
+
+    let v1 = random_vector(128, 0);
+    let v2 = random_vector(128, 1);
+
+    let id1 = store.insert(v1).unwrap();
+    let id2 = store.insert(v2).unwrap();
+
+    assert_eq!(id1, 0);
+    assert_eq!(id2, 1);
+    assert_eq!(store.len(), 2);
+}
+
+#[test]
+fn test_vector_store_knn_with_hnsw() {
+    let mut store = VectorStore::new(128);
+
+    // Insert some vectors
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Query for nearest neighbors (uses HNSW)
+    let query = random_vector(128, 50);
+    let results = store.knn_search(&query, 10).unwrap();
+
+    assert_eq!(results.len(), 10);
+
+    // Results should be sorted by distance
+    for i in 1..results.len() {
+        assert!(results[i].1 >= results[i - 1].1);
+    }
+}
+
+#[test]
+fn test_vector_store_brute_force() {
+    let mut store = VectorStore::new(128);
+
+    // Insert some vectors
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Query using brute-force
+    let query = random_vector(128, 50);
+    let results = store.knn_search_brute_force(&query, 10).unwrap();
+
+    assert_eq!(results.len(), 10);
+
+    // Results should be sorted by distance
+    for i in 1..results.len() {
+        assert!(results[i].1 >= results[i - 1].1);
+    }
+}
+
+#[test]
+fn test_dimension_mismatch() {
+    let mut store = VectorStore::new(128);
+    let wrong_dim = Vector::new(vec![1.0; 64]);
+
+    assert!(store.insert(wrong_dim).is_err());
+}
+
+#[test]
+fn test_ef_search_tuning() {
+    let mut store = VectorStore::new(128);
+
+    // Insert vectors to initialize HNSW
+    for i in 0..10 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Check default ef_search (lazy init uses 10K capacity → medium tier → ef_construction=200)
+    // HNSWIndex::new sets ef_search = ef_construction for consistency
+    assert_eq!(store.get_ef_search(), Some(200));
+
+    // Tune ef_search
+    store.set_ef_search(600);
+    assert_eq!(store.get_ef_search(), Some(600));
+}
+
+#[test]
+fn test_save_load_roundtrip() {
+    use std::fs;
+
+    let test_dir = "/tmp/omendb_test_vector_store";
+    let test_path = format!("{}/test_store", test_dir);
+
+    // Clean up any existing test data
+    let _ = fs::remove_dir_all(test_dir);
+
+    // Create store with 100 vectors
+    let mut store = VectorStore::new(128);
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Verify we have HNSW index
+    assert!(store.hnsw_index.is_some());
+    assert_eq!(store.len(), 100);
+
+    // Save to disk
+    store.save_to_disk(&test_path).unwrap();
+
+    // Verify HNSW index file exists
+    assert!(fs::metadata(format!("{}/test_store.hnsw", test_dir)).is_ok());
+    assert!(fs::metadata(format!("{}/test_store.vectors.bin", test_dir)).is_ok());
+
+    // Load from disk
+    let loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
+
+    // Verify loaded store
+    assert_eq!(loaded_store.len(), 100);
+    assert_eq!(loaded_store.dimensions, 128);
+    assert!(
+        loaded_store.hnsw_index.is_some(),
+        "HNSW index should be rebuilt"
+    );
+
+    // Verify vectors are identical
+    for i in 0..100 {
+        let original = store.get(i).unwrap();
+        let loaded = loaded_store.get(i).unwrap();
+        assert_eq!(original.data, loaded.data);
+    }
+
+    // Verify search works on loaded store
+    let query = random_vector(128, 50);
+    let mut loaded_mut = loaded_store;
+    let results = loaded_mut.knn_search(&query, 10).unwrap();
+    assert_eq!(results.len(), 10);
+
+    // Clean up
+    let _ = fs::remove_dir_all(test_dir);
+}
+
+#[test]
+fn test_rebuild_index() {
+    let mut store = VectorStore::new(128);
+
+    // Insert vectors
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Verify HNSW index exists
+    assert!(store.hnsw_index.is_some());
+
+    // Clear the index
+    store.hnsw_index = None;
+    assert!(store.hnsw_index.is_none());
+
+    // Rebuild index
+    store.rebuild_index().unwrap();
+
+    // Verify index is rebuilt
+    assert!(store.hnsw_index.is_some());
+
+    // Verify search works
+    let query = random_vector(128, 50);
+    let results = store.knn_search(&query, 10).unwrap();
+    assert_eq!(results.len(), 10);
+}
+
+#[test]
+fn test_quantization_insert() {
+    use crate::vector::rabitq::RaBitQParams;
+
+    // Create store with 4-bit quantization
+    let params = RaBitQParams::bits4();
+    let mut store = VectorStore::new_with_quantization(128, params);
+
+    // Insert vectors
+    for i in 0..50 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Verify quantized vectors were created
+    assert_eq!(store.vectors.len(), 50);
+    assert_eq!(store.quantized_vectors.len(), 50);
+    assert!(store.quantized_vectors.iter().all(|qv| qv.is_some()));
+}
+
+#[test]
+fn test_quantization_search_accuracy() {
+    use crate::vector::rabitq::RaBitQParams;
+
+    // Create store with 4-bit quantization
+    let params = RaBitQParams::bits4();
+    let mut store = VectorStore::new_with_quantization(128, params);
+
+    // Insert vectors
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Search with quantization (uses two-phase search)
+    let query = random_vector(128, 50);
+    let results = store.knn_search(&query, 10).unwrap();
+
+    // Should still get 10 results
+    assert_eq!(results.len(), 10);
+
+    // Results should be sorted by distance
+    for i in 1..results.len() {
+        assert!(results[i].1 >= results[i - 1].1);
+    }
+}
+
+#[test]
+fn test_quantization_persistence() {
+    use crate::vector::rabitq::RaBitQParams;
+    use std::fs;
+
+    let test_dir = "/tmp/omendb_test_quantization";
+    let test_path = format!("{}/test_store", test_dir);
+
+    // Clean up any existing test data
+    let _ = fs::remove_dir_all(test_dir);
+
+    // Create store with 4-bit quantization
+    let params = RaBitQParams::bits4();
+    let mut store = VectorStore::new_with_quantization(128, params);
+
+    // Insert vectors
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Save to disk
+    store.save_to_disk(&test_path).unwrap();
+
+    // Verify quantization files exist
+    assert!(fs::metadata(format!("{}/test_store.quantized.bin", test_dir)).is_ok());
+    assert!(fs::metadata(format!("{}/test_store.quantizer.json", test_dir)).is_ok());
+
+    // Load from disk
+    let mut loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
+
+    // Verify quantized vectors were loaded
+    assert_eq!(loaded_store.quantized_vectors.len(), 100);
+    assert!(loaded_store.quantizer.is_some());
+
+    // Verify search works with loaded quantization
+    let query = random_vector(128, 50);
+    let results = loaded_store.knn_search(&query, 10).unwrap();
+    assert_eq!(results.len(), 10);
+
+    // Clean up
+    let _ = fs::remove_dir_all(test_dir);
+}
+
+#[test]
+fn test_quantization_batch_insert() {
+    use crate::vector::rabitq::RaBitQParams;
+
+    // Create store with 4-bit quantization
+    let params = RaBitQParams::bits4();
+    let mut store = VectorStore::new_with_quantization(128, params);
+
+    // Batch insert vectors
+    let vectors: Vec<Vector> = (0..100).map(|i| random_vector(128, i)).collect();
+    let ids = store.batch_insert(vectors).unwrap();
+
+    // Verify all vectors and quantized vectors were created
+    assert_eq!(ids.len(), 100);
+    assert_eq!(store.vectors.len(), 100);
+    assert_eq!(store.quantized_vectors.len(), 100);
+    assert!(store.quantized_vectors.iter().all(|qv| qv.is_some()));
+}
+
+//  Adaptive parameter selection tests
+
+#[test]
+fn test_adaptive_params_small_scale() {
+    // < 50K vectors should use M=16 (fast & efficient)
+    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(10_000);
+    assert_eq!(m, 16);
+    assert_eq!(ef_construction, 200);
+    assert_eq!(ef_search, 100);
+
+    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(49_999);
+    assert_eq!(m, 16);
+    assert_eq!(ef_construction, 200);
+    assert_eq!(ef_search, 100);
+}
+
+#[test]
+fn test_adaptive_params_medium_scale() {
+    // 50K-500K vectors should use M=32 (balanced, 98% recall)
+    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(50_000);
+    assert_eq!(m, 32);
+    assert_eq!(ef_construction, 400);
+    assert_eq!(ef_search, 100);
+
+    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(100_000);
+    assert_eq!(m, 32);
+    assert_eq!(ef_construction, 400);
+    assert_eq!(ef_search, 100);
+
+    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(499_999);
+    assert_eq!(m, 32);
+    assert_eq!(ef_construction, 400);
+    assert_eq!(ef_search, 100);
+}
+
+#[test]
+fn test_adaptive_params_large_scale() {
+    // >= 500K vectors should use M=48 (high recall, 99%)
+    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(500_000);
+    assert_eq!(m, 48);
+    assert_eq!(ef_construction, 600);
+    assert_eq!(ef_search, 150);
+
+    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(1_000_000);
+    assert_eq!(m, 48);
+    assert_eq!(ef_construction, 600);
+    assert_eq!(ef_search, 150);
+}
+
+#[test]
+fn test_new_with_capacity_small() {
+    let store = VectorStore::new_with_capacity(128, 10_000);
+
+    // Should have eagerly initialized HNSW with M=16
+    assert!(store.hnsw_index.is_some());
+
+    // Verify parameters (we can't directly inspect but can test behavior)
+    assert_eq!(store.dimensions, 128);
+}
+
+#[test]
+fn test_new_with_capacity_medium() {
+    let store = VectorStore::new_with_capacity(128, 100_000);
+
+    // Should have eagerly initialized HNSW with M=32
+    assert!(store.hnsw_index.is_some());
+    assert_eq!(store.dimensions, 128);
+}
+
+#[test]
+fn test_new_with_capacity_large() {
+    let store = VectorStore::new_with_capacity(128, 1_000_000);
+
+    // Should have eagerly initialized HNSW with M=48
+    assert!(store.hnsw_index.is_some());
+    assert_eq!(store.dimensions, 128);
+}
+
+#[test]
+fn test_new_with_capacity_functional() {
+    // Verify new_with_capacity works functionally (can insert and search)
+    let mut store = VectorStore::new_with_capacity(128, 100_000);
+
+    // Insert vectors
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Search
+    let query = random_vector(128, 50);
+    let results = store.knn_search(&query, 10).unwrap();
+
+    assert_eq!(results.len(), 10);
+
+    // Results should be sorted by distance
+    for i in 1..results.len() {
+        assert!(results[i].1 >= results[i - 1].1);
+    }
+}
+
+// Tests for metadata support
+
+#[test]
+fn test_insert_with_metadata() {
+    let mut store = VectorStore::new(128);
+
+    let metadata = serde_json::json!({
+        "title": "Test Document",
+        "author": "Alice",
+        "year": 2024
+    });
+
+    let index = store
+        .insert_with_metadata("doc1".to_string(), random_vector(128, 0), metadata.clone())
+        .unwrap();
+
+    assert_eq!(index, 0);
+    assert!(store.id_to_index.contains_key("doc1"));
+    assert_eq!(store.metadata.get(&0), Some(&metadata));
+}
+
+#[test]
+fn test_set_insert() {
+    let mut store = VectorStore::new(128);
+
+    let metadata = serde_json::json!({"title": "Doc 1"});
+
+    // First set should insert
+    let index = store
+        .set("doc1".to_string(), random_vector(128, 0), metadata.clone())
+        .unwrap();
+
+    assert_eq!(index, 0);
+    assert_eq!(store.len(), 1);
+}
+
+#[test]
+fn test_set_update() {
+    let mut store = VectorStore::new(128);
+
+    // Insert initial document
+    store
+        .set(
+            "doc1".to_string(),
+            random_vector(128, 0),
+            serde_json::json!({"title": "Original"}),
+        )
+        .unwrap();
+
+    // Upsert with same ID should update
+    let index = store
+        .set(
+            "doc1".to_string(),
+            random_vector(128, 1),
+            serde_json::json!({"title": "Updated"}),
+        )
+        .unwrap();
+
+    assert_eq!(index, 0);
+    assert_eq!(store.len(), 1); // Still only 1 vector
+    assert_eq!(
+        store.metadata.get(&0).unwrap().get("title").unwrap(),
+        "Updated"
+    );
+}
+
+#[test]
+fn test_delete() {
+    let mut store = VectorStore::new(128);
+
+    store
+        .insert_with_metadata(
+            "doc1".to_string(),
+            random_vector(128, 0),
+            serde_json::json!({"title": "Doc 1"}),
+        )
+        .unwrap();
+
+    // Delete the document
+    store.delete("doc1").unwrap();
+
+    // Should be marked as deleted
+    assert!(store.deleted.contains_key(&0));
+    assert!(!store.id_to_index.contains_key("doc1"));
+
+    // get_by_id should return None for deleted
+    assert!(store.get_by_id("doc1").is_none());
+}
+
+#[test]
+fn test_update() {
+    let mut store = VectorStore::new(128);
+
+    store
+        .insert_with_metadata(
+            "doc1".to_string(),
+            random_vector(128, 0),
+            serde_json::json!({"title": "Original"}),
+        )
+        .unwrap();
+
+    // Update metadata only
+    store
+        .update(
+            "doc1",
+            None,
+            Some(serde_json::json!({"title": "Updated", "author": "Bob"})),
+        )
+        .unwrap();
+
+    let (_, metadata) = store.get_by_id("doc1").unwrap();
+    assert_eq!(metadata.get("title").unwrap(), "Updated");
+    assert_eq!(metadata.get("author").unwrap(), "Bob");
+}
+
+#[test]
+fn test_metadata_filter_eq() {
+    let filter = MetadataFilter::Eq("author".to_string(), serde_json::json!("Alice"));
+
+    let metadata1 = serde_json::json!({"author": "Alice"});
+    let metadata2 = serde_json::json!({"author": "Bob"});
+
+    assert!(filter.matches(&metadata1));
+    assert!(!filter.matches(&metadata2));
+}
+
+#[test]
+fn test_metadata_filter_gte() {
+    let filter = MetadataFilter::Gte("year".to_string(), 2020.0);
+
+    let metadata1 = serde_json::json!({"year": 2024});
+    let metadata2 = serde_json::json!({"year": 2019});
+
+    assert!(filter.matches(&metadata1));
+    assert!(!filter.matches(&metadata2));
+}
+
+#[test]
+fn test_metadata_filter_and() {
+    let filter = MetadataFilter::And(vec![
+        MetadataFilter::Eq("author".to_string(), serde_json::json!("Alice")),
+        MetadataFilter::Gte("year".to_string(), 2020.0),
+    ]);
+
+    let metadata1 = serde_json::json!({"author": "Alice", "year": 2024});
+    let metadata2 = serde_json::json!({"author": "Alice", "year": 2019});
+    let metadata3 = serde_json::json!({"author": "Bob", "year": 2024});
+
+    assert!(filter.matches(&metadata1));
+    assert!(!filter.matches(&metadata2));
+    assert!(!filter.matches(&metadata3));
+}
+
+#[test]
+fn test_search_with_filter() {
+    let mut store = VectorStore::new(128);
+
+    // Insert vectors with metadata
+    store
+        .set(
+            "doc1".to_string(),
+            random_vector(128, 0),
+            serde_json::json!({"author": "Alice", "year": 2024}),
+        )
+        .unwrap();
+
+    store
+        .set(
+            "doc2".to_string(),
+            random_vector(128, 1),
+            serde_json::json!({"author": "Bob", "year": 2023}),
+        )
+        .unwrap();
+
+    store
+        .set(
+            "doc3".to_string(),
+            random_vector(128, 2),
+            serde_json::json!({"author": "Alice", "year": 2022}),
+        )
+        .unwrap();
+
+    // Search with filter for Alice's documents
+    let filter = MetadataFilter::Eq("author".to_string(), serde_json::json!("Alice"));
+    let query = random_vector(128, 0);
+    let results = store.knn_search_with_filter(&query, 10, &filter).unwrap();
+
+    // Should only return Alice's documents (doc1 and doc3)
+    assert_eq!(results.len(), 2);
+    for (_, _, metadata) in &results {
+        assert_eq!(metadata.get("author").unwrap(), "Alice");
+    }
+}
+
+#[test]
+fn test_persistence_with_metadata() {
+    use std::fs;
+
+    let test_dir = "/tmp/omendb_test_metadata";
+    let test_path = format!("{}/test_store", test_dir);
+
+    // Clean up any existing test data
+    let _ = fs::remove_dir_all(test_dir);
+
+    // Create store with metadata
+    let mut store = VectorStore::new(128);
+
+    store
+        .set(
+            "doc1".to_string(),
+            random_vector(128, 0),
+            serde_json::json!({"title": "Doc 1", "year": 2024}),
+        )
+        .unwrap();
+
+    store
+        .set(
+            "doc2".to_string(),
+            random_vector(128, 1),
+            serde_json::json!({"title": "Doc 2", "year": 2023}),
+        )
+        .unwrap();
+
+    // Save to disk
+    store.save_to_disk(&test_path).unwrap();
+
+    // Verify metadata files exist
+    assert!(fs::metadata(format!("{}/test_store.metadata.json", test_dir)).is_ok());
+    assert!(fs::metadata(format!("{}/test_store.id_mapping.json", test_dir)).is_ok());
+
+    // Load from disk
+    let loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
+
+    // Verify metadata was loaded
+    assert_eq!(loaded_store.metadata.len(), 2);
+    assert_eq!(loaded_store.id_to_index.len(), 2);
+
+    // Verify we can retrieve by ID
+    let (_, metadata) = loaded_store.get_by_id("doc1").unwrap();
+    assert_eq!(metadata.get("title").unwrap(), "Doc 1");
+    assert_eq!(metadata.get("year").unwrap(), 2024);
+
+    // Clean up
+    let _ = fs::remove_dir_all(test_dir);
+}
+
+#[test]
+fn test_get_by_id() {
+    let mut store = VectorStore::new(128);
+
+    let vector = random_vector(128, 0);
+    let metadata = serde_json::json!({"title": "Test"});
+
+    store
+        .insert_with_metadata("doc1".to_string(), vector.clone(), metadata.clone())
+        .unwrap();
+
+    // Get by ID
+    let (retrieved_vector, retrieved_metadata) = store.get_by_id("doc1").unwrap();
+
+    assert_eq!(retrieved_vector.data, vector.data);
+    assert_eq!(retrieved_metadata, &metadata);
+
+    // Non-existent ID should return None
+    assert!(store.get_by_id("nonexistent").is_none());
+}
+
+// Tests for seerdb persistent storage
+
+#[test]
+fn test_open_new_database() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test-oadb");
+
+    // Open new database
+    let mut store = VectorStore::open(&db_path).unwrap();
+    assert!(store.is_persistent());
+    assert_eq!(store.len(), 0);
+
+    // Insert some vectors
+    store
+        .set(
+            "doc1".to_string(),
+            random_vector(128, 0),
+            serde_json::json!({"title": "Doc 1"}),
+        )
+        .unwrap();
+
+    store
+        .set(
+            "doc2".to_string(),
+            random_vector(128, 1),
+            serde_json::json!({"title": "Doc 2"}),
+        )
+        .unwrap();
+
+    assert_eq!(store.len(), 2);
+    assert!(store.get_by_id("doc1").is_some());
+}
+
+#[test]
+fn test_persistent_roundtrip() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("roundtrip-oadb");
+
+    // Create and populate store
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+
+        store
+            .set(
+                "vec1".to_string(),
+                random_vector(128, 10),
+                serde_json::json!({"category": "A", "score": 0.95}),
+            )
+            .unwrap();
+
+        store
+            .set(
+                "vec2".to_string(),
+                random_vector(128, 20),
+                serde_json::json!({"category": "B", "score": 0.85}),
+            )
+            .unwrap();
+
+        store
+            .set(
+                "vec3".to_string(),
+                random_vector(128, 30),
+                serde_json::json!({"category": "A", "score": 0.75}),
+            )
+            .unwrap();
+
+        // Flush to ensure data is on disk
+        store.flush().unwrap();
+    }
+
+    // Reopen and verify data
+    {
+        let store = VectorStore::open(&db_path).unwrap();
+
+        assert_eq!(store.len(), 3);
+
+        // Verify vec1
+        let (vec1, meta1) = store.get_by_id("vec1").unwrap();
+        assert_eq!(vec1.data, random_vector(128, 10).data);
+        assert_eq!(meta1["category"], "A");
+        assert_eq!(meta1["score"], 0.95);
+
+        // Verify vec2
+        let (vec2, meta2) = store.get_by_id("vec2").unwrap();
+        assert_eq!(vec2.data, random_vector(128, 20).data);
+        assert_eq!(meta2["category"], "B");
+
+        // Verify vec3
+        assert!(store.get_by_id("vec3").is_some());
+    }
+}
+
+#[test]
+fn test_persistent_delete() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("delete-oadb");
+
+    // Create, populate, and delete
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+
+        store
+            .set(
+                "keep".to_string(),
+                random_vector(128, 1),
+                serde_json::json!({}),
+            )
+            .unwrap();
+        store
+            .set(
+                "delete_me".to_string(),
+                random_vector(128, 2),
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        assert_eq!(store.len(), 2);
+
+        // Delete one
+        store.delete("delete_me").unwrap();
+        assert!(store.get_by_id("delete_me").is_none());
+
+        store.flush().unwrap();
+    }
+
+    // Reopen and verify deletion persisted
+    {
+        let store = VectorStore::open(&db_path).unwrap();
+
+        // Only "keep" should be accessible
+        assert!(store.get_by_id("keep").is_some());
+        assert!(store.get_by_id("delete_me").is_none());
+    }
+}
+
+#[test]
+fn test_persistent_search() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("search-oadb");
+
+    // Create and populate
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+
+        for i in 0..100 {
+            store
+                .set(
+                    format!("vec{}", i),
+                    random_vector(128, i),
+                    serde_json::json!({"index": i}),
+                )
+                .unwrap();
+        }
+
+        store.flush().unwrap();
+    }
+
+    // Reopen and search
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+
+        assert_eq!(store.len(), 100);
+
+        // Search should work
+        let query = random_vector(128, 50);
+        let results = store.knn_search(&query, 10).unwrap();
+
+        // Verify we get results
+        assert_eq!(results.len(), 10, "Should return 10 results");
+
+        // Verify results are sorted by distance
+        for i in 1..results.len() {
+            assert!(
+                results[i].1 >= results[i - 1].1,
+                "Results should be sorted by distance"
+            );
+        }
+    }
+}
+
+mod incremental_tests {
+    use super::*;
+
+    #[test]
+    fn test_incremental_set_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+
+        // Single item inserts
+        store
+            .set_batch(vec![(
+                "vec1".to_string(),
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        store
+            .set_batch(vec![(
+                "vec2".to_string(),
+                Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Batch insert
+        store
+            .set_batch(vec![
+                (
+                    "vec3".to_string(),
+                    Vector::new(vec![0.0, 0.0, 1.0, 0.0]),
+                    serde_json::json!({}),
+                ),
+                (
+                    "vec4".to_string(),
+                    Vector::new(vec![0.0, 0.0, 0.0, 1.0]),
+                    serde_json::json!({}),
+                ),
+            ])
+            .unwrap();
+
+        // Another batch
+        store
+            .set_batch(vec![
+                (
+                    "vec5".to_string(),
+                    Vector::new(vec![0.5, 0.5, 0.0, 0.0]),
+                    serde_json::json!({}),
+                ),
+                (
+                    "vec6".to_string(),
+                    Vector::new(vec![0.0, 0.5, 0.5, 0.0]),
+                    serde_json::json!({}),
+                ),
+            ])
+            .unwrap();
+
+        let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(
+            results.len(),
+            6,
+            "Incremental inserts must all be searchable"
+        );
+    }
+
+    /// INC-2: Interleave inserts and searches
+    #[test]
+    fn test_interleaved_insert_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+
+        let mut total_inserted = 0;
+
+        // Insert 10 batches of 10 vectors, searching after each batch
+        for batch in 0..10 {
+            let vectors: Vec<_> = (0..10)
+                .map(|i| {
+                    let id = batch * 10 + i;
+                    let mut v = vec![0.0; 4];
+                    v[id % 4] = 1.0 + (id as f32 * 0.01);
+                    (format!("vec{}", id), Vector::new(v), serde_json::json!({}))
+                })
+                .collect();
+
+            store.set_batch(vectors).unwrap();
+            total_inserted += 10;
+
+            // Search after each batch
+            let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+            let results = store.knn_search(&query, total_inserted + 10).unwrap();
+            assert_eq!(
+                results.len(),
+                total_inserted,
+                "After batch {}, expected {} results but got {}",
+                batch,
+                total_inserted,
+                results.len()
+            );
+        }
+
+        // Final verification
+        let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+        let results = store.knn_search(&query, 200).unwrap();
+        assert_eq!(results.len(), 100, "All 100 vectors must be searchable");
+    }
+
+    /// INC-3: Insert batch, search, single insert, search
+    #[test]
+    fn test_batch_then_single_insert() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+
+        // Batch insert
+        let batch: Vec<_> = (0..50)
+            .map(|i| {
+                let mut v = vec![0.0; 4];
+                v[i % 4] = 1.0;
+                (format!("batch{}", i), Vector::new(v), serde_json::json!({}))
+            })
+            .collect();
+        store.set_batch(batch).unwrap();
+
+        // Search to "activate" the index
+        let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+        let results = store.knn_search(&query, 100).unwrap();
+        assert_eq!(results.len(), 50, "Batch vectors must be searchable");
+
+        // Single insert after search
+        store
+            .set_batch(vec![(
+                "single".to_string(),
+                Vector::new(vec![0.99, 0.01, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Search again - new vector must be reachable
+        let results = store.knn_search(&query, 100).unwrap();
+        assert_eq!(
+            results.len(),
+            51,
+            "New vector after search must be reachable"
+        );
+
+        // The new vector should appear in search results
+        // Index 50 is the single insert (0-49 were batch)
+        let found = results.iter().any(|(idx, _)| *idx == 50);
+        assert!(found, "Newly inserted vector must appear in search results");
+    }
+
+    /// INC-4: Empty index -> insert -> search -> insert -> search cycle
+    #[test]
+    fn test_insert_search_cycle_from_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+
+        let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+
+        // Search empty index
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 0, "Empty index should return no results");
+
+        // First insert
+        store
+            .set_batch(vec![(
+                "first".to_string(),
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Search should find first vector
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 1, "Should find first vector");
+
+        // Second insert
+        store
+            .set_batch(vec![(
+                "second".to_string(),
+                Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Search should find both
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 2, "Should find both vectors");
+
+        // Third insert
+        store
+            .set_batch(vec![(
+                "third".to_string(),
+                Vector::new(vec![0.5, 0.5, 0.0, 0.0]),
+                serde_json::json!({}),
+            )])
+            .unwrap();
+
+        // Search should find all three
+        let results = store.knn_search(&query, 10).unwrap();
+        assert_eq!(results.len(), 3, "Should find all three vectors");
+    }
+}

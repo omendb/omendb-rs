@@ -1178,9 +1178,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seerdb"
-version = "0.0.1"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0213f6b594f0e412a8523fd7c2de746f215f26810a51df80a2d2a90225e031b"
+checksum = "e9eb7c4e09e7fea52a24d5eedbfda0b81fcf4c428c93c0022e67c439bcd3c02a"
 dependencies = [
  "anyhow",
  "arc-swap",
