@@ -68,6 +68,7 @@ fixedbitset = "0.5.7"
 
 # Bytes (for storage)
 bytes = "1.0"
+arc-swap = "1.7.1"
 
 [dev-dependencies]
 criterion = "0.5"

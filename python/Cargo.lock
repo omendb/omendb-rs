@@ -630,6 +630,7 @@ name = "omendb"
 version = "0.0.1-alpha"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "bincode",
  "bytes",
  "chrono",
