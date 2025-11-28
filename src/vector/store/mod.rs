@@ -177,7 +177,7 @@ impl VectorStore {
 
     /// Compute adaptive HNSW parameters based on expected vector count
     ///
-    /// Optimized for balanced speed/recall tradeoff (similar to `ChromaDB` defaults):
+    /// Optimized for balanced speed/recall tradeoff:
     /// - `ef_search=100` provides ~98% recall with high QPS (2000+ QPS)
     /// - `ef_construction` kept high for quality graph
     ///
@@ -380,7 +380,7 @@ impl VectorStore {
             };
 
             // Start with small default capacity (10K vectors)
-            // This uses fast parameters (M=16, ef_construction=100) matching ChromaDB
+            // Uses fast parameters (M=16, ef_construction=100)
             // Index will automatically grow as more vectors are added
             self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
             self.dimensions = dimensions;

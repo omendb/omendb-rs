@@ -60,17 +60,6 @@ def query_workload(db, n_queries, k, dimensions, with_filter=False):
     return qps, latency_ms
 
 
-def benchmark_vs_chromadb():
-    """Compare against ChromaDB from Nov 6 benchmarks"""
-    print("\n" + "="*60)
-    print("COMPARISON VS CHROMADB (Nov 6 benchmarks)")
-    print("="*60)
-    print("\nChromaDB (embedded):")
-    print("  Build: 24,728 vec/s")
-    print("  Query: 3,282 QPS (0.30ms latency)")
-    print("  Recall: 100%")
-
-
 def profile_query_workload(db, n_queries, k, dimensions):
     """Profile query workload to find bottlenecks"""
     print("\n" + "="*60)
@@ -155,24 +144,13 @@ def main():
         # Phase 4: Profile to find bottlenecks
         profile_query_workload(db, 1000, k=10, dimensions=dimensions)
 
-        # Comparison
-        benchmark_vs_chromadb()
-
         print("\n" + "="*60)
-        print("PERFORMANCE ANALYSIS")
+        print("PERFORMANCE SUMMARY")
         print("="*60)
-        print("\nOur performance:")
-        print(f"  Build: {n_vectors/build_time:,.0f} vec/s")
-        print(f"  Query (k=10): {qps_k10:,.0f} QPS @ {lat_k10:.3f}ms")
-        print(f"  Query (k=100): {qps_k100:,.0f} QPS @ {lat_k100:.3f}ms")
-        print(f"  Query (filtered): {qps_filtered:,.0f} QPS @ {lat_filtered:.3f}ms")
-
-        print("\nVs ChromaDB:")
-        print(f"  Build: {(n_vectors/build_time) / 24728 * 100:.1f}% of ChromaDB speed")
-        print(f"  Query: {qps_k10 / 3282 * 100:.1f}% of ChromaDB speed")
-
-        print("\nVs Rust core (7,094 QPS):")
-        print(f"  Query overhead: {7094 / qps_k10:.2f}x slower than Rust")
+        print(f"\nBuild: {n_vectors/build_time:,.0f} vec/s")
+        print(f"Query (k=10): {qps_k10:,.0f} QPS @ {lat_k10:.3f}ms")
+        print(f"Query (k=100): {qps_k100:,.0f} QPS @ {lat_k100:.3f}ms")
+        print(f"Query (filtered): {qps_filtered:,.0f} QPS @ {lat_filtered:.3f}ms")
 
         print("\n" + "="*60)
         print("BOTTLENECK ANALYSIS")

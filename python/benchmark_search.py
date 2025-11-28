@@ -88,14 +88,3 @@ with tempfile.TemporaryDirectory() as tmpdir:
     print(f"Latency p95:  {p95:.2f}ms")
     print(f"Latency p99:  {p99:.2f}ms")
     print(f"{'='*60}\n")
-
-    # Compare to target
-    print("Comparison to ChromaDB (Nov 2025 benchmark):")
-    print("  ChromaDB:  3,282 QPS, 0.30ms p50")
-    print(f"  OmenDB:      {qps:,.0f} QPS, {p50:.2f}ms p50")
-    if qps < 3282:
-        speedup_needed = 3282 / qps
-        print(f"  Need {speedup_needed:.1f}x faster to match ChromaDB")
-    else:
-        print("  ✅ Faster than ChromaDB!")
-    print()

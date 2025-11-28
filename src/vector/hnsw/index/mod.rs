@@ -479,7 +479,7 @@ impl HNSWIndex {
     /// # Performance
     /// - Small batches (<100): Use `insert()` for simplicity
     /// - Medium batches (100-10K): 8-12x speedup expected
-    /// - Large batches (10K+): 20-50x speedup expected (matches ChromaDB/LanceDB)
+    /// - Large batches (10K+): 20-50x speedup expected
     ///
     /// # Algorithm
     /// - Pre-allocate all nodes and levels (deterministic)
