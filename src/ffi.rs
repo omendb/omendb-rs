@@ -225,6 +225,11 @@ pub extern "C" fn omendb_get(
         }
     };
 
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
+        return -1;
+    }
+
     match CString::new(json_str) {
         Ok(cstr) => {
             unsafe { *result = cstr.into_raw() };
@@ -391,6 +396,11 @@ pub extern "C" fn omendb_search(
             return -1;
         }
     };
+
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
+        return -1;
+    }
 
     match CString::new(json_str) {
         Ok(cstr) => {

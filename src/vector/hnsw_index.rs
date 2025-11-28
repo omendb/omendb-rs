@@ -59,11 +59,11 @@ impl HNSWIndex {
     /// ```ignore
     /// use omen::vector::HNSWIndex;
     ///
-    /// let mut index = HNSWIndex::new(1_000_000, 1536);
+    /// let mut index = HNSWIndex::new(1_000_000, 1536)?;
     /// index.insert(&vector)?;
     /// let results = index.search(&query, 10)?;
     /// ```
-    pub fn new(max_elements: usize, dimensions: usize) -> Self {
+    pub fn new(max_elements: usize, dimensions: usize) -> Result<Self> {
         // Adaptive HNSW parameters based on expected dataset size
         // Goal: Balance speed and recall appropriately for each scale
         let (max_nb_connection, ef_construction) = if max_elements < 10_000 {
@@ -87,10 +87,9 @@ impl HNSWIndex {
             max_level: 8,
         };
 
-        let index = CoreHNSW::new(dimensions, params, DistanceFunction::L2, false)
-            .expect("Failed to create HNSW index");
+        let index = CoreHNSW::new(dimensions, params, DistanceFunction::L2, false)?;
 
-        Self {
+        Ok(Self {
             index,
             max_elements,
             max_nb_connection,
@@ -98,7 +97,7 @@ impl HNSWIndex {
             ef_search: ef_construction, // Match ef_construction for consistency
             dimensions,
             num_vectors: 0,
-        }
+        })
     }
 
     /// Create new HNSW index with custom parameters
@@ -113,7 +112,7 @@ impl HNSWIndex {
     /// # Example
     /// ```ignore
     /// // Higher M for better recall at scale
-    /// let mut index = HNSWIndex::new_with_params(1_000_000, 128, 32, 400, 600);
+    /// let mut index = HNSWIndex::new_with_params(1_000_000, 128, 32, 400, 600)?;
     /// ```
     pub fn new_with_params(
         max_elements: usize,
@@ -121,7 +120,7 @@ impl HNSWIndex {
         m: usize,
         ef_construction: usize,
         ef_search: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         let params = CoreParams {
             m,
             ef_construction,
@@ -130,10 +129,9 @@ impl HNSWIndex {
             max_level: 8,
         };
 
-        let index = CoreHNSW::new(dimensions, params, DistanceFunction::L2, false)
-            .expect("Failed to create HNSW index");
+        let index = CoreHNSW::new(dimensions, params, DistanceFunction::L2, false)?;
 
-        Self {
+        Ok(Self {
             index,
             max_elements,
             max_nb_connection: m,
@@ -141,7 +139,7 @@ impl HNSWIndex {
             ef_search,
             dimensions,
             num_vectors: 0,
-        }
+        })
     }
 
     /// Insert vector into index and return its ID
@@ -419,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_basic() {
-        let mut index = HNSWIndex::new(1000, 4);
+        let mut index = HNSWIndex::new(1000, 4).unwrap();
 
         // Insert vectors
         let v1 = vec![1.0, 0.0, 0.0, 0.0];
@@ -442,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_batch_insert() {
-        let mut index = HNSWIndex::new(1000, 3);
+        let mut index = HNSWIndex::new(1000, 3).unwrap();
 
         let vectors = vec![
             vec![1.0, 0.0, 0.0],
@@ -458,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_ef_search() {
-        let mut index = HNSWIndex::new(1000, 4);
+        let mut index = HNSWIndex::new(1000, 4).unwrap();
 
         assert_eq!(index.get_ef_search(), 100); // Default for <10K: M=16, ef=100
 

@@ -493,6 +493,15 @@ impl HNSWIndex {
             return Ok(Vec::new());
         }
 
+        // batch_insert uses parallel graph operations that require Memory mode
+        if !self.neighbors.is_memory_mode() {
+            return Err(HNSWError::Storage(
+                "batch_insert() requires GraphStorage::Memory mode. \
+                 Use insert() for single-threaded insertion with Layered/Disk modes."
+                    .to_string(),
+            ));
+        }
+
         let batch_size = vectors.len();
         info!(batch_size, "Starting parallel batch insertion");
 

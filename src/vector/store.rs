@@ -144,13 +144,17 @@ impl VectorStore {
     pub fn new_with_capacity(dimensions: usize, expected_vectors: usize) -> Self {
         let (m, ef_construction, ef_search) = Self::adaptive_hnsw_params(expected_vectors);
 
-        let hnsw_index = Some(HNSWIndex::new_with_params(
-            expected_vectors.max(1_000_000), // Use expected capacity, min 1M
-            dimensions,
-            m,
-            ef_construction,
-            ef_search,
-        ));
+        // SAFETY: adaptive_hnsw_params always returns valid parameters (m > 0, ef > 0)
+        let hnsw_index = Some(
+            HNSWIndex::new_with_params(
+                expected_vectors.max(1_000_000), // Use expected capacity, min 1M
+                dimensions,
+                m,
+                ef_construction,
+                ef_search,
+            )
+            .expect("adaptive_hnsw_params returns valid parameters"),
+        );
 
         Self {
             vectors: Vec::new(),
@@ -216,14 +220,14 @@ impl VectorStore {
     /// # Example
     /// ```ignore
     /// // Higher M for better recall at 100K+ scale
-    /// let mut store = VectorStore::new_with_params(128, 32, 400, 600);
+    /// let mut store = VectorStore::new_with_params(128, 32, 400, 600)?;
     /// ```
     pub fn new_with_params(
         dimensions: usize,
         m: usize,
         ef_construction: usize,
         ef_search: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         // Eagerly initialize HNSW with custom parameters
         let hnsw_index = Some(HNSWIndex::new_with_params(
             1_000_000,
@@ -231,9 +235,9 @@ impl VectorStore {
             m,
             ef_construction,
             ef_search,
-        ));
+        )?);
 
-        Self {
+        Ok(Self {
             vectors: Vec::new(),
             hnsw_index,
             dimensions,
@@ -243,7 +247,7 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
-        }
+        })
     }
 
     /// Open a persistent vector store at the given path
@@ -295,7 +299,7 @@ impl VectorStore {
                 vectors.len(),
                 path.as_ref().display()
             );
-            let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions);
+            let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
             for vector in &vectors {
                 index.insert(&vector.data)?;
             }
@@ -357,7 +361,7 @@ impl VectorStore {
             // Start with small default capacity (10K vectors)
             // This uses fast parameters (M=16, ef_construction=100) matching ChromaDB
             // Index will automatically grow as more vectors are added
-            self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions));
+            self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
             self.dimensions = dimensions;
         } else {
             // Validate dimension matches existing HNSW index
@@ -507,7 +511,7 @@ impl VectorStore {
                 } else {
                     self.dimensions
                 };
-                self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions));
+                self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
                 self.dimensions = dimensions;
             }
 
@@ -735,7 +739,7 @@ impl VectorStore {
         // Lazy initialize HNSW on first insert
         if self.hnsw_index.is_none() {
             let capacity = vectors.len().max(1_000_000);
-            self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions));
+            self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions)?);
         }
 
         let _start_id = self.vectors.len();
@@ -805,7 +809,7 @@ impl VectorStore {
         let start = std::time::Instant::now();
 
         // Create new HNSW index
-        let mut index = HNSWIndex::new(self.vectors.len().max(1_000_000), self.dimensions);
+        let mut index = HNSWIndex::new(self.vectors.len().max(1_000_000), self.dimensions)?;
 
         // Insert all vectors
         for vector in &self.vectors {
@@ -864,7 +868,7 @@ impl VectorStore {
         // Initialize HNSW if needed
         if self.hnsw_index.is_none() {
             let capacity = (self.vectors.len() + other.vectors.len()).max(1_000_000);
-            self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions));
+            self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions)?);
         }
 
         // Track how many vectors we actually merge (skip ID conflicts)
@@ -1063,7 +1067,7 @@ impl VectorStore {
             .collect();
 
         // Sort by distance and take top k
-        all_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        all_results.sort_by(|a, b| a.1.total_cmp(&b.1));
         all_results.truncate(k);
 
         Ok(all_results)
@@ -1128,7 +1132,7 @@ impl VectorStore {
             .collect();
 
         // Sort by quantized distance and take top candidates
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
         let candidates: Vec<usize> = distances
             .into_iter()
             .take(oversample)
@@ -1147,7 +1151,7 @@ impl VectorStore {
             .collect();
 
         // Sort by exact distance and return top-k
-        reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
         Ok(reranked.into_iter().take(k).collect())
     }
 
@@ -1177,7 +1181,7 @@ impl VectorStore {
             .collect();
 
         // Sort by distance and take top K
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
         Ok(distances.into_iter().take(k).collect())
     }
 
@@ -1239,7 +1243,10 @@ impl VectorStore {
 
         let path = Path::new(base_path);
         let directory = path.parent().unwrap_or_else(|| Path::new("."));
-        let filename = path.file_name().unwrap().to_str().unwrap();
+        let filename = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid path: no filename in '{}'", base_path))?;
 
         // Create directory if needed
         fs::create_dir_all(directory)?;
@@ -1328,7 +1335,10 @@ impl VectorStore {
 
         let path = Path::new(base_path);
         let directory = path.parent().unwrap_or_else(|| Path::new("."));
-        let filename = path.file_name().unwrap().to_str().unwrap();
+        let filename = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid path: no filename in '{}'", base_path))?;
 
         // Check if HNSW index file exists
         let hnsw_path = directory.join(format!("{}.hnsw", filename));
