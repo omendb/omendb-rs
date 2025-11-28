@@ -26,13 +26,13 @@
 //! omendb_close(db);
 //! ```
 
+use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::ptr;
-use std::cell::RefCell;
 use std::path::Path;
+use std::ptr;
 
-use crate::vector::{VectorStore, Vector, MetadataFilter};
+use crate::vector::{MetadataFilter, Vector, VectorStore};
 use serde_json::{json, Value as JsonValue};
 
 thread_local! {
@@ -142,7 +142,10 @@ pub extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) -> i64 
         };
 
         let embedding: Vec<f32> = match item.get("embedding").and_then(|v| v.as_array()) {
-            Some(arr) => arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect(),
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect(),
             None => {
                 set_last_error("Item missing 'embedding' field".to_string());
                 return -1;
@@ -358,12 +361,17 @@ pub extern "C" fn omendb_search(
     for (idx, distance) in search_results {
         if let Some(vector) = db.store.get(idx) {
             // Find the string ID for this index
-            let id = db.store.id_to_index.iter()
+            let id = db
+                .store
+                .id_to_index
+                .iter()
                 .find(|(_, &i)| i == idx)
                 .map(|(id, _)| id.clone())
                 .unwrap_or_else(|| idx.to_string());
 
-            let metadata = db.store.get_by_id(&id)
+            let metadata = db
+                .store
+                .get_by_id(&id)
                 .map(|(_, m)| m.clone())
                 .unwrap_or(json!({}));
 

@@ -61,8 +61,8 @@ impl StorageMode {
     /// assert_eq!(mode, StorageMode::DiskHeavy);
     /// ```
     pub fn auto_select(num_vectors: usize) -> Self {
-        const HYBRID_THRESHOLD: usize = 10_000_000;  // 10M
-        const DISK_HEAVY_THRESHOLD: usize = 100_000_000;  // 100M
+        const HYBRID_THRESHOLD: usize = 10_000_000; // 10M
+        const DISK_HEAVY_THRESHOLD: usize = 100_000_000; // 100M
 
         if num_vectors < HYBRID_THRESHOLD {
             StorageMode::Memory
@@ -117,7 +117,11 @@ impl StorageMode {
     ///
     /// # Returns
     /// NonZeroUsize for cache capacity, or None if Memory mode
-    pub fn cache_capacity_nonzero(&self, num_nodes: usize, avg_levels: f64) -> Option<NonZeroUsize> {
+    pub fn cache_capacity_nonzero(
+        &self,
+        num_nodes: usize,
+        avg_levels: f64,
+    ) -> Option<NonZeroUsize> {
         self.cache_capacity(num_nodes, avg_levels)
             .and_then(NonZeroUsize::new)
     }
@@ -224,7 +228,8 @@ impl TieringConfig {
     pub fn auto(num_vectors: usize, avg_levels: f64, avg_neighbors: usize) -> Self {
         let mode = StorageMode::auto_select(num_vectors);
         let cache_capacity = mode.cache_capacity_nonzero(num_vectors, avg_levels);
-        let estimated_memory_bytes = mode.estimated_memory_bytes(num_vectors, avg_neighbors, avg_levels);
+        let estimated_memory_bytes =
+            mode.estimated_memory_bytes(num_vectors, avg_neighbors, avg_levels);
 
         Self {
             mode,
@@ -243,7 +248,8 @@ impl TieringConfig {
         avg_neighbors: usize,
     ) -> Self {
         let cache_capacity = mode.cache_capacity_nonzero(num_vectors, avg_levels);
-        let estimated_memory_bytes = mode.estimated_memory_bytes(num_vectors, avg_neighbors, avg_levels);
+        let estimated_memory_bytes =
+            mode.estimated_memory_bytes(num_vectors, avg_neighbors, avg_levels);
 
         Self {
             mode,
@@ -286,9 +292,18 @@ mod tests {
         assert_eq!(StorageMode::auto_select(99_999_999), StorageMode::Hybrid);
 
         // DiskHeavy mode (100M+)
-        assert_eq!(StorageMode::auto_select(100_000_000), StorageMode::DiskHeavy);
-        assert_eq!(StorageMode::auto_select(500_000_000), StorageMode::DiskHeavy);
-        assert_eq!(StorageMode::auto_select(1_000_000_000), StorageMode::DiskHeavy);
+        assert_eq!(
+            StorageMode::auto_select(100_000_000),
+            StorageMode::DiskHeavy
+        );
+        assert_eq!(
+            StorageMode::auto_select(500_000_000),
+            StorageMode::DiskHeavy
+        );
+        assert_eq!(
+            StorageMode::auto_select(1_000_000_000),
+            StorageMode::DiskHeavy
+        );
     }
 
     #[test]
@@ -301,7 +316,9 @@ mod tests {
         assert_eq!(capacity, 9_000_000); // 10M × 3 × 0.3 = 9M
 
         // DiskHeavy mode: 10% cache
-        let capacity = StorageMode::DiskHeavy.cache_capacity(100_000_000, 3.5).unwrap();
+        let capacity = StorageMode::DiskHeavy
+            .cache_capacity(100_000_000, 3.5)
+            .unwrap();
         assert_eq!(capacity, 35_000_000); // 100M × 3.5 × 0.1 = 35M
 
         // Minimum capacity
@@ -312,14 +329,20 @@ mod tests {
     #[test]
     fn test_cache_capacity_nonzero() {
         // Memory mode: None
-        assert!(StorageMode::Memory.cache_capacity_nonzero(10_000, 3.0).is_none());
+        assert!(StorageMode::Memory
+            .cache_capacity_nonzero(10_000, 3.0)
+            .is_none());
 
         // Hybrid mode: Some(NonZeroUsize)
-        let capacity = StorageMode::Hybrid.cache_capacity_nonzero(10_000_000, 3.0).unwrap();
+        let capacity = StorageMode::Hybrid
+            .cache_capacity_nonzero(10_000_000, 3.0)
+            .unwrap();
         assert_eq!(capacity.get(), 9_000_000);
 
         // DiskHeavy mode: Some(NonZeroUsize)
-        let capacity = StorageMode::DiskHeavy.cache_capacity_nonzero(100_000_000, 3.5).unwrap();
+        let capacity = StorageMode::DiskHeavy
+            .cache_capacity_nonzero(100_000_000, 3.5)
+            .unwrap();
         assert_eq!(capacity.get(), 35_000_000);
     }
 

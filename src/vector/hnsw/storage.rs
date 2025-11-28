@@ -304,7 +304,8 @@ impl NeighborLists {
             // Visit neighbors at all levels (starting from highest)
             for level in (0..=start_level).rev() {
                 let neighbors = self.get_neighbors(node_id, level);
-                for &neighbor_id in &neighbors {  // ← Add & to iterate over Vec
+                for &neighbor_id in &neighbors {
+                    // ← Add & to iterate over Vec
                     if visited.insert(neighbor_id) {
                         queue.push_back(neighbor_id);
                     }
@@ -370,11 +371,7 @@ impl Serialize for NeighborLists {
         let neighbors_data: Vec<Vec<Vec<u32>>> = self
             .neighbors
             .iter()
-            .map(|node| {
-                node.iter()
-                    .map(|level| level.read().clone())
-                    .collect()
-            })
+            .map(|node| node.iter().map(|level| level.read().clone()).collect())
             .collect();
 
         state.serialize_field("neighbors", &neighbors_data)?;
@@ -402,11 +399,7 @@ impl<'de> Deserialize<'de> for NeighborLists {
         let neighbors: Vec<Vec<RwLock<Vec<u32>>>> = data
             .neighbors
             .into_iter()
-            .map(|node| {
-                node.into_iter()
-                    .map(RwLock::new)
-                    .collect()
-            })
+            .map(|node| node.into_iter().map(RwLock::new).collect())
             .collect();
 
         Ok(NeighborLists {
@@ -498,7 +491,10 @@ impl VectorStorage {
     /// Insert a full precision vector
     pub fn insert(&mut self, vector: Vec<f32>) -> Result<u32, String> {
         match self {
-            Self::FullPrecision { vectors, dimensions } => {
+            Self::FullPrecision {
+                vectors,
+                dimensions,
+            } => {
                 if vector.len() != *dimensions {
                     return Err(format!(
                         "Vector dimension mismatch: expected {}, got {}",
@@ -542,12 +538,10 @@ impl VectorStorage {
     /// Get a vector by ID (full precision)
     pub fn get(&self, id: u32) -> Option<&[f32]> {
         match self {
-            Self::FullPrecision { vectors, .. } => {
-                vectors.get(id as usize).map(|v| v.as_slice())
-            }
-            Self::BinaryQuantized { original, .. } => {
-                original.as_ref().and_then(|o| o.get(id as usize).map(|v| v.as_slice()))
-            }
+            Self::FullPrecision { vectors, .. } => vectors.get(id as usize).map(|v| v.as_slice()),
+            Self::BinaryQuantized { original, .. } => original
+                .as_ref()
+                .and_then(|o| o.get(id as usize).map(|v| v.as_slice())),
         }
     }
 
@@ -566,12 +560,10 @@ impl VectorStorage {
     #[inline]
     pub fn prefetch(&self, id: u32) {
         let ptr = match self {
-            Self::FullPrecision { vectors, .. } => {
-                vectors.get(id as usize).map(|v| v.as_ptr())
-            }
-            Self::BinaryQuantized { original, .. } => {
-                original.as_ref().and_then(|o| o.get(id as usize).map(|v| v.as_ptr()))
-            }
+            Self::FullPrecision { vectors, .. } => vectors.get(id as usize).map(|v| v.as_ptr()),
+            Self::BinaryQuantized { original, .. } => original
+                .as_ref()
+                .and_then(|o| o.get(id as usize).map(|v| v.as_ptr())),
         };
 
         if let Some(ptr) = ptr {
@@ -660,9 +652,10 @@ impl VectorStorage {
     /// Get memory usage in bytes (approximate)
     pub fn memory_usage(&self) -> usize {
         match self {
-            Self::FullPrecision { vectors, dimensions } => {
-                vectors.len() * dimensions * std::mem::size_of::<f32>()
-            }
+            Self::FullPrecision {
+                vectors,
+                dimensions,
+            } => vectors.len() * dimensions * std::mem::size_of::<f32>(),
             Self::BinaryQuantized {
                 quantized,
                 original,
@@ -789,11 +782,7 @@ mod tests {
     fn test_quantization_training() {
         let mut storage = VectorStorage::new_binary_quantized(2, true);
 
-        let samples = vec![
-            vec![1.0, 5.0],
-            vec![2.0, 6.0],
-            vec![3.0, 7.0],
-        ];
+        let samples = vec![vec![1.0, 5.0], vec![2.0, 6.0], vec![3.0, 7.0]];
 
         storage.train_quantization(&samples).unwrap();
 

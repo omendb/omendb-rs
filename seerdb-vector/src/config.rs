@@ -83,8 +83,12 @@ impl SeerdbVectorConfigBuilder {
         SeerdbVectorConfig {
             sync_writes: self.sync_writes.unwrap_or(defaults.sync_writes),
             memtable_capacity: self.memtable_capacity.unwrap_or(defaults.memtable_capacity),
-            block_cache_capacity: self.block_cache_capacity.unwrap_or(defaults.block_cache_capacity),
-            background_compaction: self.background_compaction.unwrap_or(defaults.background_compaction),
+            block_cache_capacity: self
+                .block_cache_capacity
+                .unwrap_or(defaults.block_cache_capacity),
+            background_compaction: self
+                .background_compaction
+                .unwrap_or(defaults.background_compaction),
         }
     }
 }

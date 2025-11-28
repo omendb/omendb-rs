@@ -18,13 +18,13 @@
 //! - Better accuracy than binary quantization
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use smallvec::SmallVec;
+use std::fmt;
 
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 
 /// Number of bits per dimension for quantization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,8 +100,8 @@ impl Default for RaBitQParams {
     fn default() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits4, // 8x compression
-            num_rescale_factors: 12,                // Good balance
-            rescale_range: (0.5, 2.0),              // Paper recommendation
+            num_rescale_factors: 12,               // Good balance
+            rescale_range: (0.5, 2.0),             // Paper recommendation
         }
     }
 }
@@ -127,7 +127,7 @@ impl RaBitQParams {
     pub fn bits8() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits8,
-            num_rescale_factors: 16, // More factors for higher precision
+            num_rescale_factors: 16,   // More factors for higher precision
             rescale_range: (0.7, 1.5), // Narrower range for 8-bit
         }
     }
@@ -420,11 +420,7 @@ impl RaBitQ {
     ///
     /// This reconstructs both vectors and computes standard L2 distance.
     /// For maximum accuracy, use this with original vectors for reranking.
-    pub fn distance_l2(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_l2(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
 
@@ -438,11 +434,7 @@ impl RaBitQ {
     /// Compute cosine distance between two quantized vectors
     ///
     /// Cosine distance = 1 - cosine similarity
-    pub fn distance_cosine(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_cosine(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
 
@@ -459,11 +451,7 @@ impl RaBitQ {
     }
 
     /// Compute dot product between two quantized vectors
-    pub fn distance_dot(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_dot(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
 
@@ -475,11 +463,7 @@ impl RaBitQ {
     ///
     /// This computes distance in the quantized space without full reconstruction.
     /// Faster but less accurate than distance_l2.
-    pub fn distance_approximate(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_approximate(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         // Unpack to quantized values (u8)
         let v1 = self.unpack_quantized(&qv1.data, qv1.bits, qv1.dimensions);
         let v2 = self.unpack_quantized(&qv2.data, qv2.bits, qv2.dimensions);
@@ -501,11 +485,7 @@ impl RaBitQ {
     /// computes distance against the uncompressed query vector.
     ///
     /// Avoids `Vec<f32>` allocation for the reconstructed vector.
-    pub fn distance_asymmetric_l2(
-        &self,
-        query: &[f32],
-        quantized: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_asymmetric_l2(&self, query: &[f32], quantized: &QuantizedVector) -> f32 {
         self.distance_asymmetric_l2_raw(query, &quantized.data, quantized.scale, quantized.bits)
     }
 
@@ -531,13 +511,13 @@ impl RaBitQ {
             4 => {
                 // Unpack to stack buffer (up to 256 dims = 1KB). Falls back to heap for larger.
                 let mut buffer: SmallVec<[f32; 256]> = SmallVec::with_capacity(query.len());
-                
+
                 let num_pairs = query.len() / 2;
-                
+
                 // Check bounds once to avoid checks in loop
-                if data.len() < (query.len() + 1) / 2 {
+                if data.len() < query.len().div_ceil(2) {
                     // Fallback if data is truncated (shouldn't happen in valid storage)
-                    return f32::MAX; 
+                    return f32::MAX;
                 }
 
                 for i in 0..num_pairs {
@@ -545,30 +525,30 @@ impl RaBitQ {
                     buffer.push((byte >> 4) as f32 * factor);
                     buffer.push((byte & 0x0F) as f32 * factor);
                 }
-                
-                if query.len() % 2 != 0 {
+
+                if !query.len().is_multiple_of(2) {
                     let byte = unsafe { *data.get_unchecked(num_pairs) };
                     buffer.push((byte >> 4) as f32 * factor);
                 }
-                
+
                 simd_l2_distance(query, &buffer)
             }
             2 => {
                 let mut buffer: SmallVec<[f32; 256]> = SmallVec::with_capacity(query.len());
                 let num_quads = query.len() / 4;
-                
-                if data.len() < (query.len() + 3) / 4 {
+
+                if data.len() < query.len().div_ceil(4) {
                     return f32::MAX;
                 }
 
                 for i in 0..num_quads {
                     let byte = unsafe { *data.get_unchecked(i) };
-                    buffer.push(((byte >> 0) & 0b11) as f32 * factor);
+                    buffer.push((byte & 0b11) as f32 * factor);
                     buffer.push(((byte >> 2) & 0b11) as f32 * factor);
                     buffer.push(((byte >> 4) & 0b11) as f32 * factor);
                     buffer.push(((byte >> 6) & 0b11) as f32 * factor);
                 }
-                
+
                 // Handle remainder
                 let remaining = query.len() % 4;
                 if remaining > 0 {
@@ -577,7 +557,7 @@ impl RaBitQ {
                         buffer.push(((byte >> (i * 2)) & 0b11) as f32 * factor);
                     }
                 }
-                
+
                 simd_l2_distance(query, &buffer)
             }
             _ => {
@@ -586,11 +566,11 @@ impl RaBitQ {
                 // That's fine for non-optimized bit widths.
                 let unpacked = self.unpack_quantized(data, bits, query.len());
                 let mut buffer: SmallVec<[f32; 256]> = SmallVec::with_capacity(query.len());
-                
+
                 for &q in &unpacked {
                     buffer.push(q as f32 * factor);
                 }
-                
+
                 simd_l2_distance(query, &buffer)
             }
         }
@@ -604,11 +584,7 @@ impl RaBitQ {
     /// - x86_64: AVX2 > SSE2 > scalar
     /// - aarch64: NEON > scalar
     #[inline]
-    pub fn distance_l2_simd(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_l2_simd(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         // Reconstruct to f32 vectors
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -619,11 +595,7 @@ impl RaBitQ {
 
     /// Compute cosine distance using SIMD acceleration
     #[inline]
-    pub fn distance_cosine_simd(
-        &self,
-        qv1: &QuantizedVector,
-        qv2: &QuantizedVector,
-    ) -> f32 {
+    pub fn distance_cosine_simd(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
 
@@ -719,158 +691,170 @@ fn cosine_distance_scalar(v1: &[f32], v2: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
-unsafe fn l2_distance_avx2(v1: &[f32], v2: &[f32]) -> f32 { unsafe {
-    let len = v1.len().min(v2.len());
-    let mut sum = _mm256_setzero_ps();
+unsafe fn l2_distance_avx2(v1: &[f32], v2: &[f32]) -> f32 {
+    unsafe {
+        let len = v1.len().min(v2.len());
+        let mut sum = _mm256_setzero_ps();
 
-    let chunks = len / 8;
-    for i in 0..chunks {
-        let a = _mm256_loadu_ps(v1.as_ptr().add(i * 8));
-        let b = _mm256_loadu_ps(v2.as_ptr().add(i * 8));
-        let diff = _mm256_sub_ps(a, b);
-        sum = _mm256_fmadd_ps(diff, diff, sum);
+        let chunks = len / 8;
+        for i in 0..chunks {
+            let a = _mm256_loadu_ps(v1.as_ptr().add(i * 8));
+            let b = _mm256_loadu_ps(v2.as_ptr().add(i * 8));
+            let diff = _mm256_sub_ps(a, b);
+            sum = _mm256_fmadd_ps(diff, diff, sum);
+        }
+
+        // Horizontal sum
+        let sum_high = _mm256_extractf128_ps(sum, 1);
+        let sum_low = _mm256_castps256_ps128(sum);
+        let sum128 = _mm_add_ps(sum_low, sum_high);
+        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        let mut result = _mm_cvtss_f32(sum32);
+
+        // Handle remainder
+        for i in (chunks * 8)..len {
+            let diff = v1[i] - v2[i];
+            result += diff * diff;
+        }
+
+        result.sqrt()
     }
-
-    // Horizontal sum
-    let sum_high = _mm256_extractf128_ps(sum, 1);
-    let sum_low = _mm256_castps256_ps128(sum);
-    let sum128 = _mm_add_ps(sum_low, sum_high);
-    let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
-    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-    let mut result = _mm_cvtss_f32(sum32);
-
-    // Handle remainder
-    for i in (chunks * 8)..len {
-        let diff = v1[i] - v2[i];
-        result += diff * diff;
-    }
-
-    result.sqrt()
-}}
+}
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "fma")]
-unsafe fn cosine_distance_avx2(v1: &[f32], v2: &[f32]) -> f32 { unsafe {
-    let len = v1.len().min(v2.len());
-    let mut dot_sum = _mm256_setzero_ps();
-    let mut norm1_sum = _mm256_setzero_ps();
-    let mut norm2_sum = _mm256_setzero_ps();
+unsafe fn cosine_distance_avx2(v1: &[f32], v2: &[f32]) -> f32 {
+    unsafe {
+        let len = v1.len().min(v2.len());
+        let mut dot_sum = _mm256_setzero_ps();
+        let mut norm1_sum = _mm256_setzero_ps();
+        let mut norm2_sum = _mm256_setzero_ps();
 
-    let chunks = len / 8;
-    for i in 0..chunks {
-        let a = _mm256_loadu_ps(v1.as_ptr().add(i * 8));
-        let b = _mm256_loadu_ps(v2.as_ptr().add(i * 8));
-        dot_sum = _mm256_fmadd_ps(a, b, dot_sum);
-        norm1_sum = _mm256_fmadd_ps(a, a, norm1_sum);
-        norm2_sum = _mm256_fmadd_ps(b, b, norm2_sum);
+        let chunks = len / 8;
+        for i in 0..chunks {
+            let a = _mm256_loadu_ps(v1.as_ptr().add(i * 8));
+            let b = _mm256_loadu_ps(v2.as_ptr().add(i * 8));
+            dot_sum = _mm256_fmadd_ps(a, b, dot_sum);
+            norm1_sum = _mm256_fmadd_ps(a, a, norm1_sum);
+            norm2_sum = _mm256_fmadd_ps(b, b, norm2_sum);
+        }
+
+        // Horizontal sums
+        let mut dot = horizontal_sum_avx2(dot_sum);
+        let mut norm1 = horizontal_sum_avx2(norm1_sum);
+        let mut norm2 = horizontal_sum_avx2(norm2_sum);
+
+        // Handle remainder
+        for i in (chunks * 8)..len {
+            dot += v1[i] * v2[i];
+            norm1 += v1[i] * v1[i];
+            norm2 += v2[i] * v2[i];
+        }
+
+        if norm1 < 1e-10 || norm2 < 1e-10 {
+            return 1.0;
+        }
+
+        let cosine_sim = dot / (norm1.sqrt() * norm2.sqrt());
+        1.0 - cosine_sim
     }
-
-    // Horizontal sums
-    let mut dot = horizontal_sum_avx2(dot_sum);
-    let mut norm1 = horizontal_sum_avx2(norm1_sum);
-    let mut norm2 = horizontal_sum_avx2(norm2_sum);
-
-    // Handle remainder
-    for i in (chunks * 8)..len {
-        dot += v1[i] * v2[i];
-        norm1 += v1[i] * v1[i];
-        norm2 += v2[i] * v2[i];
-    }
-
-    if norm1 < 1e-10 || norm2 < 1e-10 {
-        return 1.0;
-    }
-
-    let cosine_sim = dot / (norm1.sqrt() * norm2.sqrt());
-    1.0 - cosine_sim
-}}
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-unsafe fn horizontal_sum_avx2(v: __m256) -> f32 { unsafe {
-    let sum_high = _mm256_extractf128_ps(v, 1);
-    let sum_low = _mm256_castps256_ps128(v);
-    let sum128 = _mm_add_ps(sum_low, sum_high);
-    let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
-    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-    _mm_cvtss_f32(sum32)
-}}
+unsafe fn horizontal_sum_avx2(v: __m256) -> f32 {
+    unsafe {
+        let sum_high = _mm256_extractf128_ps(v, 1);
+        let sum_low = _mm256_castps256_ps128(v);
+        let sum128 = _mm_add_ps(sum_low, sum_high);
+        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        _mm_cvtss_f32(sum32)
+    }
+}
 
 // SSE2 implementations (x86_64 fallback)
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-unsafe fn l2_distance_sse2(v1: &[f32], v2: &[f32]) -> f32 { unsafe {
-    let len = v1.len().min(v2.len());
-    let mut sum = _mm_setzero_ps();
+unsafe fn l2_distance_sse2(v1: &[f32], v2: &[f32]) -> f32 {
+    unsafe {
+        let len = v1.len().min(v2.len());
+        let mut sum = _mm_setzero_ps();
 
-    let chunks = len / 4;
-    for i in 0..chunks {
-        let a = _mm_loadu_ps(v1.as_ptr().add(i * 4));
-        let b = _mm_loadu_ps(v2.as_ptr().add(i * 4));
-        let diff = _mm_sub_ps(a, b);
-        sum = _mm_add_ps(sum, _mm_mul_ps(diff, diff));
+        let chunks = len / 4;
+        for i in 0..chunks {
+            let a = _mm_loadu_ps(v1.as_ptr().add(i * 4));
+            let b = _mm_loadu_ps(v2.as_ptr().add(i * 4));
+            let diff = _mm_sub_ps(a, b);
+            sum = _mm_add_ps(sum, _mm_mul_ps(diff, diff));
+        }
+
+        // Horizontal sum
+        let sum64 = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        let mut result = _mm_cvtss_f32(sum32);
+
+        // Handle remainder
+        for i in (chunks * 4)..len {
+            let diff = v1[i] - v2[i];
+            result += diff * diff;
+        }
+
+        result.sqrt()
     }
-
-    // Horizontal sum
-    let sum64 = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
-    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-    let mut result = _mm_cvtss_f32(sum32);
-
-    // Handle remainder
-    for i in (chunks * 4)..len {
-        let diff = v1[i] - v2[i];
-        result += diff * diff;
-    }
-
-    result.sqrt()
-}}
+}
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-unsafe fn cosine_distance_sse2(v1: &[f32], v2: &[f32]) -> f32 { unsafe {
-    let len = v1.len().min(v2.len());
-    let mut dot_sum = _mm_setzero_ps();
-    let mut norm1_sum = _mm_setzero_ps();
-    let mut norm2_sum = _mm_setzero_ps();
+unsafe fn cosine_distance_sse2(v1: &[f32], v2: &[f32]) -> f32 {
+    unsafe {
+        let len = v1.len().min(v2.len());
+        let mut dot_sum = _mm_setzero_ps();
+        let mut norm1_sum = _mm_setzero_ps();
+        let mut norm2_sum = _mm_setzero_ps();
 
-    let chunks = len / 4;
-    for i in 0..chunks {
-        let a = _mm_loadu_ps(v1.as_ptr().add(i * 4));
-        let b = _mm_loadu_ps(v2.as_ptr().add(i * 4));
-        dot_sum = _mm_add_ps(dot_sum, _mm_mul_ps(a, b));
-        norm1_sum = _mm_add_ps(norm1_sum, _mm_mul_ps(a, a));
-        norm2_sum = _mm_add_ps(norm2_sum, _mm_mul_ps(b, b));
+        let chunks = len / 4;
+        for i in 0..chunks {
+            let a = _mm_loadu_ps(v1.as_ptr().add(i * 4));
+            let b = _mm_loadu_ps(v2.as_ptr().add(i * 4));
+            dot_sum = _mm_add_ps(dot_sum, _mm_mul_ps(a, b));
+            norm1_sum = _mm_add_ps(norm1_sum, _mm_mul_ps(a, a));
+            norm2_sum = _mm_add_ps(norm2_sum, _mm_mul_ps(b, b));
+        }
+
+        // Horizontal sums
+        let mut dot = horizontal_sum_sse2(dot_sum);
+        let mut norm1 = horizontal_sum_sse2(norm1_sum);
+        let mut norm2 = horizontal_sum_sse2(norm2_sum);
+
+        // Handle remainder
+        for i in (chunks * 4)..len {
+            dot += v1[i] * v2[i];
+            norm1 += v1[i] * v1[i];
+            norm2 += v2[i] * v2[i];
+        }
+
+        if norm1 < 1e-10 || norm2 < 1e-10 {
+            return 1.0;
+        }
+
+        let cosine_sim = dot / (norm1.sqrt() * norm2.sqrt());
+        1.0 - cosine_sim
     }
-
-    // Horizontal sums
-    let mut dot = horizontal_sum_sse2(dot_sum);
-    let mut norm1 = horizontal_sum_sse2(norm1_sum);
-    let mut norm2 = horizontal_sum_sse2(norm2_sum);
-
-    // Handle remainder
-    for i in (chunks * 4)..len {
-        dot += v1[i] * v2[i];
-        norm1 += v1[i] * v1[i];
-        norm2 += v2[i] * v2[i];
-    }
-
-    if norm1 < 1e-10 || norm2 < 1e-10 {
-        return 1.0;
-    }
-
-    let cosine_sim = dot / (norm1.sqrt() * norm2.sqrt());
-    1.0 - cosine_sim
-}}
+}
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-unsafe fn horizontal_sum_sse2(v: __m128) -> f32 { unsafe {
-    let sum64 = _mm_add_ps(v, _mm_movehl_ps(v, v));
-    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-    _mm_cvtss_f32(sum32)
-}}
+unsafe fn horizontal_sum_sse2(v: __m128) -> f32 {
+    unsafe {
+        let sum64 = _mm_add_ps(v, _mm_movehl_ps(v, v));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        _mm_cvtss_f32(sum32)
+    }
+}
 
 // NEON implementations (aarch64)
 
@@ -1372,10 +1356,8 @@ mod tests {
         ];
 
         // Quantize all
-        let quantized: Vec<QuantizedVector> = vectors
-            .iter()
-            .map(|v| quantizer.quantize(v))
-            .collect();
+        let quantized: Vec<QuantizedVector> =
+            vectors.iter().map(|v| quantizer.quantize(v)).collect();
 
         // Ground truth L2 distances
         let ground_truth_01 = vectors[0]
@@ -1453,12 +1435,12 @@ mod tests {
         let query = vec![0.1, 0.2, 0.3, 0.4];
         // Vector close to query
         let vector = vec![0.12, 0.22, 0.32, 0.42];
-        
+
         let quantized = quantizer.quantize(&vector);
 
         // Symmetric distance (allocates)
         let dist_sym = quantizer.distance_l2_simd(&quantized, &quantizer.quantize(&query));
-        
+
         // Asymmetric distance (no allocation)
         let dist_asym = quantizer.distance_asymmetric_l2(&query, &quantized);
 
@@ -1489,7 +1471,12 @@ mod tests {
 
         // SIMD should match scalar within floating point precision
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(diff < 0.01, "SIMD vs scalar: {} vs {}", dist_simd, dist_scalar);
+        assert!(
+            diff < 0.01,
+            "SIMD vs scalar: {} vs {}",
+            dist_simd,
+            dist_scalar
+        );
     }
 
     #[test]
@@ -1511,7 +1498,12 @@ mod tests {
 
         // SIMD should match scalar within floating point precision
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(diff < 0.01, "SIMD vs scalar: {} vs {}", dist_simd, dist_scalar);
+        assert!(
+            diff < 0.01,
+            "SIMD vs scalar: {} vs {}",
+            dist_simd,
+            dist_scalar
+        );
     }
 
     #[test]
@@ -1530,7 +1522,12 @@ mod tests {
 
         // Should be close (allow for quantization + FP variance)
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(diff < 0.1, "High-D SIMD vs scalar: {} vs {}", dist_simd, dist_scalar);
+        assert!(
+            diff < 0.1,
+            "High-D SIMD vs scalar: {} vs {}",
+            dist_simd,
+            dist_scalar
+        );
     }
 
     #[test]

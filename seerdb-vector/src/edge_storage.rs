@@ -53,8 +53,7 @@ impl EdgeStorage {
             ..Default::default()
         };
 
-        let db = DB::open(options)
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+        let db = DB::open(options).map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }
@@ -90,8 +89,9 @@ impl EdgeStorage {
         let key = Self::encode_key(node_id, level);
         let value = bincode::serialize(neighbors)
             .map_err(|e| SeerdbVectorError::Serialization(e.to_string()))?;
-        
-        self.db.put(&key, &value)
+
+        self.db
+            .put(key, &value)
             .map_err(|e| SeerdbVectorError::Backend(e.to_string()))
     }
 
@@ -102,14 +102,14 @@ impl EdgeStorage {
         if batch.is_empty() {
             return Ok(());
         }
-        
+
         let mut db_batch = self.db.batch_with_capacity(batch.len());
-        
+
         for (node_id, level, neighbors) in batch {
             let key = Self::encode_key(*node_id, *level);
             let value = bincode::serialize(neighbors)
                 .map_err(|e| SeerdbVectorError::Serialization(e.to_string()))?;
-            db_batch.put(&key, &value);
+            db_batch.put(key, &value);
         }
 
         db_batch
@@ -123,8 +123,12 @@ impl EdgeStorage {
     /// Uses point lookup O(1) instead of prefix scan O(N_SST).
     pub fn get_neighbors(&self, node_id: u64, level: u8) -> Result<Vec<u64>> {
         let key = Self::encode_key(node_id, level);
-        
-        if let Some(value) = self.db.get(&key).map_err(|e| SeerdbVectorError::Backend(e.to_string()))? {
+
+        if let Some(value) = self
+            .db
+            .get(key)
+            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?
+        {
             // Deserialize Vec<u64>
             let neighbors: Vec<u64> = bincode::deserialize(&value)
                 .map_err(|e| SeerdbVectorError::Serialization(e.to_string()))?;
@@ -156,7 +160,11 @@ mod tests {
     #[test]
     fn test_put_and_get_neighbors() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = EdgeStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = EdgeStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         // Add neighbors
         let neighbors = vec![100, 200, 300];
@@ -170,13 +178,13 @@ mod tests {
     #[test]
     fn test_put_neighbors_batch() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = EdgeStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = EdgeStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
-        let batch = vec![
-            (1, 0, vec![2, 3]),
-            (2, 0, vec![1, 3]),
-            (3, 0, vec![1, 2]),
-        ];
+        let batch = vec![(1, 0, vec![2, 3]), (2, 0, vec![1, 3]), (3, 0, vec![1, 2])];
         storage.put_neighbors_batch(&batch).unwrap();
 
         assert_eq!(storage.get_neighbors(1, 0).unwrap(), vec![2, 3]);
@@ -187,7 +195,11 @@ mod tests {
     #[test]
     fn test_get_neighbors_empty() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = EdgeStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = EdgeStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         let retrieved = storage.get_neighbors(999, 0).unwrap();
         assert!(retrieved.is_empty());
@@ -198,11 +210,11 @@ mod tests {
     fn bench_get_neighbors_performance() {
         use std::time::Instant;
         let temp_dir = TempDir::new().unwrap();
-        
+
         let config = SeerdbVectorConfig::builder()
             .memtable_capacity(1024 * 1024)
             .build();
-            
+
         let storage = EdgeStorage::new(temp_dir.path().to_path_buf(), &config).unwrap();
 
         // 1. Insert noise to create multiple SSTables
@@ -216,7 +228,7 @@ mod tests {
             storage.put_neighbors_batch(&noise_batch).unwrap();
             storage.flush().unwrap();
         }
-        
+
         println!("Created ~10 SSTables");
 
         // 2. Insert 32 neighbors for node 1 (Last -> Newest)

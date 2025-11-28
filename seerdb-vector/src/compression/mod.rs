@@ -7,4 +7,4 @@
 
 pub mod rabitq;
 
-pub use rabitq::{RaBitQ, RaBitQParams, QuantizedVector, QuantizationBits};
+pub use rabitq::{QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams};

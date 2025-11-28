@@ -171,12 +171,7 @@ impl DiskStorage {
     ///
     /// # Errors
     /// Returns error if directory creation or file writing fails
-    pub fn create(
-        path: &Path,
-        nodes: &[Vec<Vec<NodeId>>],
-        max_level: u32,
-        m: u32,
-    ) -> Result<()> {
+    pub fn create(path: &Path, nodes: &[Vec<Vec<NodeId>>], max_level: u32, m: u32) -> Result<()> {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(path)?;
 
@@ -189,7 +184,7 @@ impl DiskStorage {
             entry_node_id: 0, // Will be set by caller
             entry_level: 0,   // Will be set by caller
             m,
-            m0: m * 2, // Base layer has 2x neighbors
+            m0: m * 2,           // Base layer has 2x neighbors
             ef_construction: 64, // Default
         };
 
@@ -205,14 +200,12 @@ impl DiskStorage {
     /// Load metadata from metadata.bin
     fn load_metadata(path: &Path) -> Result<GraphMetadata> {
         let metadata_path = path.join("metadata.bin");
-        let mut file = File::open(&metadata_path).map_err(|e| {
-            HNSWError::Storage(format!("Failed to open metadata.bin: {}", e))
-        })?;
+        let mut file = File::open(&metadata_path)
+            .map_err(|e| HNSWError::Storage(format!("Failed to open metadata.bin: {}", e)))?;
 
         let mut buffer = vec![0u8; METADATA_HEADER_SIZE];
-        file.read_exact(&mut buffer).map_err(|e| {
-            HNSWError::Storage(format!("Failed to read metadata: {}", e))
-        })?;
+        file.read_exact(&mut buffer)
+            .map_err(|e| HNSWError::Storage(format!("Failed to read metadata: {}", e)))?;
 
         // Validate magic number
         if &buffer[0..8] != MAGIC_NUMBER {
@@ -225,8 +218,8 @@ impl DiskStorage {
         let version = u32::from_le_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]);
         let storage_mode = u32::from_le_bytes([buffer[12], buffer[13], buffer[14], buffer[15]]);
         let num_nodes = u64::from_le_bytes([
-            buffer[16], buffer[17], buffer[18], buffer[19],
-            buffer[20], buffer[21], buffer[22], buffer[23],
+            buffer[16], buffer[17], buffer[18], buffer[19], buffer[20], buffer[21], buffer[22],
+            buffer[23],
         ]);
         let max_level = u32::from_le_bytes([buffer[24], buffer[25], buffer[26], buffer[27]]);
         let entry_node_id = u32::from_le_bytes([buffer[28], buffer[29], buffer[30], buffer[31]]);
@@ -347,9 +340,9 @@ impl DiskStorage {
         }
 
         let mmap = unsafe {
-            mmap_options
-                .map(&file)
-                .map_err(|e| HNSWError::Storage(format!("Failed to mmap {}: {}", path.display(), e)))?
+            mmap_options.map(&file).map_err(|e| {
+                HNSWError::Storage(format!("Failed to mmap {}: {}", path.display(), e))
+            })?
         };
 
         // madvise(MADV_RANDOM) could improve random access patterns but requires nix crate.
@@ -658,7 +651,11 @@ impl WritableDiskStorage {
     /// Returns error if:
     /// - Node ID is not sequential
     /// - Write fails
-    pub fn write_node(&mut self, node_id: NodeId, neighbors_per_level: &[Vec<NodeId>]) -> Result<()> {
+    pub fn write_node(
+        &mut self,
+        node_id: NodeId,
+        neighbors_per_level: &[Vec<NodeId>],
+    ) -> Result<()> {
         // Validate node_id is sequential
         if node_id as usize != self.offset_index.len() {
             return Err(HNSWError::Storage(format!(
@@ -768,7 +765,8 @@ impl NodeStorage for WritableDiskStorage {
         // WritableDiskStorage is write-only during building
         // Reads should happen after finalize() -> DiskStorage
         Err(HNSWError::Storage(
-            "WritableDiskStorage is write-only. Call finalize() to get read-only DiskStorage".to_string(),
+            "WritableDiskStorage is write-only. Call finalize() to get read-only DiskStorage"
+                .to_string(),
         ))
     }
 
@@ -808,8 +806,7 @@ impl NodeStorage for WritableDiskStorage {
 
     fn memory_usage(&self) -> usize {
         // Offset index + metadata
-        self.offset_index.len() * std::mem::size_of::<u64>()
-            + std::mem::size_of::<Self>()
+        self.offset_index.len() * std::mem::size_of::<u64>() + std::mem::size_of::<Self>()
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -828,8 +825,8 @@ mod tests {
         vec![
             // Node 0: 2 levels
             vec![
-                vec![1, 2],    // Level 0
-                vec![3],       // Level 1
+                vec![1, 2], // Level 0
+                vec![3],    // Level 1
             ],
             // Node 1: 1 level
             vec![
@@ -837,14 +834,14 @@ mod tests {
             ],
             // Node 2: 2 levels
             vec![
-                vec![0, 1],    // Level 0
-                vec![3],       // Level 1
+                vec![0, 1], // Level 0
+                vec![3],    // Level 1
             ],
             // Node 3: 3 levels
             vec![
-                vec![1, 2],    // Level 0
-                vec![0, 2],    // Level 1
-                vec![],        // Level 2 (empty)
+                vec![1, 2], // Level 0
+                vec![0, 2], // Level 1
+                vec![],     // Level 2 (empty)
             ],
         ]
     }
@@ -962,10 +959,7 @@ mod tests {
 
         // Corrupt metadata
         let metadata_path = path.join("metadata.bin");
-        let mut file = OpenOptions::new()
-            .write(true)
-            .open(&metadata_path)
-            .unwrap();
+        let mut file = OpenOptions::new().write(true).open(&metadata_path).unwrap();
         file.write_all(b"BADMAGIC").unwrap();
 
         // Should fail to open
@@ -1009,7 +1003,9 @@ mod tests {
         // Write 4 nodes
         let nodes = create_test_data();
         for (node_id, neighbors_per_level) in nodes.iter().enumerate() {
-            storage.write_node(node_id as NodeId, neighbors_per_level).unwrap();
+            storage
+                .write_node(node_id as NodeId, neighbors_per_level)
+                .unwrap();
         }
         assert_eq!(storage.len(), 4);
         assert!(!storage.is_empty());
@@ -1058,7 +1054,9 @@ mod tests {
         let mut storage = WritableDiskStorage::create(&path, 2, 16).unwrap();
         let nodes = create_test_data();
         for (node_id, neighbors_per_level) in nodes.iter().enumerate() {
-            storage.write_node(node_id as NodeId, neighbors_per_level).unwrap();
+            storage
+                .write_node(node_id as NodeId, neighbors_per_level)
+                .unwrap();
         }
 
         // Finalize
@@ -1067,7 +1065,9 @@ mod tests {
         // Verify all data is readable and correct
         for (node_id, expected_neighbors) in nodes.iter().enumerate() {
             for (level, expected) in expected_neighbors.iter().enumerate() {
-                let actual = disk_storage.read_neighbors(node_id as NodeId, level as Level).unwrap();
+                let actual = disk_storage
+                    .read_neighbors(node_id as NodeId, level as Level)
+                    .unwrap();
                 assert_eq!(
                     actual, *expected,
                     "Mismatch for node {} level {}",
@@ -1088,7 +1088,9 @@ mod tests {
         let mut storage = WritableDiskStorage::create(&path, 2, 16).unwrap();
         let nodes = create_test_data();
         for (node_id, neighbors_per_level) in nodes.iter().enumerate() {
-            storage.write_node(node_id as NodeId, neighbors_per_level).unwrap();
+            storage
+                .write_node(node_id as NodeId, neighbors_per_level)
+                .unwrap();
         }
         let _disk_storage = storage.finalize().unwrap();
 

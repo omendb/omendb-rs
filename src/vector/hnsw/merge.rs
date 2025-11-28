@@ -117,11 +117,7 @@ impl GraphMerger {
     /// # Returns
     /// Merge statistics including timing breakdown
     #[instrument(skip(self, large, small), fields(large_size = large.len(), small_size = small.len()))]
-    pub fn merge_graphs(
-        &self,
-        large: &mut HNSWIndex,
-        small: &HNSWIndex,
-    ) -> Result<MergeStats> {
+    pub fn merge_graphs(&self, large: &mut HNSWIndex, small: &HNSWIndex) -> Result<MergeStats> {
         let total_start = Instant::now();
         let small_size = small.len();
 
@@ -159,7 +155,8 @@ impl GraphMerger {
         // Phase 2: Insert join set vectors
         let join_insert_start = Instant::now();
         for &node_id in &join_set {
-            let vector = small.get_vector(node_id)
+            let vector = small
+                .get_vector(node_id)
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
             large.insert(vector.to_vec())?;
         }
@@ -176,7 +173,9 @@ impl GraphMerger {
         let mut fast_path_inserts = 0;
         let mut fallback_inserts = 0;
 
-        let fast_ef = self.config.fast_ef
+        let fast_ef = self
+            .config
+            .fast_ef
             .unwrap_or(large.params().ef_construction / 2);
 
         for node_id in 0..small.len() as u32 {
@@ -184,7 +183,8 @@ impl GraphMerger {
                 continue;
             }
 
-            let vector = small.get_vector(node_id)
+            let vector = small
+                .get_vector(node_id)
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
 
             // Find neighbors of this node that are in the join set
@@ -224,7 +224,10 @@ impl GraphMerger {
         info!(
             vectors_merged = stats.vectors_merged,
             join_set_size = stats.join_set_size,
-            fast_path_ratio = format!("{:.1}%", (stats.fast_path_inserts as f64 / stats.vectors_merged.max(1) as f64) * 100.0),
+            fast_path_ratio = format!(
+                "{:.1}%",
+                (stats.fast_path_inserts as f64 / stats.vectors_merged.max(1) as f64) * 100.0
+            ),
             total_ms = stats.total_duration.as_millis(),
             estimated_speedup = format!("{:.2}x", stats.estimated_speedup()),
             "IGTM merge complete"
@@ -318,11 +321,7 @@ impl GraphMerger {
     }
 
     /// Check if all vertices have sufficient coverage
-    fn is_fully_covered(
-        &self,
-        coverage: &HashMap<u32, usize>,
-        graph: &HNSWIndex,
-    ) -> Result<bool> {
+    fn is_fully_covered(&self, coverage: &HashMap<u32, usize>, graph: &HNSWIndex) -> Result<bool> {
         for node_id in 0..graph.len() as u32 {
             let c = coverage.get(&node_id).copied().unwrap_or(0);
             if c < self.config.min_coverage {
@@ -342,7 +341,7 @@ impl Default for GraphMerger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::hnsw::{HNSWParams, DistanceFunction};
+    use crate::vector::hnsw::{DistanceFunction, HNSWParams};
 
     fn create_test_index(num_vectors: usize, dim: usize) -> HNSWIndex {
         let params = HNSWParams {

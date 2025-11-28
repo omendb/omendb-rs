@@ -9,11 +9,7 @@
 //! - Multiple distance functions (L2, cosine, dot product)
 //! - Optional binary quantization (32x memory reduction)
 
-use super::hnsw::{
-    DistanceFunction,
-    HNSWIndex as CoreHNSW,
-    HNSWParams as CoreParams,
-};
+use super::hnsw::{DistanceFunction, HNSWIndex as CoreHNSW, HNSWParams as CoreParams};
 use anyhow::Result;
 use std::path::Path;
 
@@ -164,7 +160,10 @@ impl HNSWIndex {
             );
         }
 
-        let id = self.index.insert(vector.to_vec()).map_err(|e| anyhow::anyhow!(e))?;
+        let id = self
+            .index
+            .insert(vector.to_vec())
+            .map_err(|e| anyhow::anyhow!(e))?;
         self.num_vectors += 1;
         Ok(id as usize)
     }
@@ -193,7 +192,10 @@ impl HNSWIndex {
         }
 
         // Use parallel batch_insert from core HNSW implementation
-        let core_ids = self.index.batch_insert(vectors.to_vec()).map_err(|e| anyhow::anyhow!(e))?;
+        let core_ids = self
+            .index
+            .batch_insert(vectors.to_vec())
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         // Update vector count
         self.num_vectors += vectors.len();
@@ -222,7 +224,10 @@ impl HNSWIndex {
         }
 
         // Search with HNSW
-        let results = self.index.search(query, k, self.ef_search).map_err(|e| anyhow::anyhow!(e))?;
+        let results = self
+            .index
+            .search(query, k, self.ef_search)
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         // Convert to (id, distance) tuples
         let neighbors: Vec<(usize, f32)> = results
@@ -236,7 +241,12 @@ impl HNSWIndex {
     /// Search with metadata filter (ACORN-1)
     ///
     /// Uses ACORN-1 filtered search algorithm for efficient metadata-aware search.
-    pub fn search_with_filter<F>(&self, query: &[f32], k: usize, filter_fn: F) -> Result<Vec<(usize, f32)>>
+    pub fn search_with_filter<F>(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter_fn: F,
+    ) -> Result<Vec<(usize, f32)>>
     where
         F: Fn(u32) -> bool,
     {
@@ -249,7 +259,9 @@ impl HNSWIndex {
         }
 
         // Search with ACORN-1 filtered search
-        let results = self.index.search_with_filter(query, k, self.ef_search, filter_fn)
+        let results = self
+            .index
+            .search_with_filter(query, k, self.ef_search, filter_fn)
             .map_err(|e| anyhow::anyhow!(e))?;
 
         // Convert to (id, distance) tuples
@@ -379,7 +391,8 @@ impl HNSWIndex {
         }
 
         let merger = GraphMerger::with_config(MergeConfig::default());
-        let stats = merger.merge_graphs(&mut self.index, &other.index)
+        let stats = merger
+            .merge_graphs(&mut self.index, &other.index)
             .map_err(|e| anyhow::anyhow!(e))?;
 
         self.num_vectors += stats.vectors_merged;

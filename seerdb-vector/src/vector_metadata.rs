@@ -37,12 +37,11 @@ impl VectorMetadataStorage {
             memtable_capacity: config.memtable_capacity / 4,
 
             background_compaction: config.background_compaction,
-            
+
             ..Default::default()
         };
 
-        let db =
-            DB::open(options).map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+        let db = DB::open(options).map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }
@@ -119,7 +118,11 @@ mod tests {
     #[test]
     fn test_insert_and_get() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = VectorMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         let key = "v:42";
         let value = br#"{"category": "test", "score": 0.95}"#;
@@ -132,7 +135,11 @@ mod tests {
     #[test]
     fn test_get_nonexistent() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = VectorMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         let result = storage.get("v:999").unwrap();
         assert_eq!(result, None);
@@ -141,7 +148,11 @@ mod tests {
     #[test]
     fn test_update_metadata() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = VectorMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         let key = "v:42";
         storage.insert(key, br#"{"v": 1}"#).unwrap();
@@ -154,7 +165,11 @@ mod tests {
     #[test]
     fn test_remove_metadata() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = VectorMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         let key = "v:42";
         storage.insert(key, br#"{"test": true}"#).unwrap();
@@ -167,7 +182,11 @@ mod tests {
     #[test]
     fn test_multiple_vectors() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &SeerdbVectorConfig::default()).unwrap();
+        let storage = VectorMetadataStorage::new(
+            temp_dir.path().to_path_buf(),
+            &SeerdbVectorConfig::default(),
+        )
+        .unwrap();
 
         storage.insert("v:1", br#"{"id": 1}"#).unwrap();
         storage.insert("v:2", br#"{"id": 2}"#).unwrap();
@@ -185,7 +204,8 @@ mod tests {
 
         // Create storage and insert
         {
-            let storage = VectorMetadataStorage::new(path.clone(), &SeerdbVectorConfig::default()).unwrap();
+            let storage =
+                VectorMetadataStorage::new(path.clone(), &SeerdbVectorConfig::default()).unwrap();
             storage.insert("v:42", br#"{"persistent": true}"#).unwrap();
             storage.flush().unwrap();
         }

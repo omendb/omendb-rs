@@ -10,7 +10,7 @@
 //! - `cfg:count` → vector count (u64)
 
 use anyhow::Result;
-use seerdb::{DB, DBOptions, SyncPolicy};
+use seerdb::{DBOptions, SyncPolicy, DB};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -433,7 +433,9 @@ mod tests {
         {
             let storage = SeerDBStorage::open(&path).unwrap();
             storage.put_vector(0, &[1.0, 2.0, 3.0]).unwrap();
-            storage.put_metadata(0, &serde_json::json!({"test": true})).unwrap();
+            storage
+                .put_metadata(0, &serde_json::json!({"test": true}))
+                .unwrap();
             storage.put_id_mapping("doc1", 0).unwrap();
             storage.flush().unwrap();
         }
@@ -464,8 +466,12 @@ mod tests {
             storage.increment_count().unwrap();
             storage.put_vector(1, &[3.0, 4.0]).unwrap();
             storage.increment_count().unwrap();
-            storage.put_metadata(0, &serde_json::json!({"id": 0})).unwrap();
-            storage.put_metadata(1, &serde_json::json!({"id": 1})).unwrap();
+            storage
+                .put_metadata(0, &serde_json::json!({"id": 0}))
+                .unwrap();
+            storage
+                .put_metadata(1, &serde_json::json!({"id": 1}))
+                .unwrap();
             storage.put_id_mapping("doc0", 0).unwrap();
             storage.put_id_mapping("doc1", 1).unwrap();
             storage.flush().unwrap();
@@ -476,7 +482,12 @@ mod tests {
             let storage = SeerDBStorage::open(&path).unwrap();
 
             let vectors = storage.load_all_vectors().unwrap();
-            assert_eq!(vectors.len(), 2, "Expected 2 vectors, got {}", vectors.len());
+            assert_eq!(
+                vectors.len(),
+                2,
+                "Expected 2 vectors, got {}",
+                vectors.len()
+            );
             assert_eq!(vectors[0], (0, vec![1.0, 2.0]));
             assert_eq!(vectors[1], (1, vec![3.0, 4.0]));
 
