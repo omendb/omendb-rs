@@ -63,9 +63,9 @@ pub struct LayeredStorage {
     /// Storage for layer 0 (base layer, all nodes)
     ///
     /// Mode-dependent:
-    /// - Memory mode: MemoryStorage
+    /// - Memory mode: `MemoryStorage`
     /// - Hybrid mode: CachedStorage(DiskStorage)
-    /// - DiskHeavy mode: CachedStorage(DiskStorage)
+    /// - `DiskHeavy` mode: CachedStorage(DiskStorage)
     layer_0: Box<dyn NodeStorage>,
 
     /// Storage for layers 1-N (upper layers, always memory)
@@ -99,6 +99,7 @@ impl LayeredStorage {
     /// * `layer_0` - Storage backend for layer 0 (Memory, Disk, or Cached)
     /// * `mode` - Storage mode (for tracking/debugging)
     /// * `max_levels` - Maximum number of levels (typically 8)
+    #[must_use]
     pub fn new(layer_0: Box<dyn NodeStorage>, mode: StorageMode, max_levels: usize) -> Self {
         Self {
             layer_0,
@@ -113,10 +114,11 @@ impl LayeredStorage {
     /// Used when loading from disk where upper layers are extracted separately.
     ///
     /// # Arguments
-    /// * `layer_0` - Storage backend for layer 0 (typically DiskStorage + CachedStorage)
-    /// * `upper_layers` - Pre-populated MemoryStorage with upper layer data
+    /// * `layer_0` - Storage backend for layer 0 (typically `DiskStorage` + `CachedStorage`)
+    /// * `upper_layers` - Pre-populated `MemoryStorage` with upper layer data
     /// * `mode` - Storage mode (for tracking/debugging)
     /// * `max_levels` - Maximum number of levels (typically 8)
+    #[must_use]
     pub fn new_with_upper_layers(
         layer_0: Box<dyn NodeStorage>,
         upper_layers: MemoryStorage,
@@ -133,12 +135,13 @@ impl LayeredStorage {
 
     /// Create pure in-memory layered storage (Memory mode)
     ///
-    /// Both layer 0 and upper layers use MemoryStorage.
+    /// Both layer 0 and upper layers use `MemoryStorage`.
     ///
     /// # Example
     /// ```ignore
     /// let storage = LayeredStorage::new_memory(8);
     /// ```
+    #[must_use]
     pub fn new_memory(max_levels: usize) -> Self {
         Self {
             layer_0: Box::new(MemoryStorage::new(max_levels)),
@@ -175,19 +178,21 @@ impl LayeredStorage {
     }
 
     /// Get current storage mode
+    #[must_use]
     pub fn mode(&self) -> StorageMode {
         self.mode
     }
 
     /// Get maximum levels
+    #[must_use]
     pub fn max_levels(&self) -> usize {
         self.max_levels
     }
 
     /// Route to appropriate storage backend based on level
     ///
-    /// - Level 0: layer_0 backend (mode-dependent)
-    /// - Level 1+: upper_layers backend (always memory)
+    /// - Level 0: `layer_0` backend (mode-dependent)
+    /// - Level 1+: `upper_layers` backend (always memory)
     fn storage_for_level(&self, level: Level) -> &dyn NodeStorage {
         if level == 0 {
             self.layer_0.as_ref()

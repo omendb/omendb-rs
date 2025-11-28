@@ -5,7 +5,7 @@
 //! Features:
 //! - Cache-line aligned data structures (64-byte nodes)
 //! - Fast binary serialization (<1 second for 100K vectors)
-//! - Configurable parameters (M, ef_construction, ef_search)
+//! - Configurable parameters (M, `ef_construction`, `ef_search`)
 //! - Multiple distance functions (L2, cosine, dot product)
 //! - Optional binary quantization (32x memory reduction)
 
@@ -46,14 +46,14 @@ impl HNSWIndex {
     /// Create new HNSW index with adaptive parameters
     ///
     /// # Arguments
-    /// * `max_elements` - Maximum number of vectors (e.g., 1_000_000)
-    /// * `dimensions` - Vector dimensionality (e.g., 1536 for OpenAI embeddings)
+    /// * `max_elements` - Maximum number of vectors (e.g., `1_000_000`)
+    /// * `dimensions` - Vector dimensionality (e.g., 1536 for `OpenAI` embeddings)
     ///
     /// # Adaptive Parameters
     /// Parameters automatically adjust based on expected dataset size:
-    /// - <10K vectors: M=16, ef_construction=100 (fast builds, 95%+ recall)
-    /// - 10K-100K: M=24, ef_construction=200 (balanced)
-    /// - 100K+: M=32, ef_construction=400 (maximum recall, 98%+)
+    /// - <10K vectors: M=16, `ef_construction=100` (fast builds, 95%+ recall)
+    /// - 10K-100K: M=24, `ef_construction=200` (balanced)
+    /// - 100K+: M=32, `ef_construction=400` (maximum recall, 98%+)
     ///
     /// # Example
     /// ```ignore
@@ -158,10 +158,7 @@ impl HNSWIndex {
             );
         }
 
-        let id = self
-            .index
-            .insert(vector.to_vec())
-            .map_err(|e| anyhow::anyhow!(e))?;
+        let id = self.index.insert(vector).map_err(|e| anyhow::anyhow!(e))?;
         self.num_vectors += 1;
         Ok(id as usize)
     }
@@ -271,9 +268,9 @@ impl HNSWIndex {
         Ok(neighbors)
     }
 
-    /// Set ef_search parameter for runtime tuning
+    /// Set `ef_search` parameter for runtime tuning
     ///
-    /// Higher ef_search improves recall but increases query latency.
+    /// Higher `ef_search` improves recall but increases query latency.
     ///
     /// # Guidelines
     /// - ef=50: ~85-90% recall, ~1ms
@@ -284,22 +281,26 @@ impl HNSWIndex {
         self.ef_search = ef_search;
     }
 
-    /// Get current ef_search value
+    /// Get current `ef_search` value
+    #[must_use]
     pub fn get_ef_search(&self) -> usize {
         self.ef_search
     }
 
     /// Number of vectors in index
+    #[must_use]
     pub fn len(&self) -> usize {
         self.num_vectors
     }
 
     /// Check if index is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.num_vectors == 0
     }
 
     /// Get index parameters
+    #[must_use]
     pub fn params(&self) -> HNSWParams {
         HNSWParams {
             max_elements: self.max_elements,
@@ -330,7 +331,7 @@ impl HNSWIndex {
 
     /// Load index from disk
     ///
-    /// Loads index saved with save() method.
+    /// Loads index saved with `save()` method.
     ///
     /// # Performance
     /// Fast loading: <1 second for 100K vectors (vs minutes for rebuild)
@@ -355,11 +356,13 @@ impl HNSWIndex {
     }
 
     /// Get dimensions
+    #[must_use]
     pub fn dimensions(&self) -> usize {
         self.dimensions
     }
 
     /// Get memory usage in bytes
+    #[must_use]
     pub fn memory_usage(&self) -> usize {
         self.index.memory_usage()
     }
@@ -401,6 +404,7 @@ impl HNSWIndex {
     /// Access the underlying core HNSW index
     ///
     /// Used for advanced operations like direct graph merging.
+    #[must_use]
     pub fn core_index(&self) -> &CoreHNSW {
         &self.index
     }

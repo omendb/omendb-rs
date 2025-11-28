@@ -1,6 +1,6 @@
 //! SIMD-accelerated distance calculations for HNSW
 //!
-//! Uses std::simd (portable SIMD) for cross-platform SIMD support.
+//! Uses `std::simd` (portable SIMD) for cross-platform SIMD support.
 //! Automatically compiles to optimal SIMD instructions (AVX2, SSE2, NEON).
 //!
 //! ## Performance
@@ -20,6 +20,7 @@ use std::simd::{num::SimdFloat, LaneCount, Simd, SupportedLaneCount};
 /// Automatically uses optimal SIMD lane count (8 for AVX2, 4 for SSE2/NEON).
 /// Falls back to scalar if vector too small for SIMD.
 #[inline]
+#[must_use]
 pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     l2_distance_squared(a, b).sqrt()
 }
@@ -28,9 +29,9 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// HNSW only needs relative ordering, not absolute distances.
 /// Squared distance maintains ordering since sqrt is monotonic.
-/// This saves ~10-15% compute time in search_layer.
+/// This saves ~10-15% compute time in `search_layer`.
 ///
-/// Note: Use l2_distance() when actual Euclidean distance is needed.
+/// Note: Use `l2_distance()` when actual Euclidean distance is needed.
 #[inline]
 pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
@@ -46,6 +47,7 @@ pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 /// Automatically uses optimal SIMD lane count (8 for AVX2, 4 for SSE2/NEON).
 /// Falls back to scalar if vector too small for SIMD.
 #[inline]
+#[must_use]
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
 
@@ -59,6 +61,7 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 /// Computed as: 1 - (dot(a, b) / (norm(a) * norm(b)))
 /// Returns 1.0 for zero vectors (maximum distance).
 #[inline]
+#[must_use]
 pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
 
@@ -78,7 +81,7 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Cosine distance for pre-normalized vectors (3x faster)
 ///
 /// When vectors are unit-normalized (||a|| = ||b|| = 1):
-///   cosine_distance = 1 - dot(a, b)
+///   `cosine_distance` = 1 - dot(a, b)
 ///
 /// This skips the expensive norm calculations (2 dot products + 2 sqrts).
 /// Use when you control normalization on insert.

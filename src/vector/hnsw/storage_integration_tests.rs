@@ -1,10 +1,10 @@
 //! Integration tests for storage layers
 //!
 //! Tests the complete workflow:
-//! 1. Build index with MemoryStorage
-//! 2. Serialize to disk with DiskStorage
+//! 1. Build index with `MemoryStorage`
+//! 2. Serialize to disk with `DiskStorage`
 //! 3. Load from disk and verify queries
-//! 4. Test with CachedStorage for performance
+//! 4. Test with `CachedStorage` for performance
 
 #[cfg(test)]
 mod tests {

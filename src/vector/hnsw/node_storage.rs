@@ -1,9 +1,9 @@
 //! Node storage abstraction for HNSW-IF
 //!
 //! Provides a storage abstraction layer that allows switching between:
-//! - MemoryStorage: Fast in-memory storage (current behavior)
-//! - DiskStorage: mmap-based disk storage for large datasets
-//! - CachedStorage: LRU cache over DiskStorage for hybrid mode
+//! - `MemoryStorage`: Fast in-memory storage (current behavior)
+//! - `DiskStorage`: mmap-based disk storage for large datasets
+//! - `CachedStorage`: LRU cache over `DiskStorage` for hybrid mode
 //!
 //! This enables automatic tiering:
 //! - <10M vectors: Pure memory (no overhead)
@@ -56,7 +56,7 @@ pub trait NodeStorage: Send + Sync {
     /// Write all neighbors for a node (all levels at once)
     ///
     /// This is an optimization for storage backends that prefer bulk writes.
-    /// Default implementation calls write_neighbors() for each level sequentially.
+    /// Default implementation calls `write_neighbors()` for each level sequentially.
     ///
     /// # Arguments
     /// * `node_id` - ID of the node
@@ -66,7 +66,7 @@ pub trait NodeStorage: Send + Sync {
     /// Returns error if write fails
     ///
     /// # Note
-    /// Storage backends like WritableDiskStorage can override this for atomic writes.
+    /// Storage backends like `WritableDiskStorage` can override this for atomic writes.
     fn write_node(&mut self, node_id: NodeId, neighbors_per_level: &[Vec<NodeId>]) -> Result<()> {
         // Default: Write each level sequentially
         for (level, neighbors) in neighbors_per_level.iter().enumerate() {
@@ -106,7 +106,7 @@ pub trait NodeStorage: Send + Sync {
 
     /// Flush any pending writes to persistent storage
     ///
-    /// No-op for MemoryStorage, important for DiskStorage
+    /// No-op for `MemoryStorage`, important for `DiskStorage`
     fn flush(&mut self) -> Result<()> {
         Ok(()) // Default: no-op
     }
@@ -118,16 +118,16 @@ pub trait NodeStorage: Send + Sync {
 /// In-memory storage for HNSW graph nodes
 ///
 /// This is the default storage for <10M vectors.
-/// Wraps the existing NeighborLists implementation.
+/// Wraps the existing `NeighborLists` implementation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryStorage {
-    /// Neighbor storage: neighbors[node_id][level] = Vec<neighbor_ids>
+    /// Neighbor storage: neighbors[`node_id`][level] = Vec<`neighbor_ids`>
     neighbors: Vec<Vec<Vec<NodeId>>>,
 
     /// Maximum levels supported (typically 8)
     max_levels: usize,
 
-    /// M_max (max neighbors = M * 2) for pre-allocation
+    /// `M_max` (max neighbors = M * 2) for pre-allocation
     m_max: usize,
 }
 
@@ -136,6 +136,7 @@ impl MemoryStorage {
     ///
     /// # Arguments
     /// * `max_levels` - Maximum number of levels (typically 8)
+    #[must_use]
     pub fn new(max_levels: usize) -> Self {
         Self {
             neighbors: Vec::new(),
@@ -150,6 +151,7 @@ impl MemoryStorage {
     /// * `num_nodes` - Expected number of nodes (for pre-allocation)
     /// * `max_levels` - Maximum number of levels
     /// * `m` - M parameter (max neighbors = M * 2)
+    #[must_use]
     pub fn with_capacity(num_nodes: usize, max_levels: usize, m: usize) -> Self {
         Self {
             neighbors: Vec::with_capacity(num_nodes),
@@ -175,11 +177,12 @@ impl MemoryStorage {
     }
 
     /// Get total number of neighbors across all nodes and levels
+    #[must_use]
     pub fn total_neighbors(&self) -> usize {
         self.neighbors
             .iter()
             .flat_map(|node| node.iter())
-            .map(|level| level.len())
+            .map(std::vec::Vec::len)
             .sum()
     }
 }

@@ -1,9 +1,9 @@
 //! Automatic storage tiering for HNSW-IF
 //!
 //! Automatically selects storage mode based on dataset size:
-//! - <10M vectors: Pure memory (MemoryStorage)
-//! - 10M-100M: Hybrid (CachedStorage + DiskStorage, 30% cache)
-//! - 100M+: Disk-heavy (CachedStorage + DiskStorage, 10% cache)
+//! - <10M vectors: Pure memory (`MemoryStorage`)
+//! - 10M-100M: Hybrid (`CachedStorage` + `DiskStorage`, 30% cache)
+//! - 100M+: Disk-heavy (`CachedStorage` + `DiskStorage`, 10% cache)
 //!
 //! Key insight from Gorgeous 2025: Cache adjacency lists only (not vectors)
 //! gives 88% hit rate vs 10% for traditional caching.
@@ -18,15 +18,15 @@ use std::num::NonZeroUsize;
 pub enum StorageMode {
     /// Pure in-memory storage (<10M vectors)
     ///
-    /// - Graph stored in MemoryStorage
+    /// - Graph stored in `MemoryStorage`
     /// - Fast writes and reads
     /// - No disk I/O overhead
-    /// - Memory: ~50 bytes per neighbor × num_nodes × avg_levels
+    /// - Memory: ~50 bytes per neighbor × `num_nodes` × `avg_levels`
     Memory,
 
     /// Hybrid mode (10M-100M vectors)
     ///
-    /// - Graph stored on disk (DiskStorage with mmap)
+    /// - Graph stored on disk (`DiskStorage` with mmap)
     /// - 30% of adjacency lists cached in LRU cache
     /// - Expected cache hit rate: 70-80%
     /// - Memory: ~30% of graph size
@@ -34,7 +34,7 @@ pub enum StorageMode {
 
     /// Disk-heavy mode (100M+ vectors)
     ///
-    /// - Graph stored on disk (DiskStorage with mmap)
+    /// - Graph stored on disk (`DiskStorage` with mmap)
     /// - 10% of adjacency lists cached in LRU cache
     /// - Expected cache hit rate: 50-70%
     /// - Memory: ~10% of graph size
@@ -47,7 +47,7 @@ impl StorageMode {
     /// # Thresholds
     /// - <10M vectors: Memory mode
     /// - 10M-100M vectors: Hybrid mode (30% cache)
-    /// - 100M+ vectors: DiskHeavy mode (10% cache)
+    /// - 100M+ vectors: `DiskHeavy` mode (10% cache)
     ///
     /// # Example
     /// ```ignore
@@ -60,6 +60,7 @@ impl StorageMode {
     /// let mode = StorageMode::auto_select(500_000_000);
     /// assert_eq!(mode, StorageMode::DiskHeavy);
     /// ```
+    #[must_use]
     pub fn auto_select(num_vectors: usize) -> Self {
         const HYBRID_THRESHOLD: usize = 10_000_000; // 10M
         const DISK_HEAVY_THRESHOLD: usize = 100_000_000; // 100M
@@ -82,7 +83,7 @@ impl StorageMode {
     /// # Returns
     /// - Memory mode: None (no cache needed)
     /// - Hybrid mode: 30% of total adjacency lists
-    /// - DiskHeavy mode: 10% of total adjacency lists
+    /// - `DiskHeavy` mode: 10% of total adjacency lists
     ///
     /// # Example
     /// ```ignore
@@ -91,6 +92,7 @@ impl StorageMode {
     /// let capacity = StorageMode::Hybrid.cache_capacity(10_000_000, 3.0);
     /// assert_eq!(capacity, Some(9_000_000));
     /// ```
+    #[must_use]
     pub fn cache_capacity(&self, num_nodes: usize, avg_levels: f64) -> Option<usize> {
         match self {
             StorageMode::Memory => None, // No cache needed (already in memory)
@@ -109,14 +111,14 @@ impl StorageMode {
         }
     }
 
-    /// Get cache capacity as NonZeroUsize (for LruCache constructor)
+    /// Get cache capacity as `NonZeroUsize` (for `LruCache` constructor)
     ///
     /// # Arguments
     /// * `num_nodes` - Total number of nodes in graph
     /// * `avg_levels` - Average number of levels per node
     ///
     /// # Returns
-    /// NonZeroUsize for cache capacity, or None if Memory mode
+    /// `NonZeroUsize` for cache capacity, or None if Memory mode
     pub fn cache_capacity_nonzero(
         &self,
         num_nodes: usize,
@@ -138,9 +140,10 @@ impl StorageMode {
     ///
     /// # Formula
     /// - Memory per adjacency list: ~58 bytes (16 neighbors × 4 bytes + overhead)
-    /// - Memory mode: num_nodes × avg_levels × 58 bytes
+    /// - Memory mode: `num_nodes` × `avg_levels` × 58 bytes
     /// - Hybrid mode: 30% of Memory mode
-    /// - DiskHeavy mode: 10% of Memory mode
+    /// - `DiskHeavy` mode: 10% of Memory mode
+    #[must_use]
     pub fn estimated_memory_bytes(
         &self,
         num_nodes: usize,
@@ -162,6 +165,7 @@ impl StorageMode {
     }
 
     /// Get cache percentage for this mode
+    #[must_use]
     pub fn cache_percentage(&self) -> Option<f64> {
         match self {
             StorageMode::Memory => None,
@@ -171,16 +175,19 @@ impl StorageMode {
     }
 
     /// Check if this mode requires disk storage
+    #[must_use]
     pub fn requires_disk(&self) -> bool {
         matches!(self, StorageMode::Hybrid | StorageMode::DiskHeavy)
     }
 
     /// Check if this mode requires cache
+    #[must_use]
     pub fn requires_cache(&self) -> bool {
         matches!(self, StorageMode::Hybrid | StorageMode::DiskHeavy)
     }
 
     /// Get human-readable description
+    #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
             StorageMode::Memory => "Pure in-memory storage (<10M vectors)",
@@ -215,7 +222,7 @@ impl TieringConfig {
     /// Create tiering config with automatic mode selection
     ///
     /// # Arguments
-    /// * `num_vectors` - Number of vectors (= num_nodes)
+    /// * `num_vectors` - Number of vectors (= `num_nodes`)
     /// * `avg_levels` - Average levels per node (typically 3-4)
     /// * `avg_neighbors` - Average neighbors per level (typically M = 16)
     ///
@@ -225,6 +232,7 @@ impl TieringConfig {
     /// assert_eq!(config.mode, StorageMode::Hybrid);
     /// assert!(config.cache_capacity.is_some());
     /// ```
+    #[must_use]
     pub fn auto(num_vectors: usize, avg_levels: f64, avg_neighbors: usize) -> Self {
         let mode = StorageMode::auto_select(num_vectors);
         let cache_capacity = mode.cache_capacity_nonzero(num_vectors, avg_levels);
@@ -241,6 +249,7 @@ impl TieringConfig {
     }
 
     /// Create tiering config with explicit mode
+    #[must_use]
     pub fn with_mode(
         mode: StorageMode,
         num_vectors: usize,
@@ -261,10 +270,11 @@ impl TieringConfig {
     }
 
     /// Get memory usage in human-readable format
+    #[must_use]
     pub fn memory_usage_human(&self) -> String {
         let bytes = self.estimated_memory_bytes;
         if bytes < 1024 {
-            format!("{} bytes", bytes)
+            format!("{bytes} bytes")
         } else if bytes < 1024 * 1024 {
             format!("{:.2} KB", bytes as f64 / 1024.0)
         } else if bytes < 1024 * 1024 * 1024 {

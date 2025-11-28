@@ -17,7 +17,7 @@ pub enum HNSWError {
     #[error("Node not found: id {0}")]
     NodeNotFound(u32),
 
-    /// Invalid level (exceeds max_levels)
+    /// Invalid level (exceeds `max_levels`)
     #[error("Invalid level: {level} exceeds max_levels {max_levels}")]
     InvalidLevel { level: usize, max_levels: usize },
 
@@ -73,6 +73,7 @@ impl HNSWError {
     }
 
     /// Check if this is a recoverable error
+    #[must_use]
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
@@ -85,6 +86,7 @@ impl HNSWError {
     }
 
     /// Check if this indicates a bug in the implementation
+    #[must_use]
     pub fn is_internal_bug(&self) -> bool {
         matches!(self, Self::Internal(_) | Self::VectorNotFound(_))
     }

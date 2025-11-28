@@ -50,7 +50,7 @@ impl SeerDBStorage {
 
     /// Store a vector by internal index
     pub fn put_vector(&self, id: usize, vector: &[f32]) -> Result<()> {
-        let key = format!("v:{}", id);
+        let key = format!("v:{id}");
         let value = bincode::serialize(vector)?;
         self.db.put(&key, &value)?;
         Ok(())
@@ -58,7 +58,7 @@ impl SeerDBStorage {
 
     /// Get a vector by internal index
     pub fn get_vector(&self, id: usize) -> Result<Option<Vec<f32>>> {
-        let key = format!("v:{}", id);
+        let key = format!("v:{id}");
         match self.db.get(&key)? {
             Some(bytes) => {
                 let vector: Vec<f32> = bincode::deserialize(&bytes)?;
@@ -70,7 +70,7 @@ impl SeerDBStorage {
 
     /// Store metadata for a vector
     pub fn put_metadata(&self, id: usize, metadata: &serde_json::Value) -> Result<()> {
-        let key = format!("m:{}", id);
+        let key = format!("m:{id}");
         let value = serde_json::to_vec(metadata)?;
         self.db.put(&key, &value)?;
         Ok(())
@@ -78,7 +78,7 @@ impl SeerDBStorage {
 
     /// Get metadata for a vector
     pub fn get_metadata(&self, id: usize) -> Result<Option<serde_json::Value>> {
-        let key = format!("m:{}", id);
+        let key = format!("m:{id}");
         match self.db.get(&key)? {
             Some(bytes) => {
                 let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
@@ -92,15 +92,15 @@ impl SeerDBStorage {
     ///
     /// Stores both:
     /// - `i:{string_id}` → index (for lookup by string ID)
-    /// - `r:{index}` → string_id (for rebuilding id_to_index on load)
+    /// - `r:{index}` → `string_id` (for rebuilding `id_to_index` on load)
     pub fn put_id_mapping(&self, string_id: &str, index: usize) -> Result<()> {
         // Forward mapping: string_id → index
-        let key = format!("i:{}", string_id);
+        let key = format!("i:{string_id}");
         let value = (index as u64).to_le_bytes();
         self.db.put(&key, value)?;
 
         // Reverse mapping: index → string_id (for rebuild on load)
-        let reverse_key = format!("r:{}", index);
+        let reverse_key = format!("r:{index}");
         self.db.put(&reverse_key, string_id.as_bytes())?;
 
         Ok(())
@@ -108,7 +108,7 @@ impl SeerDBStorage {
 
     /// Get internal index for a string ID
     pub fn get_id_mapping(&self, string_id: &str) -> Result<Option<usize>> {
-        let key = format!("i:{}", string_id);
+        let key = format!("i:{string_id}");
         match self.db.get(&key)? {
             Some(bytes) => {
                 if bytes.len() != 8 {
@@ -124,7 +124,7 @@ impl SeerDBStorage {
 
     /// Get string ID for an internal index (reverse lookup)
     pub fn get_string_id(&self, index: usize) -> Result<Option<String>> {
-        let key = format!("r:{}", index);
+        let key = format!("r:{index}");
         match self.db.get(&key)? {
             Some(bytes) => {
                 let string_id = std::str::from_utf8(&bytes)?.to_string();
@@ -138,25 +138,25 @@ impl SeerDBStorage {
     pub fn delete_id_mapping(&self, string_id: &str) -> Result<()> {
         // Get the index first so we can delete the reverse mapping
         if let Some(index) = self.get_id_mapping(string_id)? {
-            let reverse_key = format!("r:{}", index);
+            let reverse_key = format!("r:{index}");
             self.db.delete(&reverse_key)?;
         }
 
-        let key = format!("i:{}", string_id);
+        let key = format!("i:{string_id}");
         self.db.delete(&key)?;
         Ok(())
     }
 
     /// Store configuration value
     pub fn put_config(&self, key: &str, value: u64) -> Result<()> {
-        let full_key = format!("cfg:{}", key);
+        let full_key = format!("cfg:{key}");
         self.db.put(&full_key, value.to_le_bytes())?;
         Ok(())
     }
 
     /// Get configuration value
     pub fn get_config(&self, key: &str) -> Result<Option<u64>> {
-        let full_key = format!("cfg:{}", key);
+        let full_key = format!("cfg:{key}");
         match self.db.get(&full_key)? {
             Some(bytes) => {
                 if bytes.len() != 8 {
@@ -223,7 +223,7 @@ impl SeerDBStorage {
 
     /// Load all ID mappings from storage
     ///
-    /// Uses reverse mapping (index → string_id) to rebuild id_to_index on load.
+    /// Uses reverse mapping (index → `string_id`) to rebuild `id_to_index` on load.
     pub fn load_all_id_mappings(&self) -> Result<HashMap<String, usize>> {
         let mut mappings = HashMap::new();
 
@@ -242,20 +242,20 @@ impl SeerDBStorage {
 
     /// Mark a vector as deleted (tombstone)
     pub fn put_deleted(&self, id: usize) -> Result<()> {
-        let key = format!("d:{}", id);
+        let key = format!("d:{id}");
         self.db.put(&key, [1])?;
         Ok(())
     }
 
     /// Check if a vector is deleted
     pub fn is_deleted(&self, id: usize) -> Result<bool> {
-        let key = format!("d:{}", id);
+        let key = format!("d:{id}");
         Ok(self.db.get(&key)?.is_some())
     }
 
     /// Remove deleted marker (for re-insertion)
     pub fn remove_deleted(&self, id: usize) -> Result<()> {
-        let key = format!("d:{}", id);
+        let key = format!("d:{id}");
         self.db.delete(&key)?;
         Ok(())
     }
@@ -268,7 +268,7 @@ impl SeerDBStorage {
 
         let iter = self.db.prefix(b"d:")?;
         for entry in iter {
-            let (key, _value): (Bytes, Bytes) = entry.map_err(|e| anyhow::anyhow!("{}", e))?;
+            let (key, _value): (Bytes, Bytes) = entry.map_err(|e| anyhow::anyhow!("{e}"))?;
             // Skip keys that aren't valid UTF-8
             if let Ok(key_str) = std::str::from_utf8(&key) {
                 if let Some(id_str) = key_str.strip_prefix("d:") {
@@ -289,7 +289,7 @@ impl SeerDBStorage {
 
     /// Get seerdb statistics for profiling
     ///
-    /// Returns cache hit rate, SSTable counts, latency percentiles, etc.
+    /// Returns cache hit rate, `SSTable` counts, latency percentiles, etc.
     pub fn stats(&self) -> seerdb::DBStats {
         self.db.stats()
     }
@@ -306,7 +306,7 @@ impl SeerDBStorage {
     /// 2-5x faster than individual puts for batches of 100+ operations.
     ///
     /// # Arguments
-    /// * `items` - Vec of (index, string_id, vector, metadata) tuples
+    /// * `items` - Vec of (index, `string_id`, vector, metadata) tuples
     ///
     /// # Returns
     /// * `Ok(())` on success
@@ -325,22 +325,22 @@ impl SeerDBStorage {
 
         for (idx, string_id, vector, metadata) in &items {
             // Vector
-            let key = format!("v:{}", idx);
+            let key = format!("v:{idx}");
             let value = bincode::serialize(vector)?;
             batch.put(key.as_bytes(), &value);
 
             // Metadata
-            let key = format!("m:{}", idx);
+            let key = format!("m:{idx}");
             let value = serde_json::to_vec(metadata)?;
             batch.put(key.as_bytes(), &value);
 
             // Forward ID mapping: string_id → index
-            let key = format!("i:{}", string_id);
+            let key = format!("i:{string_id}");
             let value = (*idx as u64).to_le_bytes();
             batch.put(key.as_bytes(), value);
 
             // Reverse ID mapping: index → string_id
-            let key = format!("r:{}", idx);
+            let key = format!("r:{idx}");
             batch.put(key.as_bytes(), string_id.as_bytes());
         }
 

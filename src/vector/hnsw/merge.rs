@@ -19,8 +19,8 @@ pub struct MergeConfig {
     /// Default: 2 (from IGTM paper)
     pub min_coverage: usize,
 
-    /// ef parameter for fast search during merge (lower than ef_construction for speed)
-    /// Default: ef_construction / 2
+    /// ef parameter for fast search during merge (lower than `ef_construction` for speed)
+    /// Default: `ef_construction` / 2
     pub fast_ef: Option<usize>,
 
     /// Whether to use parallel join set computation
@@ -67,6 +67,7 @@ pub struct MergeStats {
 
 impl MergeStats {
     /// Calculate speedup vs naive approach (estimated)
+    #[must_use]
     pub fn estimated_speedup(&self) -> f64 {
         // Naive: all vectors go through full search
         // IGTM: join_set gets full search, remaining get fast search
@@ -91,6 +92,7 @@ pub struct GraphMerger {
 
 impl GraphMerger {
     /// Create a new graph merger with default configuration
+    #[must_use]
     pub fn new() -> Self {
         Self {
             config: MergeConfig::default(),
@@ -98,6 +100,7 @@ impl GraphMerger {
     }
 
     /// Create a new graph merger with custom configuration
+    #[must_use]
     pub fn with_config(config: MergeConfig) -> Self {
         Self { config }
     }
@@ -106,7 +109,7 @@ impl GraphMerger {
     ///
     /// # Algorithm
     /// 1. Compute join set: Find minimal vertex subset that covers all vertices
-    ///    (every vertex has ≥min_coverage neighbors in the join set)
+    ///    (every vertex has ≥`min_coverage` neighbors in the join set)
     /// 2. Insert join set into large graph using standard insertion
     /// 3. For remaining vertices, use join set neighbors as entry points for fast insertion
     ///
@@ -142,7 +145,7 @@ impl GraphMerger {
 
         // Phase 1: Compute join set
         let join_set_start = Instant::now();
-        let join_set = self.compute_join_set(small)?;
+        let join_set = self.compute_join_set(small);
         let join_set_duration = join_set_start.elapsed();
 
         debug!(
@@ -158,7 +161,7 @@ impl GraphMerger {
             let vector = small
                 .get_vector(node_id)
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
-            large.insert(vector.to_vec())?;
+            large.insert(vector)?;
         }
         let join_set_insert_duration = join_insert_start.elapsed();
 
@@ -197,12 +200,12 @@ impl GraphMerger {
 
             if entry_points.is_empty() {
                 // Fallback: no join set neighbors, use standard insert
-                large.insert(vector.to_vec())?;
+                large.insert(vector)?;
                 fallback_inserts += 1;
             } else {
                 // Fast path: use join set neighbors as entry points
                 // These vectors were already inserted, so we can find them in large graph
-                large.insert_with_hints(vector.to_vec(), &entry_points, fast_ef)?;
+                large.insert_with_hints(vector, &entry_points, fast_ef)?;
                 fast_path_inserts += 1;
             }
         }
@@ -238,19 +241,19 @@ impl GraphMerger {
 
     /// Compute join set using greedy covering algorithm
     ///
-    /// Finds minimal subset J such that every vertex v has ≥min_coverage neighbors in J.
+    /// Finds minimal subset J such that every vertex v has ≥`min_coverage` neighbors in J.
     /// Uses greedy selection: pick vertex maximizing coverage gain at each step.
-    fn compute_join_set(&self, graph: &HNSWIndex) -> Result<HashSet<u32>> {
+    fn compute_join_set(&self, graph: &HNSWIndex) -> HashSet<u32> {
         let mut join_set = HashSet::new();
         let mut coverage: HashMap<u32, usize> = HashMap::new();
 
         let num_vectors = graph.len();
         if num_vectors == 0 {
-            return Ok(join_set);
+            return join_set;
         }
 
         // Greedy selection until all vertices are covered
-        while !self.is_fully_covered(&coverage, graph)? {
+        while !self.is_fully_covered(&coverage, graph) {
             // Find vertex with maximum gain
             let best = (0..num_vectors as u32)
                 .filter(|id| !join_set.contains(id))
@@ -259,30 +262,27 @@ impl GraphMerger {
                         .unwrap_or(0)
                 });
 
-            match best {
-                Some(best_id) => {
-                    join_set.insert(best_id);
+            if let Some(best_id) = best {
+                join_set.insert(best_id);
 
-                    // Update coverage: all neighbors of best_id gain a neighbor in J
-                    if let Ok(neighbors) = graph.get_neighbors_level0(best_id) {
-                        for &neighbor in &neighbors {
-                            *coverage.entry(neighbor).or_insert(0) += 1;
-                        }
+                // Update coverage: all neighbors of best_id gain a neighbor in J
+                if let Ok(neighbors) = graph.get_neighbors_level0(best_id) {
+                    for &neighbor in &neighbors {
+                        *coverage.entry(neighbor).or_insert(0) += 1;
                     }
+                }
 
-                    // Also update coverage for best_id itself (it's now covered)
-                    *coverage.entry(best_id).or_insert(0) += self.config.min_coverage;
-                }
-                None => {
-                    // No more vertices to add, but not fully covered
-                    // This can happen with disconnected components
-                    warn!("Join set computation terminated early - graph may have disconnected components");
-                    break;
-                }
+                // Also update coverage for best_id itself (it's now covered)
+                *coverage.entry(best_id).or_insert(0) += self.config.min_coverage;
+            } else {
+                // No more vertices to add, but not fully covered
+                // This can happen with disconnected components
+                warn!("Join set computation terminated early - graph may have disconnected components");
+                break;
             }
         }
 
-        Ok(join_set)
+        join_set
     }
 
     /// Calculate gain for adding vertex to join set
@@ -321,14 +321,14 @@ impl GraphMerger {
     }
 
     /// Check if all vertices have sufficient coverage
-    fn is_fully_covered(&self, coverage: &HashMap<u32, usize>, graph: &HNSWIndex) -> Result<bool> {
+    fn is_fully_covered(&self, coverage: &HashMap<u32, usize>, graph: &HNSWIndex) -> bool {
         for node_id in 0..graph.len() as u32 {
             let c = coverage.get(&node_id).copied().unwrap_or(0);
             if c < self.config.min_coverage {
-                return Ok(false);
+                return false;
             }
         }
-        Ok(true)
+        true
     }
 }
 
@@ -353,7 +353,7 @@ mod tests {
 
         for i in 0..num_vectors {
             let vector: Vec<f32> = (0..dim).map(|j| (i * dim + j) as f32 / 100.0).collect();
-            index.insert(vector).unwrap();
+            index.insert(&vector).unwrap();
         }
 
         index
@@ -392,7 +392,7 @@ mod tests {
         let small = create_test_index(100, 8);
         let merger = GraphMerger::new();
 
-        let join_set = merger.compute_join_set(&small).unwrap();
+        let join_set = merger.compute_join_set(&small);
 
         // Join set should be non-empty
         assert!(!join_set.is_empty());

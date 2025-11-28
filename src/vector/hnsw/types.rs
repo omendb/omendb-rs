@@ -17,7 +17,7 @@ pub struct HNSWParams {
     /// Typical range: 16-64, Qdrant uses 32-64
     pub m: usize,
 
-    /// Size of dynamic candidate list during construction (ef_construction)
+    /// Size of dynamic candidate list during construction (`ef_construction`)
     ///
     /// Higher ef = better recall, slower construction
     /// Must be >= M
@@ -50,6 +50,7 @@ impl Default for HNSWParams {
 
 impl HNSWParams {
     /// Create parameters optimized for recall
+    #[must_use]
     pub fn high_recall() -> Self {
         let m = 64;
         Self {
@@ -62,6 +63,7 @@ impl HNSWParams {
     }
 
     /// Create parameters optimized for memory
+    #[must_use]
     pub fn low_memory() -> Self {
         let m = 16;
         Self {
@@ -108,12 +110,12 @@ pub struct HNSWNode {
     /// Node ID (u32 = 4 bytes, supports 4 billion vectors)
     pub id: u32,
 
-    /// Current level (0 to max_level)
+    /// Current level (0 to `max_level`)
     pub level: u8,
 
     /// Neighbor counts per level (u8 = 1 byte per level, max 8 levels)
     ///
-    /// neighbor_counts[i] = number of neighbors at level i
+    /// `neighbor_counts`[i] = number of neighbors at level i
     pub neighbor_counts: [u8; 8],
 
     /// Reserved for future use (extensions, flags, etc.)
@@ -136,6 +138,7 @@ fn default_padding() -> [u8; 48] {
 
 impl HNSWNode {
     /// Create a new node
+    #[must_use]
     pub fn new(id: u32, level: u8) -> Self {
         Self {
             id,
@@ -147,6 +150,7 @@ impl HNSWNode {
     }
 
     /// Get number of neighbors at a given level
+    #[must_use]
     pub fn neighbor_count(&self, level: u8) -> usize {
         if level <= self.level {
             self.neighbor_counts[level as usize] as usize
@@ -192,6 +196,7 @@ impl DistanceFunction {
     ///
     /// Uses SIMD-accelerated implementations when `simd` feature is enabled.
     /// Falls back to optimized scalar implementations otherwise.
+    #[must_use]
     pub fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         match self {
             Self::L2 => l2_distance(a, b),
@@ -203,10 +208,11 @@ impl DistanceFunction {
     /// Compute distance for internal comparisons (optimized, may not be actual distance)
     ///
     /// For L2: returns squared distance (skips sqrt) since relative ordering is preserved
-    /// For Cosine/NegativeDotProduct: same as distance()
+    /// For Cosine/NegativeDotProduct: same as `distance()`
     ///
-    /// This is ~10-15% faster for L2 in HNSW search_layer.
+    /// This is ~10-15% faster for L2 in HNSW `search_layer`.
     #[inline]
+    #[must_use]
     pub fn distance_for_comparison(&self, a: &[f32], b: &[f32]) -> f32 {
         match self {
             Self::L2 => l2_distance_squared(a, b),
@@ -220,6 +226,7 @@ impl DistanceFunction {
     /// For L2: applies sqrt
     /// For others: identity
     #[inline]
+    #[must_use]
     pub fn comparison_to_actual(&self, d: f32) -> f32 {
         match self {
             Self::L2 => d.sqrt(),
@@ -234,7 +241,7 @@ pub use super::simd_distance::{cosine_distance, dot_product, l2_distance, l2_dis
 /// Candidate during search (node ID + distance)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Candidate {
-    /// Distance to query (OrderedFloat for Ord)
+    /// Distance to query (`OrderedFloat` for Ord)
     pub distance: OrderedFloat<f32>,
 
     /// Node ID
@@ -242,6 +249,7 @@ pub struct Candidate {
 }
 
 impl Candidate {
+    #[must_use]
     pub fn new(node_id: u32, distance: f32) -> Self {
         Self {
             distance: OrderedFloat(distance),
@@ -261,6 +269,7 @@ pub struct SearchResult {
 }
 
 impl SearchResult {
+    #[must_use]
     pub fn new(id: u32, distance: f32) -> Self {
         Self { id, distance }
     }
