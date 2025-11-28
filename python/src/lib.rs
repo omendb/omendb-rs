@@ -137,7 +137,7 @@ impl VectorDatabase {
                     .transpose()?
                     .unwrap_or_else(|| serde_json::json!({}));
                 vec![(id_str, Vector::new(emb), meta)]
-            } else if let Ok(items) = id_or_items.downcast::<PyList>() {
+            } else if let Ok(items) = id_or_items.cast::<PyList>() {
                 // Batch: set([{...}, {...}])
                 parse_batch_items(items)?
             } else {
@@ -237,7 +237,7 @@ impl VectorDatabase {
         let mut py_results = Vec::with_capacity(results.len());
 
         // Convert results to Python dicts using interned keys (requires GIL)
-        // Using PyDict directly avoids HashMap<String, PyObject> overhead
+        // Using PyDict directly avoids HashMap<String, Py<PyAny>> overhead
         for (index, distance, metadata) in results {
             // O(1) lookup using cached reverse index
             if let Some(id) = inner.index_to_id_cache.get(&index) {
@@ -434,7 +434,7 @@ impl VectorDatabase {
     ///     >>> if result:
     ///     ...     print(result["id"], result["embedding"], result["metadata"])
     ///     doc1 [0.1, 0.2, 0.3] {'title': 'Hello'}
-    fn get(&self, py: Python<'_>, id: String) -> PyResult<Option<HashMap<String, PyObject>>> {
+    fn get(&self, py: Python<'_>, id: String) -> PyResult<Option<HashMap<String, Py<PyAny>>>> {
         let inner = self.inner.read();
 
         if let Some((vector, metadata)) = inner.store.get_by_id(&id) {
@@ -795,7 +795,7 @@ fn open(path: String, dimensions: usize, config: Option<&Bound<'_, PyDict>>) -> 
         // Apply HNSW config if provided (allows tuning ef_search for speed/recall tradeoff)
         if let Some(cfg) = config {
             if let Some(hnsw_dict) = cfg.get_item("hnsw")? {
-                let hnsw = hnsw_dict.downcast::<PyDict>()
+                let hnsw = hnsw_dict.cast::<PyDict>()
                     .map_err(|_| PyValueError::new_err("'hnsw' must be a dict"))?;
 
                 // Apply ef_search tuning (most impactful for search QPS)
@@ -866,7 +866,7 @@ fn create_store_with_config(dimensions: usize, config: &Bound<'_, PyDict>) -> Py
 
     // Parse HNSW configuration (if provided)
     if let Some(hnsw_dict) = config.get_item("hnsw")? {
-        let hnsw = hnsw_dict.downcast::<PyDict>()
+        let hnsw = hnsw_dict.cast::<PyDict>()
             .map_err(|_| PyValueError::new_err("'hnsw' must be a dict"))?;
 
         let m: usize = hnsw.get_item("m")?
@@ -884,7 +884,7 @@ fn create_store_with_config(dimensions: usize, config: &Bound<'_, PyDict>) -> Py
     }
     // Parse quantization configuration (if provided)
     else if let Some(quant_dict) = config.get_item("quantization")? {
-        let quant = quant_dict.downcast::<PyDict>()
+        let quant = quant_dict.cast::<PyDict>()
             .map_err(|_| PyValueError::new_err("'quantization' must be a dict"))?;
 
         let bits: u8 = quant.get_item("bits")?
@@ -916,12 +916,12 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
     // Handle special logical operators first
     if let Some(and_value) = filter.get_item("$and")? {
         // $and expects an array of filter dicts
-        let and_list = and_value.downcast::<PyList>()
+        let and_list = and_value.cast::<PyList>()
             .map_err(|_| PyValueError::new_err("$and must be an array of filters"))?;
 
         let mut sub_filters = Vec::new();
         for item in and_list.iter() {
-            let sub_dict = item.downcast::<PyDict>()
+            let sub_dict = item.cast::<PyDict>()
                 .map_err(|_| PyValueError::new_err("Each $and element must be a dict"))?;
             sub_filters.push(parse_filter(&sub_dict)?);
         }
@@ -931,12 +931,12 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
 
     if let Some(or_value) = filter.get_item("$or")? {
         // $or expects an array of filter dicts
-        let or_list = or_value.downcast::<PyList>()
+        let or_list = or_value.cast::<PyList>()
             .map_err(|_| PyValueError::new_err("$or must be an array of filters"))?;
 
         let mut sub_filters = Vec::new();
         for item in or_list.iter() {
-            let sub_dict = item.downcast::<PyDict>()
+            let sub_dict = item.cast::<PyDict>()
                 .map_err(|_| PyValueError::new_err("Each $or element must be a dict"))?;
             sub_filters.push(parse_filter(&sub_dict)?);
         }
@@ -951,7 +951,7 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
         let key_str: String = key.extract()?;
 
         // Check if value is a dict (operator-based filter)
-        if let Ok(op_dict) = value.downcast::<PyDict>() {
+        if let Ok(op_dict) = value.cast::<PyDict>() {
             for (op, op_value) in op_dict.iter() {
                 let op_str: String = op.extract()?;
 
@@ -981,7 +981,7 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
                         filters.push(MetadataFilter::Lte(key_str.clone(), num));
                     }
                     "$in" => {
-                        let list = op_value.downcast::<PyList>()?;
+                        let list = op_value.cast::<PyList>()?;
                         let json_vals: Result<Vec<JsonValue>, _> = list.iter()
                             .map(|obj| pyobject_to_json(&obj))
                             .collect();
@@ -1019,7 +1019,7 @@ fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector,
     let mut batch = Vec::new();
 
     for (idx, item) in items.iter().enumerate() {
-        let dict = item.downcast::<PyDict>()
+        let dict = item.cast::<PyDict>()
             .map_err(|_| PyValueError::new_err(format!(
                 "Item at index {} must be a dict", idx
             )))?;
@@ -1078,14 +1078,14 @@ fn pyobject_to_json(obj: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
         Ok(JsonValue::Null)
     } else {
         // Try as dict
-        if let Ok(dict) = obj.downcast::<PyDict>() {
+        if let Ok(dict) = obj.cast::<PyDict>() {
             let mut map = serde_json::Map::new();
             for (key, value) in dict.iter() {
                 let key_str: String = key.extract()?;
                 map.insert(key_str, pyobject_to_json(&value)?);
             }
             Ok(JsonValue::Object(map))
-        } else if let Ok(list) = obj.downcast::<PyList>() {
+        } else if let Ok(list) = obj.cast::<PyList>() {
             let values: Result<Vec<_>, _> = list.iter()
                 .map(|item| pyobject_to_json(&item))
                 .collect();
@@ -1101,7 +1101,7 @@ fn pyobject_to_json(obj: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
 }
 
 /// Helper: Convert serde_json::Value to Python object
-fn json_to_pyobject(py: Python<'_>, value: &JsonValue) -> PyResult<PyObject> {
+fn json_to_pyobject(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
     match value {
         JsonValue::Null => Ok(py.None()),
         JsonValue::Bool(b) => Ok(PyBool::new(py, *b).to_owned().into()),
