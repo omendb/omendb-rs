@@ -879,7 +879,8 @@ fn create_store_with_config(dimensions: usize, config: &Bound<'_, PyDict>) -> Py
             .ok_or_else(|| PyValueError::new_err("'hnsw.ef_search' required"))?
             .extract()?;
 
-        Ok(VectorStore::new_with_params(dimensions, m, ef_construction, ef_search))
+        VectorStore::new_with_params(dimensions, m, ef_construction, ef_search)
+            .map_err(|e| PyValueError::new_err(format!("Failed to create HNSW index: {}", e)))
     }
     // Parse quantization configuration (if provided)
     else if let Some(quant_dict) = config.get_item("quantization")? {
