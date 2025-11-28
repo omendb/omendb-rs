@@ -177,7 +177,7 @@ def test_insert_nested_metadata(db):
 
 
 def test_insert_with_document(db):
-    """Test inserting vectors with document field (ChromaDB compat)"""
+    """Test inserting vectors with document field"""
     vector = {
         "id": "doc1",
         "embedding": [0.1] * 128,

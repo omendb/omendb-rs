@@ -14,7 +14,7 @@ pub struct HNSWParams {
     /// Number of bidirectional links per node (M)
     ///
     /// Higher M = better recall, more memory, slower construction
-    /// Typical range: 16-64, Qdrant uses 32-64
+    /// Typical range: 16-64
     pub m: usize,
 
     /// Size of dynamic candidate list during construction (`ef_construction`)

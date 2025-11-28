@@ -158,7 +158,7 @@ def compare_to_rust_core():
     print("  Build: 3.1x slower")
     print("  Query: 2.2x slower")
     print("\nExpected after optimizations:")
-    print("  Build target: 15K-20K vec/s (beat ChromaDB's 24K)")
+    print("  Build target: 20K+ vec/s")
     print("  Query target: 5K-6K QPS (match Rust core)")
 
 
@@ -183,7 +183,6 @@ def main():
 5. Consider unsafe direct buffer access for embeddings
 6. Profile Rust HNSW build to ensure it's not the bottleneck
 
-Goal: Beat ChromaDB (24K vec/s build, 3K QPS query) by 2x
 Target: 40K+ vec/s build, 6K+ QPS query
     """)
 

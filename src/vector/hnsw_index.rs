@@ -68,7 +68,6 @@ impl HNSWIndex {
         // Goal: Balance speed and recall appropriately for each scale
         let (max_nb_connection, ef_construction) = if max_elements < 10_000 {
             // Small datasets (<10K): Prioritize speed, 95%+ recall sufficient
-            // Matches ChromaDB defaults for competitive insert performance
             (16, 100)
         } else if max_elements < 100_000 {
             // Medium datasets (10K-100K): Balanced approach

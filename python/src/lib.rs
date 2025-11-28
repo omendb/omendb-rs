@@ -81,7 +81,7 @@ impl VectorDatabase {
     ///     >>> db.set([{"id": "doc1", "embedding": [0.7, 0.8, 0.9]}])
     ///     [0]
     ///
-    ///     ChromaDB-style with document:
+    ///     With document:
     ///
     ///     >>> db.set([{"id": "doc1", "embedding": [...], "document": "Original text content"}])
     ///
@@ -97,7 +97,7 @@ impl VectorDatabase {
     ///     # Batch (list of dicts)
     ///     db.set([{"id": "a", "embedding": [...], "metadata": {...}}])
     ///
-    ///     # ChromaDB-style kwargs
+    ///     # Batch kwargs
     ///     db.set(ids=["a", "b"], embeddings=[[...], [...]], metadatas=[{...}, {...}])
     #[pyo3(name = "set", signature = (id_or_items=None, embedding=None, metadata=None, *, ids=None, embeddings=None, metadatas=None))]
     fn set_vectors(
@@ -111,7 +111,7 @@ impl VectorDatabase {
         metadatas: Option<&Bound<'_, PyList>>,
     ) -> PyResult<Vec<usize>> {
         let batch = if let (Some(ids), Some(embeddings)) = (&ids, &embeddings) {
-            // ChromaDB-style: ids=[], embeddings=[], metadatas=[]
+            // Batch kwargs: ids=[], embeddings=[], metadatas=[]
             if ids.len() != embeddings.len() {
                 return Err(PyValueError::new_err(format!(
                     "ids and embeddings must have same length: {} vs {}",
@@ -1030,7 +1030,7 @@ fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector,
             )))?
             .extract()?;
 
-        // Support "embedding", "vector" (Qdrant/Milvus), or "values" (Pinecone)
+        // Support "embedding", "vector", or "values" field names
         let embedding: Vec<f32> = dict.get_item("embedding")?
             .or(dict.get_item("vector")?)
             .or(dict.get_item("values")?)
@@ -1045,7 +1045,7 @@ fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector,
             serde_json::json!({})
         };
 
-        // Handle document field (ChromaDB compatibility)
+        // Handle optional document field
         if let Some(document) = dict.get_item("document")? {
             let doc_str: String = document.extract()
                 .map_err(|_| PyValueError::new_err(format!(
