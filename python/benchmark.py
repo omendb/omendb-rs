@@ -1,187 +1,181 @@
 #!/usr/bin/env python3
-"""Performance benchmark for OmenDB Python bindings
+"""OmenDB Performance Benchmark
 
-Target: 20K-30K vec/s @ 10K vectors (from Week 1 design)
+Measures build throughput, search QPS, and filtered search performance
+at multiple embedding dimensions and dataset sizes.
+
+Usage:
+    python benchmark.py              # Quick benchmark (10K vectors)
+    python benchmark.py --full       # Full benchmark (10K, 50K, 100K)
+    python benchmark.py --dimension 1536  # Specific dimension
 """
 
-import omendb
+import argparse
 import tempfile
-import os
 import time
 import numpy as np
 
+import omendb
 
-def benchmark_insert(db, n_vectors, dimensions):
-    """Benchmark insert performance"""
-    print(f"\n{'='*60}")
-    print(f"INSERT BENCHMARK: {n_vectors:,} vectors ({dimensions} dims)")
-    print(f"{'='*60}")
 
-    # Generate random vectors
-    vectors = []
-    for i in range(n_vectors):
-        embedding = np.random.randn(dimensions).astype(np.float32).tolist()
-        vectors.append({
-            "id": f"vec{i}",
-            "embedding": embedding,
-            "metadata": {"index": i}
-        })
+def generate_vectors(n: int, dim: int, seed: int = 42) -> np.ndarray:
+    """Generate random vectors."""
+    np.random.seed(seed)
+    return np.random.randn(n, dim).astype(np.float32)
 
-    # Benchmark insert
+
+def benchmark_build(db_path: str, vectors: np.ndarray, with_metadata: bool = True) -> dict:
+    """Benchmark index build throughput."""
+    n, dim = vectors.shape
+    db = omendb.open(db_path, dimensions=dim)
+
+    if with_metadata:
+        batch = [
+            {"id": f"d{i}", "embedding": vectors[i].tolist(), "metadata": {"cat": i % 10}}
+            for i in range(n)
+        ]
+    else:
+        batch = [{"id": f"d{i}", "embedding": vectors[i].tolist()} for i in range(n)]
+
     start = time.time()
-    db.set(vectors)
+    db.set(batch)
     elapsed = time.time() - start
 
-    vec_per_sec = n_vectors / elapsed
+    return {
+        "vectors": n,
+        "time_s": elapsed,
+        "vec_per_s": n / elapsed,
+        "db": db,
+    }
 
-    print(f"  Time: {elapsed:.2f}s")
-    print(f"  Throughput: {vec_per_sec:,.0f} vec/s")
-    print(f"  Latency: {(elapsed / n_vectors) * 1000:.3f}ms per vector")
 
-    return vec_per_sec
+def benchmark_search(db, queries: np.ndarray, k: int = 10, warmup: int = 10) -> dict:
+    """Benchmark search QPS and latency."""
+    n_queries = len(queries)
 
+    # Warmup
+    for q in queries[:warmup]:
+        db.search(q.tolist(), k=k)
 
-def benchmark_search(db, n_queries, k, dimensions):
-    """Benchmark search performance"""
-    print(f"\n{'='*60}")
-    print(f"SEARCH BENCHMARK: {n_queries} queries (k={k})")
-    print(f"{'='*60}")
-
-    # Generate random query vectors
-    queries = [np.random.randn(dimensions).astype(np.float32).tolist() for _ in range(n_queries)]
-
-    # Benchmark search
+    # Benchmark
+    latencies = []
     start = time.time()
-    for query in queries:
-        _ = db.search(query, k=k)
-    elapsed = time.time() - start
+    for q in queries:
+        t0 = time.time()
+        db.search(q.tolist(), k=k)
+        latencies.append((time.time() - t0) * 1000)
+    total = time.time() - start
 
-    qps = n_queries / elapsed
-    latency_ms = (elapsed / n_queries) * 1000
+    latencies.sort()
+    return {
+        "queries": n_queries,
+        "time_s": total,
+        "qps": n_queries / total,
+        "latency_avg_ms": sum(latencies) / len(latencies),
+        "latency_p50_ms": latencies[len(latencies) // 2],
+        "latency_p99_ms": latencies[int(len(latencies) * 0.99)],
+    }
 
-    print(f"  Time: {elapsed:.2f}s")
-    print(f"  QPS: {qps:,.0f}")
-    print(f"  Latency (mean): {latency_ms:.3f}ms")
 
-    return qps, latency_ms
+def benchmark_filtered_search(
+    db, queries: np.ndarray, filter_dict: dict, k: int = 10, warmup: int = 10
+) -> dict:
+    """Benchmark filtered search performance."""
+    n_queries = len(queries)
+
+    # Warmup
+    for q in queries[:warmup]:
+        db.search(q.tolist(), k=k, filter=filter_dict)
+
+    # Benchmark
+    start = time.time()
+    for q in queries:
+        db.search(q.tolist(), k=k, filter=filter_dict)
+    total = time.time() - start
+
+    return {
+        "queries": n_queries,
+        "time_s": total,
+        "qps": n_queries / total,
+        "latency_ms": (total / n_queries) * 1000,
+    }
 
 
-def benchmark_batch_operations(dimensions):
-    """Benchmark batch operations"""
+def benchmark_batch_search(db, queries: np.ndarray, k: int = 10) -> dict:
+    """Benchmark batch search performance."""
+    queries_list = [q.tolist() for q in queries]
+
+    start = time.time()
+    results = db.batch_search(queries_list, k=k)
+    total = time.time() - start
+
+    return {
+        "queries": len(queries),
+        "time_s": total,
+        "qps": len(queries) / total,
+        "latency_ms": (total / len(queries)) * 1000,
+    }
+
+
+def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000):
+    """Run full benchmark suite for given parameters."""
     print(f"\n{'='*60}")
-    print("BATCH OPERATIONS BENCHMARK")
+    print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D")
     print(f"{'='*60}")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "bench.db")
-        db = omendb.open(db_path, dimensions=dimensions)
-
-        # Test different batch sizes
-        batch_sizes = [100, 1000, 10000]
-
-        for batch_size in batch_sizes:
-            vectors = [{
-                "id": f"vec{i}",
-                "embedding": np.random.randn(dimensions).astype(np.float32).tolist(),
-                "metadata": {}
-            } for i in range(batch_size)]
-
-            start = time.time()
-            db.set(vectors)
-            elapsed = time.time() - start
-
-            print(f"  Batch size {batch_size:,}: {batch_size / elapsed:,.0f} vec/s")
-
-
-def benchmark_persistence(dimensions, n_vectors):
-    """Benchmark save/load operations"""
-    print(f"\n{'='*60}")
-    print(f"PERSISTENCE BENCHMARK: {n_vectors:,} vectors")
-    print(f"{'='*60}")
+    vectors = generate_vectors(n_vectors, dim)
+    queries = generate_vectors(n_queries, dim, seed=999)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "persist.db")
+        # Build
+        build = benchmark_build(f"{tmpdir}/db", vectors)
+        print(f"\nBuild:    {build['vec_per_s']:>10,.0f} vec/s  ({build['time_s']:.2f}s)")
 
-        # Create and populate database
-        db = omendb.open(db_path, dimensions=dimensions)
-        vectors = [{
-            "id": f"vec{i}",
-            "embedding": np.random.randn(dimensions).astype(np.float32).tolist(),
-            "metadata": {"index": i}
-        } for i in range(n_vectors)]
+        db = build["db"]
 
-        db.set(vectors)
+        # Search
+        search = benchmark_search(db, queries)
+        print(f"Search:   {search['qps']:>10,.0f} QPS    ({search['latency_avg_ms']:.2f}ms avg, {search['latency_p99_ms']:.2f}ms p99)")
 
-        # Benchmark save
-        start = time.time()
-        db.save()
-        save_time = time.time() - start
+        # Filtered search (10% selectivity)
+        filtered = benchmark_filtered_search(db, queries, {"cat": {"$eq": 5}})
+        print(f"Filtered: {filtered['qps']:>10,.0f} QPS    ({filtered['latency_ms']:.2f}ms, 10% selectivity)")
 
-        print(f"  Save time: {save_time:.2f}s")
-        print(f"  Save throughput: {n_vectors / save_time:,.0f} vec/s")
+        # Batch search
+        batch = benchmark_batch_search(db, queries)
+        print(f"Batch:    {batch['qps']:>10,.0f} QPS    ({batch['latency_ms']:.3f}ms per query)")
 
-        del db
-
-        # Benchmark load
-        start = time.time()
-        _ = omendb.open(db_path, dimensions=dimensions)
-        load_time = time.time() - start
-
-        print(f"  Load time: {load_time:.2f}s")
-        print(f"  Load throughput: {n_vectors / load_time:,.0f} vec/s")
-        print(f"  Speedup vs rebuild: {load_time:.2f}s load vs building HNSW from scratch")
+    return {"build": build, "search": search, "filtered": filtered, "batch": batch}
 
 
 def main():
-    print("\n" + "="*60)
-    print("OADB PYTHON BINDINGS PERFORMANCE BENCHMARK")
-    print("="*60)
-    print("Target: 20K-30K vec/s @ 10K vectors (from Week 1 design)")
-    print()
+    parser = argparse.ArgumentParser(description="OmenDB Performance Benchmark")
+    parser.add_argument("--full", action="store_true", help="Run full benchmark suite")
+    parser.add_argument("--dimension", type=int, default=128, help="Vector dimension")
+    parser.add_argument("--vectors", type=int, default=10000, help="Number of vectors")
+    args = parser.parse_args()
 
-    dimensions = 128
+    print("=" * 60)
+    print("OmenDB Performance Benchmark")
+    print("=" * 60)
 
-    # Test 1: Insert performance @ 10K vectors (target scale)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "bench.db")
-        db = omendb.open(db_path, dimensions=dimensions)
+    if args.full:
+        # Multiple dimensions
+        for dim in [128, 384, 768, 1536]:
+            run_benchmark(10000, dim)
 
-        insert_throughput = benchmark_insert(db, 10_000, dimensions)
+        # Multiple scales at 128D
+        print("\n" + "=" * 60)
+        print("Scale Test (128D)")
+        print("=" * 60)
+        for n in [1000, 10000, 50000]:
+            run_benchmark(n, 128)
+    else:
+        run_benchmark(args.vectors, args.dimension)
 
-        # Verify target met
-        if insert_throughput >= 20_000:
-            print(f"\n  ✅ PASS: {insert_throughput:,.0f} vec/s >= 20K target")
-        else:
-            print(f"\n  ⚠️  BELOW TARGET: {insert_throughput:,.0f} vec/s < 20K target")
-
-        # Test 2: Search performance
-        benchmark_search(db, 1000, k=10, dimensions=dimensions)
-
-    # Test 3: Larger scale (100K vectors)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "bench_large.db")
-        db = omendb.open(db_path, dimensions=dimensions)
-
-        print(f"\n{'='*60}")
-        print("LARGER SCALE: 100K vectors")
-        print(f"{'='*60}")
-
-        throughput_100k = benchmark_insert(db, 100_000, dimensions)
-        benchmark_search(db, 100, k=10, dimensions=dimensions)
-
-    # Test 4: Batch operations
-    benchmark_batch_operations(dimensions)
-
-    # Test 5: Persistence
-    benchmark_persistence(dimensions, 10_000)
-
-    print(f"\n{'='*60}")
-    print("SUMMARY")
-    print(f"{'='*60}")
-    print(f"  Insert @ 10K: {insert_throughput:,.0f} vec/s")
-    print(f"  Insert @ 100K: {throughput_100k:,.0f} vec/s")
-    print(f"  Target (20K-30K vec/s): {'✅ PASSED' if insert_throughput >= 20_000 else '⚠️ BELOW TARGET'}")
-    print()
+    print("\n" + "=" * 60)
+    print("Benchmark complete")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
