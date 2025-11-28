@@ -429,12 +429,19 @@ impl<'de> Deserialize<'de> for NeighborLists {
 /// Vector storage (quantized or full precision)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum VectorStorage {
-    /// Full precision f32 vectors
+    /// Full precision f32 vectors - FLAT CONTIGUOUS STORAGE
     ///
     /// Memory: dimensions * 4 bytes per vector
     /// Example: 1536D = 6144 bytes per vector
+    ///
+    /// Vectors stored in single contiguous array for cache efficiency.
+    /// Access: vectors[id * dimensions..(id + 1) * dimensions]
     FullPrecision {
-        vectors: Vec<Vec<f32>>,
+        /// Flat contiguous vector data (all vectors concatenated)
+        vectors: Vec<f32>,
+        /// Number of vectors stored
+        count: usize,
+        /// Dimensions per vector
         dimensions: usize,
     },
 
@@ -466,6 +473,7 @@ impl VectorStorage {
     pub fn new_full_precision(dimensions: usize) -> Self {
         Self::FullPrecision {
             vectors: Vec::new(),
+            count: 0,
             dimensions,
         }
     }
@@ -489,7 +497,7 @@ impl VectorStorage {
     #[must_use]
     pub fn len(&self) -> usize {
         match self {
-            Self::FullPrecision { vectors, .. } => vectors.len(),
+            Self::FullPrecision { count, .. } => *count,
             Self::BinaryQuantized { quantized, .. } => quantized.len(),
         }
     }
@@ -515,6 +523,7 @@ impl VectorStorage {
         match self {
             Self::FullPrecision {
                 vectors,
+                count,
                 dimensions,
             } => {
                 if vector.len() != *dimensions {
@@ -524,8 +533,9 @@ impl VectorStorage {
                         vector.len()
                     ));
                 }
-                let id = vectors.len() as u32;
-                vectors.push(vector);
+                let id = *count as u32;
+                vectors.extend(vector);
+                *count += 1;
                 Ok(id)
             }
             Self::BinaryQuantized {
@@ -558,11 +568,24 @@ impl VectorStorage {
     }
 
     /// Get a vector by ID (full precision)
+    ///
+    /// Returns slice directly into contiguous storage - zero-copy, cache-friendly.
+    #[inline]
     #[must_use]
     pub fn get(&self, id: u32) -> Option<&[f32]> {
         match self {
-            Self::FullPrecision { vectors, .. } => {
-                vectors.get(id as usize).map(std::vec::Vec::as_slice)
+            Self::FullPrecision {
+                vectors,
+                count,
+                dimensions,
+            } => {
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                Some(&vectors[start..end])
             }
             Self::BinaryQuantized { original, .. } => original
                 .as_ref()
@@ -584,9 +607,19 @@ impl VectorStorage {
     /// Hardware prefetcher handles subsequent cache lines.
     #[inline]
     pub fn prefetch(&self, id: u32) {
-        let ptr = match self {
-            Self::FullPrecision { vectors, .. } => {
-                vectors.get(id as usize).map(std::vec::Vec::as_ptr)
+        let ptr: Option<*const f32> = match self {
+            Self::FullPrecision {
+                vectors,
+                count,
+                dimensions,
+            } => {
+                let idx = id as usize;
+                if idx >= *count {
+                    None
+                } else {
+                    let start = idx * *dimensions;
+                    Some(vectors[start..].as_ptr())
+                }
             }
             Self::BinaryQuantized { original, .. } => original
                 .as_ref()
@@ -680,10 +713,7 @@ impl VectorStorage {
     #[must_use]
     pub fn memory_usage(&self) -> usize {
         match self {
-            Self::FullPrecision {
-                vectors,
-                dimensions,
-            } => vectors.len() * dimensions * std::mem::size_of::<f32>(),
+            Self::FullPrecision { vectors, .. } => vectors.len() * std::mem::size_of::<f32>(),
             Self::BinaryQuantized {
                 quantized,
                 original,
@@ -706,10 +736,21 @@ impl VectorStorage {
     /// This reorders vectors to match the BFS-reordered neighbor lists.
     pub fn reorder(&mut self, old_to_new: &[u32]) {
         match self {
-            Self::FullPrecision { vectors, .. } => {
-                let mut new_vectors = vec![Vec::new(); vectors.len()];
+            Self::FullPrecision {
+                vectors,
+                count,
+                dimensions,
+            } => {
+                let dim = *dimensions;
+                let n = *count;
+                let mut new_vectors = vec![0.0f32; vectors.len()];
                 for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                    new_vectors[new_id as usize] = std::mem::take(&mut vectors[old_id]);
+                    if old_id < n {
+                        let old_start = old_id * dim;
+                        let new_start = new_id as usize * dim;
+                        new_vectors[new_start..new_start + dim]
+                            .copy_from_slice(&vectors[old_start..old_start + dim]);
+                    }
                 }
                 *vectors = new_vectors;
             }
