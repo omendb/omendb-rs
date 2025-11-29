@@ -7,7 +7,7 @@ use ::omendb::vector::{Vector, VectorStore, MetadataFilter};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use parking_lot::RwLock;
-use numpy::PyReadonlyArray1;
+use numpy::{PyReadonlyArray1, IntoPyArray};
 
 /// Extract query vector from Python object (list or numpy array)
 fn extract_query_vector(ob: &Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
@@ -224,8 +224,8 @@ impl VectorDatabase {
     ///     k: Number of nearest neighbors
     ///     ef: Optional search width override (default: auto-tuned to max(k*4, 64))
     ///     filter: Optional metadata filter
-    ///     raw: If True, return list of (id, distance) tuples instead of dicts (faster)
-    #[pyo3(signature = (query, k, ef=None, filter=None, raw=false))]
+    ///     as_numpy: If True, return (ids, distances) as numpy arrays (faster, for ML pipelines)
+    #[pyo3(signature = (query, k, ef=None, filter=None, as_numpy=false))]
     fn search(
         &self,
         py: Python<'_>,
@@ -233,7 +233,7 @@ impl VectorDatabase {
         k: usize,
         ef: Option<usize>,
         filter: Option<&Bound<'_, PyDict>>,
-        raw: bool,
+        as_numpy: bool,
     ) -> PyResult<Py<PyAny>> {
         // Validate ef >= k if provided
         if let Some(ef_val) = ef {
@@ -254,10 +254,10 @@ impl VectorDatabase {
             None
         };
 
-        // Acquire write lock (need write for cache rebuild)
+        // Acquire write lock (needed for potential index rebuild)
         let mut inner = self.inner.write();
 
-        // Perform search with optional ef override
+        // Perform search
         let results = inner.store.search_with_ef(&query_vec, k, rust_filter.as_ref(), ef)
             .map_err(convert_error)?;
 
@@ -270,20 +270,23 @@ impl VectorDatabase {
             inner.cache_valid = true;
         }
 
-        // Convert results based on raw flag
-        if raw {
-            // Raw mode: return list of (id, distance) tuples (faster, no metadata)
-            let py_results: Vec<_> = results
-                .into_iter()
-                .filter_map(|(index, distance, _)| {
-                    inner.index_to_id_cache.get(&index).map(|id| {
-                        PyTuple::new(py, &[id.into_pyobject(py).unwrap().into_any(), distance.into_pyobject(py).unwrap().into_any()]).unwrap().unbind()
-                    })
-                })
-                .collect();
-            Ok(py_results.into_pyobject(py)?.into_any().unbind())
+        // Convert results based on as_numpy flag
+        if as_numpy {
+            // NumPy mode: return (ids, distances) as numpy arrays (fastest, for ML pipelines)
+            let n = results.len();
+            let mut ids = Vec::with_capacity(n);
+            let mut distances = Vec::with_capacity(n);
+
+            for (index, distance, _) in results {
+                ids.push(index as i64);
+                distances.push(distance);
+            }
+
+            let ids_array = ids.into_pyarray(py);
+            let distances_array = distances.into_pyarray(py);
+            Ok(PyTuple::new(py, &[ids_array.into_any(), distances_array.into_any()])?.into_any().unbind())
         } else {
-            // Dict mode: return list of {id, distance, metadata} dicts
+            // Dict mode: return list of {id, distance, metadata} dicts (default, user-friendly)
             let mut py_results = Vec::with_capacity(results.len());
             for (index, distance, metadata) in results {
                 if let Some(id) = inner.index_to_id_cache.get(&index) {
@@ -363,10 +366,10 @@ impl VectorDatabase {
             .map(Vector::new)
             .collect();
 
-        // Acquire write lock
+        // Acquire write lock (needed for potential index rebuild)
         let mut inner = self.inner.write();
 
-        // Search all queries sequentially (RwLock serializes concurrent access)
+        // Search all queries sequentially
         let all_results: Vec<_> = query_vecs.iter()
             .map(|query| {
                 inner.store.search_with_ef(query, k, rust_filter.as_ref(), ef)
@@ -374,7 +377,7 @@ impl VectorDatabase {
             })
             .collect::<PyResult<Vec<_>>>()?;
 
-        // Rebuild cache if invalid (lazy rebuild on first search after set/delete)
+        // Rebuild cache if invalid
         if !inner.cache_valid {
             inner.index_to_id_cache = inner.store.id_to_index
                 .iter()
