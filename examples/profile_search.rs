@@ -28,8 +28,8 @@ fn main() {
     let mut index = HNSWIndex::new(dim, 16, 200, 16).unwrap();
 
     let build_start = Instant::now();
-    for (i, vec) in vectors.iter().enumerate() {
-        index.insert(vec.clone(), i as u64).unwrap();
+    for vec in &vectors {
+        index.insert(vec).unwrap();
     }
     let build_time = build_start.elapsed();
     println!("Build: {:.0} vec/s", n_vectors as f64 / build_time.as_secs_f64());
