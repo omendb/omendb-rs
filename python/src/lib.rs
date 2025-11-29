@@ -854,6 +854,31 @@ fn open(
             )));
         }
     }
+
+    // Handle :memory: for true in-memory database (like SQLite)
+    if path == ":memory:" {
+        let store = if m.is_some() || ef_construction.is_some() {
+            let m_val = m.unwrap_or(16);
+            let ef_con = ef_construction.unwrap_or(100);
+            let ef_search = (10_usize * 4).max(64).max(100);
+            VectorStore::new_with_params(dimensions, m_val, ef_con, ef_search)
+                .map_err(|e| PyValueError::new_err(format!("Failed to create HNSW index: {}", e)))?
+        } else {
+            VectorStore::new_with_capacity(dimensions, 10_000)
+        };
+
+        return Ok(VectorDatabase {
+            inner: RwLock::new(VectorDatabaseInner {
+                store,
+                index_to_id_cache: HashMap::new(),
+                cache_valid: true,
+            }),
+            path,
+            dimensions,
+            is_persistent: false,
+        });
+    }
+
     use std::path::Path;
 
     let db_path = Path::new(&path);
