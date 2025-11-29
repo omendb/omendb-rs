@@ -29,3 +29,6 @@ rayon = "1.10"
 
 # Thread-safe locking
 parking_lot = "0.12"
+
+# NumPy support for zero-copy array access
+numpy = "0.27"
