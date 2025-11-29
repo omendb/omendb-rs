@@ -37,10 +37,10 @@ pub struct HNSWParams {
 
 impl Default for HNSWParams {
     fn default() -> Self {
-        let m = 48; // Good balance of recall and memory
+        let m = 16; // Industry standard (ChromaDB, hnswlib, Milvus, pgvector)
         Self {
             m,
-            ef_construction: 200, // 4x M, good recall
+            ef_construction: 100, // Good balance of build speed and recall
             ml: 1.0 / (m as f32).ln(),
             seed: 42,
             max_level: 8, // Support up to ~100M vectors
@@ -322,7 +322,7 @@ mod tests {
         assert!(invalid_params.validate().is_err());
 
         invalid_params = HNSWParams::default();
-        invalid_params.ef_construction = 10; // < M (48)
+        invalid_params.ef_construction = 10; // < M (16)
         assert!(invalid_params.validate().is_err());
     }
 

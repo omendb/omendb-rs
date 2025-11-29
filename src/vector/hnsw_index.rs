@@ -209,6 +209,19 @@ impl HNSWIndex {
     /// # Returns
     /// Vector of (ID, distance) tuples, sorted by distance (ascending)
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<(usize, f32)>> {
+        self.search_with_ef(query, k, None)
+    }
+
+    /// Search for K nearest neighbors with optional ef override
+    ///
+    /// # Arguments
+    /// * `query` - Query vector (must match index dimensions)
+    /// * `k` - Number of nearest neighbors to return
+    /// * `ef` - Search width override (None = use default, which auto-tunes to max(k*4, 64))
+    ///
+    /// # Returns
+    /// Vector of (ID, distance) tuples, sorted by distance (ascending)
+    pub fn search_with_ef(&self, query: &[f32], k: usize, ef: Option<usize>) -> Result<Vec<(usize, f32)>> {
         if query.len() != self.dimensions {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
@@ -217,10 +230,13 @@ impl HNSWIndex {
             );
         }
 
+        // Use provided ef or fall back to auto-tuned default
+        let effective_ef = ef.unwrap_or_else(|| (k * 4).max(64).max(self.ef_search));
+
         // Search with HNSW
         let results = self
             .index
-            .search(query, k, self.ef_search)
+            .search(query, k, effective_ef)
             .map_err(|e| anyhow::anyhow!(e))?;
 
         // Convert to (id, distance) tuples
@@ -244,6 +260,22 @@ impl HNSWIndex {
     where
         F: Fn(u32) -> bool,
     {
+        self.search_with_filter_ef(query, k, None, filter_fn)
+    }
+
+    /// Search with metadata filter and optional ef override (ACORN-1)
+    ///
+    /// Uses ACORN-1 filtered search algorithm for efficient metadata-aware search.
+    pub fn search_with_filter_ef<F>(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: Option<usize>,
+        filter_fn: F,
+    ) -> Result<Vec<(usize, f32)>>
+    where
+        F: Fn(u32) -> bool,
+    {
         if query.len() != self.dimensions {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
@@ -252,10 +284,13 @@ impl HNSWIndex {
             );
         }
 
+        // Use provided ef or fall back to auto-tuned default
+        let effective_ef = ef.unwrap_or_else(|| (k * 4).max(64).max(self.ef_search));
+
         // Search with ACORN-1 filtered search
         let results = self
             .index
-            .search_with_filter(query, k, self.ef_search, filter_fn)
+            .search_with_filter(query, k, effective_ef, filter_fn)
             .map_err(|e| anyhow::anyhow!(e))?;
 
         // Convert to (id, distance) tuples

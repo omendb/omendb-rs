@@ -958,6 +958,16 @@ impl VectorStore {
     /// Quantization (if enabled) is for storage/memory savings only.
     /// Search always uses HNSW with original vectors for accuracy and speed.
     pub fn knn_search(&mut self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
+        self.knn_search_with_ef(query, k, None)
+    }
+
+    /// K-nearest neighbors search with optional ef override
+    ///
+    /// # Arguments
+    /// * `query` - Query vector
+    /// * `k` - Number of neighbors to return
+    /// * `ef` - Search width override (None = auto-tune to max(k*4, 64))
+    pub fn knn_search_with_ef(&mut self, query: &Vector, k: usize, ef: Option<usize>) -> Result<Vec<(usize, f32)>> {
         if query.dim() != self.dimensions {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
@@ -987,7 +997,7 @@ impl VectorStore {
         // Use HNSW index if available
         // NOTE: Quantization (if enabled) is for storage only, not search
         if let Some(ref index) = self.hnsw_index {
-            return index.search(&query.data, k);
+            return index.search_with_ef(&query.data, k, ef);
         }
 
         // Fallback to brute-force if no index (small datasets only)
@@ -1001,10 +1011,7 @@ impl VectorStore {
     /// K-nearest neighbors search with metadata filtering
     ///
     /// Performs HNSW search and filters results by metadata.
-    /// Uses oversample-and-filter strategy:
-    /// 1. Fetch k*3 candidates from HNSW (to account for filtered results)
-    /// 2. Filter by metadata
-    /// 3. Return top-k filtered results
+    /// Uses ACORN-1 algorithm for efficient filtered search.
     ///
     /// Returns Vec of (id, distance, metadata) tuples
     pub fn knn_search_with_filter(
@@ -1012,6 +1019,22 @@ impl VectorStore {
         query: &Vector,
         k: usize,
         filter: &MetadataFilter,
+    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+        self.knn_search_with_filter_ef(query, k, filter, None)
+    }
+
+    /// K-nearest neighbors search with metadata filtering and optional ef override
+    ///
+    /// Performs HNSW search and filters results by metadata.
+    /// Uses ACORN-1 algorithm for efficient filtered search.
+    ///
+    /// Returns Vec of (id, distance, metadata) tuples
+    pub fn knn_search_with_filter_ef(
+        &mut self,
+        query: &Vector,
+        k: usize,
+        filter: &MetadataFilter,
+        ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
         // Use ACORN-1 filtered search if HNSW index is available
         if let Some(ref hnsw) = self.hnsw_index {
@@ -1036,8 +1059,8 @@ impl VectorStore {
                 filter.matches(&metadata)
             };
 
-            // Use ACORN-1 filtered search (includes adaptive threshold and 2-hop exploration)
-            let search_results = hnsw.search_with_filter(&query.data, k, filter_fn)?;
+            // Use ACORN-1 filtered search with optional ef override
+            let search_results = hnsw.search_with_filter_ef(&query.data, k, ef, filter_fn)?;
 
             // Convert to (index, distance, metadata) format
             let filtered_results: Vec<(usize, f32, JsonValue)> = search_results
@@ -1097,11 +1120,28 @@ impl VectorStore {
         k: usize,
         filter: Option<&MetadataFilter>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
+        self.search_with_ef(query, k, filter, None)
+    }
+
+    /// Search with optional filter and ef override
+    ///
+    /// # Arguments
+    /// * `query` - Query vector
+    /// * `k` - Number of neighbors to return
+    /// * `filter` - Optional metadata filter
+    /// * `ef` - Search width override (None = auto-tune to max(k*4, 64))
+    pub fn search_with_ef(
+        &mut self,
+        query: &Vector,
+        k: usize,
+        filter: Option<&MetadataFilter>,
+        ef: Option<usize>,
+    ) -> Result<Vec<(usize, f32, JsonValue)>> {
         if let Some(f) = filter {
-            self.knn_search_with_filter(query, k, f)
+            self.knn_search_with_filter_ef(query, k, f, ef)
         } else {
             // No filter - get all results with metadata
-            let results = self.knn_search(query, k)?;
+            let results = self.knn_search_with_ef(query, k, ef)?;
             Ok(results
                 .into_iter()
                 .filter_map(|(index, distance)| {
