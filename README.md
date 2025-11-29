@@ -34,7 +34,7 @@ results = db.search([1.0, 0.0, 0.0, 0.0], k=2, filter={"type": {"$eq": "cat"}})
 ## Why OmenDB?
 
 - **No server** - Runs in your process, data stays local
-- **Fast** - ~19,000 searches/sec at 10K vectors
+- **Fast** - ~3,000 searches/sec at 10K vectors (128D)
 - **Memory efficient** - 8x compression, same accuracy
 - **Filtered search** - Query by metadata without scanning everything
 - **Persistent** - Survives restarts, no manual saves needed
