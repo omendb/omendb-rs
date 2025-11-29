@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::{PyValueError, PyRuntimeError};
-use pyo3::types::{PyDict, PyList, PyBool};
+use pyo3::types::{PyDict, PyList, PyBool, PyTuple};
 use pyo3::conversion::IntoPyObject;
 use pyo3::Py;
 use ::omendb::vector::{Vector, VectorStore, MetadataFilter};
@@ -8,6 +8,23 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use parking_lot::RwLock;
 use numpy::PyReadonlyArray1;
+
+/// Extract query vector from Python object (list or numpy array)
+fn extract_query_vector(ob: &Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
+    // Try numpy array first (more efficient)
+    if let Ok(arr) = ob.extract::<PyReadonlyArray1<'_, f32>>() {
+        return arr.as_slice()
+            .map(|s| s.to_vec())
+            .map_err(|e| PyValueError::new_err(format!("Invalid numpy array: {}", e)));
+    }
+    // Fall back to list
+    if let Ok(list) = ob.extract::<Vec<f32>>() {
+        return Ok(list);
+    }
+    Err(PyValueError::new_err(
+        "query must be a list of floats or numpy array (dtype=float32)"
+    ))
+}
 
 /// Convert PyO3 errors to Python exceptions with proper type mapping
 fn convert_error(err: anyhow::Error) -> PyErr {
@@ -201,15 +218,22 @@ impl VectorDatabase {
     ///     - QPS: 3,492 queries/sec @ 10K vectors
     ///     - Latency: 0.29ms p50, 0.34ms p95, 0.37ms p99
     ///     - Recall: 100% (exact nearest neighbors)
-    #[pyo3(signature = (query, k, filter=None))]
+    ///
+    /// Args:
+    ///     query: Query vector (list or numpy array)
+    ///     k: Number of nearest neighbors
+    ///     filter: Optional metadata filter
+    ///     raw: If True, return list of (id, distance) tuples instead of dicts (faster)
+    #[pyo3(signature = (query, k, filter=None, raw=false))]
     fn search(
         &self,
         py: Python<'_>,
-        query: Vec<f32>,
+        query: &Bound<'_, PyAny>,
         k: usize,
         filter: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Vec<Py<PyDict>>> {
-        let query_vec = Vector::new(query);
+        raw: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let query_vec = Vector::new(extract_query_vector(query)?);
 
         // Convert Python filter to Rust MetadataFilter (if provided)
         let rust_filter = if let Some(f) = filter {
@@ -234,96 +258,36 @@ impl VectorDatabase {
             inner.cache_valid = true;
         }
 
-        // Pre-allocate results vector
-        let mut py_results = Vec::with_capacity(results.len());
-
-        // Convert results to Python dicts using interned keys (requires GIL)
-        // Using PyDict directly avoids HashMap<String, Py<PyAny>> overhead
-        for (index, distance, metadata) in results {
-            // O(1) lookup using cached reverse index
-            if let Some(id) = inner.index_to_id_cache.get(&index) {
-                let dict = PyDict::new(py);
-                // Use intern! to avoid string allocation on each call
-                dict.set_item(pyo3::intern!(py, "id"), id)?;
-                dict.set_item(pyo3::intern!(py, "distance"), distance)?;
-                // Fast path for empty metadata (common case)
-                if metadata.as_object().map_or(false, |o| o.is_empty()) {
-                    dict.set_item(pyo3::intern!(py, "metadata"), PyDict::new(py))?;
-                } else if let Ok(metadata_dict) = json_to_pyobject(py, &metadata) {
-                    dict.set_item(pyo3::intern!(py, "metadata"), metadata_dict)?;
-                }
-                py_results.push(dict.unbind());
-            }
-        }
-
-        Ok(py_results)
-    }
-
-    /// Search with numpy array (zero-copy, ~30% faster than list-based search).
-    ///
-    /// This method accepts a numpy array directly, avoiding the overhead of
-    /// converting Python lists to Rust vectors. Use this when performance matters.
-    ///
-    /// Args:
-    ///     query (np.ndarray): Query vector as numpy array (dtype=float32)
-    ///     k (int): Number of nearest neighbors to return
-    ///     filter (dict, optional): Metadata filter
-    ///
-    /// Returns:
-    ///     list[dict]: Search results with keys: id, distance, metadata
-    #[pyo3(signature = (query, k, filter=None))]
-    fn search_numpy(
-        &self,
-        py: Python<'_>,
-        query: PyReadonlyArray1<'_, f32>,
-        k: usize,
-        filter: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Vec<Py<PyDict>>> {
-        // Zero-copy access to numpy array data
-        let query_slice = query.as_slice()
-            .map_err(|e| PyValueError::new_err(format!("Invalid numpy array: {}", e)))?;
-        let query_vec = Vector::new(query_slice.to_vec());
-
-        // Convert Python filter to Rust MetadataFilter (if provided)
-        let rust_filter = if let Some(f) = filter {
-            Some(parse_filter(f)?)
-        } else {
-            None
-        };
-
-        // Acquire write lock (need write for cache rebuild)
-        let mut inner = self.inner.write();
-
-        // Perform search
-        let results = inner.store.search(&query_vec, k, rust_filter.as_ref())
-            .map_err(convert_error)?;
-
-        // Rebuild cache if invalid
-        if !inner.cache_valid {
-            inner.index_to_id_cache = inner.store.id_to_index
-                .iter()
-                .map(|(id, &idx)| (idx, id.clone()))
+        // Convert results based on raw flag
+        if raw {
+            // Raw mode: return list of (id, distance) tuples (faster, no metadata)
+            let py_results: Vec<_> = results
+                .into_iter()
+                .filter_map(|(index, distance, _)| {
+                    inner.index_to_id_cache.get(&index).map(|id| {
+                        PyTuple::new(py, &[id.into_pyobject(py).unwrap().into_any(), distance.into_pyobject(py).unwrap().into_any()]).unwrap().unbind()
+                    })
+                })
                 .collect();
-            inner.cache_valid = true;
-        }
-
-        // Convert results to Python dicts
-        let mut py_results = Vec::with_capacity(results.len());
-        for (index, distance, metadata) in results {
-            if let Some(id) = inner.index_to_id_cache.get(&index) {
-                let dict = PyDict::new(py);
-                dict.set_item(pyo3::intern!(py, "id"), id)?;
-                dict.set_item(pyo3::intern!(py, "distance"), distance)?;
-                if metadata.as_object().map_or(false, |o| o.is_empty()) {
-                    dict.set_item(pyo3::intern!(py, "metadata"), PyDict::new(py))?;
-                } else if let Ok(metadata_dict) = json_to_pyobject(py, &metadata) {
-                    dict.set_item(pyo3::intern!(py, "metadata"), metadata_dict)?;
+            Ok(py_results.into_pyobject(py)?.into_any().unbind())
+        } else {
+            // Dict mode: return list of {id, distance, metadata} dicts
+            let mut py_results = Vec::with_capacity(results.len());
+            for (index, distance, metadata) in results {
+                if let Some(id) = inner.index_to_id_cache.get(&index) {
+                    let dict = PyDict::new(py);
+                    dict.set_item(pyo3::intern!(py, "id"), id)?;
+                    dict.set_item(pyo3::intern!(py, "distance"), distance)?;
+                    if metadata.as_object().map_or(false, |o| o.is_empty()) {
+                        dict.set_item(pyo3::intern!(py, "metadata"), PyDict::new(py))?;
+                    } else if let Ok(metadata_dict) = json_to_pyobject(py, &metadata) {
+                        dict.set_item(pyo3::intern!(py, "metadata"), metadata_dict)?;
+                    }
+                    py_results.push(dict.unbind());
                 }
-                py_results.push(dict.unbind());
             }
+            Ok(py_results.into_pyobject(py)?.into_any().unbind())
         }
-
-        Ok(py_results)
     }
 
     /// Batch search multiple queries in a single call (amortizes FFI overhead).
