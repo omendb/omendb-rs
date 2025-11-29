@@ -235,8 +235,10 @@ impl DistanceFunction {
     }
 }
 
-// Re-export SIMD distance functions for convenience
-pub use super::simd_distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
+// Re-export SIMD distance functions from seerdb-vector
+pub use seerdb_vector::simd_distance::{
+    cosine_distance, dot_product, l2_distance, l2_distance_squared,
+};
 
 /// Candidate during search (node ID + distance)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

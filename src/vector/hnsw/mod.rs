@@ -15,7 +15,6 @@ mod layered_storage;
 mod merge;
 mod node_storage;
 mod query_buffers;
-mod simd_distance;
 mod storage;
 mod storage_integration_tests;
 mod storage_tiering;
@@ -24,8 +23,8 @@ mod types;
 // Public API exports
 pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
 
-// Re-export SIMD-enabled distance functions
-pub use simd_distance::{cosine_distance, dot_product, l2_distance};
+// Re-export SIMD-enabled distance functions from seerdb-vector (single source of truth)
+pub use seerdb_vector::simd_distance::{cosine_distance, dot_product, l2_distance};
 
 pub use storage::{NeighborLists, VectorStorage};
 
