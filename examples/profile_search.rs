@@ -25,7 +25,7 @@ fn main() {
         .collect();
 
     println!("Building index...");
-    // Use default M=48 to match Python benchmark
+    // Use default M=16 (industry standard)
     let params = HNSWParams::default();
     let mut index = HNSWIndex::new(dim, params, DistanceFunction::L2, false).unwrap();
 

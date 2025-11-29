@@ -222,17 +222,29 @@ impl VectorDatabase {
     /// Args:
     ///     query: Query vector (list or numpy array)
     ///     k: Number of nearest neighbors
+    ///     ef: Optional search width override (default: auto-tuned to max(k*4, 64))
     ///     filter: Optional metadata filter
     ///     raw: If True, return list of (id, distance) tuples instead of dicts (faster)
-    #[pyo3(signature = (query, k, filter=None, raw=false))]
+    #[pyo3(signature = (query, k, ef=None, filter=None, raw=false))]
     fn search(
         &self,
         py: Python<'_>,
         query: &Bound<'_, PyAny>,
         k: usize,
+        ef: Option<usize>,
         filter: Option<&Bound<'_, PyDict>>,
         raw: bool,
     ) -> PyResult<Py<PyAny>> {
+        // Validate ef >= k if provided
+        if let Some(ef_val) = ef {
+            if ef_val < k {
+                return Err(PyValueError::new_err(format!(
+                    "ef ({}) must be >= k ({})",
+                    ef_val, k
+                )));
+            }
+        }
+
         let query_vec = Vector::new(extract_query_vector(query)?);
 
         // Convert Python filter to Rust MetadataFilter (if provided)
@@ -245,8 +257,8 @@ impl VectorDatabase {
         // Acquire write lock (need write for cache rebuild)
         let mut inner = self.inner.write();
 
-        // Perform search (RwLock serializes concurrent access)
-        let results = inner.store.search(&query_vec, k, rust_filter.as_ref())
+        // Perform search with optional ef override
+        let results = inner.store.search_with_ef(&query_vec, k, rust_filter.as_ref(), ef)
             .map_err(convert_error)?;
 
         // Rebuild cache if invalid (lazy rebuild on first search after set/delete)
@@ -300,6 +312,7 @@ impl VectorDatabase {
     /// Args:
     ///     queries (list[list[float]]): List of query vectors
     ///     k (int): Number of nearest neighbors to return per query
+    ///     ef (int, optional): Search width override (default: auto-tuned to max(k*4, 64))
     ///     filter (dict, optional): Metadata filter (same for all queries)
     ///
     /// Returns:
@@ -319,14 +332,25 @@ impl VectorDatabase {
     ///     1000
     ///     >>> len(all_results[0])
     ///     10
-    #[pyo3(signature = (queries, k, filter=None))]
+    #[pyo3(signature = (queries, k, ef=None, filter=None))]
     fn batch_search(
         &self,
         py: Python<'_>,
         queries: Vec<Vec<f32>>,
         k: usize,
+        ef: Option<usize>,
         filter: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Vec<Vec<Py<PyDict>>>> {
+        // Validate ef >= k if provided
+        if let Some(ef_val) = ef {
+            if ef_val < k {
+                return Err(PyValueError::new_err(format!(
+                    "ef ({}) must be >= k ({})",
+                    ef_val, k
+                )));
+            }
+        }
+
         // Convert Python filter once (shared by all queries)
         let rust_filter = if let Some(f) = filter {
             Some(parse_filter(f)?)
@@ -345,7 +369,7 @@ impl VectorDatabase {
         // Search all queries sequentially (RwLock serializes concurrent access)
         let all_results: Vec<_> = query_vecs.iter()
             .map(|query| {
-                inner.store.search(query, k, rust_filter.as_ref())
+                inner.store.search_with_ef(query, k, rust_filter.as_ref(), ef)
                     .map_err(convert_error)
             })
             .collect::<PyResult<Vec<_>>>()?;
@@ -795,19 +819,38 @@ impl VectorDatabase {
 ///
 ///     >>> db = omendb.open("./my_vectors")  # dimensions auto-detected
 ///
-///     Advanced configuration:
+///     With HNSW parameters (power users):
 ///
-///     >>> db = omendb.open("./my_vectors", dimensions=384, config={
-///     ...     "hnsw": {"m": 32, "ef_construction": 400},
-///     ...     "quantization": {"bits": 4}
-///     ... })
+///     >>> db = omendb.open("./my_vectors", dimensions=384, m=32, ef_construction=400)
 ///
 /// Performance:
 ///     - Loading from disk: 401x faster than rebuilding
 ///     - Default settings optimized for 1K-100K vectors
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=128, config=None))]
-fn open(path: String, dimensions: usize, config: Option<&Bound<'_, PyDict>>) -> PyResult<VectorDatabase> {
+#[pyo3(signature = (path, dimensions=128, m=None, ef_construction=None, config=None))]
+fn open(
+    path: String,
+    dimensions: usize,
+    m: Option<usize>,
+    ef_construction: Option<usize>,
+    config: Option<&Bound<'_, PyDict>>,
+) -> PyResult<VectorDatabase> {
+    // Validate optional params
+    if let Some(m_val) = m {
+        if !(4..=64).contains(&m_val) {
+            return Err(PyValueError::new_err(format!(
+                "m must be between 4 and 64, got {}", m_val
+            )));
+        }
+    }
+    if let (Some(ef_val), Some(m_val)) = (ef_construction, m) {
+        if ef_val < m_val {
+            return Err(PyValueError::new_err(format!(
+                "ef_construction ({}) must be >= m ({})",
+                ef_val, m_val
+            )));
+        }
+    }
     use std::path::Path;
 
     let db_path = Path::new(&path);
@@ -872,7 +915,14 @@ fn open(path: String, dimensions: usize, config: Option<&Bound<'_, PyDict>>) -> 
         })
     } else {
         // Create new database with configuration
-        let store = if let Some(cfg) = config {
+        let store = if m.is_some() || ef_construction.is_some() {
+            // Use explicit HNSW params if provided
+            let m_val = m.unwrap_or(16);
+            let ef_con = ef_construction.unwrap_or(100);
+            let ef_search = (10_usize * 4).max(64).max(100); // Default ef_search
+            VectorStore::new_with_params(dimensions, m_val, ef_con, ef_search)
+                .map_err(|e| PyValueError::new_err(format!("Failed to create HNSW index: {}", e)))?
+        } else if let Some(cfg) = config {
             create_store_with_config(dimensions, cfg)?
         } else {
             // No config: use adaptive defaults (M=16 for <50K vectors)
