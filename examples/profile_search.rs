@@ -4,7 +4,7 @@
 //! Then: perf record -g ./target/release/examples/profile_search
 //!       perf report
 
-use omendb::vector::hnsw::HNSWIndex;
+use omendb::vector::hnsw::{DistanceFunction, HNSWIndex, HNSWParams};
 use rand::Rng;
 use std::time::Instant;
 
@@ -25,7 +25,12 @@ fn main() {
         .collect();
 
     println!("Building index...");
-    let mut index = HNSWIndex::new(dim, 16, 200, 16).unwrap();
+    let params = HNSWParams {
+        m: 16,
+        ef_construction: 200,
+        ..Default::default()
+    };
+    let mut index = HNSWIndex::new(dim, params, DistanceFunction::L2, false).unwrap();
 
     let build_start = Instant::now();
     for vec in &vectors {
