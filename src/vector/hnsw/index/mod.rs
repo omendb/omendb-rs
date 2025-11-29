@@ -993,7 +993,6 @@ impl HNSWIndex {
 
         // Estimate filter selectivity
         let selectivity = self.estimate_selectivity(&filter_fn);
-        debug!(selectivity, "Estimated filter selectivity");
 
         // Adaptive threshold: bypass ACORN-1 if filter is too permissive
         // Or for small/medium graphs where brute force is fast enough
@@ -1003,27 +1002,34 @@ impl HNSWIndex {
 
         if selectivity > SELECTIVITY_THRESHOLD || self.len() <= SMALL_GRAPH_SIZE {
             // Filter is broad (>60% match) or graph is small: use standard search + post-filter
-            debug!(
-                selectivity,
-                threshold = SELECTIVITY_THRESHOLD,
-                graph_size = self.len(),
-                "Using standard search + post-filter"
-            );
+            debug!(selectivity, "Using post-filter path");
 
-            // Oversample to account for filtered results
-            let oversample_factor = 1.0 / selectivity.max(0.1);
-            let oversample_k = ((k as f32 * oversample_factor).ceil() as usize)
-                .max(k * 2)
-                .min(self.len()); // Cap at graph size
+            // For very selective filters, we may need to search the entire graph
+            // to find all matching items
+            let oversample_factor = 1.0 / selectivity.max(0.01);
+            let mut oversample_k = ((k as f32 * oversample_factor).ceil() as usize)
+                .max(k * 10) // At least 10x k
+                .min(self.len());
 
             // Ensure ef >= oversample_k (required by HNSW)
-            let search_ef = ef.max(oversample_k).max(self.len().min(200));
+            let mut search_ef = ef.max(oversample_k).max(self.len().min(500));
 
             let mut all_results = self.search(query, oversample_k, search_ef)?;
             all_results.retain(|r| filter_fn(r.id));
+
+            // If we didn't find enough, progressively expand search
+            // This handles the case where matching items aren't in the nearest neighbors
+            while all_results.len() < k && oversample_k < self.len() {
+                debug!(found = all_results.len(), wanted = k, "Expanding search");
+                oversample_k = (oversample_k * 2).min(self.len());
+                search_ef = oversample_k;
+                all_results = self.search(query, oversample_k, search_ef)?;
+                all_results.retain(|r| filter_fn(r.id));
+            }
+
             all_results.truncate(k);
 
-            debug!(num_results = all_results.len(), "Post-filtering complete");
+            debug!(num_results = all_results.len(), "Post-filter complete");
 
             return Ok(all_results);
         }
@@ -1070,24 +1076,26 @@ impl HNSWIndex {
             "ACORN-1 search completed"
         );
 
-        // Fallback: if ACORN-1 found no results, try brute-force post-filter
+        // Fallback: if ACORN-1 found fewer than k results, try brute-force post-filter
         // This can happen when the graph structure doesn't connect to matching nodes
-        if results.is_empty() && k > 0 {
-            debug!("ACORN-1 returned no results, falling back to post-filter");
+        // (especially for rare filters where matching nodes are sparse)
+        if results.len() < k {
+            debug!(
+                found = results.len(),
+                wanted = k,
+                "ACORN-1 insufficient, falling back to post-filter"
+            );
 
             // Full post-filter search as last resort
-            let oversample_k = (k as f32 / selectivity.max(0.01)).ceil() as usize;
-            let oversample_k = oversample_k.max(k * 5).min(self.len());
-            let search_ef = ef.max(oversample_k).max(self.len().min(200));
+            // Use large oversample to find all matching items
+            let oversample_k = self.len(); // Search all nodes
+            let search_ef = self.len(); // Maximum ef
 
             let mut all_results = self.search(query, oversample_k, search_ef)?;
             all_results.retain(|r| filter_fn(r.id));
             all_results.truncate(k);
 
-            debug!(
-                num_results = all_results.len(),
-                "ACORN-1 fallback post-filter complete"
-            );
+            debug!(num_results = all_results.len(), "Post-filter fallback complete");
 
             return Ok(all_results);
         }
