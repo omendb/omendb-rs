@@ -25,11 +25,8 @@ fn main() {
         .collect();
 
     println!("Building index...");
-    let params = HNSWParams {
-        m: 16,
-        ef_construction: 200,
-        ..Default::default()
-    };
+    // Use default M=48 to match Python benchmark
+    let params = HNSWParams::default();
     let mut index = HNSWIndex::new(dim, params, DistanceFunction::L2, false).unwrap();
 
     let build_start = Instant::now();
