@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(count_collisions(&hash3, &hash4), 0);
 
         // Half matching
-        let mut hash5 = [0xFF; HASH_BYTES];
+        let hash5 = [0xFF; HASH_BYTES];
         let mut hash6 = [0xFF; HASH_BYTES];
         hash6[0] = 0x00; // Flip first byte (8 bits)
         let collisions = count_collisions(&hash5, &hash6);
