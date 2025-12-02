@@ -954,12 +954,21 @@ impl VectorStore {
         Ok(merged_count)
     }
 
+    /// Check if index needs to be rebuilt (read-only check)
+    ///
+    /// Returns true if index is missing and we have significant data.
+    /// Use this to avoid write lock when index is already ready.
+    #[inline]
+    pub fn needs_index_rebuild(&self) -> bool {
+        self.hnsw_index.is_none() && self.vectors.len() > 100
+    }
+
     /// Ensure HNSW index is ready for search
     ///
     /// Rebuilds the index if it's missing but vectors exist (crash recovery case).
     /// Call this once after loading from disk before performing searches.
     pub fn ensure_index_ready(&mut self) -> Result<()> {
-        if self.hnsw_index.is_none() && self.vectors.len() > 100 {
+        if self.needs_index_rebuild() {
             eprintln!(
                 "⚠️  HNSW index missing for {} vectors - rebuilding...",
                 self.vectors.len()
