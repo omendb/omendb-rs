@@ -267,7 +267,7 @@ class TestPerformance:
             assert p99_latency < 10.0, f"P99 latency {p99_latency:.2f}ms > 10ms"
 
     @pytest.mark.slow
-    def test_batch_search_performance(self):
+    def test_search_batch_performance(self):
         """Test batch search is faster than individual searches."""
         dim = 128
         n_vectors = 1000
@@ -290,7 +290,7 @@ class TestPerformance:
 
             # Batch search
             start = time.time()
-            db.batch_search(queries, k=10)
+            db.search_batch(queries, k=10)
             batch_time = time.time() - start
 
             # Batch should be faster

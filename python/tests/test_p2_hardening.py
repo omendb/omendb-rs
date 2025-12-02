@@ -136,7 +136,7 @@ class TestGILDeadlock:
             assert len(completed) == 100
 
     def test_mixed_batch_and_single_ops(self):
-        """Interleave batch_search with single operations"""
+        """Interleave search_batch with single operations"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
             db = omendb.open(db_path, dimensions=64)
@@ -150,11 +150,11 @@ class TestGILDeadlock:
             errors = []
             lock = threading.Lock()
 
-            def batch_searcher(thread_id: int):
+            def search_batcher(thread_id: int):
                 try:
                     for _ in range(5):
                         queries = [generate_random_vector(64, thread_id * 100 + j) for j in range(20)]
-                        results = db.batch_search(queries, k=5)
+                        results = db.search_batch(queries, k=5)
                         assert len(results) == 20
                 except Exception as e:
                     with lock:
@@ -170,7 +170,7 @@ class TestGILDeadlock:
 
             threads = []
             for i in range(5):
-                threads.append(threading.Thread(target=batch_searcher, args=(i,)))
+                threads.append(threading.Thread(target=search_batcher, args=(i,)))
             for i in range(10):
                 threads.append(threading.Thread(target=single_searcher, args=(i + 5,)))
 
