@@ -434,7 +434,7 @@ class TestMixedReadWrite:
 class TestThreadPoolExecutor:
     """Test using ThreadPoolExecutor for parallel operations"""
 
-    def test_parallel_batch_search(self):
+    def test_parallel_search_batch(self):
         """Use ThreadPoolExecutor for parallel batch search"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
