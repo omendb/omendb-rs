@@ -82,3 +82,11 @@ profile_search = []
 
 [profile.release]
 debug = true
+
+[[bench]]
+name = "distance_bench"
+harness = false
+
+[[bench]]
+name = "search_bench"
+harness = false
