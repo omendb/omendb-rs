@@ -9,83 +9,51 @@ use std::collections::HashMap;
 use parking_lot::RwLock;
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 
-/// Query input can be single or batch
-enum QueryInput {
-    Single(Vec<f32>),
-    Batch(Vec<Vec<f32>>),
-}
-
-/// Extract query vector from Python object (list or numpy array)
+/// Extract single query vector from Python object (list or 1D numpy array)
 fn extract_query_vector(ob: &Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
-    // Try numpy array first (more efficient)
+    // Try 1D numpy array first (more efficient)
     if let Ok(arr) = ob.extract::<PyReadonlyArray1<'_, f32>>() {
         return arr.as_slice()
             .map(|s| s.to_vec())
             .map_err(|e| PyValueError::new_err(format!("Invalid numpy array: {}", e)));
     }
-    // Fall back to list
+    // Fall back to list of floats
     if let Ok(list) = ob.extract::<Vec<f32>>() {
         return Ok(list);
     }
     Err(PyValueError::new_err(
-        "query must be a list of floats or numpy array (dtype=float32)"
+        "query must be a list of floats or 1D numpy array (dtype=float32)"
     ))
 }
 
-/// Extract single query or batch of queries (auto-detect)
-fn extract_queries(ob: &Bound<'_, PyAny>) -> PyResult<QueryInput> {
-    // Try 2D numpy array first (batch of queries)
+/// Extract batch of query vectors from Python object (list of lists or 2D numpy array)
+fn extract_batch_queries(ob: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f32>>> {
+    // Try 2D numpy array first (most efficient)
     if let Ok(arr) = ob.extract::<PyReadonlyArray2<'_, f32>>() {
         let shape = arr.shape();
         let n_queries = shape[0];
         let dim = shape[1];
         let mut queries = Vec::with_capacity(n_queries);
 
-        // Get slice and copy rows
         if let Ok(slice) = arr.as_slice() {
             for i in 0..n_queries {
                 let start = i * dim;
                 let end = start + dim;
                 queries.push(slice[start..end].to_vec());
             }
+            return Ok(queries);
         } else {
             return Err(PyValueError::new_err("2D array must be contiguous"));
         }
-        return Ok(QueryInput::Batch(queries));
     }
 
-    // Try 1D numpy array (single query)
-    if let Ok(arr) = ob.extract::<PyReadonlyArray1<'_, f32>>() {
-        return arr.as_slice()
-            .map(|s| QueryInput::Single(s.to_vec()))
-            .map_err(|e| PyValueError::new_err(format!("Invalid numpy array: {}", e)));
-    }
-
-    // Try list - need to check if it's list of floats (single) or list of lists (batch)
-    if let Ok(list) = ob.extract::<Bound<'_, PyList>>() {
-        if list.is_empty() {
-            return Err(PyValueError::new_err("query cannot be empty"));
-        }
-
-        // Check first element type
-        let first = list.get_item(0)?;
-
-        // If first element is a number, it's a single query
-        if first.extract::<f32>().is_ok() {
-            let vec: Vec<f32> = list.extract()?;
-            return Ok(QueryInput::Single(vec));
-        }
-
-        // Otherwise assume it's a batch (list of lists or list of arrays)
-        let mut queries = Vec::with_capacity(list.len());
-        for item in list.iter() {
-            queries.push(extract_query_vector(&item)?);
-        }
-        return Ok(QueryInput::Batch(queries));
+    // Try list of lists/arrays
+    if let Ok(list) = ob.extract::<Vec<Vec<f32>>>() {
+        return Ok(list);
     }
 
     Err(PyValueError::new_err(
-        "query must be a list of floats, numpy array, or list of queries for batch search"
+        "queries must be a 2D numpy array or list of lists"
     ))
 }
 
@@ -263,46 +231,26 @@ impl VectorDatabase {
         Ok(result)
     }
 
-    /// Search for k nearest neighbors.
-    ///
-    /// Automatically detects single query vs batch queries and uses parallel
-    /// execution for batch. This provides the best of both worlds - simple API
-    /// for single queries and high throughput for batch queries.
+    /// Search for k nearest neighbors (single query).
     ///
     /// Args:
-    ///     query: Single query vector OR list of query vectors for batch search.
-    ///         - Single: list[float] or 1D numpy array
-    ///         - Batch: list[list[float]] or 2D numpy array (auto-parallelized)
-    ///     k (int): Number of nearest neighbors to return per query
+    ///     query: Query vector (list of floats or 1D numpy array)
+    ///     k (int): Number of nearest neighbors to return
     ///     ef (int, optional): Search width override (default: auto-tuned)
     ///     filter (dict, optional): MongoDB-style metadata filter
     ///
     /// Returns:
-    ///     Single query: list[dict] with keys {id, distance, metadata}
-    ///     Batch queries: list[list[dict]] - one result list per query
+    ///     list[dict]: Results with keys {id, distance, metadata}
     ///
     /// Examples:
-    ///     Single query:
-    ///
     ///     >>> results = db.search([0.1, 0.2, 0.3], k=5)
     ///     >>> results[0]['id'], results[0]['distance']
     ///     ('doc1', 0.123)
     ///
-    ///     Batch queries (auto-parallelized):
+    ///     With filter:
+    ///     >>> results = db.search(query, k=10, filter={"category": "news"})
     ///
-    ///     >>> queries = [[0.1]*128, [0.2]*128, [0.3]*128]
-    ///     >>> all_results = db.search(queries, k=10)
-    ///     >>> len(all_results)  # 3 result lists
-    ///     3
-    ///
-    ///     With 2D numpy array:
-    ///
-    ///     >>> queries = np.random.rand(100, 128).astype(np.float32)
-    ///     >>> all_results = db.search(queries, k=10)  # Parallel execution
-    ///
-    /// Performance:
-    ///     - Single: ~10,000 QPS @ 768D (ef=10)
-    ///     - Batch: ~40,000+ QPS @ 768D with parallel execution
+    /// For batch queries, use search_batch() instead.
     #[pyo3(signature = (query, k, ef=None, filter=None))]
     fn search(
         &self,
@@ -311,63 +259,29 @@ impl VectorDatabase {
         k: usize,
         ef: Option<usize>,
         filter: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Py<PyAny>> {
-        // Validate ef >= k if provided
+    ) -> PyResult<Vec<Py<PyDict>>> {
         if let Some(ef_val) = ef {
             if ef_val < k {
                 return Err(PyValueError::new_err(format!(
-                    "ef ({}) must be >= k ({})",
-                    ef_val, k
+                    "ef ({}) must be >= k ({})", ef_val, k
                 )));
             }
         }
 
-        // Auto-detect single vs batch
-        match extract_queries(query)? {
-            QueryInput::Single(query_data) => {
-                self.search_single(py, query_data, k, ef, filter)
-            }
-            QueryInput::Batch(queries) => {
-                if filter.is_some() {
-                    return Err(PyValueError::new_err(
-                        "filter not supported in batch search"
-                    ));
-                }
-                self.search_batch_internal(py, queries, k, ef)
-            }
-        }
-    }
+        let query_vec = Vector::new(extract_query_vector(query)?);
+        let rust_filter = filter.map(parse_filter).transpose()?;
 
-    /// Internal single-query search
-    fn search_single(
-        &self,
-        py: Python<'_>,
-        query_data: Vec<f32>,
-        k: usize,
-        ef: Option<usize>,
-        filter: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Py<PyAny>> {
-        let query_vec = Vector::new(query_data);
-
-        // Convert Python filter to Rust MetadataFilter (if provided)
-        let rust_filter = if let Some(f) = filter {
-            Some(parse_filter(f)?)
-        } else {
-            None
-        };
-
-        // Try read lock first - fast path when cache is valid
+        // Fast path: read lock when cache is valid
         {
             let inner = self.inner.read();
             if inner.cache_valid && !inner.store.needs_index_rebuild() {
                 let results = inner.store.search_with_ef_readonly(&query_vec, k, rust_filter.as_ref(), ef)
                     .map_err(convert_error)?;
-                let py_results = results_to_py(py, &results, &inner.index_to_id_cache)?;
-                return Ok(py_results.into_pyobject(py)?.into_any().unbind());
+                return results_to_py(py, &results, &inner.index_to_id_cache);
             }
         }
 
-        // Slow path: need to rebuild cache or index
+        // Slow path: rebuild cache if needed
         let mut inner = self.inner.write();
         inner.store.ensure_index_ready().map_err(convert_error)?;
         if !inner.cache_valid {
@@ -380,21 +294,55 @@ impl VectorDatabase {
 
         let results = inner.store.search_with_ef_readonly(&query_vec, k, rust_filter.as_ref(), ef)
             .map_err(convert_error)?;
-        let py_results = results_to_py(py, &results, &inner.index_to_id_cache)?;
-        Ok(py_results.into_pyobject(py)?.into_any().unbind())
+        results_to_py(py, &results, &inner.index_to_id_cache)
     }
 
-    /// Internal batch search with parallel execution
-    fn search_batch_internal(
+    /// Batch search multiple queries with parallel execution.
+    ///
+    /// Efficiently searches multiple queries in parallel using rayon.
+    /// Releases the GIL during search for maximum throughput.
+    ///
+    /// Args:
+    ///     queries: Batch of query vectors (2D numpy array or list of lists)
+    ///     k (int): Number of nearest neighbors per query
+    ///     ef (int, optional): Search width override
+    ///
+    /// Returns:
+    ///     list[list[dict]]: Results for each query, each with {id, distance, metadata}
+    ///
+    /// Examples:
+    ///     >>> queries = [[0.1]*128, [0.2]*128, [0.3]*128]
+    ///     >>> results = db.search_batch(queries, k=10)
+    ///     >>> len(results)  # 3 result lists
+    ///     3
+    ///
+    ///     With 2D numpy array:
+    ///     >>> queries = np.random.rand(100, 128).astype(np.float32)
+    ///     >>> results = db.search_batch(queries, k=10)
+    ///
+    /// Performance: ~20,000+ QPS @ 768D with parallel execution
+    #[pyo3(signature = (queries, k, ef=None))]
+    fn search_batch(
         &self,
         py: Python<'_>,
-        queries: Vec<Vec<f32>>,
+        queries: &Bound<'_, PyAny>,
         k: usize,
         ef: Option<usize>,
-    ) -> PyResult<Py<PyAny>> {
-        let query_vecs: Vec<Vector> = queries.into_iter().map(Vector::new).collect();
+    ) -> PyResult<Vec<Vec<Py<PyDict>>>> {
+        if let Some(ef_val) = ef {
+            if ef_val < k {
+                return Err(PyValueError::new_err(format!(
+                    "ef ({}) must be >= k ({})", ef_val, k
+                )));
+            }
+        }
 
-        // Ensure index is ready and cache is valid
+        let query_vecs: Vec<Vector> = extract_batch_queries(queries)?
+            .into_iter()
+            .map(Vector::new)
+            .collect();
+
+        // Ensure index and cache are ready
         {
             let mut inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
@@ -407,7 +355,7 @@ impl VectorDatabase {
             }
         }
 
-        // Release GIL and perform parallel search using rayon
+        // Release GIL and search in parallel
         #[allow(deprecated)]
         let all_results: Vec<Result<Vec<(usize, f32, JsonValue)>, _>> = py.allow_threads(|| {
             let inner = self.inner.read();
@@ -419,42 +367,9 @@ impl VectorDatabase {
         let mut py_all_results = Vec::with_capacity(all_results.len());
         for result in all_results {
             let results = result.map_err(convert_error)?;
-            let py_results = results_to_py(py, &results, &inner.index_to_id_cache)?;
-            py_all_results.push(py_results);
+            py_all_results.push(results_to_py(py, &results, &inner.index_to_id_cache)?);
         }
-        Ok(py_all_results.into_pyobject(py)?.into_any().unbind())
-    }
-
-    /// Batch search multiple queries in a single call.
-    ///
-    /// NOTE: Prefer using search() with a list of queries instead.
-    /// search() automatically detects batch input and uses parallel execution.
-    ///
-    /// Example:
-    ///     >>> results = db.search([[0.1]*128, [0.2]*128], k=10)  # Same as batch_search
-    #[pyo3(signature = (queries, k, ef=None, filter=None))]
-    fn batch_search(
-        &self,
-        py: Python<'_>,
-        queries: Vec<Vec<f32>>,
-        k: usize,
-        ef: Option<usize>,
-        filter: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Py<PyAny>> {
-        if let Some(ef_val) = ef {
-            if ef_val < k {
-                return Err(PyValueError::new_err(format!(
-                    "ef ({}) must be >= k ({})",
-                    ef_val, k
-                )));
-            }
-        }
-        if filter.is_some() {
-            return Err(PyValueError::new_err(
-                "filter not supported in batch_search"
-            ));
-        }
-        self.search_batch_internal(py, queries, k, ef)
+        Ok(py_all_results)
     }
 
     /// Delete vectors by ID.
