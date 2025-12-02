@@ -254,27 +254,79 @@ impl VectorDatabase {
             None
         };
 
-        // Ensure index is ready (may trigger rebuild, needs write lock)
+        // Try read lock first - fast path when cache is valid
         {
-            let mut inner = self.inner.write();
-            inner.store.ensure_index_ready().map_err(convert_error)?;
+            let inner = self.inner.read();
+            if inner.cache_valid && !inner.store.needs_index_rebuild() {
+                // Fast path: everything is ready, search directly
+                if as_numpy {
+                    if rust_filter.is_some() {
+                        return Err(PyValueError::new_err("filter not supported with as_numpy=True"));
+                    }
+                    let results = inner.store.knn_search_readonly(&query_vec, k, ef)
+                        .map_err(convert_error)?;
+                    let n = results.len();
+                    let mut ids = Vec::with_capacity(n);
+                    let mut distances = Vec::with_capacity(n);
+                    for (index, distance) in results {
+                        ids.push(index as i64);
+                        distances.push(distance);
+                    }
+                    let ids_array = ids.into_pyarray(py);
+                    let distances_array = distances.into_pyarray(py);
+                    return Ok(PyTuple::new(py, &[ids_array.into_any(), distances_array.into_any()])?.into_any().unbind());
+                } else {
+                    let results = inner.store.search_with_ef_readonly(&query_vec, k, rust_filter.as_ref(), ef)
+                        .map_err(convert_error)?;
+                    let mut py_results = Vec::with_capacity(results.len());
+                    for (index, distance, metadata) in results {
+                        if let Some(id) = inner.index_to_id_cache.get(&index) {
+                            let dict = PyDict::new(py);
+                            dict.set_item(pyo3::intern!(py, "id"), id)?;
+                            dict.set_item(pyo3::intern!(py, "distance"), distance)?;
+                            if metadata.as_object().map_or(false, |o| o.is_empty()) {
+                                dict.set_item(pyo3::intern!(py, "metadata"), PyDict::new(py))?;
+                            } else if let Ok(metadata_dict) = json_to_pyobject(py, &metadata) {
+                                dict.set_item(pyo3::intern!(py, "metadata"), metadata_dict)?;
+                            }
+                            py_results.push(dict.unbind());
+                        }
+                    }
+                    return Ok(py_results.into_pyobject(py)?.into_any().unbind());
+                }
+            }
         }
 
-        // Now use read lock for the actual search (enables concurrent searches)
-        let inner = self.inner.read();
+        // Slow path: need to rebuild cache or index
+        let mut inner = self.inner.write();
+        inner.store.ensure_index_ready().map_err(convert_error)?;
+        if !inner.cache_valid {
+            inner.index_to_id_cache = inner.store.id_to_index
+                .iter()
+                .map(|(id, &idx)| (idx, id.clone()))
+                .collect();
+            inner.cache_valid = true;
+        }
 
-        // Perform search using readonly version
-        let results = inner.store.search_with_ef_readonly(&query_vec, k, rust_filter.as_ref(), ef)
-            .map_err(convert_error)?;
+        // Now search with write lock held
+        let inner_ref = &*inner;
 
         // Convert results based on as_numpy flag
         if as_numpy {
-            // NumPy mode: return (ids, distances) as numpy arrays (fastest, for ML pipelines)
+            // NumPy mode: use fast path without metadata lookup
+            // Filters not supported in NumPy mode
+            if rust_filter.is_some() {
+                return Err(PyValueError::new_err("filter not supported with as_numpy=True"));
+            }
+
+            let results = inner.store.knn_search_readonly(&query_vec, k, ef)
+                .map_err(convert_error)?;
+
             let n = results.len();
             let mut ids = Vec::with_capacity(n);
             let mut distances = Vec::with_capacity(n);
 
-            for (index, distance, _) in results {
+            for (index, distance) in results {
                 ids.push(index as i64);
                 distances.push(distance);
             }
@@ -284,6 +336,9 @@ impl VectorDatabase {
             Ok(PyTuple::new(py, &[ids_array.into_any(), distances_array.into_any()])?.into_any().unbind())
         } else {
             // Dict mode: return list of {id, distance, metadata} dicts (default, user-friendly)
+            let results = inner.store.search_with_ef_readonly(&query_vec, k, rust_filter.as_ref(), ef)
+                .map_err(convert_error)?;
+
             let mut py_results = Vec::with_capacity(results.len());
             for (index, distance, metadata) in results {
                 if let Some(id) = inner.index_to_id_cache.get(&index) {
@@ -374,10 +429,19 @@ impl VectorDatabase {
             .map(Vector::new)
             .collect();
 
-        // Ensure index is ready (may trigger rebuild, needs write lock)
+        // Ensure index is ready and cache is valid
         {
             let mut inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
+
+            // Rebuild id cache if invalid
+            if !inner.cache_valid {
+                inner.index_to_id_cache = inner.store.id_to_index
+                    .iter()
+                    .map(|(id, &idx)| (idx, id.clone()))
+                    .collect();
+                inner.cache_valid = true;
+            }
         }
 
         // Release GIL and perform parallel search using rayon
