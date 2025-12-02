@@ -4,3 +4,6 @@ data/*.hdf5
 example_db.*
 *.hnsw
 *.vectors.bin
+
+# Benchmark data (large files)
+benchmarks/data/

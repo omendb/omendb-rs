@@ -112,8 +112,8 @@ class TestEfSearchConstraints:
             results = db.search(vectors[0]["embedding"], k=1)
             assert len(results) == 1
 
-    def test_ef_search_vs_k_constraint(self):
-        """Test that ef >= k is enforced during search"""
+    def test_ef_search_auto_clamp_to_k(self):
+        """Test that ef is auto-clamped to k when ef < k (no error)"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
             db = omendb.open(db_path, dimensions=64)
@@ -124,10 +124,10 @@ class TestEfSearchConstraints:
             # Set low ef_search
             db.set_ef_search(5)
 
-            # Search with k > ef_search should fail
+            # Search with k > ef_search should work (ef auto-clamped to k)
             query = vectors[0]["embedding"]
-            with pytest.raises(RuntimeError, match="ef"):
-                db.search(query, k=10)  # k=10 > ef=5
+            results = db.search(query, k=10)  # k=10 > ef=5, auto-clamps ef to 10
+            assert len(results) == 10
 
     def test_ef_search_equals_k(self):
         """Test that ef = k is allowed"""
