@@ -10,6 +10,7 @@ use super::rabitq::{QuantizedVector, RaBitQ, RaBitQParams};
 use super::storage::SeerDBStorage;
 use super::types::Vector;
 use anyhow::Result;
+use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::Path;
@@ -953,21 +954,50 @@ impl VectorStore {
         Ok(merged_count)
     }
 
+    /// Ensure HNSW index is ready for search
+    ///
+    /// Rebuilds the index if it's missing but vectors exist (crash recovery case).
+    /// Call this once after loading from disk before performing searches.
+    pub fn ensure_index_ready(&mut self) -> Result<()> {
+        if self.hnsw_index.is_none() && self.vectors.len() > 100 {
+            eprintln!(
+                "⚠️  HNSW index missing for {} vectors - rebuilding...",
+                self.vectors.len()
+            );
+            self.rebuild_index()?;
+        }
+        Ok(())
+    }
+
     /// K-nearest neighbors search using HNSW
     ///
     /// Quantization (if enabled) is for storage/memory savings only.
     /// Search always uses HNSW with original vectors for accuracy and speed.
+    ///
+    /// Note: May trigger index rebuild if index is missing. For parallel search,
+    /// call `ensure_index_ready()` first, then use `knn_search_readonly()`.
     pub fn knn_search(&mut self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
         self.knn_search_with_ef(query, k, None)
     }
 
     /// K-nearest neighbors search with optional ef override
     ///
+    /// Note: May trigger index rebuild. For parallel search, use readonly version.
+    pub fn knn_search_with_ef(&mut self, query: &Vector, k: usize, ef: Option<usize>) -> Result<Vec<(usize, f32)>> {
+        self.ensure_index_ready()?;
+        self.knn_search_readonly(query, k, ef)
+    }
+
+    /// Read-only K-nearest neighbors search (for parallel execution)
+    ///
+    /// This version takes `&self` instead of `&mut self`, enabling parallel search.
+    /// Caller must ensure index is ready by calling `ensure_index_ready()` first.
+    ///
     /// # Arguments
     /// * `query` - Query vector
     /// * `k` - Number of neighbors to return
     /// * `ef` - Search width override (None = auto-tune to max(k*4, 64))
-    pub fn knn_search_with_ef(&mut self, query: &Vector, k: usize, ef: Option<usize>) -> Result<Vec<(usize, f32)>> {
+    pub fn knn_search_readonly(&self, query: &Vector, k: usize, ef: Option<usize>) -> Result<Vec<(usize, f32)>> {
         if query.dim() != self.dimensions {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
@@ -984,27 +1014,12 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // CRITICAL FIX: Rebuild index if missing but vectors exist
-        // This handles the case where vectors were loaded from disk but index wasn't persisted
-        if self.hnsw_index.is_none() && self.vectors.len() > 100 {
-            eprintln!(
-                "⚠️  HNSW index missing for {} vectors - rebuilding...",
-                self.vectors.len()
-            );
-            self.rebuild_index()?;
-        }
-
         // Use HNSW index if available
-        // NOTE: Quantization (if enabled) is for storage only, not search
         if let Some(ref index) = self.hnsw_index {
             return index.search_with_ef(&query.data, k, ef);
         }
 
         // Fallback to brute-force if no index (small datasets only)
-        eprintln!(
-            "ℹ️  Using brute-force search for {} vectors",
-            self.vectors.len()
-        );
         self.knn_search_brute_force(query, k)
     }
 
@@ -1020,7 +1035,8 @@ impl VectorStore {
         k: usize,
         filter: &MetadataFilter,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.knn_search_with_filter_ef(query, k, filter, None)
+        self.ensure_index_ready()?;
+        self.knn_search_with_filter_ef_readonly(query, k, filter, None)
     }
 
     /// K-nearest neighbors search with metadata filtering and optional ef override
@@ -1031,6 +1047,21 @@ impl VectorStore {
     /// Returns Vec of (id, distance, metadata) tuples
     pub fn knn_search_with_filter_ef(
         &mut self,
+        query: &Vector,
+        k: usize,
+        filter: &MetadataFilter,
+        ef: Option<usize>,
+    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+        self.ensure_index_ready()?;
+        self.knn_search_with_filter_ef_readonly(query, k, filter, ef)
+    }
+
+    /// Read-only filtered search (for parallel execution)
+    ///
+    /// This version takes `&self` instead of `&mut self`, enabling parallel search.
+    /// Caller must ensure index is ready by calling `ensure_index_ready()` first.
+    pub fn knn_search_with_filter_ef_readonly(
+        &self,
         query: &Vector,
         k: usize,
         filter: &MetadataFilter,
@@ -1137,11 +1168,26 @@ impl VectorStore {
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
+        self.ensure_index_ready()?;
+        self.search_with_ef_readonly(query, k, filter, ef)
+    }
+
+    /// Read-only search with optional filter (for parallel execution)
+    ///
+    /// This version takes `&self` instead of `&mut self`, enabling parallel search.
+    /// Caller must ensure index is ready by calling `ensure_index_ready()` first.
+    pub fn search_with_ef_readonly(
+        &self,
+        query: &Vector,
+        k: usize,
+        filter: Option<&MetadataFilter>,
+        ef: Option<usize>,
+    ) -> Result<Vec<(usize, f32, JsonValue)>> {
         if let Some(f) = filter {
-            self.knn_search_with_filter_ef(query, k, f, ef)
+            self.knn_search_with_filter_ef_readonly(query, k, f, ef)
         } else {
             // No filter - get all results with metadata
-            let results = self.knn_search_with_ef(query, k, ef)?;
+            let results = self.knn_search_readonly(query, k, ef)?;
             Ok(results
                 .into_iter()
                 .filter_map(|(index, distance)| {
@@ -1159,6 +1205,47 @@ impl VectorStore {
                 })
                 .collect())
         }
+    }
+
+    /// Parallel batch search for multiple queries (ChromaDB-style optimization)
+    ///
+    /// Executes all queries in parallel using rayon, achieving significant
+    /// speedup on multi-core systems. Caller must call `ensure_index_ready()`
+    /// before this method.
+    ///
+    /// # Arguments
+    /// * `queries` - Slice of query vectors
+    /// * `k` - Number of neighbors to return per query
+    /// * `ef` - Search width override (None = auto-tune)
+    ///
+    /// # Returns
+    /// Vec of results, one per query. Each result contains (index, distance) pairs.
+    pub fn batch_search_parallel(
+        &self,
+        queries: &[Vector],
+        k: usize,
+        ef: Option<usize>,
+    ) -> Vec<Result<Vec<(usize, f32)>>> {
+        queries
+            .par_iter()
+            .map(|q| self.knn_search_readonly(q, k, ef))
+            .collect()
+    }
+
+    /// Parallel batch search with metadata (ChromaDB-style optimization)
+    ///
+    /// Executes all queries in parallel using rayon, returning metadata with results.
+    /// Caller must call `ensure_index_ready()` before this method.
+    pub fn batch_search_parallel_with_metadata(
+        &self,
+        queries: &[Vector],
+        k: usize,
+        ef: Option<usize>,
+    ) -> Vec<Result<Vec<(usize, f32, JsonValue)>>> {
+        queries
+            .par_iter()
+            .map(|q| self.search_with_ef_readonly(q, k, None, ef))
+            .collect()
     }
 
     /// Two-phase search with quantization + reranking
