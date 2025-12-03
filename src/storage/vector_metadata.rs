@@ -1,7 +1,7 @@
 //! Vector metadata storage using seerdb
 //!
 //! Stores user-facing JSON metadata for vectors.
-//! Key format: "v:{vector_id}" as UTF-8 bytes
+//! Key format: "`v:{vector_id`}" as UTF-8 bytes
 //! Value: JSON-serialized metadata bytes
 
 use crate::{config::StorageConfig, Result, OmenDBError};
@@ -52,6 +52,7 @@ impl VectorMetadataStorage {
     }
 
     /// Get reference to underlying seerdb
+    #[must_use] 
     pub fn db(&self) -> &DB {
         &self.db
     }

@@ -1,8 +1,8 @@
 //! Node metadata storage using seerdb
 //!
-//! Stores per-node metadata (max_level) for HNSW hierarchical navigation.
-//! Key format: node_id (8 bytes big-endian)
-//! Value: max_level (1 byte)
+//! Stores per-node metadata (`max_level`) for HNSW hierarchical navigation.
+//! Key format: `node_id` (8 bytes big-endian)
+//! Value: `max_level` (1 byte)
 
 use crate::{config::StorageConfig, Result, OmenDBError};
 use seerdb::db::{DBOptions, DB};
@@ -52,11 +52,12 @@ impl NodeMetadataStorage {
     }
 
     /// Get reference to underlying seerdb
+    #[must_use] 
     pub fn db(&self) -> &DB {
         &self.db
     }
 
-    /// Encode key: node_id as big-endian bytes
+    /// Encode key: `node_id` as big-endian bytes
     fn encode_key(node_id: u64) -> [u8; 8] {
         node_id.to_be_bytes()
     }

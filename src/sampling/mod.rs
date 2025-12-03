@@ -79,7 +79,7 @@ fn get_projections(dimensions: usize) -> &'static Vec<Vec<f32>> {
 /// Compute random projection hash for a vector
 ///
 /// Algorithm:
-/// 1. For each of HASH_BITS projection vectors:
+/// 1. For each of `HASH_BITS` projection vectors:
 ///    - Compute dot product with input vector
 ///    - Set bit to 1 if dot product ≥ 0, else 0
 /// 2. Pack bits into byte array
@@ -92,6 +92,7 @@ fn get_projections(dimensions: usize) -> &'static Vec<Vec<f32>> {
 /// let hash = compute_hash(&vector);
 /// assert_eq!(hash.len(), 16); // 128 bits = 16 bytes
 /// ```
+#[must_use] 
 pub fn compute_hash(vector: &[f32]) -> [u8; HASH_BYTES] {
     let projections = get_projections(vector.len());
     let mut hash = [0u8; HASH_BYTES];
@@ -119,11 +120,11 @@ pub fn compute_hash(vector: &[f32]) -> [u8; HASH_BYTES] {
 ///
 /// Algorithm:
 /// 1. XOR the two hashes (differences become 1, matches become 0)
-/// 2. Count zero bits = HASH_BITS - count_ones(XOR result)
+/// 2. Count zero bits = `HASH_BITS` - `count_ones(XOR` result)
 ///
 /// Higher collision count = more similar vectors (likely neighbors)
 ///
-/// Returns: Number of matching bits (0 to HASH_BITS)
+/// Returns: Number of matching bits (0 to `HASH_BITS`)
 ///
 /// # Example
 /// ```ignore
@@ -133,6 +134,7 @@ pub fn compute_hash(vector: &[f32]) -> [u8; HASH_BYTES] {
 /// assert_eq!(collisions, 128); // All bits match
 /// ```
 #[inline]
+#[must_use] 
 pub fn count_collisions(hash1: &[u8; HASH_BYTES], hash2: &[u8; HASH_BYTES]) -> usize {
     // XOR hashes and count differing bits
     let diff_bits: usize = hash1
@@ -159,7 +161,7 @@ pub fn count_collisions(hash1: &[u8; HASH_BYTES], hash2: &[u8; HASH_BYTES]) -> u
 /// # Arguments
 /// * `query_hash` - Hash of the query vector
 /// * `candidate_hash` - Hash of the candidate vector
-/// * `threshold` - Minimum collision count to read (typically 60-70% of HASH_BITS)
+/// * `threshold` - Minimum collision count to read (typically 60-70% of `HASH_BITS`)
 ///
 /// Returns: true if vector should be read, false to skip
 ///
@@ -178,6 +180,7 @@ pub fn count_collisions(hash1: &[u8; HASH_BYTES], hash2: &[u8; HASH_BYTES]) -> u
 /// }
 /// ```
 #[inline]
+#[must_use] 
 pub fn should_read_vector(
     query_hash: &[u8; HASH_BYTES],
     candidate_hash: &[u8; HASH_BYTES],
@@ -188,13 +191,14 @@ pub fn should_read_vector(
 
 /// Compute default sampling threshold
 ///
-/// Returns 50% of HASH_BITS as a reasonable default.
+/// Returns 50% of `HASH_BITS` as a reasonable default.
 /// Tunable based on recall requirements:
 /// - Lower threshold (40-50%): More aggressive filtering, higher speedup, lower recall
 /// - Higher threshold (60-70%): More conservative, lower speedup, higher recall
 ///
 /// Paper uses threshold that achieves ρ = 0.8 (skip 20% of reads)
 /// After testing: 60% was too aggressive (53% recall), 50% provides better balance
+#[must_use] 
 pub fn default_threshold() -> usize {
     (HASH_BITS as f32 * 0.5) as usize // 64 out of 128 bits
 }
