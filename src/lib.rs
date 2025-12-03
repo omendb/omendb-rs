@@ -32,6 +32,13 @@
 //! let results = store.knn_search(&Vector::new(vec![0.1; 128]), 10).unwrap();
 //! ```
 
+// Core modules
+pub mod compression;
+pub mod config;
+pub mod sampling;
+pub mod simd;
+pub mod storage;
+pub mod types;
 pub mod vector;
 
 #[cfg(feature = "ffi")]
@@ -40,5 +47,6 @@ pub mod ffi;
 // Re-export core types
 pub use vector::{MetadataFilter, Vector, VectorStore};
 
-// Re-export seerdb-vector types
-pub use seerdb_vector::{config::SeerdbVectorConfig, CompressionTier, DistanceMetric, StorageTier};
+// Re-export storage types (formerly seerdb-vector)
+pub use config::SeerdbVectorConfig;
+pub use types::{CompressionTier, DistanceMetric, Result, SeerdbVectorError, StorageTier};
