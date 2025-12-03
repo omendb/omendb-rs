@@ -50,6 +50,7 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "maturin>=1.0",
     "pytest>=8.3.5",
     "pytest-timeout>=2.3.0",
     "chromadb>=1.0.0",
