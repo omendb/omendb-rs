@@ -22,16 +22,16 @@ static EMPTY_NEIGHBORS: &[u32] = &[];
 /// Only fetch neighbors when traversing the graph.
 ///
 /// Thread-safety:
-/// - Reads: Lock-free via ArcSwap (just atomic load)
+/// - Reads: Lock-free via `ArcSwap` (just atomic load)
 /// - Writes: Mutex-protected copy-on-write for thread-safety
 ///
 /// Performance: Search is read-heavy, construction is write-heavy.
 /// Lock-free reads give ~40% speedup on high-dimension searches.
 #[derive(Debug)]
 pub struct NeighborLists {
-    /// Neighbor storage: neighbors[`node_id`][level] = ArcSwap<Box<[u32]>>
+    /// Neighbor storage: neighbors[`node_id`][level] = `ArcSwap`<Box<[u32]>>
     ///
-    /// ArcSwap enables:
+    /// `ArcSwap` enables:
     /// - Lock-free reads during search (just atomic load + deref)
     /// - Thread-safe writes via copy-on-write
     neighbors: Vec<Vec<ArcSwap<Box<[u32]>>>>,
@@ -100,7 +100,7 @@ impl NeighborLists {
     /// Execute a closure with read access to neighbors (LOCK-FREE, zero-copy)
     ///
     /// This is the hot path for search - just an atomic load, no locking.
-    /// ~40% faster than RwLock at high dimensions (1536D+).
+    /// ~40% faster than `RwLock` at high dimensions (1536D+).
     #[inline]
     pub fn with_neighbors<F, R>(&self, node_id: u32, level: u8, f: F) -> R
     where

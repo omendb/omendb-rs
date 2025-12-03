@@ -1,14 +1,14 @@
-//! Configuration for OmenDB storage
+//! Configuration for `OmenDB` storage
 //!
 //! Provides configuration options for the underlying storage engine.
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for OmenDB storage
+/// Configuration for `OmenDB` storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     /// WAL sync policy (fsync behavior)
-    /// Default: false (SyncPolicy::None - for performance)
+    /// Default: false (`SyncPolicy::None` - for performance)
     pub sync_writes: bool,
 
     /// Memtable capacity in bytes
@@ -37,12 +37,13 @@ impl Default for StorageConfig {
 
 impl StorageConfig {
     /// Create a new config builder
+    #[must_use] 
     pub fn builder() -> StorageConfigBuilder {
         StorageConfigBuilder::default()
     }
 }
 
-/// Builder for StorageConfig
+/// Builder for `StorageConfig`
 #[derive(Debug, Default)]
 pub struct StorageConfigBuilder {
     sync_writes: Option<bool>,
@@ -53,30 +54,35 @@ pub struct StorageConfigBuilder {
 
 impl StorageConfigBuilder {
     /// Set sync writes policy
+    #[must_use] 
     pub fn sync_writes(mut self, enabled: bool) -> Self {
         self.sync_writes = Some(enabled);
         self
     }
 
     /// Set memtable capacity
+    #[must_use] 
     pub fn memtable_capacity(mut self, capacity: usize) -> Self {
         self.memtable_capacity = Some(capacity);
         self
     }
 
     /// Set block cache capacity
+    #[must_use] 
     pub fn block_cache_capacity(mut self, capacity: usize) -> Self {
         self.block_cache_capacity = Some(capacity);
         self
     }
 
     /// Enable/disable background compaction
+    #[must_use] 
     pub fn background_compaction(mut self, enabled: bool) -> Self {
         self.background_compaction = Some(enabled);
         self
     }
 
     /// Build configuration
+    #[must_use] 
     pub fn build(self) -> StorageConfig {
         let defaults = StorageConfig::default();
 

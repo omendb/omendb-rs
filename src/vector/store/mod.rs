@@ -762,7 +762,7 @@ impl VectorStore {
         let mut all_ids = Vec::with_capacity(vectors.len());
 
         // Process in chunks for better memory management and progress tracking
-        for (_chunk_idx, chunk) in vectors.chunks(CHUNK_SIZE).enumerate() {
+        for chunk in vectors.chunks(CHUNK_SIZE) {
             // Extract vector data for HNSW
             let vector_data: Vec<Vec<f32>> = chunk.iter().map(|v| v.data.clone()).collect();
 
@@ -974,7 +974,7 @@ impl VectorStore {
 
         // Check if we have any data (either in vectors or in HNSW)
         let has_data = !self.vectors.is_empty()
-            || self.hnsw_index.as_ref().map_or(false, |idx| !idx.is_empty());
+            || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
 
         if !has_data {
             return Ok(Vec::new());

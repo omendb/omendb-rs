@@ -9,7 +9,7 @@ use seerdb::SyncPolicy;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Size of edge key (node_id + level = 9 bytes)
+/// Size of edge key (`node_id` + level = 9 bytes)
 const KEY_SIZE: usize = 9;
 
 /// Edge storage using seerdb
@@ -64,17 +64,19 @@ impl EdgeStorage {
     }
 
     /// Get reference to underlying seerdb
+    #[must_use] 
     pub fn db(&self) -> &DB {
         &self.db
     }
 
     /// Get cache statistics for performance monitoring
+    #[must_use] 
     pub fn cache_stats(&self) -> (u64, u64, f64) {
         let stats = self.db.stats();
         (stats.cache_hits, stats.cache_misses, stats.cache_hit_rate)
     }
 
-    /// Encode edge key: node_id || level
+    /// Encode edge key: `node_id` || level
     fn encode_key(node_id: u64, level: u8) -> [u8; KEY_SIZE] {
         let mut key = [0u8; KEY_SIZE];
         key[0..8].copy_from_slice(&node_id.to_be_bytes());
@@ -120,7 +122,7 @@ impl EdgeStorage {
 
     /// Get all neighbors of a node at a specific level
     ///
-    /// Uses point lookup O(1) instead of prefix scan O(N_SST).
+    /// Uses point lookup O(1) instead of prefix scan `O(N_SST)`.
     pub fn get_neighbors(&self, node_id: u64, level: u8) -> Result<Vec<u64>> {
         let key = Self::encode_key(node_id, level);
 

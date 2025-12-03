@@ -288,6 +288,7 @@ impl GraphStorage {
     ///
     /// Thread-safe version for parallel graph construction.
     /// Only works with Memory mode. Returns false if called on Layered mode.
+    
     pub fn add_bidirectional_link_parallel(&self, node_a: u32, node_b: u32, level: u8) -> bool {
         match self {
             Self::Memory(lists) => {
@@ -303,6 +304,7 @@ impl GraphStorage {
     /// Removes link from `node_a` to `node_b` (NOT bidirectional).
     /// Thread-safe version for parallel graph construction.
     /// Only works with Memory mode. Returns false if called on Layered mode.
+    
     pub fn remove_link_parallel(&self, node_a: u32, node_b: u32, level: u8) -> bool {
         match self {
             Self::Memory(lists) => {
@@ -317,6 +319,7 @@ impl GraphStorage {
     ///
     /// Thread-safe version for parallel graph construction.
     /// Only works with Memory mode. Returns false if called on Layered mode.
+    
     pub fn set_neighbors_parallel(&self, node_id: u32, level: u8, neighbors: Vec<u32>) -> bool {
         match self {
             Self::Memory(lists) => {
