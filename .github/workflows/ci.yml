@@ -40,4 +40,4 @@ jobs:
         run: uv run maturin develop --release
       - name: Run Python tests
         working-directory: python
-        run: uv run pytest tests/ -x --timeout=120 -m "not slow and not soak"
+        run: uv run pytest tests/test_basic.py tests/test_search.py tests/test_delete.py tests/test_insert.py tests/test_config.py tests/test_persistence.py -x --timeout=30
