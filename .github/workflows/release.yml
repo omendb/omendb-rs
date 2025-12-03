@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.0.1a2)'
+        description: 'Version to release (e.g., 0.0.1a3)'
         required: true
         type: string
 
@@ -13,49 +13,53 @@ permissions:
 
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: 3.x
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist -m python/Cargo.toml
+          args: --release --out dist --find-interpreter -m python/Cargo.toml
           manylinux: auto
-          # Use zig for cross-compilation instead of Docker
-          container: off
-      - uses: actions/upload-artifact@v4
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
 
   macos:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+        include:
+          - runner: macos-13
+            target: x86_64
+          - runner: macos-14
+            target: aarch64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: 3.x
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist -m python/Cargo.toml
-      - uses: actions/upload-artifact@v4
+          args: --release --out dist --find-interpreter -m python/Cargo.toml
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-${{ matrix.target }}
           path: dist
 
-  # NOTE: Windows disabled - jemalloc (from seerdb) doesn't compile on Windows
+  # NOTE: Windows disabled - jemalloc (from seerdb dependency) doesn't compile on Windows
   # TODO: Add Windows support when seerdb makes jemalloc optional
 
   sdist:
@@ -67,7 +71,8 @@ jobs:
         with:
           command: sdist
           args: --out dist -m python/Cargo.toml
-      - uses: actions/upload-artifact@v4
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
         with:
           name: wheels-sdist
           path: dist
