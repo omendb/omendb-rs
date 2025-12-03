@@ -3,7 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/omendb)](https://pypi.org/project/omendb/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/omendb/omendb/blob/main/LICENSE)
 
-Embedded vector database. No server, no setup, just `pip install`.
+Embedded vector database for Python. No server, no setup, just `pip install`.
+
+> **Alpha**: This is an early release. The API may change. Please report issues.
 
 ## Quick Start
 
@@ -31,13 +33,25 @@ results = db.search([1.0, 0.0, 0.0, 0.0], k=2, filter={"type": {"$eq": "cat"}})
 # [{"id": "c", "distance": 2.0, "metadata": {"type": "cat"}}]
 ```
 
-## Why OmenDB?
+## Features
 
-- **No server** - Runs in your process, data stays local
-- **Fast** - 50,000 QPS batch, 5,700 QPS single (10K vectors, 128D)
-- **Memory efficient** - 8x compression, same accuracy
-- **Filtered search** - Query by metadata without scanning everything
-- **Persistent** - Survives restarts, no manual saves needed
+- **Embedded** - Runs in your process, no server needed
+- **Persistent** - Data survives restarts, no manual saves
+- **Filtered search** - Query by metadata using ACORN-1 algorithm
+- **Compression** - RaBitQ quantization reduces memory 4-8x
+- **HNSW indexing** - Approximate nearest neighbor search
+
+### Performance
+
+On a 10K vector dataset (128D, M3 Max):
+
+| Operation | Throughput |
+|-----------|------------|
+| Batch search (100 queries) | ~40,000 QPS |
+| Single search | ~6,000 QPS |
+| Insert | ~17,000 vec/s |
+
+Run `python benchmark.py` to measure on your hardware.
 
 ## With LangChain
 
