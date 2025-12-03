@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Run Rust tests
+        run: cargo test --lib
+      - name: Run clippy
+        run: cargo clippy --lib -- -D warnings
+
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync
+      - name: Build and install
+        working-directory: python
+        run: uv run maturin develop --release
+      - name: Run Python tests
+        working-directory: python
+        run: uv run pytest tests/ -x --timeout=120
