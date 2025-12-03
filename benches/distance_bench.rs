@@ -4,7 +4,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::Rng;
-use seerdb_vector::simd_distance::{dot_product, l2_distance_squared};
+use omendb::distance::{dot_product, l2_distance_squared};
 
 fn generate_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
     let mut rng = rand::thread_rng();

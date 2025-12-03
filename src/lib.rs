@@ -80,7 +80,7 @@
 pub mod compression;
 pub mod config;
 pub mod sampling;
-pub mod simd;
+pub mod distance;
 pub mod storage;
 pub mod types;
 pub mod vector;
@@ -91,6 +91,6 @@ pub mod ffi;
 // Re-export core types
 pub use vector::{MetadataFilter, Vector, VectorStore};
 
-// Re-export storage types (formerly seerdb-vector)
-pub use config::SeerdbVectorConfig;
-pub use types::{CompressionTier, DistanceMetric, Result, SeerdbVectorError, StorageTier};
+// Re-export storage types
+pub use config::StorageConfig;
+pub use types::{CompressionTier, DistanceMetric, OmenDBError, Result, StorageTier};

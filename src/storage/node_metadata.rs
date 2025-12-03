@@ -4,7 +4,7 @@
 //! Key format: node_id (8 bytes big-endian)
 //! Value: max_level (1 byte)
 
-use crate::{config::SeerdbVectorConfig, Result, SeerdbVectorError};
+use crate::{config::StorageConfig, Result, OmenDBError};
 use seerdb::db::{DBOptions, DB};
 use seerdb::SyncPolicy;
 use std::path::PathBuf;
@@ -21,7 +21,7 @@ pub struct NodeMetadataStorage {
 
 impl NodeMetadataStorage {
     /// Create new node metadata storage at path
-    pub fn new(path: PathBuf, config: &SeerdbVectorConfig) -> Result<Self> {
+    pub fn new(path: PathBuf, config: &StorageConfig) -> Result<Self> {
         let options = DBOptions {
             data_dir: path,
 
@@ -41,7 +41,7 @@ impl NodeMetadataStorage {
             ..Default::default()
         };
 
-        let db = DB::open(options).map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+        let db = DB::open(options).map_err(|e| OmenDBError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }
@@ -70,7 +70,7 @@ impl NodeMetadataStorage {
         let key = Self::encode_key(node_id);
         self.db
             .put(key, [max_level])
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -85,7 +85,7 @@ impl NodeMetadataStorage {
 
         batch
             .commit()
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -98,11 +98,11 @@ impl NodeMetadataStorage {
         match self
             .db
             .get(key)
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?
         {
             Some(value) => {
                 if value.len() != 1 {
-                    return Err(SeerdbVectorError::InvalidData(format!(
+                    return Err(OmenDBError::InvalidData(format!(
                         "Invalid node metadata value length: {}",
                         value.len()
                     )));
@@ -118,7 +118,7 @@ impl NodeMetadataStorage {
         let key = Self::encode_key(node_id);
         self.db
             .delete(key)
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -133,7 +133,7 @@ impl NodeMetadataStorage {
 
         batch
             .commit()
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -141,7 +141,7 @@ impl NodeMetadataStorage {
     pub fn flush(&self) -> Result<()> {
         self.db
             .flush()
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 }
@@ -156,7 +156,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = NodeMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -171,7 +171,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = NodeMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -184,7 +184,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = NodeMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -200,7 +200,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = NodeMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -216,7 +216,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = NodeMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -245,14 +245,14 @@ mod tests {
         // Create storage and set level
         {
             let storage =
-                NodeMetadataStorage::new(path.clone(), &SeerdbVectorConfig::default()).unwrap();
+                NodeMetadataStorage::new(path.clone(), &StorageConfig::default()).unwrap();
             storage.set_max_level(42, 3).unwrap();
             storage.flush().unwrap();
         }
 
         // Reopen and verify persistence
         {
-            let storage = NodeMetadataStorage::new(path, &SeerdbVectorConfig::default()).unwrap();
+            let storage = NodeMetadataStorage::new(path, &StorageConfig::default()).unwrap();
             assert_eq!(storage.get_max_level(42).unwrap(), Some(3));
         }
     }

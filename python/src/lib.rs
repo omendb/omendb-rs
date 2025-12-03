@@ -115,7 +115,7 @@ struct VectorDatabase {
     path: String,
     /// Dimensions (stored for creating collections)
     dimensions: usize,
-    /// Whether this is a persistent database (uses seerdb storage)
+    /// Whether this is a persistent database (uses persistent storage)
     is_persistent: bool,
 }
 
@@ -752,7 +752,7 @@ impl VectorDatabase {
 ///
 /// Args:
 ///     path (str): Path to database directory (will be created if needed).
-///                 Uses seerdb persistent storage with auto-persist.
+///                 Uses persistent storage with auto-persist.
 ///     dimensions (int, optional): Vector dimensionality. Required for new databases,
 ///                                 ignored when loading existing database. Default: 128
 ///     config (dict, optional): Advanced configuration options:
@@ -843,10 +843,10 @@ fn open(
 
     let db_path = Path::new(&path);
 
-    // Always use seerdb persistent storage (recommended)
+    // Always use persistent storage (recommended)
     // Legacy paths are still supported for backward compatibility
     if !path.ends_with(".vectors.bin") && !path.ends_with(".hnsw") {
-        // Use seerdb persistent storage (default for all new databases)
+        // Use persistent storage (default for all new databases)
         let mut store = if dimensions == 0 {
             // Try to load existing (dimensions come from stored data)
             VectorStore::open(&path).map_err(convert_error)?

@@ -1,4 +1,4 @@
-//! Core types for seerdb-vector storage layer
+//! Core types for OmenDB storage layer
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -131,9 +131,9 @@ pub struct CompactionStats {
     pub duration_secs: f64,
 }
 
-/// seerdb-vector error types
+/// OmenDB error types
 #[derive(Debug, Error)]
-pub enum SeerdbVectorError {
+pub enum OmenDBError {
     /// I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -167,5 +167,5 @@ pub enum SeerdbVectorError {
     InvalidData(String),
 }
 
-/// Result type for seerdb-vector operations
-pub type Result<T> = std::result::Result<T, SeerdbVectorError>;
+/// Result type for OmenDB operations
+pub type Result<T> = std::result::Result<T, OmenDBError>;
