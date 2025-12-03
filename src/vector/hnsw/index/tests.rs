@@ -1590,3 +1590,72 @@ fn profile_seerdb_impl(_n: usize) {
         .expect("Failed to write results");
     println!("\n✓ Results written to: {}", output_path.display());
 }
+
+#[test]
+fn test_asymmetric_hnsw_search() {
+    use crate::compression::RaBitQParams;
+
+    let params = HNSWParams::default();
+    let rabitq = RaBitQParams::bits4();
+    let mut index =
+        HNSWIndex::new_with_asymmetric(32, params, DistanceFunction::L2, rabitq).unwrap();
+
+    assert!(index.is_asymmetric());
+    assert!(index.is_empty());
+
+    // Insert some vectors
+    let num_vectors = 100;
+    for i in 0..num_vectors {
+        let mut vec = vec![0.0f32; 32];
+        vec[i % 32] = 1.0;
+        vec[(i + 1) % 32] = 0.5;
+        index.insert(&vec).unwrap();
+    }
+
+    assert_eq!(index.len(), num_vectors);
+
+    // Search for nearest neighbor
+    let mut query = vec![0.0f32; 32];
+    query[0] = 1.0;
+    query[1] = 0.5;
+
+    let results = index.search(&query, 10, 50).unwrap();
+
+    // Should find the matching vector (id 0) as closest
+    assert!(!results.is_empty());
+    assert_eq!(results[0].id, 0, "Expected vector 0 to be closest");
+
+    // Distance to self should be very small (just quantization error)
+    assert!(
+        results[0].distance < 0.5,
+        "Distance to self should be small: {}",
+        results[0].distance
+    );
+}
+
+#[test]
+fn test_asymmetric_only_supports_l2() {
+    use crate::compression::RaBitQParams;
+
+    let params = HNSWParams::default();
+    let rabitq = RaBitQParams::bits4();
+
+    // L2 should work
+    let result =
+        HNSWIndex::new_with_asymmetric(32, params.clone(), DistanceFunction::L2, rabitq.clone());
+    assert!(result.is_ok());
+
+    // Cosine should fail
+    let result = HNSWIndex::new_with_asymmetric(
+        32,
+        params.clone(),
+        DistanceFunction::Cosine,
+        rabitq.clone(),
+    );
+    assert!(result.is_err());
+
+    // NegativeDotProduct should fail
+    let result =
+        HNSWIndex::new_with_asymmetric(32, params, DistanceFunction::NegativeDotProduct, rabitq);
+    assert!(result.is_err());
+}

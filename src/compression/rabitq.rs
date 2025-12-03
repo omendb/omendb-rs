@@ -22,7 +22,7 @@ use smallvec::SmallVec;
 use std::fmt;
 
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::{vdupq_n_f32, vld1q_f32, vsubq_f32, vfmaq_f32, vaddvq_f32};
+use std::arch::aarch64::{vaddvq_f32, vdupq_n_f32, vfmaq_f32, vld1q_f32, vsubq_f32};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
@@ -45,7 +45,7 @@ pub enum QuantizationBits {
 
 impl QuantizationBits {
     /// Convert to number of bits
-    #[must_use] 
+    #[must_use]
     pub fn to_u8(self) -> u8 {
         match self {
             QuantizationBits::Bits2 => 2,
@@ -58,19 +58,19 @@ impl QuantizationBits {
     }
 
     /// Get number of quantization levels (2^bits)
-    #[must_use] 
+    #[must_use]
     pub fn levels(self) -> usize {
         1 << self.to_u8()
     }
 
     /// Get compression ratio vs f32 (32 bits / `bits_per_dim`)
-    #[must_use] 
+    #[must_use]
     pub fn compression_ratio(self) -> f32 {
         32.0 / self.to_u8() as f32
     }
 
     /// Get number of values that fit in one byte
-    #[must_use] 
+    #[must_use]
     pub fn values_per_byte(self) -> usize {
         8 / self.to_u8() as usize
     }
@@ -112,7 +112,7 @@ impl Default for RaBitQParams {
 
 impl RaBitQParams {
     /// Create parameters for 2-bit quantization (16x compression)
-    #[must_use] 
+    #[must_use]
     pub fn bits2() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits2,
@@ -121,7 +121,7 @@ impl RaBitQParams {
     }
 
     /// Create parameters for 4-bit quantization (8x compression, recommended)
-    #[must_use] 
+    #[must_use]
     pub fn bits4() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits4,
@@ -130,7 +130,7 @@ impl RaBitQParams {
     }
 
     /// Create parameters for 8-bit quantization (4x compression, highest quality)
-    #[must_use] 
+    #[must_use]
     pub fn bits8() -> Self {
         Self {
             bits_per_dim: QuantizationBits::Bits8,
@@ -172,7 +172,7 @@ pub struct QuantizedVector {
 
 impl QuantizedVector {
     /// Create a new quantized vector
-    #[must_use] 
+    #[must_use]
     pub fn new(data: Vec<u8>, scale: f32, bits: u8, dimensions: usize) -> Self {
         Self {
             data,
@@ -183,13 +183,13 @@ impl QuantizedVector {
     }
 
     /// Get memory usage in bytes
-    #[must_use] 
+    #[must_use]
     pub fn memory_bytes(&self) -> usize {
         std::mem::size_of::<Self>() + self.data.len()
     }
 
     /// Get compression ratio vs original f32 vector
-    #[must_use] 
+    #[must_use]
     pub fn compression_ratio(&self) -> f32 {
         let original_bytes = self.dimensions * 4; // f32 = 4 bytes
         let compressed_bytes = self.data.len() + 4 + 1; // data + scale + bits
@@ -204,26 +204,26 @@ impl QuantizedVector {
 /// 2. For each scale, quantize to grid and compute error
 /// 3. Select scale with minimum error
 /// 4. Store quantized vector with optimal scale
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RaBitQ {
     params: RaBitQParams,
 }
 
 impl RaBitQ {
     /// Create a new `RaBitQ` quantizer
-    #[must_use] 
+    #[must_use]
     pub fn new(params: RaBitQParams) -> Self {
         Self { params }
     }
 
     /// Create with default 4-bit quantization
-    #[must_use] 
+    #[must_use]
     pub fn default_4bit() -> Self {
         Self::new(RaBitQParams::bits4())
     }
 
     /// Get quantization parameters
-    #[must_use] 
+    #[must_use]
     pub fn params(&self) -> &RaBitQParams {
         &self.params
     }
@@ -235,7 +235,7 @@ impl RaBitQ {
     /// 2. For each scale, quantize to grid and compute error
     /// 3. Select scale with minimum error
     /// 4. Return quantized vector with optimal scale
-    #[must_use] 
+    #[must_use]
     pub fn quantize(&self, vector: &[f32]) -> QuantizedVector {
         let mut best_error = f32::MAX;
         let mut best_quantized = Vec::new();
@@ -356,7 +356,7 @@ impl RaBitQ {
     }
 
     /// Unpack quantized bytes into individual values
-    #[must_use] 
+    #[must_use]
     pub fn unpack_quantized(&self, packed: &[u8], bits: u8, dimensions: usize) -> Vec<u8> {
         match bits {
             2 => {
@@ -413,7 +413,7 @@ impl RaBitQ {
     /// 1. Unpack bytes to quantized values [0, 2^bits-1]
     /// 2. Denormalize: v' = q / (2^bits - 1)
     /// 3. Unscale: v = v' / scale
-    #[must_use] 
+    #[must_use]
     pub fn reconstruct(&self, quantized: &[u8], scale: f32, dimensions: usize) -> Vec<f32> {
         let bits = self.params.bits_per_dim.to_u8();
         let levels = self.params.bits_per_dim.levels() as f32;
@@ -437,7 +437,7 @@ impl RaBitQ {
     ///
     /// This reconstructs both vectors and computes standard L2 distance.
     /// For maximum accuracy, use this with original vectors for reranking.
-    #[must_use] 
+    #[must_use]
     pub fn distance_l2(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -452,7 +452,7 @@ impl RaBitQ {
     /// Compute cosine distance between two quantized vectors
     ///
     /// Cosine distance = 1 - cosine similarity
-    #[must_use] 
+    #[must_use]
     pub fn distance_cosine(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -470,7 +470,7 @@ impl RaBitQ {
     }
 
     /// Compute dot product between two quantized vectors
-    #[must_use] 
+    #[must_use]
     pub fn distance_dot(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
@@ -483,7 +483,7 @@ impl RaBitQ {
     ///
     /// This computes distance in the quantized space without full reconstruction.
     /// Faster but less accurate than `distance_l2`.
-    #[must_use] 
+    #[must_use]
     pub fn distance_approximate(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         // Unpack to quantized values (u8)
         let v1 = self.unpack_quantized(&qv1.data, qv1.bits, qv1.dimensions);
@@ -506,7 +506,7 @@ impl RaBitQ {
     /// computes distance against the uncompressed query vector.
     ///
     /// Avoids `Vec<f32>` allocation for the reconstructed vector.
-    #[must_use] 
+    #[must_use]
     pub fn distance_asymmetric_l2(&self, query: &[f32], quantized: &QuantizedVector) -> f32 {
         self.distance_asymmetric_l2_raw(query, &quantized.data, quantized.scale, quantized.bits)
     }
@@ -515,7 +515,7 @@ impl RaBitQ {
     ///
     /// Enables zero-copy access from mmap (no `QuantizedVector` allocation needed).
     /// Uses `SmallVec` to unpack on stack and SIMD for distance computation.
-    #[must_use] 
+    #[must_use]
     pub fn distance_asymmetric_l2_raw(
         &self,
         query: &[f32],
@@ -607,7 +607,7 @@ impl RaBitQ {
     /// - `x86_64`: AVX2 > SSE2 > scalar
     /// - aarch64: NEON > scalar
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn distance_l2_simd(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         // Reconstruct to f32 vectors
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
@@ -619,7 +619,7 @@ impl RaBitQ {
 
     /// Compute cosine distance using SIMD acceleration
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn distance_cosine_simd(&self, qv1: &QuantizedVector, qv2: &QuantizedVector) -> f32 {
         let v1 = self.reconstruct(&qv1.data, qv1.scale, qv1.dimensions);
         let v2 = self.reconstruct(&qv2.data, qv2.scale, qv2.dimensions);
