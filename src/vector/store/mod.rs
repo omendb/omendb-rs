@@ -317,17 +317,10 @@ impl VectorStore {
         let hnsw_index = if vectors.is_empty() {
             None
         } else {
-            let count = vectors.len() - deleted.len();
-            eprintln!(
-                "📂 Loading {} vectors from {}...",
-                count,
-                path.as_ref().display()
-            );
             let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
             for vector in &vectors {
                 index.insert(&vector.data)?;
             }
-            eprintln!("✅ HNSW index built for {count} vectors");
             Some(index)
         };
 
@@ -769,7 +762,7 @@ impl VectorStore {
         let mut all_ids = Vec::with_capacity(vectors.len());
 
         // Process in chunks for better memory management and progress tracking
-        for (chunk_idx, chunk) in vectors.chunks(CHUNK_SIZE).enumerate() {
+        for (_chunk_idx, chunk) in vectors.chunks(CHUNK_SIZE).enumerate() {
             // Extract vector data for HNSW
             let vector_data: Vec<Vec<f32>> = chunk.iter().map(|v| v.data.clone()).collect();
 
@@ -777,17 +770,6 @@ impl VectorStore {
             if let Some(ref mut index) = self.hnsw_index {
                 let chunk_ids = index.batch_insert(&vector_data)?;
                 all_ids.extend(chunk_ids);
-            }
-
-            // Log progress for large batches
-            if vectors.len() >= CHUNK_SIZE {
-                let processed = ((chunk_idx + 1) * CHUNK_SIZE).min(vectors.len());
-                eprintln!(
-                    "  Inserted {} / {} vectors ({:.1}%)",
-                    processed,
-                    vectors.len(),
-                    (processed as f64 / vectors.len() as f64) * 100.0
-                );
             }
         }
 
@@ -821,12 +803,6 @@ impl VectorStore {
             return Ok(());
         }
 
-        eprintln!(
-            "🔨 Rebuilding HNSW index for {} vectors...",
-            self.vectors.len()
-        );
-        let start = std::time::Instant::now();
-
         // Create new HNSW index
         let mut index = HNSWIndex::new(self.vectors.len().max(1_000_000), self.dimensions)?;
 
@@ -839,7 +815,6 @@ impl VectorStore {
 
         // Rebuild quantized vectors if quantizer is enabled
         if let Some(ref quantizer) = self.quantizer {
-            eprintln!("  Quantizing {} vectors...", self.vectors.len());
             self.quantized_vectors.clear();
             for vector in &self.vectors {
                 let quantized = quantizer.quantize(&vector.data);
@@ -847,10 +822,6 @@ impl VectorStore {
             }
         }
 
-        eprintln!(
-            "✅ HNSW index rebuilt in {:.2}s",
-            start.elapsed().as_secs_f64()
-        );
         Ok(())
     }
 
@@ -880,9 +851,6 @@ impl VectorStore {
         if other.vectors.is_empty() {
             return Ok(0);
         }
-
-        let start = std::time::Instant::now();
-        eprintln!("🔗 Merging {} vectors using IGTM...", other.vectors.len());
 
         // Initialize HNSW if needed
         if self.hnsw_index.is_none() {
@@ -941,15 +909,8 @@ impl VectorStore {
             self_index.merge_from(other_index)?;
         } else {
             // Fallback: rebuild index if other didn't have one
-            eprintln!("  ⚠️  Other store has no HNSW index, rebuilding...");
             self.rebuild_index()?;
         }
-
-        eprintln!(
-            "✅ Merged {} vectors in {:.2}s",
-            merged_count,
-            start.elapsed().as_secs_f64()
-        );
 
         Ok(merged_count)
     }
@@ -969,10 +930,6 @@ impl VectorStore {
     /// Call this once after loading from disk before performing searches.
     pub fn ensure_index_ready(&mut self) -> Result<()> {
         if self.needs_index_rebuild() {
-            eprintln!(
-                "⚠️  HNSW index missing for {} vectors - rebuilding...",
-                self.vectors.len()
-            );
             self.rebuild_index()?;
         }
         Ok(())
@@ -1017,7 +974,7 @@ impl VectorStore {
 
         // Check if we have any data (either in vectors or in HNSW)
         let has_data = !self.vectors.is_empty()
-            || (self.hnsw_index.is_some() && !self.hnsw_index.as_ref().unwrap().is_empty());
+            || self.hnsw_index.as_ref().map_or(false, |idx| !idx.is_empty());
 
         if !has_data {
             return Ok(Vec::new());
@@ -1265,7 +1222,9 @@ impl VectorStore {
     /// Note: Currently unused (quantization is storage-only), but kept for future hybrid search
     #[allow(dead_code)]
     fn knn_search_with_reranking(&self, query: &Vector, k: usize) -> Vec<(usize, f32)> {
-        let quantizer = self.quantizer.as_ref().unwrap();
+        let Some(quantizer) = self.quantizer.as_ref() else {
+            return Vec::new();
+        };
 
         // Quantize query
         let quantized_query = quantizer.quantize(&query.data);
@@ -1413,16 +1372,17 @@ impl VectorStore {
         fs::write(&vectors_path, encoded)?;
 
         // Save quantized vectors if quantization is enabled
-        if self.quantizer.is_some() && !self.quantized_vectors.is_empty() {
-            let quantized_path = directory.join(format!("{filename}.quantized.bin"));
-            let encoded = bincode::serialize(&self.quantized_vectors)?;
-            fs::write(&quantized_path, encoded)?;
+        if let Some(quantizer) = self.quantizer.as_ref() {
+            if !self.quantized_vectors.is_empty() {
+                let quantized_path = directory.join(format!("{filename}.quantized.bin"));
+                let encoded = bincode::serialize(&self.quantized_vectors)?;
+                fs::write(&quantized_path, encoded)?;
 
-            // Save quantizer parameters
-            let params_path = directory.join(format!("{filename}.quantizer.json"));
-            let quantizer = self.quantizer.as_ref().unwrap();
-            let params_json = serde_json::to_string_pretty(&quantizer.params())?;
-            fs::write(&params_path, params_json)?;
+                // Save quantizer parameters
+                let params_path = directory.join(format!("{filename}.quantizer.json"));
+                let params_json = serde_json::to_string_pretty(&quantizer.params())?;
+                fs::write(&params_path, params_json)?;
+            }
         }
 
         // Save metadata if present
@@ -1446,31 +1406,10 @@ impl VectorStore {
             fs::write(&deleted_path, deleted_json)?;
         }
 
-        // Check if HNSW index exists
+        // Save HNSW index if present
         if let Some(ref index) = self.hnsw_index {
-            // Save HNSW index using our fast binary format
             let hnsw_path = directory.join(format!("{filename}.hnsw"));
             index.save(&hnsw_path)?;
-
-            let quantization_status = if self.quantizer.is_some() {
-                " with Extended RaBitQ quantization"
-            } else {
-                ""
-            };
-
-            eprintln!(
-                "💾 Saved {} vectors ({} dims) with HNSW index{} to {}",
-                self.vectors.len(),
-                self.dimensions,
-                quantization_status,
-                base_path
-            );
-        } else {
-            eprintln!(
-                "💾 Saved {} vectors ({} dims) without HNSW index (no index built yet)",
-                self.vectors.len(),
-                self.dimensions
-            );
         }
 
         Ok(())
@@ -1499,9 +1438,7 @@ impl VectorStore {
         let hnsw_path = directory.join(format!("{filename}.hnsw"));
 
         if hnsw_path.exists() {
-            // Fast path: Load HNSW index directly (<1s)
-            eprintln!("📂 Loading HNSW index from {}...", hnsw_path.display());
-
+            // Fast path: Load HNSW index directly
             let hnsw_index = HNSWIndex::load(&hnsw_path)?;
 
             // Load vectors array (needed for get/len/verification)
@@ -1512,7 +1449,6 @@ impl VectorStore {
                 vectors_raw.into_iter().map(Vector::new).collect()
             } else {
                 // Fallback: empty vectors (search still works via HNSW)
-                eprintln!("⚠️  Warning: vectors.bin not found, get() and len() unavailable");
                 Vec::new()
             };
 
@@ -1531,11 +1467,6 @@ impl VectorStore {
                 let quantized_data = fs::read(&quantized_path)?;
                 let quantized_vectors: Vec<Option<QuantizedVector>> =
                     bincode::deserialize(&quantized_data)?;
-
-                eprintln!(
-                    "  Loaded Extended RaBitQ quantization ({} quantized vectors)",
-                    quantized_vectors.len()
-                );
 
                 (Some(quantizer), quantized_vectors)
             } else {
@@ -1569,12 +1500,6 @@ impl VectorStore {
                 HashMap::new()
             };
 
-            eprintln!(
-                "✅ Loaded {} vectors ({} dims) with HNSW index (fast load: <1s)",
-                vectors.len(),
-                dimensions
-            );
-
             Ok(Self {
                 vectors,
                 hnsw_index: Some(hnsw_index),
@@ -1588,8 +1513,6 @@ impl VectorStore {
             })
         } else {
             // Fallback: Load vectors and rebuild HNSW
-            eprintln!("📂 HNSW index not found, loading vectors and rebuilding...");
-
             let vectors_path = directory.join(format!("{filename}.vectors.bin"));
             if !vectors_path.exists() {
                 anyhow::bail!("Vector file not found: {}", vectors_path.display());
@@ -1598,12 +1521,6 @@ impl VectorStore {
             let vectors_data = fs::read(&vectors_path)?;
             let vectors_raw: Vec<Vec<f32>> = bincode::deserialize(&vectors_data)?;
             let vectors: Vec<Vector> = vectors_raw.into_iter().map(Vector::new).collect();
-
-            eprintln!(
-                "📂 Loaded {} vectors ({} dims), rebuilding HNSW...",
-                vectors.len(),
-                dimensions
-            );
 
             // Try to load quantizer parameters
             let params_path = directory.join(format!("{filename}.quantizer.json"));
@@ -1620,11 +1537,6 @@ impl VectorStore {
                 let quantized_data = fs::read(&quantized_path)?;
                 let quantized_vectors: Vec<Option<QuantizedVector>> =
                     bincode::deserialize(&quantized_data)?;
-
-                eprintln!(
-                    "  Loaded Extended RaBitQ quantization ({} quantized vectors)",
-                    quantized_vectors.len()
-                );
 
                 (Some(quantizer), quantized_vectors)
             } else {

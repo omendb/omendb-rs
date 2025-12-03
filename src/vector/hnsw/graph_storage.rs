@@ -287,15 +287,14 @@ impl GraphStorage {
     /// Add bidirectional link (parallel version - assumes nodes pre-allocated)
     ///
     /// Thread-safe version for parallel graph construction.
-    /// Only works with Memory mode. Panics if used with Layered mode.
-    pub fn add_bidirectional_link_parallel(&self, node_a: u32, node_b: u32, level: u8) {
+    /// Only works with Memory mode. Returns false if called on Layered mode.
+    pub fn add_bidirectional_link_parallel(&self, node_a: u32, node_b: u32, level: u8) -> bool {
         match self {
             Self::Memory(lists) => {
                 lists.add_bidirectional_link_parallel(node_a, node_b, level);
+                true
             }
-            Self::Layered(_) => {
-                panic!("add_bidirectional_link_parallel() only supports Memory mode");
-            }
+            Self::Layered(_) => false,
         }
     }
 
@@ -303,30 +302,28 @@ impl GraphStorage {
     ///
     /// Removes link from `node_a` to `node_b` (NOT bidirectional).
     /// Thread-safe version for parallel graph construction.
-    /// Only works with Memory mode. Panics if used with Layered mode.
-    pub fn remove_link_parallel(&self, node_a: u32, node_b: u32, level: u8) {
+    /// Only works with Memory mode. Returns false if called on Layered mode.
+    pub fn remove_link_parallel(&self, node_a: u32, node_b: u32, level: u8) -> bool {
         match self {
             Self::Memory(lists) => {
                 lists.remove_link_parallel(node_a, node_b, level);
+                true
             }
-            Self::Layered(_) => {
-                panic!("remove_link_parallel() only supports Memory mode");
-            }
+            Self::Layered(_) => false,
         }
     }
 
     /// Set neighbors (parallel version - assumes node pre-allocated)
     ///
     /// Thread-safe version for parallel graph construction.
-    /// Only works with Memory mode. Panics if used with Layered mode.
-    pub fn set_neighbors_parallel(&self, node_id: u32, level: u8, neighbors: Vec<u32>) {
+    /// Only works with Memory mode. Returns false if called on Layered mode.
+    pub fn set_neighbors_parallel(&self, node_id: u32, level: u8, neighbors: Vec<u32>) -> bool {
         match self {
             Self::Memory(lists) => {
                 lists.set_neighbors_parallel(node_id, level, neighbors);
+                true
             }
-            Self::Layered(_) => {
-                panic!("set_neighbors_parallel() only supports Memory mode");
-            }
+            Self::Layered(_) => false,
         }
     }
 
