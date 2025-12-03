@@ -315,6 +315,7 @@ impl RaBitQ {
     /// - 2-bit: 4 values per byte (00 00 00 00)
     /// - 4-bit: 2 values per byte (0000 0000)
     /// - 8-bit: 1 value per byte
+    #[allow(clippy::unused_self)]
     fn pack_quantized(&self, values: &[u8], bits: u8) -> Vec<u8> {
         match bits {
             2 => {
