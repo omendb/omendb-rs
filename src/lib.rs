@@ -19,17 +19,61 @@
     clippy::needless_pass_by_value     // Public API takes owned values for clarity and storage
 )]
 
-//! Embedded vector database with HNSW indexing.
+//! Fast embedded vector database with HNSW indexing.
 //!
-//! # Example
+//! # Quick Start
+//!
+//! ```rust
+//! use omendb::{Vector, VectorStore};
+//! use serde_json::json;
+//!
+//! // Create store (128-dimensional vectors)
+//! let mut store = VectorStore::new(128);
+//!
+//! // Insert vectors with metadata
+//! store.set("doc1".into(), Vector::new(vec![1.0; 128]), json!({"type": "article"})).unwrap();
+//! store.set("doc2".into(), Vector::new(vec![0.9; 128]), json!({"type": "note"})).unwrap();
+//!
+//! // Search
+//! let query = Vector::new(vec![1.0; 128]);
+//! let results = store.knn_search(&query, 2).unwrap();
+//! // results: [(0, 0.0), (1, 1.13)] - (index, distance)
+//!
+//! // Get by ID
+//! let (vec, metadata) = store.get_by_id("doc1").unwrap();
+//! ```
+//!
+//! # Filtered Search (ACORN-1)
+//!
+//! ```rust
+//! use omendb::{MetadataFilter, Vector, VectorStore};
+//! use serde_json::json;
+//!
+//! let mut store = VectorStore::new(64);
+//! store.set("a".into(), Vector::new(vec![0.1; 64]), json!({"year": 2024})).unwrap();
+//! store.set("b".into(), Vector::new(vec![0.2; 64]), json!({"year": 2023})).unwrap();
+//!
+//! let query = Vector::new(vec![0.1; 64]);
+//! let filter = MetadataFilter::Gte("year".into(), 2024.0);
+//! let results = store.knn_search_with_filter(&query, 10, &filter).unwrap();
+//! // Only returns vectors where year >= 2024
+//! ```
+//!
+//! # Persistence
 //!
 //! ```rust,no_run
-//! use omendb::vector::{Vector, VectorStore};
+//! use omendb::VectorStore;
 //!
-//! let mut store = VectorStore::new(128); // 128 dimensions
-//! store.insert(Vector::new(vec![0.1; 128])).unwrap();
+//! // Open or create persistent store
+//! let mut store = VectorStore::open_with_dimensions("./vectors", 128).unwrap();
 //!
-//! let results = store.knn_search(&Vector::new(vec![0.1; 128]), 10).unwrap();
+//! // ... insert vectors ...
+//!
+//! // Save (also auto-saves on drop)
+//! store.flush().unwrap();
+//!
+//! // Reopen later
+//! let store = VectorStore::open("./vectors").unwrap();
 //! ```
 
 // Core modules
