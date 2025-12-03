@@ -99,6 +99,7 @@ class TestEmbeddingDimensions:
 class TestRecallAccuracy:
     """Test recall accuracy at various scales."""
 
+    @pytest.mark.slow
     def test_recall_1k_vectors(self):
         """Test recall with 1K vectors (should be near-perfect)."""
         dim = 128
@@ -128,6 +129,7 @@ class TestRecallAccuracy:
             avg_recall = sum(recalls) / len(recalls)
             assert avg_recall >= 0.95, f"Average recall {avg_recall:.0%} < 95%"
 
+    @pytest.mark.slow
     def test_recall_with_ef_search_tuning(self):
         """Test that higher ef_search improves recall."""
         dim = 128
