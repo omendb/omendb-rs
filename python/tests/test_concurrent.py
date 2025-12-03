@@ -214,6 +214,7 @@ class TestConcurrentWriters:
             assert actual == expected, f"Expected {expected}, got {actual}"
             print(f"\n{num_threads} threads, {expected} inserts: {elapsed:.2f}s")
 
+    @pytest.mark.slow
     def test_concurrent_delete_threads(self):
         """Multiple threads deleting simultaneously"""
         with tempfile.TemporaryDirectory() as tmpdir:
