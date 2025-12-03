@@ -1,4 +1,4 @@
-//! Vector compression for seerdb-vector storage
+//! Vector compression for OmenDB storage
 //!
 //! Provides RaBitQ compression for tiered storage:
 //! - L0-L2: Full precision (f32)

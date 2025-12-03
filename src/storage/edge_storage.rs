@@ -3,7 +3,7 @@
 //! Provides persistent storage for HNSW graph edges using seerdb as the backend.
 //! This replaces fjall-based storage with better performance characteristics.
 
-use crate::{config::SeerdbVectorConfig, Result, SeerdbVectorError};
+use crate::{config::StorageConfig, Result, OmenDBError};
 use seerdb::db::{DBOptions, DB};
 use seerdb::SyncPolicy;
 use std::path::PathBuf;
@@ -24,7 +24,7 @@ pub struct EdgeStorage {
 
 impl EdgeStorage {
     /// Create new edge storage at path
-    pub fn new(path: PathBuf, config: &SeerdbVectorConfig) -> Result<Self> {
+    pub fn new(path: PathBuf, config: &StorageConfig) -> Result<Self> {
         // Optimal configuration for HNSW graph storage
         let options = DBOptions {
             data_dir: path,
@@ -53,7 +53,7 @@ impl EdgeStorage {
             ..Default::default()
         };
 
-        let db = DB::open(options).map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+        let db = DB::open(options).map_err(|e| OmenDBError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }
@@ -88,11 +88,11 @@ impl EdgeStorage {
     pub fn put_neighbors(&self, node_id: u64, level: u8, neighbors: &[u64]) -> Result<()> {
         let key = Self::encode_key(node_id, level);
         let value = bincode::serialize(neighbors)
-            .map_err(|e| SeerdbVectorError::Serialization(e.to_string()))?;
+            .map_err(|e| OmenDBError::Serialization(e.to_string()))?;
 
         self.db
             .put(key, &value)
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))
+            .map_err(|e| OmenDBError::Backend(e.to_string()))
     }
 
     /// Add multiple neighbor lists in a batch
@@ -108,13 +108,13 @@ impl EdgeStorage {
         for (node_id, level, neighbors) in batch {
             let key = Self::encode_key(*node_id, *level);
             let value = bincode::serialize(neighbors)
-                .map_err(|e| SeerdbVectorError::Serialization(e.to_string()))?;
+                .map_err(|e| OmenDBError::Serialization(e.to_string()))?;
             db_batch.put(key, &value);
         }
 
         db_batch
             .commit()
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -127,11 +127,11 @@ impl EdgeStorage {
         if let Some(value) = self
             .db
             .get(key)
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?
         {
             // Deserialize Vec<u64>
             let neighbors: Vec<u64> = bincode::deserialize(&value)
-                .map_err(|e| SeerdbVectorError::Serialization(e.to_string()))?;
+                .map_err(|e| OmenDBError::Serialization(e.to_string()))?;
             Ok(neighbors)
         } else {
             Ok(Vec::new())
@@ -147,7 +147,7 @@ impl EdgeStorage {
     pub fn flush(&self) -> Result<()> {
         self.db
             .flush()
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 }
@@ -162,7 +162,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = EdgeStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -180,7 +180,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = EdgeStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -197,7 +197,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = EdgeStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -211,7 +211,7 @@ mod tests {
         use std::time::Instant;
         let temp_dir = TempDir::new().unwrap();
 
-        let config = SeerdbVectorConfig::builder()
+        let config = StorageConfig::builder()
             .memtable_capacity(1024 * 1024)
             .build();
 

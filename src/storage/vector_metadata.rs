@@ -4,7 +4,7 @@
 //! Key format: "v:{vector_id}" as UTF-8 bytes
 //! Value: JSON-serialized metadata bytes
 
-use crate::{config::SeerdbVectorConfig, Result, SeerdbVectorError};
+use crate::{config::StorageConfig, Result, OmenDBError};
 use seerdb::db::{DBOptions, DB};
 use seerdb::SyncPolicy;
 use std::path::PathBuf;
@@ -21,7 +21,7 @@ pub struct VectorMetadataStorage {
 
 impl VectorMetadataStorage {
     /// Create new vector metadata storage at path
-    pub fn new(path: PathBuf, config: &SeerdbVectorConfig) -> Result<Self> {
+    pub fn new(path: PathBuf, config: &StorageConfig) -> Result<Self> {
         let options = DBOptions {
             data_dir: path,
 
@@ -41,7 +41,7 @@ impl VectorMetadataStorage {
             ..Default::default()
         };
 
-        let db = DB::open(options).map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+        let db = DB::open(options).map_err(|e| OmenDBError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }
@@ -64,7 +64,7 @@ impl VectorMetadataStorage {
     pub fn insert(&self, key: &str, value: &[u8]) -> Result<()> {
         self.db
             .put(key.as_bytes(), value)
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -78,7 +78,7 @@ impl VectorMetadataStorage {
 
         batch
             .commit()
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -89,7 +89,7 @@ impl VectorMetadataStorage {
         let value = self
             .db
             .get(key.as_bytes())
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(value.map(|bytes| bytes.to_vec()))
     }
 
@@ -97,7 +97,7 @@ impl VectorMetadataStorage {
     pub fn remove(&self, key: &str) -> Result<()> {
         self.db
             .delete(key.as_bytes())
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -105,7 +105,7 @@ impl VectorMetadataStorage {
     pub fn flush(&self) -> Result<()> {
         self.db
             .flush()
-            .map_err(|e| SeerdbVectorError::Backend(e.to_string()))?;
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
         Ok(())
     }
 }
@@ -120,7 +120,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = VectorMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -137,7 +137,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = VectorMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -150,7 +150,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = VectorMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -167,7 +167,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = VectorMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -184,7 +184,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = VectorMetadataStorage::new(
             temp_dir.path().to_path_buf(),
-            &SeerdbVectorConfig::default(),
+            &StorageConfig::default(),
         )
         .unwrap();
 
@@ -205,14 +205,14 @@ mod tests {
         // Create storage and insert
         {
             let storage =
-                VectorMetadataStorage::new(path.clone(), &SeerdbVectorConfig::default()).unwrap();
+                VectorMetadataStorage::new(path.clone(), &StorageConfig::default()).unwrap();
             storage.insert("v:42", br#"{"persistent": true}"#).unwrap();
             storage.flush().unwrap();
         }
 
         // Reopen and verify
         {
-            let storage = VectorMetadataStorage::new(path, &SeerdbVectorConfig::default()).unwrap();
+            let storage = VectorMetadataStorage::new(path, &StorageConfig::default()).unwrap();
             let retrieved = storage.get("v:42").unwrap();
             assert_eq!(retrieved, Some(br#"{"persistent": true}"#.to_vec()));
         }

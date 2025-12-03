@@ -1,4 +1,4 @@
-//! RaBitQ Quantization for seerdb-vector
+//! RaBitQ Quantization for OmenDB
 //!
 //! RaBitQ (SIGMOD 2025) provides flexible vector compression with arbitrary
 //! bit rates (2-8 bits per dimension) using optimal rescaling per vector.

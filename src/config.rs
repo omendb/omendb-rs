@@ -1,12 +1,12 @@
-//! Configuration for seerdb-vector storage
+//! Configuration for OmenDB storage
 //!
-//! Provides configuration options for the underlying seerdb engine.
+//! Provides configuration options for the underlying storage engine.
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for seerdb-vector storage
+/// Configuration for OmenDB storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SeerdbVectorConfig {
+pub struct StorageConfig {
     /// WAL sync policy (fsync behavior)
     /// Default: false (SyncPolicy::None - for performance)
     pub sync_writes: bool,
@@ -24,7 +24,7 @@ pub struct SeerdbVectorConfig {
     pub background_compaction: bool,
 }
 
-impl Default for SeerdbVectorConfig {
+impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             sync_writes: false, // Default to performance for vector graphs (derived data)
@@ -35,23 +35,23 @@ impl Default for SeerdbVectorConfig {
     }
 }
 
-impl SeerdbVectorConfig {
+impl StorageConfig {
     /// Create a new config builder
-    pub fn builder() -> SeerdbVectorConfigBuilder {
-        SeerdbVectorConfigBuilder::default()
+    pub fn builder() -> StorageConfigBuilder {
+        StorageConfigBuilder::default()
     }
 }
 
-/// Builder for SeerdbVectorConfig
+/// Builder for StorageConfig
 #[derive(Debug, Default)]
-pub struct SeerdbVectorConfigBuilder {
+pub struct StorageConfigBuilder {
     sync_writes: Option<bool>,
     memtable_capacity: Option<usize>,
     block_cache_capacity: Option<usize>,
     background_compaction: Option<bool>,
 }
 
-impl SeerdbVectorConfigBuilder {
+impl StorageConfigBuilder {
     /// Set sync writes policy
     pub fn sync_writes(mut self, enabled: bool) -> Self {
         self.sync_writes = Some(enabled);
@@ -77,10 +77,10 @@ impl SeerdbVectorConfigBuilder {
     }
 
     /// Build configuration
-    pub fn build(self) -> SeerdbVectorConfig {
-        let defaults = SeerdbVectorConfig::default();
+    pub fn build(self) -> StorageConfig {
+        let defaults = StorageConfig::default();
 
-        SeerdbVectorConfig {
+        StorageConfig {
             sync_writes: self.sync_writes.unwrap_or(defaults.sync_writes),
             memtable_capacity: self.memtable_capacity.unwrap_or(defaults.memtable_capacity),
             block_cache_capacity: self

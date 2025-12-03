@@ -24,7 +24,7 @@ mod types;
 pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
 
 // Re-export SIMD-enabled distance functions (single source of truth)
-pub use crate::simd::{cosine_distance, dot_product, l2_distance};
+pub use crate::distance::{cosine_distance, dot_product, l2_distance};
 
 pub use storage::{NeighborLists, VectorStorage};
 

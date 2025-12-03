@@ -34,19 +34,19 @@ uv run pytest tests/               # Test
 | `src/vector/store.rs` | `VectorStore` - main API |
 | `src/vector/hnsw/` | HNSW index with SIMD distance |
 | `src/compression/rabitq.rs` | RaBitQ 2/4/8-bit quantization |
-| `src/simd/distance.rs` | SIMD-accelerated distance |
-| `src/storage/` | seerdb persistent storage |
+| `src/distance/distance.rs` | SIMD-accelerated distance |
+| `src/storage/` | persistent storage |
 | `python/` | PyO3 bindings (maturin) |
 
 ### Key Types
 
 ```rust
 use omendb::{VectorStore, Vector, MetadataFilter};
-use omendb::{SeerdbVectorConfig, StorageTier, CompressionTier, DistanceMetric};
+use omendb::{StorageConfig, StorageTier, CompressionTier, DistanceMetric};
 ```
 
 ## Notes
 
 - Requires nightly Rust (`#![feature(portable_simd)]`)
 - Python 3.9+
-- Uses `parking_lot`, `rayon`, `seerdb`
+- Uses `parking_lot`, `rayon`

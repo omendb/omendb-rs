@@ -41,11 +41,11 @@ class OmenDBVectorStore(VectorStore):
         - Extended RaBitQ quantization (8x compression)
         - ACORN-1 filtered search (37.79x speedup)
         - MongoDB-style metadata filtering
-        - Automatic persistence with seerdb storage
+        - Automatic persistence with persistent storage
 
     Args:
         embedding: LangChain Embeddings model for text-to-vector conversion.
-        path: Path to database directory. Uses persistent seerdb storage.
+        path: Path to database directory. Uses persistent persistent storage.
         dimensions: Vector dimensionality. Auto-detected when loading
             existing database.
         **kwargs: Additional arguments passed to omendb.open().
