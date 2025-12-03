@@ -23,8 +23,8 @@ mod types;
 // Public API exports
 pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
 
-// Re-export SIMD-enabled distance functions from seerdb-vector (single source of truth)
-pub use seerdb_vector::simd_distance::{cosine_distance, dot_product, l2_distance};
+// Re-export SIMD-enabled distance functions (single source of truth)
+pub use crate::simd::{cosine_distance, dot_product, l2_distance};
 
 pub use storage::{NeighborLists, VectorStorage};
 
