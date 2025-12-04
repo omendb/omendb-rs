@@ -163,18 +163,29 @@ jobs:
         run: ls -R npm
         working-directory: node
 
+      - name: Determine npm tag
+        id: npm-tag
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$VERSION" == *"-"* ]]; then
+            echo "tag=--tag alpha" >> $GITHUB_OUTPUT
+          else
+            echo "tag=" >> $GITHUB_OUTPUT
+          fi
+        working-directory: node
+
       - name: Publish platform packages
         run: |
           for dir in npm/*/; do
             echo "Publishing $dir"
-            npm publish "$dir" --provenance --access public --tag alpha
+            npm publish "$dir" --provenance --access public ${{ steps.npm-tag.outputs.tag }}
           done
         working-directory: node
 
       - name: Publish @omendb/omendb
-        run: npm publish --provenance --access public --tag alpha
+        run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
         working-directory: node
 
       - name: Publish omendb wrapper
-        run: npm publish --provenance --access public --tag alpha
+        run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
         working-directory: node/wrapper
