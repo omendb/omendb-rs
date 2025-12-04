@@ -20,7 +20,7 @@ def brute_force_knn(query: list, vectors: list, k: int) -> list:
     """
     distances = []
     for v in vectors:
-        dist = euclidean_distance(query, v["embedding"])
+        dist = euclidean_distance(query, v["vector"])
         distances.append((v["id"], dist))
     distances.sort(key=lambda x: x[1])
     return distances[:k]
@@ -57,7 +57,7 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         embedding = [x / norm for x in embedding]
         vectors.append({
             "id": f"vec_{i}",
-            "embedding": embedding,
+            "vector": embedding,
             "metadata": {"index": i}
         })
     return vectors
@@ -80,7 +80,7 @@ class TestRecallSmall:
             total_recall = 0.0
 
             for q in range(num_queries):
-                query = generate_random_vectors(1, 64, seed=1000 + q)[0]["embedding"]
+                query = generate_random_vectors(1, 64, seed=1000 + q)[0]["vector"]
 
                 hnsw_results = db.search(query, k=10)
                 ground_truth = brute_force_knn(query, vectors, k=10)
@@ -104,7 +104,7 @@ class TestRecallSmall:
             correct = 0
 
             for q in range(num_queries):
-                query = generate_random_vectors(1, 64, seed=2000 + q)[0]["embedding"]
+                query = generate_random_vectors(1, 64, seed=2000 + q)[0]["vector"]
 
                 hnsw_results = db.search(query, k=1)
                 ground_truth = brute_force_knn(query, vectors, k=1)
@@ -132,7 +132,7 @@ class TestRecallMedium:
             total_recall = 0.0
 
             for q in range(num_queries):
-                query = generate_random_vectors(1, 128, seed=3000 + q)[0]["embedding"]
+                query = generate_random_vectors(1, 128, seed=3000 + q)[0]["vector"]
 
                 hnsw_results = db.search(query, k=10)
                 ground_truth = brute_force_knn(query, vectors, k=10)
@@ -156,7 +156,7 @@ class TestRecallMedium:
             total_recall = 0.0
 
             for q in range(num_queries):
-                query = generate_random_vectors(1, 128, seed=4000 + q)[0]["embedding"]
+                query = generate_random_vectors(1, 128, seed=4000 + q)[0]["vector"]
 
                 hnsw_results = db.search(query, k=50)
                 ground_truth = brute_force_knn(query, vectors, k=50)
@@ -180,7 +180,7 @@ class TestRecallWithEfSearch:
             vectors = generate_random_vectors(1000, 128)
             db.set(vectors)
 
-            query = generate_random_vectors(1, 128, seed=5000)[0]["embedding"]
+            query = generate_random_vectors(1, 128, seed=5000)[0]["vector"]
             # Use k=10 since ef must be >= k
             ground_truth = brute_force_knn(query, vectors, k=10)
 
@@ -215,7 +215,7 @@ class TestRecallWithEfSearch:
             total_recall = 0.0
 
             for q in range(num_queries):
-                query = generate_random_vectors(1, 128, seed=6000 + q)[0]["embedding"]
+                query = generate_random_vectors(1, 128, seed=6000 + q)[0]["vector"]
 
                 hnsw_results = db.search(query, k=10)
                 ground_truth = brute_force_knn(query, vectors, k=10)
@@ -246,7 +246,7 @@ class TestRecallFiltered:
                 category = i % 5  # 5 categories: 0, 1, 2, 3, 4
                 vectors.append({
                     "id": f"vec_{i}",
-                    "embedding": embedding,
+                    "vector": embedding,
                     "metadata": {"category": category}
                 })
 
@@ -255,7 +255,7 @@ class TestRecallFiltered:
             # Filter for category 0 (should have 40 vectors)
             filtered_vectors = [v for v in vectors if v["metadata"]["category"] == 0]
 
-            query = generate_random_vectors(1, 64, seed=7000)[0]["embedding"]
+            query = generate_random_vectors(1, 64, seed=7000)[0]["vector"]
 
             hnsw_results = db.search(
                 query,
@@ -280,7 +280,7 @@ class TestRecallEdgeCases:
             db_path = os.path.join(tmpdir, "test_db")
             db = omendb.open(db_path, dimensions=64)
 
-            vectors = [{"id": "only", "embedding": [0.5] * 64, "metadata": {}}]
+            vectors = [{"id": "only", "vector": [0.5] * 64, "metadata": {}}]
             db.set(vectors)
 
             results = db.search([0.5] * 64, k=1)
@@ -295,7 +295,7 @@ class TestRecallEdgeCases:
 
             # Multiple vectors at same location
             vectors = [
-                {"id": f"dup_{i}", "embedding": [0.1] * 64, "metadata": {"index": i}}
+                {"id": f"dup_{i}", "vector": [0.1] * 64, "metadata": {"index": i}}
                 for i in range(10)
             ]
             db.set(vectors)
@@ -315,7 +315,7 @@ class TestRecallEdgeCases:
             vectors = generate_random_vectors(50, 64)
             db.set(vectors)
 
-            query = generate_random_vectors(1, 64, seed=8000)[0]["embedding"]
+            query = generate_random_vectors(1, 64, seed=8000)[0]["vector"]
 
             results = db.search(query, k=50)
             ground_truth = brute_force_knn(query, vectors, k=50)
@@ -346,7 +346,7 @@ class TestRecallLarge:
             total_recall = 0.0
 
             for q in range(num_queries):
-                query = generate_random_vectors(1, 128, seed=9000 + q)[0]["embedding"]
+                query = generate_random_vectors(1, 128, seed=9000 + q)[0]["vector"]
 
                 hnsw_results = db.search(query, k=10)
                 ground_truth = brute_force_knn(query, vectors, k=10)

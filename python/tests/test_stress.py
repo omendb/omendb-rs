@@ -19,7 +19,7 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         embedding = [x / norm for x in embedding]
         vectors.append({
             "id": f"vec_{i}",
-            "embedding": embedding,
+            "vector": embedding,
             "metadata": {"index": i, "group": i % 100}
         })
     return vectors
@@ -76,7 +76,7 @@ class TestLargeScaleSearch:
 
             # Run multiple queries
             num_queries = 100
-            queries = [generate_random_vectors(1, 128, seed=1000 + i)[0]["embedding"]
+            queries = [generate_random_vectors(1, 128, seed=1000 + i)[0]["vector"]
                       for i in range(num_queries)]
 
             start = time.time()
@@ -100,7 +100,7 @@ class TestLargeScaleSearch:
             db.set(vectors)
 
             num_queries = 100
-            queries = [generate_random_vectors(1, 128, seed=2000 + i)[0]["embedding"]
+            queries = [generate_random_vectors(1, 128, seed=2000 + i)[0]["vector"]
                       for i in range(num_queries)]
 
             start = time.time()
@@ -182,7 +182,7 @@ class TestFilteredSearchScale:
             db.set(vectors)
 
             num_queries = 50
-            queries = [generate_random_vectors(1, 128, seed=3000 + i)[0]["embedding"]
+            queries = [generate_random_vectors(1, 128, seed=3000 + i)[0]["vector"]
                       for i in range(num_queries)]
 
             # Test with different selectivities
@@ -231,7 +231,7 @@ class TestPersistenceScale:
             assert len(db2) == 10000
 
             # Verify search works after reload
-            query = vectors[0]["embedding"]
+            query = vectors[0]["vector"]
             results = db2.search(query, k=5)
             assert len(results) == 5
             assert results[0]["id"] == "vec_0"
@@ -262,7 +262,7 @@ class TestDeleteScale:
             print(f"\nDelete 1K: {elapsed:.2f}s")
 
             # Verify deleted vectors not in search results
-            query = vectors[0]["embedding"]  # Query for deleted vector
+            query = vectors[0]["vector"]  # Query for deleted vector
             results = db.search(query, k=10)
             deleted_ids = set(ids_to_delete)
             assert all(r["id"] not in deleted_ids for r in results)
@@ -282,7 +282,7 @@ class TestEdgeCasesScale:
             vectors = generate_random_vectors(1000, 1536)
             db.set(vectors)
 
-            query = vectors[0]["embedding"]
+            query = vectors[0]["vector"]
             results = db.search(query, k=10)
             assert len(results) == 10
             assert results[0]["id"] == "vec_0"
@@ -303,6 +303,6 @@ class TestEdgeCasesScale:
             assert len(db) == 1000
 
             # Verify search still works
-            query = generate_random_vectors(1, 64, seed=500)[0]["embedding"]
+            query = generate_random_vectors(1, 64, seed=500)[0]["vector"]
             results = db.search(query, k=5)
             assert len(results) == 5

@@ -23,17 +23,17 @@ def test_set_and_search():
         db.set([
             {
                 "id": "doc1",
-                "embedding": [1.0, 0.0, 0.0],
+                "vector": [1.0, 0.0, 0.0],
                 "metadata": {"title": "Document 1", "year": 2024}
             },
             {
                 "id": "doc2",
-                "embedding": [0.0, 1.0, 0.0],
+                "vector": [0.0, 1.0, 0.0],
                 "metadata": {"title": "Document 2", "year": 2023}
             },
             {
                 "id": "doc3",
-                "embedding": [0.0, 0.0, 1.0],
+                "vector": [0.0, 0.0, 1.0],
                 "metadata": {"title": "Document 3", "year": 2024}
             },
         ])
@@ -58,17 +58,17 @@ def test_search_with_filter():
         db.set([
             {
                 "id": "doc1",
-                "embedding": [1.0, 0.0, 0.0],
+                "vector": [1.0, 0.0, 0.0],
                 "metadata": {"title": "Document 1", "year": 2024}
             },
             {
                 "id": "doc2",
-                "embedding": [0.9, 0.1, 0.0],
+                "vector": [0.9, 0.1, 0.0],
                 "metadata": {"title": "Document 2", "year": 2023}
             },
             {
                 "id": "doc3",
-                "embedding": [0.8, 0.2, 0.0],
+                "vector": [0.8, 0.2, 0.0],
                 "metadata": {"title": "Document 3", "year": 2024}
             },
         ])
@@ -96,7 +96,7 @@ def test_set_update():
         db.set([
             {
                 "id": "doc1",
-                "embedding": [1.0, 0.0, 0.0],
+                "vector": [1.0, 0.0, 0.0],
                 "metadata": {"title": "Original"}
             }
         ])
@@ -105,7 +105,7 @@ def test_set_update():
         db.set([
             {
                 "id": "doc1",
-                "embedding": [0.0, 1.0, 0.0],
+                "vector": [0.0, 1.0, 0.0],
                 "metadata": {"title": "Updated"}
             }
         ])
@@ -114,7 +114,7 @@ def test_set_update():
         doc = db.get("doc1")
         assert doc is not None
         assert doc["metadata"]["title"] == "Updated"
-        assert doc["embedding"] == [0.0, 1.0, 0.0]
+        assert doc["vector"] == [0.0, 1.0, 0.0]
 
 
 def test_delete():
@@ -127,12 +127,12 @@ def test_delete():
         db.set([
             {
                 "id": "doc1",
-                "embedding": [1.0, 0.0, 0.0],
+                "vector": [1.0, 0.0, 0.0],
                 "metadata": {"title": "Document 1"}
             },
             {
                 "id": "doc2",
-                "embedding": [0.0, 1.0, 0.0],
+                "vector": [0.0, 1.0, 0.0],
                 "metadata": {"title": "Document 2"}
             },
         ])
@@ -156,7 +156,7 @@ def test_save_and_load():
         db.set([
             {
                 "id": "doc1",
-                "embedding": [1.0, 0.0, 0.0],
+                "vector": [1.0, 0.0, 0.0],
                 "metadata": {"title": "Document 1"}
             }
         ])

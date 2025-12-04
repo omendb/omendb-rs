@@ -280,7 +280,7 @@ class TestPerformance:
 
             # Batch insert for speed
             vectors = [
-                {"id": f"doc_{i}", "embedding": generate_embedding(dim, seed=i)}
+                {"id": f"doc_{i}", "vector": generate_embedding(dim, seed=i)}
                 for i in range(n_vectors)
             ]
             db.set(vectors)

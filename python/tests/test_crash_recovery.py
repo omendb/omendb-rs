@@ -23,7 +23,7 @@ def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str)
 
     # Insert vectors
     vectors = [
-        {"id": f"crash_{i}", "embedding": [float(i) / count] * dims, "metadata": {"idx": i}}
+        {"id": f"crash_{i}", "vector": [float(i) / count] * dims, "metadata": {"idx": i}}
         for i in range(count)
     ]
     db.set(vectors)
@@ -47,7 +47,7 @@ def child_insert_save_crash(db_path: str, dims: int, count: int):
     db = omendb.open(db_path, dimensions=dims)
 
     vectors = [
-        {"id": f"saved_{i}", "embedding": [float(i) / count] * dims, "metadata": {"idx": i}}
+        {"id": f"saved_{i}", "vector": [float(i) / count] * dims, "metadata": {"idx": i}}
         for i in range(count)
     ]
     db.set(vectors)
@@ -75,7 +75,7 @@ def child_update_and_crash(db_path: str, dims: int, update_id: str, new_embeddin
     db = omendb.open(db_path, dimensions=dims)
     db.set([{
         "id": update_id,
-        "embedding": new_embedding,
+        "vector": new_embedding,
         "metadata": {"updated": True}
     }])
 
@@ -156,7 +156,7 @@ class TestCrashRecoveryWithExistingData:
         # First: create and save initial data
         db = omendb.open(temp_db_path, dimensions=dims)
         initial_vectors = [
-            {"id": f"initial_{i}", "embedding": [0.1] * dims, "metadata": {"batch": "initial"}}
+            {"id": f"initial_{i}", "vector": [0.1] * dims, "metadata": {"batch": "initial"}}
             for i in range(50)
         ]
         db.set(initial_vectors)
@@ -192,7 +192,7 @@ class TestCrashRecoveryWithExistingData:
         # Create and save data
         db = omendb.open(temp_db_path, dimensions=dims)
         vectors = [
-            {"id": f"vec_{i}", "embedding": [float(i)] * dims, "metadata": {}}
+            {"id": f"vec_{i}", "vector": [float(i)] * dims, "metadata": {}}
             for i in range(100)
         ]
         db.set(vectors)
@@ -225,7 +225,7 @@ class TestCrashRecoveryEdgeCases:
 
         # Initial save
         db = omendb.open(temp_db_path, dimensions=dims)
-        db.set([{"id": "survivor", "embedding": [1.0] * dims, "metadata": {"cycles": 0}}])
+        db.set([{"id": "survivor", "vector": [1.0] * dims, "metadata": {"cycles": 0}}])
         db.save()
         del db
 
@@ -250,7 +250,7 @@ class TestCrashRecoveryEdgeCases:
 
         # Initial data
         db = omendb.open(temp_db_path, dimensions=dims)
-        db.set([{"id": "anchor", "embedding": [0.5] * dims, "metadata": {}}])
+        db.set([{"id": "anchor", "vector": [0.5] * dims, "metadata": {}}])
         db.save()
         del db
 
@@ -277,7 +277,7 @@ class TestCrashRecoveryEdgeCases:
         # Save initial data
         db = omendb.open(temp_db_path, dimensions=dims)
         db.set([
-            {"id": f"safe_{i}", "embedding": [0.1] * dims, "metadata": {}}
+            {"id": f"safe_{i}", "vector": [0.1] * dims, "metadata": {}}
             for i in range(100)
         ])
         db.save()
@@ -304,7 +304,7 @@ class TestCrashRecoveryEdgeCases:
         assert len(safe_ids) >= 40, f"Missing too many safe vectors: {100 - len(safe_ids)}"
 
         # Verify database is not corrupt - can still write and search
-        db2.set([{"id": "after_crash", "embedding": [0.2] * dims, "metadata": {}}])
+        db2.set([{"id": "after_crash", "vector": [0.2] * dims, "metadata": {}}])
         results = db2.search([0.2] * dims, k=1)
         assert len(results) >= 1
 
@@ -320,7 +320,7 @@ class TestDatabaseIntegrity:
         # Create valid database
         db = omendb.open(temp_db_path, dimensions=dims)
         db.set([
-            {"id": f"v{i}", "embedding": [float(i)/100] * dims, "metadata": {"n": i}}
+            {"id": f"v{i}", "vector": [float(i)/100] * dims, "metadata": {"n": i}}
             for i in range(100)
         ])
         db.save()
@@ -340,7 +340,7 @@ class TestDatabaseIntegrity:
             # All operations should work
             _ = len(db2)
             _ = db2.search([0.5] * dims, k=10)
-            db2.set([{"id": "new", "embedding": [0.5] * dims, "metadata": {}}])
+            db2.set([{"id": "new", "vector": [0.5] * dims, "metadata": {}}])
             db2.save()
         except Exception as e:
             pytest.fail(f"Database corrupted after crash: {e}")
@@ -353,10 +353,10 @@ class TestDatabaseIntegrity:
         # Create database with known vectors
         db = omendb.open(temp_db_path, dimensions=dims)
         db.set([
-            {"id": "north", "embedding": [1.0, 0.0, 0.0, 0.0], "metadata": {}},
-            {"id": "south", "embedding": [-1.0, 0.0, 0.0, 0.0], "metadata": {}},
-            {"id": "east", "embedding": [0.0, 1.0, 0.0, 0.0], "metadata": {}},
-            {"id": "west", "embedding": [0.0, -1.0, 0.0, 0.0], "metadata": {}},
+            {"id": "north", "vector": [1.0, 0.0, 0.0, 0.0], "metadata": {}},
+            {"id": "south", "vector": [-1.0, 0.0, 0.0, 0.0], "metadata": {}},
+            {"id": "east", "vector": [0.0, 1.0, 0.0, 0.0], "metadata": {}},
+            {"id": "west", "vector": [0.0, -1.0, 0.0, 0.0], "metadata": {}},
         ])
         db.save()
         del db

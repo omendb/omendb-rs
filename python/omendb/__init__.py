@@ -3,7 +3,7 @@
 Example (standalone):
     >>> import omendb
     >>> db = omendb.open("./my_vectors", dimensions=128)
-    >>> db.set([{"id": "doc1", "embedding": [0.1] * 128, "metadata": {"title": "Hello"}}])
+    >>> db.set([{"id": "doc1", "vector": [0.1] * 128, "metadata": {"title": "Hello"}}])
     >>> results = db.search(query=[0.1] * 128, k=5)
 
 Example (LangChain):

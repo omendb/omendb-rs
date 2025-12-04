@@ -129,14 +129,18 @@ class OmenDBVectorStore(VectorStore):
 
         # Build batch for set
         items = []
-        for text, embedding, id_, metadata in zip(texts_list, embeddings, ids, metadatas):
+        for text, embedding, id_, metadata in zip(
+            texts_list, embeddings, ids, metadatas
+        ):
             # Store page_content in metadata for retrieval
             item_metadata = {**metadata, "page_content": text}
-            items.append({
-                "id": id_,
-                "embedding": embedding,
-                "metadata": item_metadata,
-            })
+            items.append(
+                {
+                    "id": id_,
+                    "vector": embedding,
+                    "metadata": item_metadata,
+                }
+            )
 
         self._db.set(items)
         return ids
@@ -227,11 +231,13 @@ class OmenDBVectorStore(VectorStore):
             metadata = result.get("metadata", {})
             # Extract page_content from metadata
             page_content = metadata.pop("page_content", "")
-            documents.append(Document(
-                page_content=page_content,
-                metadata=metadata,
-                id=result.get("id"),
-            ))
+            documents.append(
+                Document(
+                    page_content=page_content,
+                    metadata=metadata,
+                    id=result.get("id"),
+                )
+            )
 
         return documents
 
@@ -286,11 +292,13 @@ class OmenDBVectorStore(VectorStore):
             if result is not None:
                 metadata = result.get("metadata", {})
                 page_content = metadata.pop("page_content", "")
-                documents.append(Document(
-                    page_content=page_content,
-                    metadata=metadata,
-                    id=result.get("id"),
-                ))
+                documents.append(
+                    Document(
+                        page_content=page_content,
+                        metadata=metadata,
+                        id=result.get("id"),
+                    )
+                )
 
         return documents
 
