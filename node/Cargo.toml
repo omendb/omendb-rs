@@ -19,7 +19,7 @@ serde_json = "1"
 anyhow = "1"
 
 [build-dependencies]
-napi-build = "2"
+napi-build = "3"
 
 [profile.release]
 lto = true

@@ -153,7 +153,7 @@ jobs:
         working-directory: node
 
       - name: Move artifacts to packages
-        run: npm exec napi artifacts -- --artifacts-dir ./artifacts --dist ./npm
+        run: npm exec napi artifacts -- --output-dir ./artifacts --npm-dir ./npm
         working-directory: node
 
       - name: List packages
