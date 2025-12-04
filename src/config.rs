@@ -37,7 +37,7 @@ impl Default for StorageConfig {
 
 impl StorageConfig {
     /// Create a new config builder
-    #[must_use] 
+    #[must_use]
     pub fn builder() -> StorageConfigBuilder {
         StorageConfigBuilder::default()
     }
@@ -54,35 +54,35 @@ pub struct StorageConfigBuilder {
 
 impl StorageConfigBuilder {
     /// Set sync writes policy
-    #[must_use] 
+    #[must_use]
     pub fn sync_writes(mut self, enabled: bool) -> Self {
         self.sync_writes = Some(enabled);
         self
     }
 
     /// Set memtable capacity
-    #[must_use] 
+    #[must_use]
     pub fn memtable_capacity(mut self, capacity: usize) -> Self {
         self.memtable_capacity = Some(capacity);
         self
     }
 
     /// Set block cache capacity
-    #[must_use] 
+    #[must_use]
     pub fn block_cache_capacity(mut self, capacity: usize) -> Self {
         self.block_cache_capacity = Some(capacity);
         self
     }
 
     /// Enable/disable background compaction
-    #[must_use] 
+    #[must_use]
     pub fn background_compaction(mut self, enabled: bool) -> Self {
         self.background_compaction = Some(enabled);
         self
     }
 
     /// Build configuration
-    #[must_use] 
+    #[must_use]
     pub fn build(self) -> StorageConfig {
         let defaults = StorageConfig::default();
 

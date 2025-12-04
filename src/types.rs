@@ -19,7 +19,7 @@ pub enum CompressionTier {
 
 impl CompressionTier {
     /// Get compression ratio vs f32
-    #[must_use] 
+    #[must_use]
     pub fn compression_ratio(&self) -> f32 {
         match self {
             CompressionTier::Full => 1.0,
@@ -29,7 +29,7 @@ impl CompressionTier {
     }
 
     /// Expected recall for this tier
-    #[must_use] 
+    #[must_use]
     pub fn expected_recall(&self) -> f32 {
         match self {
             CompressionTier::Full => 1.0,
@@ -39,7 +39,7 @@ impl CompressionTier {
     }
 
     /// Get bits per dimension
-    #[must_use] 
+    #[must_use]
     pub fn bits_per_dim(&self) -> u8 {
         match self {
             CompressionTier::Full => 32,
@@ -70,7 +70,7 @@ pub enum StorageTier {
 
 impl StorageTier {
     /// Get compression tier for this storage tier
-    #[must_use] 
+    #[must_use]
     pub fn compression(&self) -> CompressionTier {
         match self {
             StorageTier::L0 | StorageTier::L1 | StorageTier::L2 => CompressionTier::Full,
@@ -80,13 +80,13 @@ impl StorageTier {
     }
 
     /// Is this tier in memory (L0)?
-    #[must_use] 
+    #[must_use]
     pub fn is_memory(&self) -> bool {
         matches!(self, StorageTier::L0)
     }
 
     /// Is this tier on SSD?
-    #[must_use] 
+    #[must_use]
     pub fn is_ssd(&self) -> bool {
         matches!(
             self,
@@ -95,7 +95,7 @@ impl StorageTier {
     }
 
     /// Is this tier on S3?
-    #[must_use] 
+    #[must_use]
     pub fn is_s3(&self) -> bool {
         matches!(self, StorageTier::L5 | StorageTier::L6)
     }

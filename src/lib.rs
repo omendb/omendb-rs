@@ -79,8 +79,8 @@
 // Core modules
 pub mod compression;
 pub mod config;
-pub mod sampling;
 pub mod distance;
+pub mod sampling;
 pub mod storage;
 pub mod types;
 pub mod vector;

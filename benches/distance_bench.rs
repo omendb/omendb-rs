@@ -3,8 +3,8 @@
 //! Run: cargo bench --bench distance_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use rand::Rng;
 use omendb::distance::{dot_product, l2_distance_squared};
+use rand::Rng;
 
 fn generate_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
     let mut rng = rand::thread_rng();
@@ -75,5 +75,10 @@ fn bench_l2_sequential_access(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_l2_distance, bench_dot_product, bench_l2_sequential_access);
+criterion_group!(
+    benches,
+    bench_l2_distance,
+    bench_dot_product,
+    bench_l2_sequential_access
+);
 criterion_main!(benches);

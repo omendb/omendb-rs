@@ -155,18 +155,18 @@ impl HNSWIndex {
         })
     }
 
-    /// Create a new HNSW index with RaBitQ asymmetric search (CLOUD MOAT)
+    /// Create a new HNSW index with `RaBitQ` asymmetric search (CLOUD MOAT)
     ///
     /// This enables 2-3x faster search by using asymmetric distance computation:
     /// - Query vector stays full precision
-    /// - Candidate vectors use RaBitQ quantization (8x smaller)
+    /// - Candidate vectors use `RaBitQ` quantization (8x smaller)
     /// - Final reranking uses full precision for accuracy
     ///
     /// # Arguments
     /// * `dimensions` - Vector dimensionality
     /// * `params` - HNSW construction parameters
     /// * `distance_fn` - Distance function (only L2 supported for asymmetric)
-    /// * `rabitq_params` - RaBitQ quantization parameters (typically 4-bit)
+    /// * `rabitq_params` - `RaBitQ` quantization parameters (typically 4-bit)
     ///
     /// # Performance
     /// - Search: 2-3x faster than full precision
@@ -208,7 +208,7 @@ impl HNSWIndex {
         })
     }
 
-    /// Check if this index uses asymmetric search (RaBitQ)
+    /// Check if this index uses asymmetric search (`RaBitQ`)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
         self.vectors.is_asymmetric()
@@ -315,10 +315,10 @@ impl HNSWIndex {
         Ok(self.distance_fn.distance(query, vec))
     }
 
-    /// Asymmetric distance for RaBitQ search (CLOUD MOAT - HOT PATH)
+    /// Asymmetric distance for `RaBitQ` search (CLOUD MOAT - HOT PATH)
     ///
     /// Query stays full precision, candidate uses quantized representation.
-    /// Falls back to regular distance_cmp if not using asymmetric storage.
+    /// Falls back to regular `distance_cmp` if not using asymmetric storage.
     #[inline]
     fn distance_asymmetric(&self, query: &[f32], id: u32) -> Result<f32> {
         // Try asymmetric distance first (for RaBitQ storage)
@@ -1448,14 +1448,14 @@ impl HNSWIndex {
         })
     }
 
-    /// Asymmetric search layer for RaBitQ quantized storage (CLOUD MOAT - HOT PATH)
+    /// Asymmetric search layer for `RaBitQ` quantized storage (CLOUD MOAT - HOT PATH)
     ///
-    /// Same algorithm as search_layer but uses asymmetric distance:
+    /// Same algorithm as `search_layer` but uses asymmetric distance:
     /// - Query stays full precision
     /// - Candidates use quantized representation
     /// - 2-3x faster than full precision search
     ///
-    /// Falls back to regular distance_cmp for non-RaBitQ storage.
+    /// Falls back to regular `distance_cmp` for non-RaBitQ storage.
     fn search_layer_asymmetric(
         &self,
         query: &[f32],

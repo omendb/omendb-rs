@@ -33,7 +33,11 @@ fn main() -> anyhow::Result<()> {
 
     // Get by ID
     if let Some((vec, metadata)) = store.get_by_id("doc1") {
-        println!("\nGet 'doc1': {} dims, metadata={}", vec.data.len(), metadata);
+        println!(
+            "\nGet 'doc1': {} dims, metadata={}",
+            vec.data.len(),
+            metadata
+        );
     }
 
     // Delete

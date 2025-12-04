@@ -509,7 +509,7 @@ pub enum VectorStorage {
         dimensions: usize,
     },
 
-    /// RaBitQ quantized vectors for asymmetric search (CLOUD MOAT)
+    /// `RaBitQ` quantized vectors for asymmetric search (CLOUD MOAT)
     ///
     /// Memory: dimensions * bits / 8 bytes per vector (4-bit = 8x compression)
     /// Example: 1536D @ 4-bit = 768 bytes per vector
@@ -520,14 +520,14 @@ pub enum VectorStorage {
     ///
     /// Reranking with original vectors restores recall to near full-precision.
     RaBitQQuantized {
-        /// RaBitQ quantizer (contains params)
+        /// `RaBitQ` quantizer (contains params)
         #[serde(skip)]
         quantizer: Option<RaBitQ>,
 
-        /// RaBitQ parameters (for serialization)
+        /// `RaBitQ` parameters (for serialization)
         params: RaBitQParams,
 
-        /// Quantized vectors (RaBitQ format)
+        /// Quantized vectors (`RaBitQ` format)
         quantized: Vec<QuantizedVector>,
 
         /// Original vectors for reranking (required for final accuracy)
@@ -568,11 +568,11 @@ impl VectorStorage {
         }
     }
 
-    /// Create empty RaBitQ quantized storage for asymmetric search (CLOUD MOAT)
+    /// Create empty `RaBitQ` quantized storage for asymmetric search (CLOUD MOAT)
     ///
     /// # Arguments
     /// * `dimensions` - Vector dimensionality
-    /// * `params` - RaBitQ quantization parameters (typically 4-bit for 8x compression)
+    /// * `params` - `RaBitQ` quantization parameters (typically 4-bit for 8x compression)
     ///
     /// # Performance
     /// - Search: 2-3x faster than full precision (asymmetric distance)
@@ -590,7 +590,7 @@ impl VectorStorage {
         }
     }
 
-    /// Check if this storage uses asymmetric search (RaBitQ)
+    /// Check if this storage uses asymmetric search (`RaBitQ`)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
         matches!(self, Self::RaBitQQuantized { .. })
@@ -704,7 +704,7 @@ impl VectorStorage {
     /// Get a vector by ID (full precision)
     ///
     /// Returns slice directly into contiguous storage - zero-copy, cache-friendly.
-    /// For RaBitQQuantized, returns the original vector (used for reranking).
+    /// For `RaBitQQuantized`, returns the original vector (used for reranking).
     #[inline]
     #[must_use]
     pub fn get(&self, id: u32) -> Option<&[f32]> {
@@ -744,8 +744,8 @@ impl VectorStorage {
 
     /// Compute asymmetric L2 distance (query full precision, candidate quantized)
     ///
-    /// This is the HOT PATH for asymmetric search. Only works with RaBitQQuantized storage.
-    /// Returns None if storage is not RaBitQ or if id is out of bounds.
+    /// This is the HOT PATH for asymmetric search. Only works with `RaBitQQuantized` storage.
+    /// Returns None if storage is not `RaBitQ` or if id is out of bounds.
     ///
     /// # Performance
     /// - 2-3x faster than full precision distance
@@ -784,7 +784,7 @@ impl VectorStorage {
         }
     }
 
-    /// Get the RaBitQ quantizer (for external asymmetric distance computation)
+    /// Get the `RaBitQ` quantizer (for external asymmetric distance computation)
     #[must_use]
     pub fn quantizer(&self) -> Option<&RaBitQ> {
         match self {
@@ -851,7 +851,7 @@ impl VectorStorage {
 
     /// Prefetch quantized vector data for asymmetric search
     ///
-    /// More efficient than prefetch() for RaBitQ mode as it only fetches
+    /// More efficient than `prefetch()` for `RaBitQ` mode as it only fetches
     /// the quantized representation, not the full precision original.
     #[inline]
     pub fn prefetch_quantized(&self, id: u32) {
