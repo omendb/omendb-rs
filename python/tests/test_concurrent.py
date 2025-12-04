@@ -26,11 +26,13 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
     vectors = []
     for i in range(n):
         embedding = generate_random_vector(dim)
-        vectors.append({
-            "id": f"vec_{i}",
-            "vector": embedding,
-            "metadata": {"index": i, "group": i % 10}
-        })
+        vectors.append(
+            {
+                "id": f"vec_{i}",
+                "vector": embedding,
+                "metadata": {"index": i, "group": i % 10},
+            }
+        )
     return vectors
 
 
@@ -61,7 +63,9 @@ class TestConcurrentReaders:
                             results_count.append(len(results))
                         if len(results) != 10:
                             with lock:
-                                errors.append(f"Thread {thread_id} got {len(results)} results")
+                                errors.append(
+                                    f"Thread {thread_id} got {len(results)} results"
+                                )
                 except Exception as e:
                     with lock:
                         errors.append(f"Thread {thread_id} error: {e}")
@@ -82,7 +86,9 @@ class TestConcurrentReaders:
             assert len(errors) == 0, f"Errors: {errors}"
             assert len(results_count) == 500  # 10 threads * 50 searches
             assert all(r == 10 for r in results_count)
-            print(f"\n10 threads, 500 searches: {elapsed:.2f}s ({500/elapsed:.0f} QPS)")
+            print(
+                f"\n10 threads, 500 searches: {elapsed:.2f}s ({500 / elapsed:.0f} QPS)"
+            )
 
     def test_concurrent_get_threads(self):
         """Multiple threads calling get() concurrently"""
@@ -139,16 +145,14 @@ class TestConcurrentReaders:
                     for i in range(num_searches):
                         query = generate_random_vector(64, seed=thread_id * 1000 + i)
                         group = thread_id % 10
-                        results = db.search(
-                            query,
-                            k=10,
-                            filter={"group": {"$eq": group}}
-                        )
+                        results = db.search(query, k=10, filter={"group": group})
                         # Verify filter is respected
                         for r in results:
                             if r["metadata"]["group"] != group:
                                 with lock:
-                                    errors.append(f"Filter not respected: got {r['metadata']['group']}, expected {group}")
+                                    errors.append(
+                                        f"Filter not respected: got {r['metadata']['group']}, expected {group}"
+                                    )
                 except Exception as e:
                     with lock:
                         errors.append(f"Thread {thread_id} error: {e}")
@@ -182,12 +186,18 @@ class TestConcurrentWriters:
                 try:
                     for i in range(num_vectors):
                         vec_id = f"thread_{thread_id}_vec_{i}"
-                        embedding = generate_random_vector(64, seed=thread_id * 10000 + i)
-                        db.set([{
-                            "id": vec_id,
-                            "vector": embedding,
-                            "metadata": {"thread": thread_id, "index": i}
-                        }])
+                        embedding = generate_random_vector(
+                            64, seed=thread_id * 10000 + i
+                        )
+                        db.set(
+                            [
+                                {
+                                    "id": vec_id,
+                                    "vector": embedding,
+                                    "metadata": {"thread": thread_id, "index": i},
+                                }
+                            ]
+                        )
                 except Exception as e:
                     with lock:
                         errors.append(f"Thread {thread_id} error: {e}")
@@ -242,8 +252,7 @@ class TestConcurrentWriters:
             chunk_size = 100
             for i in range(10):
                 t = threading.Thread(
-                    target=delete_worker,
-                    args=(i, i * chunk_size, (i + 1) * chunk_size)
+                    target=delete_worker, args=(i, i * chunk_size, (i + 1) * chunk_size)
                 )
                 threads.append(t)
                 t.start()
@@ -271,11 +280,13 @@ class TestConcurrentWriters:
             def update_worker(thread_id: int, num_updates: int):
                 try:
                     for i in range(num_updates):
-                        embedding = generate_random_vector(64, seed=thread_id * 1000 + i)
+                        embedding = generate_random_vector(
+                            64, seed=thread_id * 1000 + i
+                        )
                         db.update(
                             "shared",
-                            embedding=embedding,
-                            metadata={"version": thread_id * 1000 + i}
+                            embedding,
+                            metadata={"version": thread_id * 1000 + i},
                         )
                         with lock:
                             updates_completed[0] += 1
@@ -322,12 +333,18 @@ class TestMixedReadWrite:
                     i = 0
                     while not stop_flag.is_set():
                         vec_id = f"new_thread_{thread_id}_vec_{i}"
-                        embedding = generate_random_vector(64, seed=thread_id * 100000 + i)
-                        db.set([{
-                            "id": vec_id,
-                            "vector": embedding,
-                            "metadata": {"thread": thread_id}
-                        }])
+                        embedding = generate_random_vector(
+                            64, seed=thread_id * 100000 + i
+                        )
+                        db.set(
+                            [
+                                {
+                                    "id": vec_id,
+                                    "vector": embedding,
+                                    "metadata": {"thread": thread_id},
+                                }
+                            ]
+                        )
                         i += 1
                         time.sleep(0.001)  # Small delay
                 except Exception as e:
@@ -457,7 +474,9 @@ class TestThreadPoolExecutor:
 
             assert len(results) == 100
             assert all(len(r) == 10 for r in results)
-            print(f"\nThreadPoolExecutor 8 workers, 100 queries: {elapsed:.2f}s ({100/elapsed:.0f} QPS)")
+            print(
+                f"\nThreadPoolExecutor 8 workers, 100 queries: {elapsed:.2f}s ({100 / elapsed:.0f} QPS)"
+            )
 
     def test_parallel_set_batches(self):
         """Use ThreadPoolExecutor for parallel batch sets"""
@@ -472,11 +491,13 @@ class TestThreadPoolExecutor:
                 for i in range(100):
                     vec_id = f"batch_{batch_id}_vec_{i}"
                     embedding = generate_random_vector(64, seed=batch_id * 1000 + i)
-                    batch.append({
-                        "id": vec_id,
-                        "vector": embedding,
-                        "metadata": {"batch": batch_id}
-                    })
+                    batch.append(
+                        {
+                            "id": vec_id,
+                            "vector": embedding,
+                            "metadata": {"batch": batch_id},
+                        }
+                    )
                 batches.append(batch)
 
             def do_set(batch):
@@ -505,11 +526,15 @@ class TestStressConditions:
             db = omendb.open(db_path, dimensions=64)
 
             # Insert initial vector
-            db.set([{
-                "id": "hot_key",
-                "vector": generate_random_vector(64, seed=0),
-                "metadata": {"counter": 0}
-            }])
+            db.set(
+                [
+                    {
+                        "id": "hot_key",
+                        "vector": generate_random_vector(64, seed=0),
+                        "metadata": {"counter": 0},
+                    }
+                ]
+            )
 
             errors = []
             lock = threading.Lock()
@@ -523,11 +548,13 @@ class TestStressConditions:
                             db.get("hot_key")
                         else:
                             # Generate new embedding for update
-                            embedding = generate_random_vector(64, seed=thread_id * 1000 + i)
+                            embedding = generate_random_vector(
+                                64, seed=thread_id * 1000 + i
+                            )
                             db.update(
                                 "hot_key",
-                                embedding=embedding,
-                                metadata={"counter": thread_id * 1000 + i}
+                                embedding,
+                                metadata={"counter": thread_id * 1000 + i},
                             )
                         with lock:
                             total_ops[0] += 1
@@ -549,7 +576,9 @@ class TestStressConditions:
             assert len(db) == 1
 
     @pytest.mark.slow
-    @pytest.mark.skip(reason="Multi-process concurrent access needs file locking investigation - not thread safety issue")
+    @pytest.mark.skip(
+        reason="Multi-process concurrent access needs file locking investigation - not thread safety issue"
+    )
     def test_rapid_open_close(self):
         """Rapidly open and close database connections"""
         with tempfile.TemporaryDirectory() as tmpdir:

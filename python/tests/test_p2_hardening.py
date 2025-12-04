@@ -19,7 +19,11 @@ import time
 import random
 import math
 import gc
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+    TimeoutError as FuturesTimeoutError,
+)
 
 
 def generate_random_vector(dim: int, seed: int = None) -> list:
@@ -48,7 +52,11 @@ class TestGILDeadlock:
 
             # Pre-populate
             vectors = [
-                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
+                {
+                    "id": f"v{i}",
+                    "vector": generate_random_vector(64, i),
+                    "metadata": {"i": i},
+                }
                 for i in range(100)
             ]
             db.set(vectors)
@@ -63,7 +71,9 @@ class TestGILDeadlock:
                     for i in range(num_ops):
                         op = (thread_id + i) % 4
                         if op == 0:
-                            db.search(generate_random_vector(64, thread_id * 1000 + i), k=5)
+                            db.search(
+                                generate_random_vector(64, thread_id * 1000 + i), k=5
+                            )
                         elif op == 1:
                             db.get(f"v{i % 100}")
                         elif op == 2:
@@ -100,7 +110,9 @@ class TestGILDeadlock:
             # Check for errors
             assert len(errors) == 0, f"Errors (possible deadlock): {errors}"
             assert operations_completed[0] == num_threads * ops_per_thread
-            print(f"\n{operations_completed[0]} ops in {elapsed:.2f}s ({operations_completed[0]/elapsed:.0f} ops/s)")
+            print(
+                f"\n{operations_completed[0]} ops in {elapsed:.2f}s ({operations_completed[0] / elapsed:.0f} ops/s)"
+            )
 
     def test_threadpool_high_contention(self):
         """ThreadPoolExecutor with many workers hammering same db"""
@@ -109,7 +121,11 @@ class TestGILDeadlock:
             db = omendb.open(db_path, dimensions=64)
 
             vectors = [
-                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
+                {
+                    "id": f"v{i}",
+                    "vector": generate_random_vector(64, i),
+                    "metadata": {"i": i},
+                }
                 for i in range(500)
             ]
             db.set(vectors)
@@ -142,7 +158,11 @@ class TestGILDeadlock:
             db = omendb.open(db_path, dimensions=64)
 
             vectors = [
-                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
+                {
+                    "id": f"v{i}",
+                    "vector": generate_random_vector(64, i),
+                    "metadata": {"i": i},
+                }
                 for i in range(1000)
             ]
             db.set(vectors)
@@ -153,7 +173,10 @@ class TestGILDeadlock:
             def search_batcher(thread_id: int):
                 try:
                     for _ in range(5):
-                        queries = [generate_random_vector(64, thread_id * 100 + j) for j in range(20)]
+                        queries = [
+                            generate_random_vector(64, thread_id * 100 + j)
+                            for j in range(20)
+                        ]
                         results = db.search_batch(queries, k=5)
                         assert len(results) == 20
                 except Exception as e:
@@ -199,11 +222,18 @@ class TestLargeMetadata:
             # Create 1MB string
             large_string = "x" * (1024 * 1024)  # 1MB
 
-            db.set([{
-                "id": "large1",
-                "vector": generate_random_vector(64, 0),
-                "metadata": {"content": large_string, "size": len(large_string)}
-            }])
+            db.set(
+                [
+                    {
+                        "id": "large1",
+                        "vector": generate_random_vector(64, 0),
+                        "metadata": {
+                            "content": large_string,
+                            "size": len(large_string),
+                        },
+                    }
+                ]
+            )
 
             result = db.get("large1")
             assert result is not None
@@ -224,11 +254,15 @@ class TestLargeMetadata:
             # Create 10MB string
             large_string = "y" * (10 * 1024 * 1024)  # 10MB
 
-            db.set([{
-                "id": "huge1",
-                "vector": generate_random_vector(64, 0),
-                "metadata": {"content": large_string}
-            }])
+            db.set(
+                [
+                    {
+                        "id": "huge1",
+                        "vector": generate_random_vector(64, 0),
+                        "metadata": {"content": large_string},
+                    }
+                ]
+            )
 
             result = db.get("huge1")
             assert result is not None
@@ -243,11 +277,15 @@ class TestLargeMetadata:
             # Create array with 100K elements
             large_array = list(range(100_000))
 
-            db.set([{
-                "id": "array1",
-                "vector": generate_random_vector(64, 0),
-                "metadata": {"data": large_array}
-            }])
+            db.set(
+                [
+                    {
+                        "id": "array1",
+                        "vector": generate_random_vector(64, 0),
+                        "metadata": {"data": large_array},
+                    }
+                ]
+            )
 
             result = db.get("array1")
             assert result is not None
@@ -268,11 +306,15 @@ class TestLargeMetadata:
 
             nested = create_nested(20, "deep_value")
 
-            db.set([{
-                "id": "nested1",
-                "vector": generate_random_vector(64, 0),
-                "metadata": nested
-            }])
+            db.set(
+                [
+                    {
+                        "id": "nested1",
+                        "vector": generate_random_vector(64, 0),
+                        "metadata": nested,
+                    }
+                ]
+            )
 
             result = db.get("nested1")
             assert result is not None
@@ -293,11 +335,13 @@ class TestLargeMetadata:
             # 100 vectors with 100KB metadata each = ~10MB total
             vectors = []
             for i in range(100):
-                vectors.append({
-                    "id": f"v{i}",
-                    "vector": generate_random_vector(64, i),
-                    "metadata": {"content": "x" * 100_000, "idx": i}
-                })
+                vectors.append(
+                    {
+                        "id": f"v{i}",
+                        "vector": generate_random_vector(64, i),
+                        "metadata": {"content": "x" * 100_000, "idx": i},
+                    }
+                )
 
             start = time.time()
             db.set(vectors)
@@ -309,7 +353,9 @@ class TestLargeMetadata:
             result = db.get("v50")
             assert len(result["metadata"]["content"]) == 100_000
 
-            print(f"\n100 vectors with 100KB metadata: {insert_time:.2f}s ({100/insert_time:.0f} vec/s)")
+            print(
+                f"\n100 vectors with 100KB metadata: {insert_time:.2f}s ({100 / insert_time:.0f} vec/s)"
+            )
 
 
 class TestFileHandleLeaks:
@@ -323,7 +369,11 @@ class TestFileHandleLeaks:
             # Initial population
             db = omendb.open(db_path, dimensions=64)
             vectors = [
-                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
+                {
+                    "id": f"v{i}",
+                    "vector": generate_random_vector(64, i),
+                    "metadata": {"i": i},
+                }
                 for i in range(100)
             ]
             db.set(vectors)
@@ -362,14 +412,19 @@ class TestFileHandleLeaks:
 
                     # Add some vectors
                     vectors = [
-                        {"id": f"c{cycle}_v{i}", "vector": generate_random_vector(64, cycle * 10 + i)}
+                        {
+                            "id": f"c{cycle}_v{i}",
+                            "vector": generate_random_vector(64, cycle * 10 + i),
+                        }
                         for i in range(10)
                     ]
                     db.set(vectors)
                     expected_count += 10
 
                     # Verify count
-                    assert len(db) == expected_count, f"Expected {expected_count}, got {len(db)}"
+                    assert len(db) == expected_count, (
+                        f"Expected {expected_count}, got {len(db)}"
+                    )
 
                     del db
                     gc.collect()
@@ -381,7 +436,9 @@ class TestFileHandleLeaks:
             # Final verification
             db = omendb.open(db_path, dimensions=64)
             assert len(db) == expected_count
-            print(f"\n30 open/close cycles with writes: {expected_count} vectors persisted")
+            print(
+                f"\n30 open/close cycles with writes: {expected_count} vectors persisted"
+            )
 
     def test_concurrent_open_different_paths(self):
         """Multiple databases open concurrently (different paths)"""
@@ -393,11 +450,15 @@ class TestFileHandleLeaks:
             for i in range(num_dbs):
                 db_path = os.path.join(tmpdir, f"db{i}")
                 db = omendb.open(db_path, dimensions=64)
-                db.set([{
-                    "id": f"v{i}",
-                    "vector": generate_random_vector(64, i),
-                    "metadata": {"db": i}
-                }])
+                db.set(
+                    [
+                        {
+                            "id": f"v{i}",
+                            "vector": generate_random_vector(64, i),
+                            "metadata": {"db": i},
+                        }
+                    ]
+                )
                 dbs.append(db)
 
             # Verify all work
@@ -434,7 +495,11 @@ class TestSoakTest:
 
             # Initial population
             vectors = [
-                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
+                {
+                    "id": f"v{i}",
+                    "vector": generate_random_vector(64, i),
+                    "metadata": {"i": i},
+                }
                 for i in range(1000)
             ]
             db.set(vectors)
@@ -457,7 +522,9 @@ class TestSoakTest:
 
                 try:
                     # Random operation mix
-                    op = random.choice(["search", "search", "search", "set", "delete", "get"])
+                    op = random.choice(
+                        ["search", "search", "search", "set", "delete", "get"]
+                    )
 
                     if op == "search":
                         query = generate_random_vector(64)
@@ -466,11 +533,15 @@ class TestSoakTest:
 
                     elif op == "set":
                         # Add a new vector
-                        db.set([{
-                            "id": f"soak_{vector_id_counter}",
-                            "vector": generate_random_vector(64),
-                            "metadata": {"soak": True, "ts": time.time()}
-                        }])
+                        db.set(
+                            [
+                                {
+                                    "id": f"soak_{vector_id_counter}",
+                                    "vector": generate_random_vector(64),
+                                    "metadata": {"soak": True, "ts": time.time()},
+                                }
+                            ]
+                        )
                         vector_id_counter += 1
                         ops["set"] += 1
 
@@ -500,7 +571,7 @@ class TestSoakTest:
 
             print("\nSoak test complete:")
             print(f"  Duration: {total_time:.1f}s")
-            print(f"  Total ops: {total_ops} ({total_ops/total_time:.0f} ops/s)")
+            print(f"  Total ops: {total_ops} ({total_ops / total_time:.0f} ops/s)")
             print(f"  Breakdown: {ops}")
             print(f"  Final count: {len(db)} vectors")
             print(f"  Errors: {len(errors)}")
@@ -548,10 +619,12 @@ class TestSoakTest:
             tracemalloc.stop()
 
             # Compare memory
-            top_stats = final_snapshot.compare_to(initial_snapshot, 'lineno')
+            top_stats = final_snapshot.compare_to(initial_snapshot, "lineno")
 
             # Calculate total memory growth
-            total_growth = sum(stat.size_diff for stat in top_stats if stat.size_diff > 0)
+            total_growth = sum(
+                stat.size_diff for stat in top_stats if stat.size_diff > 0
+            )
             total_growth_mb = total_growth / (1024 * 1024)
 
             print("\nMemory stability test:")
@@ -560,7 +633,9 @@ class TestSoakTest:
             print(f"  Memory growth: {total_growth_mb:.2f}MB")
 
             # Allow some memory growth but flag if excessive (>50MB)
-            assert total_growth_mb < 50, f"Excessive memory growth: {total_growth_mb:.2f}MB"
+            assert total_growth_mb < 50, (
+                f"Excessive memory growth: {total_growth_mb:.2f}MB"
+            )
 
 
 # Custom marker for soak tests
