@@ -1,11 +1,12 @@
 """Tests for ef_search runtime tuning API"""
 
-import pytest
 import omendb
 import tempfile
 import os
 import random
 import math
+
+# ef_search API now implemented
 
 
 def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
@@ -16,11 +17,9 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         embedding = [random.gauss(0, 1) for _ in range(dim)]
         norm = math.sqrt(sum(x * x for x in embedding))
         embedding = [x / norm for x in embedding]
-        vectors.append({
-            "id": f"vec_{i}",
-            "vector": embedding,
-            "metadata": {"index": i}
-        })
+        vectors.append(
+            {"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i}}
+        )
     return vectors
 
 
@@ -225,30 +224,24 @@ class TestEfSearchWithFilters:
                 embedding = [random.gauss(0, 1) for _ in range(64)]
                 norm = math.sqrt(sum(x * x for x in embedding))
                 embedding = [x / norm for x in embedding]
-                vectors.append({
-                    "id": f"vec_{i}",
-                    "vector": embedding,
-                    "metadata": {"group": i % 10}
-                })
+                vectors.append(
+                    {
+                        "id": f"vec_{i}",
+                        "vector": embedding,
+                        "metadata": {"group": i % 10},
+                    }
+                )
             db.set(vectors)
 
             query = vectors[0]["vector"]
 
             # Set high ef_search
             db.set_ef_search(100)
-            high_ef_results = db.search(
-                query,
-                k=10,
-                filter={"group": {"$eq": 0}}
-            )
+            high_ef_results = db.search(query, k=10, filter={"group": 0})
 
             # Set lower ef_search (but still >= k)
             db.set_ef_search(20)
-            low_ef_results = db.search(
-                query,
-                k=10,
-                filter={"group": {"$eq": 0}}
-            )
+            low_ef_results = db.search(query, k=10, filter={"group": 0})
 
             # Both should return results
             assert len(high_ef_results) > 0

@@ -176,7 +176,7 @@ def benchmark_synthetic(
         # Filtered search (10% selectivity)
         start = time.perf_counter()
         for q in queries:
-            db.search(q.tolist(), k=k, filter={"cat": {"$eq": 5}})
+            db.search(q.tolist(), k=k, filter={"cat": 5})
         filtered_time = time.perf_counter() - start
         filtered_qps = n_queries / filtered_time
         print(f"Filtered:   {filtered_qps:>10,.0f} QPS    (10% selectivity)")

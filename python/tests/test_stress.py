@@ -192,7 +192,7 @@ class TestFilteredSearchScale:
                     results = db.search(
                         query,
                         k=10,
-                        filter={"group": {"$eq": group_filter}}
+                        filter={"group": group_filter}
                     )
                     # Should find some results (100 vectors per group)
                     assert len(results) <= 10

@@ -55,11 +55,9 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         # Normalize to unit length
         norm = math.sqrt(sum(x * x for x in embedding))
         embedding = [x / norm for x in embedding]
-        vectors.append({
-            "id": f"vec_{i}",
-            "vector": embedding,
-            "metadata": {"index": i}
-        })
+        vectors.append(
+            {"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i}}
+        )
     return vectors
 
 
@@ -244,11 +242,13 @@ class TestRecallFiltered:
                 norm = math.sqrt(sum(x * x for x in embedding))
                 embedding = [x / norm for x in embedding]
                 category = i % 5  # 5 categories: 0, 1, 2, 3, 4
-                vectors.append({
-                    "id": f"vec_{i}",
-                    "vector": embedding,
-                    "metadata": {"category": category}
-                })
+                vectors.append(
+                    {
+                        "id": f"vec_{i}",
+                        "vector": embedding,
+                        "metadata": {"category": category},
+                    }
+                )
 
             db.set(vectors)
 
@@ -257,11 +257,7 @@ class TestRecallFiltered:
 
             query = generate_random_vectors(1, 64, seed=7000)[0]["vector"]
 
-            hnsw_results = db.search(
-                query,
-                k=10,
-                filter={"category": {"$eq": 0}}
-            )
+            hnsw_results = db.search(query, k=10, filter={"category": 0})
             ground_truth = brute_force_knn(query, filtered_vectors, k=10)
 
             recall = compute_recall(hnsw_results, ground_truth)

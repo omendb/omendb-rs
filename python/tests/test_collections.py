@@ -1,4 +1,5 @@
 """Tests for Collections API."""
+
 import pytest
 import tempfile
 import shutil
@@ -21,11 +22,9 @@ class TestCollections:
         users = db.collection("users")
 
         # Collection should be usable
-        users.set([{
-            "id": "user1",
-            "vector": [0.1] * 128,
-            "metadata": {"name": "Alice"}
-        }])
+        users.set(
+            [{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}]
+        )
 
         assert len(users) == 1
         result = users.get("user1")
@@ -40,17 +39,11 @@ class TestCollections:
         products = db.collection("products")
 
         # Insert same ID into both collections - should not conflict
-        users.set([{
-            "id": "doc1",
-            "vector": [0.1] * 128,
-            "metadata": {"type": "user"}
-        }])
+        users.set([{"id": "doc1", "vector": [0.1] * 128, "metadata": {"type": "user"}}])
 
-        products.set([{
-            "id": "doc1",
-            "vector": [0.2] * 128,
-            "metadata": {"type": "product"}
-        }])
+        products.set(
+            [{"id": "doc1", "vector": [0.2] * 128, "metadata": {"type": "product"}}]
+        )
 
         # Both should have 1 item each
         assert len(users) == 1
@@ -63,7 +56,7 @@ class TestCollections:
         assert user_doc["metadata"]["type"] == "user"
         assert product_doc["metadata"]["type"] == "product"
 
-    def test_list_collections(self, db_path):
+    def test_collections(self, db_path):
         """Test listing collections."""
         db = omendb.open(db_path, dimensions=128)
 
@@ -85,11 +78,9 @@ class TestCollections:
 
         # Create and populate a collection
         users = db.collection("users")
-        users.set([{
-            "id": "user1",
-            "vector": [0.1] * 128,
-            "metadata": {"name": "Alice"}
-        }])
+        users.set(
+            [{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}]
+        )
 
         # Verify it exists
         assert "users" in db.collections()
@@ -104,7 +95,7 @@ class TestCollections:
         """Test deleting a collection that doesn't exist."""
         db = omendb.open(db_path, dimensions=128)
 
-        with pytest.raises(ValueError, match="does not exist"):
+        with pytest.raises(ValueError, match="not found"):
             db.delete_collection("nonexistent")
 
     def test_collection_name_validation(self, db_path):
@@ -135,18 +126,14 @@ class TestCollections:
         # Create and populate collections
         db1 = omendb.open(db_path, dimensions=128)
         users1 = db1.collection("users")
-        users1.set([{
-            "id": "user1",
-            "vector": [0.1] * 128,
-            "metadata": {"name": "Alice"}
-        }])
+        users1.set(
+            [{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}]
+        )
 
         products1 = db1.collection("products")
-        products1.set([{
-            "id": "prod1",
-            "vector": [0.2] * 128,
-            "metadata": {"price": 99.99}
-        }])
+        products1.set(
+            [{"id": "prod1", "vector": [0.2] * 128, "metadata": {"price": 99.99}}]
+        )
 
         # Close by going out of scope
         del db1, users1, products1
@@ -174,11 +161,15 @@ class TestCollections:
 
         users = db.collection("users")
         for i in range(100):
-            users.set([{
-                "id": f"user{i}",
-                "vector": [i * 0.01] * 128,
-                "metadata": {"index": i}
-            }])
+            users.set(
+                [
+                    {
+                        "id": f"user{i}",
+                        "vector": [i * 0.01] * 128,
+                        "metadata": {"index": i},
+                    }
+                ]
+            )
 
         # Search should work
         results = users.search(query=[0.5] * 128, k=10)
@@ -186,7 +177,7 @@ class TestCollections:
 
         # Results should be sorted by distance
         for i in range(1, len(results)):
-            assert results[i]["distance"] >= results[i-1]["distance"]
+            assert results[i]["distance"] >= results[i - 1]["distance"]
 
     def test_collection_filtered_search(self, db_path):
         """Test filtered search within a collection."""
@@ -194,18 +185,18 @@ class TestCollections:
 
         users = db.collection("users")
         for i in range(50):
-            users.set([{
-                "id": f"user{i}",
-                "vector": [i * 0.02] * 128,
-                "metadata": {"age": 20 + (i % 30)}
-            }])
+            users.set(
+                [
+                    {
+                        "id": f"user{i}",
+                        "vector": [i * 0.02] * 128,
+                        "metadata": {"age": 20 + (i % 30)},
+                    }
+                ]
+            )
 
         # Filter by age >= 40
-        results = users.search(
-            query=[0.5] * 128,
-            k=20,
-            filter={"age": {"$gte": 40}}
-        )
+        results = users.search(query=[0.5] * 128, k=20, filter={"age": {"$gte": 40}})
 
         # All results should have age >= 40
         for result in results:
@@ -227,11 +218,9 @@ class TestCollections:
 
         # Create and populate
         users = db.collection("users")
-        users.set([{
-            "id": "user1",
-            "vector": [0.1] * 128,
-            "metadata": {"name": "Alice"}
-        }])
+        users.set(
+            [{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}]
+        )
 
         # Delete
         db.delete_collection("users")
@@ -242,11 +231,9 @@ class TestCollections:
         assert len(users2) == 0  # Should be empty
 
         # Add new data
-        users2.set([{
-            "id": "user2",
-            "vector": [0.2] * 128,
-            "metadata": {"name": "Bob"}
-        }])
+        users2.set(
+            [{"id": "user2", "vector": [0.2] * 128, "metadata": {"name": "Bob"}}]
+        )
 
         assert len(users2) == 1
         assert users2.get("user2") is not None

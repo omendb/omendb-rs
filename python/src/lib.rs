@@ -325,8 +325,8 @@ impl VectorDatabase {
     ///
     /// Returns:
     ///     list[list[dict]]: Results for each query
-    #[pyo3(name = "batch_search", signature = (queries, k, ef=None))]
-    fn batch_search(
+    #[pyo3(name = "search_batch", signature = (queries, k, ef=None))]
+    fn search_batch(
         &self,
         py: Python<'_>,
         queries: &Bound<'_, PyAny>,
@@ -502,6 +502,38 @@ impl VectorDatabase {
         inner.store.save_to_disk(&self.path).map_err(convert_error)
     }
 
+    /// Get current ef_search value.
+    ///
+    /// ef_search controls the search quality/speed tradeoff. Higher values
+    /// give better recall but slower search.
+    ///
+    /// Returns:
+    ///     int or None: Current ef_search value, or None if not set
+    ///
+    /// Examples:
+    ///     >>> db.get_ef_search()
+    ///     100
+    fn get_ef_search(&self) -> Option<usize> {
+        let inner = self.inner.read();
+        inner.store.get_ef_search()
+    }
+
+    /// Set ef_search value for search quality/speed tradeoff.
+    ///
+    /// Higher ef_search = better recall, slower search.
+    /// Lower ef_search = faster search, may miss some neighbors.
+    ///
+    /// Args:
+    ///     ef_search (int): New ef_search value (must be >= k in searches)
+    ///
+    /// Examples:
+    ///     >>> db.set_ef_search(200)  # High quality
+    ///     >>> db.set_ef_search(50)   # Faster search
+    fn set_ef_search(&mut self, ef_search: usize) {
+        let mut inner = self.inner.write();
+        inner.store.set_ef_search(ef_search);
+    }
+
     /// Number of vectors in database (Pythonic).
     ///
     /// Returns:
@@ -632,7 +664,7 @@ impl VectorDatabase {
     ///
     /// Returns:
     ///     list[str]: Names of all collections
-    fn list_collections(&self) -> PyResult<Vec<String>> {
+    fn collections(&self) -> PyResult<Vec<String>> {
         if !self.is_persistent {
             return Err(PyValueError::new_err(
                 "Collections require persistent storage",

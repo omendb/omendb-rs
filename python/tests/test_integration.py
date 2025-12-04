@@ -16,10 +16,8 @@ These tests verify:
 import tempfile
 import time
 import random
-import math
 
 import pytest
-import numpy as np
 
 import omendb
 
@@ -30,7 +28,9 @@ def generate_embedding(dim: int, seed: int) -> list[float]:
     return [random.gauss(0, 1) for _ in range(dim)]
 
 
-def brute_force_knn(query: list[float], vectors: list[list[float]], k: int) -> list[int]:
+def brute_force_knn(
+    query: list[float], vectors: list[list[float]], k: int
+) -> list[int]:
     """Compute exact k-NN using brute force (L2 distance)."""
     distances = []
     for i, vec in enumerate(vectors):
@@ -43,11 +43,14 @@ def brute_force_knn(query: list[float], vectors: list[list[float]], k: int) -> l
 class TestEmbeddingDimensions:
     """Test various embedding dimensions."""
 
-    @pytest.mark.parametrize("dim,name", [
-        (384, "sentence-transformers"),
-        (768, "BERT/mpnet"),
-        (1536, "OpenAI ada-002"),
-    ])
+    @pytest.mark.parametrize(
+        "dim,name",
+        [
+            (384, "sentence-transformers"),
+            (768, "BERT/mpnet"),
+            (1536, "OpenAI ada-002"),
+        ],
+    )
     def test_embedding_dimension(self, dim: int, name: str):
         """Test search works correctly for common embedding dimensions."""
         n_vectors = 500
@@ -178,7 +181,7 @@ class TestFilteredSearch:
             query = generate_embedding(dim, seed=9999)
 
             # Search only category 2
-            results = db.search(query, k=10, filter={"category": {"$eq": 2}})
+            results = db.search(query, k=10, filter={"category": 2})
 
             # All results should be category 2
             for r in results:
@@ -212,20 +215,16 @@ class TestFilteredSearch:
 
             for i in range(200):
                 vec = generate_embedding(dim, seed=i)
-                db.set(f"doc_{i}", vec, metadata={
-                    "category": i % 4,
-                    "score": i
-                })
+                db.set(f"doc_{i}", vec, metadata={"category": i % 4, "score": i})
 
             query = generate_embedding(dim, seed=9999)
 
             # Search category=1 AND score >= 100
-            results = db.search(query, k=10, filter={
-                "$and": [
-                    {"category": {"$eq": 1}},
-                    {"score": {"$gte": 100}}
-                ]
-            })
+            results = db.search(
+                query,
+                k=10,
+                filter={"$and": [{"category": 1}, {"score": {"$gte": 100}}]},
+            )
 
             for r in results:
                 assert r["metadata"]["category"] == 1
@@ -285,7 +284,9 @@ class TestPerformance:
             ]
             db.set(vectors)
 
-            queries = [generate_embedding(dim, seed=10000 + i) for i in range(n_queries)]
+            queries = [
+                generate_embedding(dim, seed=10000 + i) for i in range(n_queries)
+            ]
 
             # Individual searches
             start = time.time()
@@ -305,8 +306,10 @@ class TestPerformance:
             # For larger datasets, batch should be faster (or at least comparable)
             # Note: batch has thread pool overhead that makes it slower for tiny datasets
             # but faster for real workloads (10K+ vectors, higher dimensions)
-            speedup = individual_time / batch_time if batch_time > 0 else float('inf')
-            print(f"Batch speedup: {speedup:.2f}x (individual={individual_time:.3f}s, batch={batch_time:.3f}s)")
+            speedup = individual_time / batch_time if batch_time > 0 else float("inf")
+            print(
+                f"Batch speedup: {speedup:.2f}x (individual={individual_time:.3f}s, batch={batch_time:.3f}s)"
+            )
 
 
 class TestEdgeCases:
