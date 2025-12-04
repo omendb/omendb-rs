@@ -43,7 +43,15 @@ def test_insert_without_metadata(db):
 
 
 def test_insert_invalid_dimensions(db):
-    """Test inserting vector with wrong dimensions"""
+    """Test inserting vector with wrong dimensions after db has vectors.
+
+    Note: First insert sets dimensions (auto-detect), so we need to insert
+    a valid vector first, then try to insert one with wrong dimensions.
+    """
+    # First insert sets dimensions to 128
+    db.set([{"id": "valid", "vector": [0.1] * 128}])
+
+    # Now inserting 64-dim vector should fail
     vector = {
         "id": "test1",
         "vector": [0.1] * 64,
