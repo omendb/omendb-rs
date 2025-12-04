@@ -221,7 +221,12 @@ impl HNSWIndex {
     ///
     /// # Returns
     /// Vector of (ID, distance) tuples, sorted by distance (ascending)
-    pub fn search_with_ef(&self, query: &[f32], k: usize, ef: Option<usize>) -> Result<Vec<(usize, f32)>> {
+    pub fn search_with_ef(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: Option<usize>,
+    ) -> Result<Vec<(usize, f32)>> {
         if query.len() != self.dimensions {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",

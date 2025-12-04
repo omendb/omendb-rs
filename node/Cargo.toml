@@ -1,0 +1,27 @@
+[workspace]
+
+[package]
+name = "omendb-node"
+version = "0.0.2-alpha.1"
+edition = "2024"
+license = "AGPL-3.0"
+repository = "https://github.com/nijaru/omendb"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "3", features = ["async", "tokio_rt", "serde-json"] }
+napi-derive = "3"
+omendb = { path = ".." }
+parking_lot = "0.12"
+serde_json = "1"
+anyhow = "1"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

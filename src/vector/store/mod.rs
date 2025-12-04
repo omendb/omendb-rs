@@ -949,7 +949,12 @@ impl VectorStore {
     /// K-nearest neighbors search with optional ef override
     ///
     /// Note: May trigger index rebuild. For parallel search, use readonly version.
-    pub fn knn_search_with_ef(&mut self, query: &Vector, k: usize, ef: Option<usize>) -> Result<Vec<(usize, f32)>> {
+    pub fn knn_search_with_ef(
+        &mut self,
+        query: &Vector,
+        k: usize,
+        ef: Option<usize>,
+    ) -> Result<Vec<(usize, f32)>> {
         self.ensure_index_ready()?;
         self.knn_search_readonly(query, k, ef)
     }
@@ -963,7 +968,12 @@ impl VectorStore {
     /// * `query` - Query vector
     /// * `k` - Number of neighbors to return
     /// * `ef` - Search width override (None = auto-tune to max(k*4, 64))
-    pub fn knn_search_readonly(&self, query: &Vector, k: usize, ef: Option<usize>) -> Result<Vec<(usize, f32)>> {
+    pub fn knn_search_readonly(
+        &self,
+        query: &Vector,
+        k: usize,
+        ef: Option<usize>,
+    ) -> Result<Vec<(usize, f32)>> {
         if query.dim() != self.dimensions {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
@@ -973,8 +983,8 @@ impl VectorStore {
         }
 
         // Check if we have any data (either in vectors or in HNSW)
-        let has_data = !self.vectors.is_empty()
-            || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
+        let has_data =
+            !self.vectors.is_empty() || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
 
         if !has_data {
             return Ok(Vec::new());

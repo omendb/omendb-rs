@@ -59,13 +59,17 @@ fn bench_search_ef_comparison(c: &mut Criterion) {
     }
 
     for ef in [64, 100, 200] {
-        group.bench_with_input(BenchmarkId::new("768D", format!("ef={ef}")), &ef, |b, &ef| {
-            b.iter(|| {
-                for q in &queries {
-                    black_box(store.knn_search_with_ef(q, 10, Some(ef)).expect("search"));
-                }
-            })
-        });
+        group.bench_with_input(
+            BenchmarkId::new("768D", format!("ef={ef}")),
+            &ef,
+            |b, &ef| {
+                b.iter(|| {
+                    for q in &queries {
+                        black_box(store.knn_search_with_ef(q, 10, Some(ef)).expect("search"));
+                    }
+                })
+            },
+        );
     }
 
     group.finish();
@@ -111,5 +115,10 @@ fn bench_search_with_metadata(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_search, bench_search_ef_comparison, bench_search_with_metadata);
+criterion_group!(
+    benches,
+    bench_search,
+    bench_search_ef_comparison,
+    bench_search_with_metadata
+);
 criterion_main!(benches);

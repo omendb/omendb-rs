@@ -1,0 +1,28 @@
+{
+	"name": "omendb",
+	"version": "0.0.2-alpha.1",
+	"description": "Fast embedded vector database with HNSW indexing (wrapper for @omendb/omendb)",
+	"main": "index.js",
+	"types": "index.d.ts",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/nijaru/omendb"
+	},
+	"keywords": [
+		"vector",
+		"database",
+		"embeddings",
+		"hnsw",
+		"similarity-search",
+		"ai",
+		"machine-learning"
+	],
+	"author": "Nick Jaru",
+	"license": "AGPL-3.0",
+	"engines": {
+		"node": ">= 18"
+	},
+	"dependencies": {
+		"@omendb/omendb": "0.0.2-alpha.1"
+	}
+}

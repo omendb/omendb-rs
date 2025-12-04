@@ -4,7 +4,7 @@
 //! Key format: "`v:{vector_id`}" as UTF-8 bytes
 //! Value: JSON-serialized metadata bytes
 
-use crate::{config::StorageConfig, Result, OmenDBError};
+use crate::{config::StorageConfig, OmenDBError, Result};
 use seerdb::db::{DBOptions, DB};
 use seerdb::SyncPolicy;
 use std::path::PathBuf;
@@ -52,7 +52,7 @@ impl VectorMetadataStorage {
     }
 
     /// Get reference to underlying seerdb
-    #[must_use] 
+    #[must_use]
     pub fn db(&self) -> &DB {
         &self.db
     }
@@ -119,11 +119,9 @@ mod tests {
     #[test]
     fn test_insert_and_get() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         let key = "v:42";
         let value = br#"{"category": "test", "score": 0.95}"#;
@@ -136,11 +134,9 @@ mod tests {
     #[test]
     fn test_get_nonexistent() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         let result = storage.get("v:999").unwrap();
         assert_eq!(result, None);
@@ -149,11 +145,9 @@ mod tests {
     #[test]
     fn test_update_metadata() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         let key = "v:42";
         storage.insert(key, br#"{"v": 1}"#).unwrap();
@@ -166,11 +160,9 @@ mod tests {
     #[test]
     fn test_remove_metadata() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         let key = "v:42";
         storage.insert(key, br#"{"test": true}"#).unwrap();
@@ -183,11 +175,9 @@ mod tests {
     #[test]
     fn test_multiple_vectors() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = VectorMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            VectorMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         storage.insert("v:1", br#"{"id": 1}"#).unwrap();
         storage.insert("v:2", br#"{"id": 2}"#).unwrap();

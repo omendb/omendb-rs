@@ -92,7 +92,7 @@ fn get_projections(dimensions: usize) -> &'static Vec<Vec<f32>> {
 /// let hash = compute_hash(&vector);
 /// assert_eq!(hash.len(), 16); // 128 bits = 16 bytes
 /// ```
-#[must_use] 
+#[must_use]
 pub fn compute_hash(vector: &[f32]) -> [u8; HASH_BYTES] {
     let projections = get_projections(vector.len());
     let mut hash = [0u8; HASH_BYTES];
@@ -134,7 +134,7 @@ pub fn compute_hash(vector: &[f32]) -> [u8; HASH_BYTES] {
 /// assert_eq!(collisions, 128); // All bits match
 /// ```
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn count_collisions(hash1: &[u8; HASH_BYTES], hash2: &[u8; HASH_BYTES]) -> usize {
     // XOR hashes and count differing bits
     let diff_bits: usize = hash1
@@ -180,7 +180,7 @@ pub fn count_collisions(hash1: &[u8; HASH_BYTES], hash2: &[u8; HASH_BYTES]) -> u
 /// }
 /// ```
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn should_read_vector(
     query_hash: &[u8; HASH_BYTES],
     candidate_hash: &[u8; HASH_BYTES],
@@ -198,7 +198,7 @@ pub fn should_read_vector(
 ///
 /// Paper uses threshold that achieves ρ = 0.8 (skip 20% of reads)
 /// After testing: 60% was too aggressive (53% recall), 50% provides better balance
-#[must_use] 
+#[must_use]
 pub fn default_threshold() -> usize {
     (HASH_BITS as f32 * 0.5) as usize // 64 out of 128 bits
 }

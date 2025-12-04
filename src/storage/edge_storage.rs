@@ -3,7 +3,7 @@
 //! Provides persistent storage for HNSW graph edges using seerdb as the backend.
 //! This replaces fjall-based storage with better performance characteristics.
 
-use crate::{config::StorageConfig, Result, OmenDBError};
+use crate::{config::StorageConfig, OmenDBError, Result};
 use seerdb::db::{DBOptions, DB};
 use seerdb::SyncPolicy;
 use std::path::PathBuf;
@@ -64,13 +64,13 @@ impl EdgeStorage {
     }
 
     /// Get reference to underlying seerdb
-    #[must_use] 
+    #[must_use]
     pub fn db(&self) -> &DB {
         &self.db
     }
 
     /// Get cache statistics for performance monitoring
-    #[must_use] 
+    #[must_use]
     pub fn cache_stats(&self) -> (u64, u64, f64) {
         let stats = self.db.stats();
         (stats.cache_hits, stats.cache_misses, stats.cache_hit_rate)
@@ -89,8 +89,8 @@ impl EdgeStorage {
     /// Overwrites any existing neighbor list.
     pub fn put_neighbors(&self, node_id: u64, level: u8, neighbors: &[u64]) -> Result<()> {
         let key = Self::encode_key(node_id, level);
-        let value = bincode::serialize(neighbors)
-            .map_err(|e| OmenDBError::Serialization(e.to_string()))?;
+        let value =
+            bincode::serialize(neighbors).map_err(|e| OmenDBError::Serialization(e.to_string()))?;
 
         self.db
             .put(key, &value)
@@ -162,11 +162,8 @@ mod tests {
     #[test]
     fn test_put_and_get_neighbors() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = EdgeStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            EdgeStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default()).unwrap();
 
         // Add neighbors
         let neighbors = vec![100, 200, 300];
@@ -180,11 +177,8 @@ mod tests {
     #[test]
     fn test_put_neighbors_batch() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = EdgeStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            EdgeStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default()).unwrap();
 
         let batch = vec![(1, 0, vec![2, 3]), (2, 0, vec![1, 3]), (3, 0, vec![1, 2])];
         storage.put_neighbors_batch(&batch).unwrap();
@@ -197,11 +191,8 @@ mod tests {
     #[test]
     fn test_get_neighbors_empty() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = EdgeStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            EdgeStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default()).unwrap();
 
         let retrieved = storage.get_neighbors(999, 0).unwrap();
         assert!(retrieved.is_empty());

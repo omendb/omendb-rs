@@ -4,7 +4,7 @@
 //! Key format: `node_id` (8 bytes big-endian)
 //! Value: `max_level` (1 byte)
 
-use crate::{config::StorageConfig, Result, OmenDBError};
+use crate::{config::StorageConfig, OmenDBError, Result};
 use seerdb::db::{DBOptions, DB};
 use seerdb::SyncPolicy;
 use std::path::PathBuf;
@@ -52,7 +52,7 @@ impl NodeMetadataStorage {
     }
 
     /// Get reference to underlying seerdb
-    #[must_use] 
+    #[must_use]
     pub fn db(&self) -> &DB {
         &self.db
     }
@@ -155,11 +155,9 @@ mod tests {
     #[test]
     fn test_set_and_get_max_level() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         storage.set_max_level(42, 3).unwrap();
 
@@ -170,11 +168,9 @@ mod tests {
     #[test]
     fn test_get_nonexistent_node() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         let level = storage.get_max_level(999).unwrap();
         assert_eq!(level, None);
@@ -183,11 +179,9 @@ mod tests {
     #[test]
     fn test_update_max_level() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         storage.set_max_level(42, 2).unwrap();
         assert_eq!(storage.get_max_level(42).unwrap(), Some(2));
@@ -199,11 +193,9 @@ mod tests {
     #[test]
     fn test_remove_node() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         storage.set_max_level(42, 3).unwrap();
         assert_eq!(storage.get_max_level(42).unwrap(), Some(3));
@@ -215,11 +207,9 @@ mod tests {
     #[test]
     fn test_batch_operations() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = NodeMetadataStorage::new(
-            temp_dir.path().to_path_buf(),
-            &StorageConfig::default(),
-        )
-        .unwrap();
+        let storage =
+            NodeMetadataStorage::new(temp_dir.path().to_path_buf(), &StorageConfig::default())
+                .unwrap();
 
         // Batch set
         let levels = vec![(1, 0), (2, 1), (3, 2), (4, 3)];

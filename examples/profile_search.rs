@@ -34,7 +34,10 @@ fn main() {
         index.insert(vec).unwrap();
     }
     let build_time = build_start.elapsed();
-    println!("Build: {:.0} vec/s", n_vectors as f64 / build_time.as_secs_f64());
+    println!(
+        "Build: {:.0} vec/s",
+        n_vectors as f64 / build_time.as_secs_f64()
+    );
 
     // Warmup
     println!("Warming up...");
@@ -63,6 +66,10 @@ fn main() {
             let _ = index.search(q, k, ef);
         }
         let elapsed = start.elapsed();
-        println!("Round {}: {:.0} QPS", round, n_queries as f64 / elapsed.as_secs_f64());
+        println!(
+            "Round {}: {:.0} QPS",
+            round,
+            n_queries as f64 / elapsed.as_secs_f64()
+        );
     }
 }
