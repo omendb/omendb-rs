@@ -26,7 +26,7 @@
 	},
 	"napi": {
 		"binaryName": "omendb",
-		"packageName": "omendb",
+		"packageName": "@omendb/omendb",
 		"targets": [
 			"x86_64-apple-darwin",
 			"aarch64-apple-darwin",
@@ -49,9 +49,9 @@
 		"omendb.node"
 	],
 	"optionalDependencies": {
-		"omendb-darwin-x64": "0.0.2-alpha.1",
-		"omendb-darwin-arm64": "0.0.2-alpha.1",
-		"omendb-linux-x64-gnu": "0.0.2-alpha.1",
-		"omendb-linux-arm64-gnu": "0.0.2-alpha.1"
+		"@omendb/omendb-darwin-x64": "0.0.2-alpha.1",
+		"@omendb/omendb-darwin-arm64": "0.0.2-alpha.1",
+		"@omendb/omendb-linux-x64-gnu": "0.0.2-alpha.1",
+		"@omendb/omendb-linux-arm64-gnu": "0.0.2-alpha.1"
 	}
 }
