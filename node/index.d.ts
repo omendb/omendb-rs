@@ -4,7 +4,7 @@ export declare class VectorDatabase {
 	/**
 	 * Insert or update vectors.
 	 *
-	 * Accepts an array of items with id, embedding, and optional metadata.
+	 * Accepts an array of items with id, vector, and optional metadata.
 	 */
 	set(items: Array<VectorItem>): Array<number>;
 	/**
@@ -38,10 +38,10 @@ export declare class VectorDatabase {
 	 * @returns Number of vectors deleted
 	 */
 	delete(ids: Array<string>): number;
-	/** Update a vector's embedding and/or metadata. */
+	/** Update a vector's data and/or metadata. */
 	update(
 		id: string,
-		embedding: Array<number> | Float32Array,
+		vector: Array<number> | Float32Array,
 		metadata?: Record<string, unknown> | undefined,
 	): void;
 	/** Save database to disk. */
@@ -64,7 +64,7 @@ export declare class VectorDatabase {
 
 export interface GetResult {
 	id: string;
-	embedding: Array<number>;
+	vector: Array<number>;
 	metadata: Record<string, unknown>;
 }
 
@@ -95,8 +95,8 @@ export interface SearchResult {
 
 export interface VectorItem {
 	id: string;
-	/** Embedding as array of numbers */
-	embedding: Array<number>;
+	/** Vector data as array of numbers */
+	vector: Array<number>;
 	/** Optional metadata */
 	metadata?: Record<string, unknown> | undefined;
 	/** Optional document text (stored in metadata.document) */

@@ -54,8 +54,8 @@ pub struct SearchResult {
 #[napi(object)]
 pub struct VectorItem {
     pub id: String,
-    /// Embedding as array of numbers
-    pub embedding: Vec<f64>,
+    /// Vector data as array of numbers
+    pub vector: Vec<f64>,
     /// Optional metadata
     #[napi(ts_type = "Record<string, unknown> | undefined")]
     pub metadata: Option<JsonValue>,
@@ -70,7 +70,7 @@ pub struct VectorItem {
 #[napi(object)]
 pub struct GetResult {
     pub id: String,
-    pub embedding: Vec<f64>,
+    pub vector: Vec<f64>,
     #[napi(ts_type = "Record<string, unknown>")]
     pub metadata: JsonValue,
 }
@@ -103,7 +103,7 @@ pub struct VectorDatabase {
 impl VectorDatabase {
     /// Insert or update vectors.
     ///
-    /// Accepts an array of items with id, embedding, and optional metadata.
+    /// Accepts an array of items with id, vector, and optional metadata.
     #[napi]
     pub fn set(&self, items: Vec<VectorItem>) -> Result<Vec<u32>> {
         let batch: Vec<(String, Vector, JsonValue)> = items
@@ -118,8 +118,8 @@ impl VectorDatabase {
                     }
                 }
 
-                let embedding: Vec<f32> = item.embedding.into_iter().map(|x| x as f32).collect();
-                (item.id, Vector::new(embedding), metadata)
+                let vector_data: Vec<f32> = item.vector.into_iter().map(|x| x as f32).collect();
+                (item.id, Vector::new(vector_data), metadata)
             })
             .collect();
 
@@ -276,9 +276,9 @@ impl VectorDatabase {
     pub fn get(&self, id: String) -> Option<GetResult> {
         let inner = self.inner.read();
 
-        inner.store.get_by_id(&id).map(|(vector, metadata)| GetResult {
+        inner.store.get_by_id(&id).map(|(vec, metadata)| GetResult {
             id,
-            embedding: vector.data.iter().map(|&x| x as f64).collect(),
+            vector: vec.data.iter().map(|&x| x as f64).collect(),
             metadata: metadata.clone(),
         })
     }
@@ -294,19 +294,19 @@ impl VectorDatabase {
         Ok(result as u32)
     }
 
-    /// Update a vector's embedding and/or metadata.
+    /// Update a vector's data and/or metadata.
     #[napi]
     pub fn update(
         &self,
         id: String,
-        embedding: Either<Vec<f64>, Float32Array>,
+        vector: Either<Vec<f64>, Float32Array>,
         #[napi(ts_arg_type = "Record<string, unknown> | undefined")] metadata: Option<JsonValue>,
     ) -> Result<()> {
-        let vector = Some(Vector::new(extract_query_vector(embedding)));
+        let vec = Some(Vector::new(extract_query_vector(vector)));
         let mut inner = self.inner.write();
         inner
             .store
-            .update(&id, vector, metadata)
+            .update(&id, vec, metadata)
             .map_err(convert_error)
     }
 

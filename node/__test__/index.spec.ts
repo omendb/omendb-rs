@@ -15,7 +15,7 @@ describe("VectorDatabase", () => {
 		describe("set", () => {
 			it("should insert single vector", () => {
 				const indices = db.set([
-					{ id: "doc1", embedding: Array(128).fill(0.1) },
+					{ id: "doc1", vector: Array(128).fill(0.1) },
 				]);
 				expect(indices).toHaveLength(1);
 				expect(db.count).toBe(1);
@@ -24,7 +24,7 @@ describe("VectorDatabase", () => {
 			it("should insert batch of vectors", () => {
 				const items = Array.from({ length: 100 }, (_, i) => ({
 					id: `doc${i}`,
-					embedding: Array(128).fill(i / 100),
+					vector: Array(128).fill(i / 100),
 					metadata: { index: i },
 				}));
 				const indices = db.set(items);
@@ -36,7 +36,7 @@ describe("VectorDatabase", () => {
 				db.set([
 					{
 						id: "doc1",
-						embedding: Array(128).fill(0.1),
+						vector: Array(128).fill(0.1),
 						metadata: { title: "Test", tags: ["a", "b"], count: 42 },
 					},
 				]);
@@ -52,7 +52,7 @@ describe("VectorDatabase", () => {
 				db.set([
 					{
 						id: "doc1",
-						embedding: Array(128).fill(0.1),
+						vector: Array(128).fill(0.1),
 						document: "Hello world",
 					},
 				]);
@@ -61,11 +61,11 @@ describe("VectorDatabase", () => {
 			});
 
 			it("should replace existing vector with same id", () => {
-				db.set([{ id: "doc1", embedding: Array(128).fill(0.1) }]);
+				db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
 				db.set([
 					{
 						id: "doc1",
-						embedding: Array(128).fill(0.9),
+						vector: Array(128).fill(0.9),
 						metadata: { new: true },
 					},
 				]);
@@ -78,9 +78,9 @@ describe("VectorDatabase", () => {
 		describe("search", () => {
 			beforeEach(() => {
 				db.set([
-					{ id: "a", embedding: Array(128).fill(0.1) },
-					{ id: "b", embedding: Array(128).fill(0.5) },
-					{ id: "c", embedding: Array(128).fill(0.9) },
+					{ id: "a", vector: Array(128).fill(0.1) },
+					{ id: "b", vector: Array(128).fill(0.5) },
+					{ id: "c", vector: Array(128).fill(0.9) },
 				]);
 			});
 
@@ -94,7 +94,7 @@ describe("VectorDatabase", () => {
 				db.set([
 					{
 						id: "d",
-						embedding: Array(128).fill(0.5),
+						vector: Array(128).fill(0.5),
 						metadata: { key: "value" },
 					},
 				]);
@@ -121,7 +121,7 @@ describe("VectorDatabase", () => {
 			beforeEach(() => {
 				const items = Array.from({ length: 100 }, (_, i) => ({
 					id: `doc${i}`,
-					embedding: Array(128).fill(i / 100),
+					vector: Array(128).fill(i / 100),
 				}));
 				db.set(items);
 			});
@@ -161,14 +161,14 @@ describe("VectorDatabase", () => {
 				db.set([
 					{
 						id: "doc1",
-						embedding: Array(128).fill(0.5),
+						vector: Array(128).fill(0.5),
 						metadata: { key: "value" },
 					},
 				]);
 				const doc = db.get("doc1");
 				expect(doc).not.toBeNull();
 				expect(doc?.id).toBe("doc1");
-				expect(doc?.embedding).toHaveLength(128);
+				expect(doc?.vector).toHaveLength(128);
 				expect(doc?.metadata).toEqual({ key: "value" });
 			});
 
@@ -181,9 +181,9 @@ describe("VectorDatabase", () => {
 		describe("delete", () => {
 			beforeEach(() => {
 				db.set([
-					{ id: "doc1", embedding: Array(128).fill(0.1) },
-					{ id: "doc2", embedding: Array(128).fill(0.2) },
-					{ id: "doc3", embedding: Array(128).fill(0.3) },
+					{ id: "doc1", vector: Array(128).fill(0.1) },
+					{ id: "doc2", vector: Array(128).fill(0.2) },
+					{ id: "doc3", vector: Array(128).fill(0.3) },
 				]);
 			});
 
@@ -212,16 +212,16 @@ describe("VectorDatabase", () => {
 				db.set([
 					{
 						id: "doc1",
-						embedding: Array(128).fill(0.1),
+						vector: Array(128).fill(0.1),
 						metadata: { old: true },
 					},
 				]);
 			});
 
-			it("should update embedding", () => {
+			it("should update vector", () => {
 				db.update("doc1", Array(128).fill(0.9));
 				const doc = db.get("doc1");
-				expect(doc?.embedding[0]).toBeCloseTo(0.9, 1);
+				expect(doc?.vector[0]).toBeCloseTo(0.9, 1);
 			});
 
 			it("should update metadata", () => {
@@ -250,10 +250,10 @@ describe("VectorDatabase", () => {
 			});
 
 			it("should return correct count after inserts", () => {
-				db.set([{ id: "doc1", embedding: Array(128).fill(0.1) }]);
+				db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
 				expect(db.count).toBe(1);
 
-				db.set([{ id: "doc2", embedding: Array(128).fill(0.2) }]);
+				db.set([{ id: "doc2", vector: Array(128).fill(0.2) }]);
 				expect(db.count).toBe(2);
 			});
 		});
@@ -284,10 +284,10 @@ describe("VectorDatabase", () => {
 			db1.set([
 				{
 					id: "persist1",
-					embedding: Array(64).fill(0.5),
+					vector: Array(64).fill(0.5),
 					metadata: { saved: true },
 				},
-				{ id: "persist2", embedding: Array(64).fill(0.9) },
+				{ id: "persist2", vector: Array(64).fill(0.9) },
 			]);
 			db1.save();
 
@@ -306,15 +306,15 @@ describe("VectorDatabase", () => {
 			const users = db.collection("users");
 			const products = db.collection("products");
 
-			users.set([{ id: "user1", embedding: Array(64).fill(0.1) }]);
-			products.set([{ id: "prod1", embedding: Array(64).fill(0.2) }]);
+			users.set([{ id: "user1", vector: Array(64).fill(0.1) }]);
+			products.set([{ id: "prod1", vector: Array(64).fill(0.2) }]);
 
 			expect(users.count).toBe(1);
 			expect(products.count).toBe(1);
 
 			// IDs are independent
-			users.set([{ id: "item1", embedding: Array(64).fill(0.3) }]);
-			products.set([{ id: "item1", embedding: Array(64).fill(0.4) }]);
+			users.set([{ id: "item1", vector: Array(64).fill(0.3) }]);
+			products.set([{ id: "item1", vector: Array(64).fill(0.4) }]);
 
 			expect(users.count).toBe(2);
 			expect(products.count).toBe(2);
@@ -333,7 +333,7 @@ describe("VectorDatabase", () => {
 		it("should delete collections", () => {
 			const db = open(dbPath, { dimensions: 64 });
 			const col = db.collection("todelete");
-			col.set([{ id: "doc1", embedding: Array(64).fill(0.1) }]);
+			col.set([{ id: "doc1", vector: Array(64).fill(0.1) }]);
 
 			db.deleteCollection("todelete");
 			expect(db.collections()).not.toContain("todelete");

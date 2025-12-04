@@ -25,12 +25,14 @@ def main():
 
         # --- INSERT ---
         # Add vectors individually or in batches
-        db.set([
-            {"id": "a", "vector": [1.0, 0.0, 0.0], "metadata": {"axis": "x"}},
-            {"id": "b", "vector": [0.0, 1.0, 0.0], "metadata": {"axis": "y"}},
-            {"id": "c", "vector": [0.0, 0.0, 1.0], "metadata": {"axis": "z"}},
-            {"id": "d", "vector": [0.7, 0.7, 0.0], "metadata": {"axis": "xy"}},
-        ])
+        db.set(
+            [
+                {"id": "a", "vector": [1.0, 0.0, 0.0], "metadata": {"axis": "x"}},
+                {"id": "b", "vector": [0.0, 1.0, 0.0], "metadata": {"axis": "y"}},
+                {"id": "c", "vector": [0.0, 0.0, 1.0], "metadata": {"axis": "z"}},
+                {"id": "d", "vector": [0.7, 0.7, 0.0], "metadata": {"axis": "xy"}},
+            ]
+        )
         print(f"Inserted {len(db)} vectors")
 
         # --- SEARCH ---
@@ -38,16 +40,26 @@ def main():
         results = db.search(query=[1.0, 0.0, 0.0], k=3)
         print("\nSearch results for [1, 0, 0]:")
         for r in results:
-            print(f"  {r['id']}: distance={r['distance']:.3f}, axis={r['metadata']['axis']}")
+            print(
+                f"  {r['id']}: distance={r['distance']:.3f}, axis={r['metadata']['axis']}"
+            )
 
         # --- GET ---
         # Retrieve by ID
         vec = db.get("a")
-        print(f"\nGet 'a': embedding={vec['embedding']}, metadata={vec['metadata']}")
+        print(f"\nGet 'a': vector={vec['vector']}, metadata={vec['metadata']}")
 
         # --- UPDATE ---
         # Replace embedding and/or metadata
-        db.set([{"id": "a", "vector": [0.9, 0.1, 0.0], "metadata": {"axis": "x", "modified": True}}])
+        db.set(
+            [
+                {
+                    "id": "a",
+                    "vector": [0.9, 0.1, 0.0],
+                    "metadata": {"axis": "x", "modified": True},
+                }
+            ]
+        )
         updated = db.get("a")
         print(f"Updated 'a': {updated['metadata']}")
 
@@ -66,6 +78,7 @@ def main():
         # --- BATCH OPERATIONS ---
         # Efficient for large datasets
         import random
+
         batch = [
             {"id": f"rand_{i}", "vector": [random.random() for _ in range(3)]}
             for i in range(100)
@@ -76,7 +89,9 @@ def main():
         # Batch search
         queries = [[random.random() for _ in range(3)] for _ in range(10)]
         results = db2.search_batch(queries, k=5)
-        print(f"Batch search: {len(results)} result sets, {len(results[0])} results each")
+        print(
+            f"Batch search: {len(results)} result sets, {len(results[0])} results each"
+        )
 
 
 if __name__ == "__main__":

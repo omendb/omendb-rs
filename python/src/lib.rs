@@ -34,17 +34,20 @@ fn extract_batch_queries(ob: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f32>>> {
     // Try 2D numpy array first (most efficient)
     if let Ok(arr) = ob.extract::<PyReadonlyArray2<'_, f32>>() {
         let shape = arr.shape();
-        let rows = shape[0];
-        let cols = shape[1];
-        let mut result = Vec::with_capacity(rows);
-        for i in 0..rows {
-            let mut row = Vec::with_capacity(cols);
-            for j in 0..cols {
-                row.push(*arr.get([i, j]).unwrap_or(&0.0));
+        let n_queries = shape[0];
+        let dim = shape[1];
+        let mut queries = Vec::with_capacity(n_queries);
+
+        if let Ok(slice) = arr.as_slice() {
+            for i in 0..n_queries {
+                let start = i * dim;
+                let end = start + dim;
+                queries.push(slice[start..end].to_vec());
             }
-            result.push(row);
+            return Ok(queries);
+        } else {
+            return Err(PyValueError::new_err("2D array must be contiguous"));
         }
-        return Ok(result);
     }
 
     // Try list of lists/arrays
