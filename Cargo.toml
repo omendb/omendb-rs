@@ -57,7 +57,7 @@ lazy_static = "1.4"
 once_cell = "1.19"
 
 # Storage
-seerdb = { path = "../seerdb" }
+seerdb = "0.0.3"
 
 # Async (for seerdb)
 tokio = { version = "1.48.0", features = ["full"] }
