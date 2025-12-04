@@ -125,8 +125,11 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org/
+
+      - name: Check npm version
+        run: npm --version
 
       - name: Install dependencies
         run: npm install
@@ -160,10 +163,18 @@ jobs:
         run: ls -R npm
         working-directory: node
 
+      - name: Publish platform packages
+        run: |
+          for dir in npm/*/; do
+            echo "Publishing $dir"
+            npm publish "$dir" --provenance --access public --tag alpha
+          done
+        working-directory: node
+
       - name: Publish @omendb/omendb
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag alpha
         working-directory: node
 
       - name: Publish omendb wrapper
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag alpha
         working-directory: node/wrapper
