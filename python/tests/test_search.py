@@ -49,9 +49,9 @@ def test_search_invalid_dimensions(db_with_vectors):
 def test_search_distance_ordering(db):
     """Test that results are ordered by distance"""
     vectors = [
-        {"id": "far", "embedding": [1.0] * 128, "metadata": {}},
-        {"id": "near", "embedding": [0.0] * 128, "metadata": {}},
-        {"id": "medium", "embedding": [0.5] * 128, "metadata": {}},
+        {"id": "far", "vector": [1.0] * 128, "metadata": {}},
+        {"id": "near", "vector": [0.0] * 128, "metadata": {}},
+        {"id": "medium", "vector": [0.5] * 128, "metadata": {}},
     ]
     db.set(vectors)
 
@@ -69,7 +69,7 @@ def test_search_distance_ordering(db):
 
 def test_search_exact_match(db):
     """Test searching for exact match"""
-    vector = {"id": "test1", "embedding": [0.123] * 128, "metadata": {}}
+    vector = {"id": "test1", "vector": [0.123] * 128, "metadata": {}}
     db.set([vector])
 
     results = db.search([0.123] * 128, k=1)
@@ -219,7 +219,7 @@ def test_search_metadata_returned(db):
     """Test that metadata is correctly returned in search results"""
     vector = {
         "id": "test1",
-        "embedding": [0.1] * 128,
+        "vector": [0.1] * 128,
         "metadata": {
             "title": "Test Document",
             "tags": ["important", "reviewed"],

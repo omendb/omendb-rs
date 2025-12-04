@@ -26,11 +26,11 @@ def db_with_vectors(temp_db_path):
     db = omendb.open(temp_db_path, dimensions=128)
 
     vectors = [
-        {"id": "vec1", "embedding": [0.1] * 128, "metadata": {"label": "A", "value": 1}},
-        {"id": "vec2", "embedding": [0.2] * 128, "metadata": {"label": "B", "value": 2}},
-        {"id": "vec3", "embedding": [0.3] * 128, "metadata": {"label": "C", "value": 3}},
-        {"id": "vec4", "embedding": [0.4] * 128, "metadata": {"label": "A", "value": 4}},
-        {"id": "vec5", "embedding": [0.5] * 128, "metadata": {"label": "B", "value": 5}},
+        {"id": "vec1", "vector": [0.1] * 128, "metadata": {"label": "A", "value": 1}},
+        {"id": "vec2", "vector": [0.2] * 128, "metadata": {"label": "B", "value": 2}},
+        {"id": "vec3", "vector": [0.3] * 128, "metadata": {"label": "C", "value": 3}},
+        {"id": "vec4", "vector": [0.4] * 128, "metadata": {"label": "A", "value": 4}},
+        {"id": "vec5", "vector": [0.5] * 128, "metadata": {"label": "B", "value": 5}},
     ]
     db.set(vectors)
     return db
@@ -40,7 +40,7 @@ def db_with_vectors(temp_db_path):
 def sample_vectors():
     """Sample vectors for testing"""
     return [
-        {"id": "v1", "embedding": [0.1] * 128, "metadata": {"category": "A"}},
-        {"id": "v2", "embedding": [0.2] * 128, "metadata": {"category": "B"}},
-        {"id": "v3", "embedding": [0.3] * 128, "metadata": {"category": "C"}},
+        {"id": "v1", "vector": [0.1] * 128, "metadata": {"category": "A"}},
+        {"id": "v2", "vector": [0.2] * 128, "metadata": {"category": "B"}},
+        {"id": "v3", "vector": [0.3] * 128, "metadata": {"category": "C"}},
     ]

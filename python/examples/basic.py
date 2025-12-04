@@ -26,10 +26,10 @@ def main():
         # --- INSERT ---
         # Add vectors individually or in batches
         db.set([
-            {"id": "a", "embedding": [1.0, 0.0, 0.0], "metadata": {"axis": "x"}},
-            {"id": "b", "embedding": [0.0, 1.0, 0.0], "metadata": {"axis": "y"}},
-            {"id": "c", "embedding": [0.0, 0.0, 1.0], "metadata": {"axis": "z"}},
-            {"id": "d", "embedding": [0.7, 0.7, 0.0], "metadata": {"axis": "xy"}},
+            {"id": "a", "vector": [1.0, 0.0, 0.0], "metadata": {"axis": "x"}},
+            {"id": "b", "vector": [0.0, 1.0, 0.0], "metadata": {"axis": "y"}},
+            {"id": "c", "vector": [0.0, 0.0, 1.0], "metadata": {"axis": "z"}},
+            {"id": "d", "vector": [0.7, 0.7, 0.0], "metadata": {"axis": "xy"}},
         ])
         print(f"Inserted {len(db)} vectors")
 
@@ -47,7 +47,7 @@ def main():
 
         # --- UPDATE ---
         # Replace embedding and/or metadata
-        db.set([{"id": "a", "embedding": [0.9, 0.1, 0.0], "metadata": {"axis": "x", "modified": True}}])
+        db.set([{"id": "a", "vector": [0.9, 0.1, 0.0], "metadata": {"axis": "x", "modified": True}}])
         updated = db.get("a")
         print(f"Updated 'a': {updated['metadata']}")
 
@@ -67,7 +67,7 @@ def main():
         # Efficient for large datasets
         import random
         batch = [
-            {"id": f"rand_{i}", "embedding": [random.random() for _ in range(3)]}
+            {"id": f"rand_{i}", "vector": [random.random() for _ in range(3)]}
             for i in range(100)
         ]
         db2.set(batch)

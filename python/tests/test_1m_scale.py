@@ -13,7 +13,7 @@ def generate_random_vectors(n, dim, seed=42):
         embedding = [random.gauss(0, 1) for _ in range(dim)]
         norm = math.sqrt(sum(x * x for x in embedding))
         embedding = [x / norm for x in embedding]
-        vectors.append({"id": f"vec_{i}", "embedding": embedding, "metadata": {"index": i}})
+        vectors.append({"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i}})
     return vectors
 
 def main():
@@ -60,7 +60,7 @@ def main():
         num_queries = 100
         start = time.time()
         for q in range(num_queries):
-            query = generate_random_vectors(1, dims, seed=9000 + q)[0]["embedding"]
+            query = generate_random_vectors(1, dims, seed=9000 + q)[0]["vector"]
             _ = db.search(query, k=10)
         search_time = time.time() - start
         qps = num_queries / search_time
@@ -88,7 +88,7 @@ def main():
         # Test search after load
         start = time.time()
         for q in range(num_queries):
-            query = generate_random_vectors(1, dims, seed=9000 + q)[0]["embedding"]
+            query = generate_random_vectors(1, dims, seed=9000 + q)[0]["vector"]
             _ = db2.search(query, k=10)
         search_time_2 = time.time() - start
         qps_2 = num_queries / search_time_2

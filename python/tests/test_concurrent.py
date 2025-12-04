@@ -28,7 +28,7 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         embedding = generate_random_vector(dim)
         vectors.append({
             "id": f"vec_{i}",
-            "embedding": embedding,
+            "vector": embedding,
             "metadata": {"index": i, "group": i % 10}
         })
     return vectors
@@ -185,7 +185,7 @@ class TestConcurrentWriters:
                         embedding = generate_random_vector(64, seed=thread_id * 10000 + i)
                         db.set([{
                             "id": vec_id,
-                            "embedding": embedding,
+                            "vector": embedding,
                             "metadata": {"thread": thread_id, "index": i}
                         }])
                 except Exception as e:
@@ -262,7 +262,7 @@ class TestConcurrentWriters:
 
             # Insert single vector
             initial = generate_random_vector(64, seed=0)
-            db.set([{"id": "shared", "embedding": initial, "metadata": {"version": 0}}])
+            db.set([{"id": "shared", "vector": initial, "metadata": {"version": 0}}])
 
             errors = []
             lock = threading.Lock()
@@ -325,7 +325,7 @@ class TestMixedReadWrite:
                         embedding = generate_random_vector(64, seed=thread_id * 100000 + i)
                         db.set([{
                             "id": vec_id,
-                            "embedding": embedding,
+                            "vector": embedding,
                             "metadata": {"thread": thread_id}
                         }])
                         i += 1
@@ -474,7 +474,7 @@ class TestThreadPoolExecutor:
                     embedding = generate_random_vector(64, seed=batch_id * 1000 + i)
                     batch.append({
                         "id": vec_id,
-                        "embedding": embedding,
+                        "vector": embedding,
                         "metadata": {"batch": batch_id}
                     })
                 batches.append(batch)
@@ -507,7 +507,7 @@ class TestStressConditions:
             # Insert initial vector
             db.set([{
                 "id": "hot_key",
-                "embedding": generate_random_vector(64, seed=0),
+                "vector": generate_random_vector(64, seed=0),
                 "metadata": {"counter": 0}
             }])
 

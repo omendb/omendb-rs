@@ -84,7 +84,7 @@ def test_delete_then_insert_same_id(db_with_vectors):
     # Re-insert with same ID
     new_vector = {
         "id": "vec1",
-        "embedding": [0.9] * 128,
+        "vector": [0.9] * 128,
         "metadata": {"status": "new"}
     }
     db_with_vectors.set([new_vector])
@@ -135,9 +135,9 @@ def test_delete_from_empty_database(db):
 def test_delete_special_characters_id(db):
     """Test deleting IDs with special characters"""
     vectors = [
-        {"id": "test-1", "embedding": [0.1] * 128, "metadata": {}},
-        {"id": "test_2", "embedding": [0.2] * 128, "metadata": {}},
-        {"id": "test.3", "embedding": [0.3] * 128, "metadata": {}},
+        {"id": "test-1", "vector": [0.1] * 128, "metadata": {}},
+        {"id": "test_2", "vector": [0.2] * 128, "metadata": {}},
+        {"id": "test.3", "vector": [0.3] * 128, "metadata": {}},
     ]
     db.set(vectors)
 

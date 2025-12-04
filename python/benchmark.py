@@ -136,7 +136,7 @@ def benchmark_synthetic(
 
         # Build
         batch = [
-            {"id": str(i), "embedding": vectors[i].tolist(), "metadata": {"cat": i % 10}}
+            {"id": str(i), "vector": vectors[i].tolist(), "metadata": {"cat": i % 10}}
             for i in range(n_vectors)
         ]
         start = time.perf_counter()
@@ -250,7 +250,7 @@ def benchmark_sift1m(
         for i in range(0, n_base, batch_size):
             end_idx = min(i + batch_size, n_base)
             batch = [
-                {"id": str(j), "embedding": base_vectors[j].tolist()}
+                {"id": str(j), "vector": base_vectors[j].tolist()}
                 for j in range(i, end_idx)
             ]
             db.set(batch)

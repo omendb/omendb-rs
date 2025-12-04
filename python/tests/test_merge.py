@@ -30,14 +30,14 @@ class TestMerge:
         # Populate db1
         db1.set([{
             "id": f"db1_vec{i}",
-            "embedding": [0.1 * i] * 128,
+            "vector": [0.1 * i] * 128,
             "metadata": {"source": "db1"}
         } for i in range(10)])
 
         # Populate db2
         db2.set([{
             "id": f"db2_vec{i}",
-            "embedding": [0.2 * i] * 128,
+            "vector": [0.2 * i] * 128,
             "metadata": {"source": "db2"}
         } for i in range(20)])
 
@@ -63,12 +63,12 @@ class TestMerge:
         # Populate both dbs
         db1.set([{
             "id": "vec1",
-            "embedding": [0.1] * 128,
+            "vector": [0.1] * 128,
             "metadata": {}
         }])
         db2.set([{
             "id": "vec2",
-            "embedding": [0.1] * 64,
+            "vector": [0.1] * 64,
             "metadata": {}
         }])
 
@@ -82,13 +82,13 @@ class TestMerge:
         db2 = omendb.open(db_path2, dimensions=128)
 
         # First establish dimensions in db1 by inserting and deleting
-        db1.set([{"id": "temp", "embedding": [0.0] * 128, "metadata": {}}])
+        db1.set([{"id": "temp", "vector": [0.0] * 128, "metadata": {}}])
         db1.delete(["temp"])
 
         # Populate only db2
         db2.set([{
             "id": f"vec{i}",
-            "embedding": [i * 0.1] * 128,
+            "vector": [i * 0.1] * 128,
             "metadata": {"index": i}
         } for i in range(50)])
 
@@ -105,17 +105,17 @@ class TestMerge:
         # Same ID in both databases
         db1.set([{
             "id": "shared_id",
-            "embedding": [0.1] * 128,
+            "vector": [0.1] * 128,
             "metadata": {"source": "db1", "value": 1}
         }])
 
         db2.set([{
             "id": "shared_id",
-            "embedding": [0.2] * 128,
+            "vector": [0.2] * 128,
             "metadata": {"source": "db2", "value": 2}
         }, {
             "id": "unique_id",
-            "embedding": [0.3] * 128,
+            "vector": [0.3] * 128,
             "metadata": {"source": "db2"}
         }])
 
@@ -138,14 +138,14 @@ class TestMerge:
         # First establish dimensions in db1 by inserting a vector
         db1.set([{
             "id": "placeholder",
-            "embedding": [0.0] * 128,
+            "vector": [0.0] * 128,
             "metadata": {}
         }])
 
         # Complex metadata in db2
         db2.set([{
             "id": "complex_meta",
-            "embedding": [0.5] * 128,
+            "vector": [0.5] * 128,
             "metadata": {
                 "nested": {"key": "value"},
                 "array": [1, 2, 3],
@@ -170,13 +170,13 @@ class TestMerge:
         # Insert distinctive vectors
         db1.set([{
             "id": "db1_unique",
-            "embedding": [1.0] * 128,  # All 1s
+            "vector": [1.0] * 128,  # All 1s
             "metadata": {"source": "db1"}
         }])
 
         db2.set([{
             "id": "db2_unique",
-            "embedding": [0.0] * 128,  # All 0s
+            "vector": [0.0] * 128,  # All 0s
             "metadata": {"source": "db2"}
         }])
 
@@ -200,13 +200,13 @@ class TestMerge:
         # Insert 500 vectors into each
         db1.set([{
             "id": f"db1_{i}",
-            "embedding": [i * 0.002] * 128,
+            "vector": [i * 0.002] * 128,
             "metadata": {"idx": i}
         } for i in range(500)])
 
         db2.set([{
             "id": f"db2_{i}",
-            "embedding": [1.0 + i * 0.002] * 128,
+            "vector": [1.0 + i * 0.002] * 128,
             "metadata": {"idx": i}
         } for i in range(500)])
 

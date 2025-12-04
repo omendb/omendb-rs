@@ -97,7 +97,9 @@ class OmenDBVectorStore(BasePydanticVectorStore):
 
         # Use provided dimensions or fall back to stored
         dims = dimensions or self.dimensions or 1536  # Default to OpenAI dimensions
-        self._db = omendb.open(self.path, dimensions=dims, **getattr(self, '_kwargs', {}))
+        self._db = omendb.open(
+            self.path, dimensions=dims, **getattr(self, "_kwargs", {})
+        )
         self._initialized = True
 
     @classmethod
@@ -156,11 +158,13 @@ class OmenDBVectorStore(BasePydanticVectorStore):
             # Store node type info
             metadata["_node_type"] = node.class_name()
 
-            items.append({
-                "id": node_id,
-                "embedding": embedding,
-                "metadata": metadata,
-            })
+            items.append(
+                {
+                    "id": node_id,
+                    "vector": embedding,
+                    "metadata": metadata,
+                }
+            )
             ids.append(node_id)
 
         if items:
@@ -247,7 +251,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
                 id_=node_id,
                 text=text,
                 metadata=metadata,
-                embedding=result.get("embedding"),
+                embedding=result.get("vector"),
             )
 
             nodes.append(node)
@@ -323,7 +327,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
         if len(filter_list) == 1:
             return filter_list[0]
 
-        condition = getattr(filters, 'condition', FilterCondition.AND)
+        condition = getattr(filters, "condition", FilterCondition.AND)
         if condition == FilterCondition.OR:
             return {"$or": filter_list}
         else:

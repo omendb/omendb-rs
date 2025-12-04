@@ -10,8 +10,8 @@ def test_save_and_load(temp_db_path):
     # Create and populate database
     db = omendb.open(temp_db_path, dimensions=128)
     vectors = [
-        {"id": "v1", "embedding": [0.1] * 128, "metadata": {"label": "A"}},
-        {"id": "v2", "embedding": [0.2] * 128, "metadata": {"label": "B"}},
+        {"id": "v1", "vector": [0.1] * 128, "metadata": {"label": "A"}},
+        {"id": "v2", "vector": [0.2] * 128, "metadata": {"label": "B"}},
     ]
     db.set(vectors)
 
@@ -34,7 +34,7 @@ def test_save_and_load(temp_db_path):
 def test_save_creates_files(temp_db_path):
     """Test that save creates expected files"""
     db = omendb.open(temp_db_path, dimensions=128)
-    vectors = [{"id": "v1", "embedding": [0.1] * 128, "metadata": {}}]
+    vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
 
     db.save()
@@ -60,7 +60,7 @@ def test_load_preserves_metadata(temp_db_path):
     vectors = [
         {
             "id": "v1",
-            "embedding": [0.1] * 128,
+            "vector": [0.1] * 128,
             "metadata": {
                 "title": "Test Doc",
                 "tags": ["a", "b"],
@@ -88,8 +88,8 @@ def test_load_preserves_distances(temp_db_path):
     """Test that distances are preserved (vectors loaded correctly)"""
     db = omendb.open(temp_db_path, dimensions=4)
     vectors = [
-        {"id": "v1", "embedding": [1.0, 0.0, 0.0, 0.0], "metadata": {}},
-        {"id": "v2", "embedding": [0.0, 1.0, 0.0, 0.0], "metadata": {}},
+        {"id": "v1", "vector": [1.0, 0.0, 0.0, 0.0], "metadata": {}},
+        {"id": "v2", "vector": [0.0, 1.0, 0.0, 0.0], "metadata": {}},
     ]
     db.set(vectors)
 
@@ -113,9 +113,9 @@ def test_save_after_delete(temp_db_path):
     """Test save/load with deleted vectors"""
     db = omendb.open(temp_db_path, dimensions=128)
     vectors = [
-        {"id": "v1", "embedding": [0.1] * 128, "metadata": {}},
-        {"id": "v2", "embedding": [0.2] * 128, "metadata": {}},
-        {"id": "v3", "embedding": [0.3] * 128, "metadata": {}},
+        {"id": "v1", "vector": [0.1] * 128, "metadata": {}},
+        {"id": "v2", "vector": [0.2] * 128, "metadata": {}},
+        {"id": "v3", "vector": [0.3] * 128, "metadata": {}},
     ]
     db.set(vectors)
 
@@ -141,12 +141,12 @@ def test_save_multiple_times(temp_db_path):
     db = omendb.open(temp_db_path, dimensions=128)
 
     # First save
-    vectors1 = [{"id": "v1", "embedding": [0.1] * 128, "metadata": {}}]
+    vectors1 = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors1)
     db.save()
 
     # Second save with more data
-    vectors2 = [{"id": "v2", "embedding": [0.2] * 128, "metadata": {}}]
+    vectors2 = [{"id": "v2", "vector": [0.2] * 128, "metadata": {}}]
     db.set(vectors2)
     db.save()
 
@@ -180,7 +180,7 @@ def test_load_with_wrong_dimensions(temp_db_path):
     """Test loading database with wrong dimensions"""
     # Create with 128 dims
     db = omendb.open(temp_db_path, dimensions=128)
-    vectors = [{"id": "v1", "embedding": [0.1] * 128, "metadata": {}}]
+    vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
     db.save()
     del db
@@ -198,12 +198,12 @@ def test_incremental_updates(temp_db_path):
     db = omendb.open(temp_db_path, dimensions=128)
 
     # First batch
-    batch1 = [{"id": f"v{i}", "embedding": [float(i)] * 128, "metadata": {}} for i in range(10)]
+    batch1 = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(10)]
     db.set(batch1)
     db.save()
 
     # Second batch
-    batch2 = [{"id": f"v{i}", "embedding": [float(i)] * 128, "metadata": {}} for i in range(10, 20)]
+    batch2 = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(10, 20)]
     db.set(batch2)
     db.save()
 
@@ -218,13 +218,13 @@ def test_set_after_reload(temp_db_path):
     """Test that set works after reload"""
     # Initial save
     db = omendb.open(temp_db_path, dimensions=128)
-    db.set([{"id": "v1", "embedding": [0.1] * 128, "metadata": {}}])
+    db.set([{"id": "v1", "vector": [0.1] * 128, "metadata": {}}])
     db.save()
     del db
 
     # Reload and add more
     db2 = omendb.open(temp_db_path, dimensions=128)
-    db2.set([{"id": "v2", "embedding": [0.2] * 128, "metadata": {}}])
+    db2.set([{"id": "v2", "vector": [0.2] * 128, "metadata": {}}])
 
     results = db2.search([0.1] * 128, k=10)
     assert len(results) == 2
@@ -235,8 +235,8 @@ def test_delete_after_reload(temp_db_path):
     # Initial save
     db = omendb.open(temp_db_path, dimensions=128)
     db.set([
-        {"id": "v1", "embedding": [0.1] * 128, "metadata": {}},
-        {"id": "v2", "embedding": [0.2] * 128, "metadata": {}},
+        {"id": "v1", "vector": [0.1] * 128, "metadata": {}},
+        {"id": "v2", "vector": [0.2] * 128, "metadata": {}},
     ])
     db.save()
     del db

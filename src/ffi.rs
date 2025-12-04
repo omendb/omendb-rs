@@ -19,7 +19,7 @@
 //! }
 //!
 //! // Insert vectors
-//! const char* items = "[{\"id\":\"doc1\",\"embedding\":[0.1,...],\"metadata\":{}}]";
+//! const char* items = "[{\"id\":\"doc1\",\"vector\":[0.1,...],\"metadata\":{}}]";
 //! omendb_set(db, items);
 //!
 //! // Search
@@ -120,7 +120,7 @@ pub unsafe extern "C" fn omendb_close(db: *mut OmenDB) {
 ///
 /// # Arguments
 /// * `db` - Database handle
-/// * `items_json` - JSON array: `[{"id": "...", "embedding": [...], "metadata": {...}}, ...]`
+/// * `items_json` - JSON array: `[{"id": "...", "vector": [...], "metadata": {...}}, ...]`
 ///
 /// # Returns
 /// Number of vectors inserted, or -1 on error
@@ -167,19 +167,19 @@ pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) 
             return -1;
         };
 
-        let embedding: Vec<f32> =
-            if let Some(arr) = item.get("embedding").and_then(|v| v.as_array()) {
-                arr.iter()
-                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                    .collect()
-            } else {
-                set_last_error("Item missing 'embedding' field".to_string());
-                return -1;
-            };
+        let vector_data: Vec<f32> = if let Some(arr) = item.get("vector").and_then(|v| v.as_array())
+        {
+            arr.iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect()
+        } else {
+            set_last_error("Item missing 'vector' field".to_string());
+            return -1;
+        };
 
         let metadata = item.get("metadata").cloned().unwrap_or(json!({}));
 
-        let vector = Vector::new(embedding);
+        let vector = Vector::new(vector_data);
         if let Err(e) = db.store.set(id, vector, metadata) {
             set_last_error(format!("Set failed: {e}"));
             return -1;
@@ -243,7 +243,7 @@ pub unsafe extern "C" fn omendb_get(
         if let Some((vector, metadata)) = db.store.get_by_id(&id) {
             results.push(json!({
                 "id": id,
-                "embedding": vector.data,
+                "vector": vector.data,
                 "metadata": metadata
             }));
         }
@@ -427,7 +427,7 @@ pub unsafe extern "C" fn omendb_search(
             json_results.push(json!({
                 "id": id,
                 "distance": distance,
-                "embedding": vector.data,
+                "vector": vector.data,
                 "metadata": metadata
             }));
         }

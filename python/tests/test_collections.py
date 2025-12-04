@@ -23,7 +23,7 @@ class TestCollections:
         # Collection should be usable
         users.set([{
             "id": "user1",
-            "embedding": [0.1] * 128,
+            "vector": [0.1] * 128,
             "metadata": {"name": "Alice"}
         }])
 
@@ -42,13 +42,13 @@ class TestCollections:
         # Insert same ID into both collections - should not conflict
         users.set([{
             "id": "doc1",
-            "embedding": [0.1] * 128,
+            "vector": [0.1] * 128,
             "metadata": {"type": "user"}
         }])
 
         products.set([{
             "id": "doc1",
-            "embedding": [0.2] * 128,
+            "vector": [0.2] * 128,
             "metadata": {"type": "product"}
         }])
 
@@ -87,7 +87,7 @@ class TestCollections:
         users = db.collection("users")
         users.set([{
             "id": "user1",
-            "embedding": [0.1] * 128,
+            "vector": [0.1] * 128,
             "metadata": {"name": "Alice"}
         }])
 
@@ -137,14 +137,14 @@ class TestCollections:
         users1 = db1.collection("users")
         users1.set([{
             "id": "user1",
-            "embedding": [0.1] * 128,
+            "vector": [0.1] * 128,
             "metadata": {"name": "Alice"}
         }])
 
         products1 = db1.collection("products")
         products1.set([{
             "id": "prod1",
-            "embedding": [0.2] * 128,
+            "vector": [0.2] * 128,
             "metadata": {"price": 99.99}
         }])
 
@@ -176,7 +176,7 @@ class TestCollections:
         for i in range(100):
             users.set([{
                 "id": f"user{i}",
-                "embedding": [i * 0.01] * 128,
+                "vector": [i * 0.01] * 128,
                 "metadata": {"index": i}
             }])
 
@@ -196,7 +196,7 @@ class TestCollections:
         for i in range(50):
             users.set([{
                 "id": f"user{i}",
-                "embedding": [i * 0.02] * 128,
+                "vector": [i * 0.02] * 128,
                 "metadata": {"age": 20 + (i % 30)}
             }])
 
@@ -229,7 +229,7 @@ class TestCollections:
         users = db.collection("users")
         users.set([{
             "id": "user1",
-            "embedding": [0.1] * 128,
+            "vector": [0.1] * 128,
             "metadata": {"name": "Alice"}
         }])
 
@@ -244,7 +244,7 @@ class TestCollections:
         # Add new data
         users2.set([{
             "id": "user2",
-            "embedding": [0.2] * 128,
+            "vector": [0.2] * 128,
             "metadata": {"name": "Bob"}
         }])
 

@@ -47,7 +47,7 @@ def main():
 
     # Index documents
     items = [
-        {"id": doc["id"], "embedding": embed(doc["text"]), "metadata": doc}
+        {"id": doc["id"], "vector": embed(doc["text"]), "metadata": doc}
         for doc in DOCS
     ]
     db.set(items)

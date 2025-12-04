@@ -18,7 +18,7 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         embedding = [x / norm for x in embedding]
         vectors.append({
             "id": f"vec_{i}",
-            "embedding": embedding,
+            "vector": embedding,
             "metadata": {"index": i}
         })
     return vectors
@@ -109,7 +109,7 @@ class TestEfSearchConstraints:
             assert db.get_ef_search() == 1
 
             # Can still search with k <= ef
-            results = db.search(vectors[0]["embedding"], k=1)
+            results = db.search(vectors[0]["vector"], k=1)
             assert len(results) == 1
 
     def test_ef_search_auto_clamp_to_k(self):
@@ -125,7 +125,7 @@ class TestEfSearchConstraints:
             db.set_ef_search(5)
 
             # Search with k > ef_search should work (ef auto-clamped to k)
-            query = vectors[0]["embedding"]
+            query = vectors[0]["vector"]
             results = db.search(query, k=10)  # k=10 > ef=5, auto-clamps ef to 10
             assert len(results) == 10
 
@@ -139,7 +139,7 @@ class TestEfSearchConstraints:
             db.set(vectors)
 
             db.set_ef_search(10)
-            results = db.search(vectors[0]["embedding"], k=10)
+            results = db.search(vectors[0]["vector"], k=10)
             assert len(results) == 10
 
 
@@ -156,7 +156,7 @@ class TestEfSearchPerformance:
             vectors = generate_random_vectors(5000, 128)
             db.set(vectors)
 
-            query = generate_random_vectors(1, 128, seed=9000)[0]["embedding"]
+            query = generate_random_vectors(1, 128, seed=9000)[0]["vector"]
 
             import time
 
@@ -227,12 +227,12 @@ class TestEfSearchWithFilters:
                 embedding = [x / norm for x in embedding]
                 vectors.append({
                     "id": f"vec_{i}",
-                    "embedding": embedding,
+                    "vector": embedding,
                     "metadata": {"group": i % 10}
                 })
             db.set(vectors)
 
-            query = vectors[0]["embedding"]
+            query = vectors[0]["vector"]
 
             # Set high ef_search
             db.set_ef_search(100)

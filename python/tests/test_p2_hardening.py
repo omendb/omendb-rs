@@ -48,7 +48,7 @@ class TestGILDeadlock:
 
             # Pre-populate
             vectors = [
-                {"id": f"v{i}", "embedding": generate_random_vector(64, i), "metadata": {"i": i}}
+                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
                 for i in range(100)
             ]
             db.set(vectors)
@@ -109,7 +109,7 @@ class TestGILDeadlock:
             db = omendb.open(db_path, dimensions=64)
 
             vectors = [
-                {"id": f"v{i}", "embedding": generate_random_vector(64, i), "metadata": {"i": i}}
+                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
                 for i in range(500)
             ]
             db.set(vectors)
@@ -142,7 +142,7 @@ class TestGILDeadlock:
             db = omendb.open(db_path, dimensions=64)
 
             vectors = [
-                {"id": f"v{i}", "embedding": generate_random_vector(64, i), "metadata": {"i": i}}
+                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
                 for i in range(1000)
             ]
             db.set(vectors)
@@ -201,7 +201,7 @@ class TestLargeMetadata:
 
             db.set([{
                 "id": "large1",
-                "embedding": generate_random_vector(64, 0),
+                "vector": generate_random_vector(64, 0),
                 "metadata": {"content": large_string, "size": len(large_string)}
             }])
 
@@ -226,7 +226,7 @@ class TestLargeMetadata:
 
             db.set([{
                 "id": "huge1",
-                "embedding": generate_random_vector(64, 0),
+                "vector": generate_random_vector(64, 0),
                 "metadata": {"content": large_string}
             }])
 
@@ -245,7 +245,7 @@ class TestLargeMetadata:
 
             db.set([{
                 "id": "array1",
-                "embedding": generate_random_vector(64, 0),
+                "vector": generate_random_vector(64, 0),
                 "metadata": {"data": large_array}
             }])
 
@@ -270,7 +270,7 @@ class TestLargeMetadata:
 
             db.set([{
                 "id": "nested1",
-                "embedding": generate_random_vector(64, 0),
+                "vector": generate_random_vector(64, 0),
                 "metadata": nested
             }])
 
@@ -295,7 +295,7 @@ class TestLargeMetadata:
             for i in range(100):
                 vectors.append({
                     "id": f"v{i}",
-                    "embedding": generate_random_vector(64, i),
+                    "vector": generate_random_vector(64, i),
                     "metadata": {"content": "x" * 100_000, "idx": i}
                 })
 
@@ -323,7 +323,7 @@ class TestFileHandleLeaks:
             # Initial population
             db = omendb.open(db_path, dimensions=64)
             vectors = [
-                {"id": f"v{i}", "embedding": generate_random_vector(64, i), "metadata": {"i": i}}
+                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
                 for i in range(100)
             ]
             db.set(vectors)
@@ -362,7 +362,7 @@ class TestFileHandleLeaks:
 
                     # Add some vectors
                     vectors = [
-                        {"id": f"c{cycle}_v{i}", "embedding": generate_random_vector(64, cycle * 10 + i)}
+                        {"id": f"c{cycle}_v{i}", "vector": generate_random_vector(64, cycle * 10 + i)}
                         for i in range(10)
                     ]
                     db.set(vectors)
@@ -395,7 +395,7 @@ class TestFileHandleLeaks:
                 db = omendb.open(db_path, dimensions=64)
                 db.set([{
                     "id": f"v{i}",
-                    "embedding": generate_random_vector(64, i),
+                    "vector": generate_random_vector(64, i),
                     "metadata": {"db": i}
                 }])
                 dbs.append(db)
@@ -434,7 +434,7 @@ class TestSoakTest:
 
             # Initial population
             vectors = [
-                {"id": f"v{i}", "embedding": generate_random_vector(64, i), "metadata": {"i": i}}
+                {"id": f"v{i}", "vector": generate_random_vector(64, i), "metadata": {"i": i}}
                 for i in range(1000)
             ]
             db.set(vectors)
@@ -468,7 +468,7 @@ class TestSoakTest:
                         # Add a new vector
                         db.set([{
                             "id": f"soak_{vector_id_counter}",
-                            "embedding": generate_random_vector(64),
+                            "vector": generate_random_vector(64),
                             "metadata": {"soak": True, "ts": time.time()}
                         }])
                         vector_id_counter += 1
@@ -519,7 +519,7 @@ class TestSoakTest:
 
             # Initial population
             vectors = [
-                {"id": f"v{i}", "embedding": generate_random_vector(64, i)}
+                {"id": f"v{i}", "vector": generate_random_vector(64, i)}
                 for i in range(500)
             ]
             db.set(vectors)

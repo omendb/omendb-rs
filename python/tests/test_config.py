@@ -9,7 +9,7 @@ def test_default_config(temp_db_path):
     db = omendb.open(temp_db_path, dimensions=128)
 
     # Should work with defaults
-    vectors = [{"id": "v1", "embedding": [0.1] * 128, "metadata": {}}]
+    vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
 
     results = db.search([0.1] * 128, k=1)
@@ -29,7 +29,7 @@ def test_hnsw_config(temp_db_path):
     db = omendb.open(temp_db_path, dimensions=128, config=config)
 
     # Should work with custom HNSW params
-    vectors = [{"id": f"v{i}", "embedding": [float(i)] * 128, "metadata": {}} for i in range(100)]
+    vectors = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(100)]
     db.set(vectors)
 
     results = db.search([50.0] * 128, k=10)
@@ -46,7 +46,7 @@ def test_quantization_2bit(temp_db_path):
 
     db = omendb.open(temp_db_path, dimensions=128, config=config)
 
-    vectors = [{"id": f"v{i}", "embedding": [float(i)] * 128, "metadata": {}} for i in range(50)]
+    vectors = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(50)]
     db.set(vectors)
 
     # Search should still work (may have lower recall)
@@ -64,7 +64,7 @@ def test_quantization_4bit(temp_db_path):
 
     db = omendb.open(temp_db_path, dimensions=128, config=config)
 
-    vectors = [{"id": f"v{i}", "embedding": [float(i)] * 128, "metadata": {}} for i in range(50)]
+    vectors = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(50)]
     db.set(vectors)
 
     results = db.search([25.0] * 128, k=5)
@@ -81,7 +81,7 @@ def test_quantization_8bit(temp_db_path):
 
     db = omendb.open(temp_db_path, dimensions=128, config=config)
 
-    vectors = [{"id": f"v{i}", "embedding": [float(i)] * 128, "metadata": {}} for i in range(50)]
+    vectors = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(50)]
     db.set(vectors)
 
     results = db.search([25.0] * 128, k=5)
@@ -96,7 +96,7 @@ def test_expected_vectors_config(temp_db_path):
 
     db = omendb.open(temp_db_path, dimensions=128, config=config)
 
-    vectors = [{"id": f"v{i}", "embedding": [float(i)] * 128, "metadata": {}} for i in range(100)]
+    vectors = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(100)]
     db.set(vectors)
 
     results = db.search([50.0] * 128, k=10)
@@ -108,7 +108,7 @@ def test_dimensions_parameter(temp_db_path):
     for dims in [64, 128, 256, 384, 512, 768, 1024, 1536]:
         db = omendb.open(temp_db_path + f"_{dims}", dimensions=dims)
 
-        vector = {"id": "v1", "embedding": [0.1] * dims, "metadata": {}}
+        vector = {"id": "v1", "vector": [0.1] * dims, "metadata": {}}
         db.set([vector])
 
         results = db.search([0.1] * dims, k=1)
@@ -127,13 +127,13 @@ def test_config_persistence(temp_db_path):
 
     # Create with config
     db = omendb.open(temp_db_path, dimensions=128, config=config)
-    db.set([{"id": "v1", "embedding": [0.1] * 128, "metadata": {}}])
+    db.set([{"id": "v1", "vector": [0.1] * 128, "metadata": {}}])
     db.save()
     del db
 
     # Reload (config comes from saved state)
     db2 = omendb.open(temp_db_path, dimensions=128)
-    db2.set([{"id": "v2", "embedding": [0.2] * 128, "metadata": {}}])
+    db2.set([{"id": "v2", "vector": [0.2] * 128, "metadata": {}}])
 
     results = db2.search([0.15] * 128, k=2)
     assert len(results) == 2
@@ -143,7 +143,7 @@ def test_empty_config(temp_db_path):
     """Test passing empty config dict"""
     db = omendb.open(temp_db_path, dimensions=128, config={})
 
-    vectors = [{"id": "v1", "embedding": [0.1] * 128, "metadata": {}}]
+    vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
 
     results = db.search([0.1] * 128, k=1)

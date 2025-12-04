@@ -5,7 +5,7 @@ import pytest
 
 def test_insert_single_vector(db):
     """Test inserting a single vector"""
-    vector = {"id": "test1", "embedding": [0.1] * 128, "metadata": {}}
+    vector = {"id": "test1", "vector": [0.1] * 128, "metadata": {}}
     indices = db.set([vector])
 
     assert len(indices) == 1
@@ -15,7 +15,7 @@ def test_insert_single_vector(db):
 def test_insert_multiple_vectors(db):
     """Test batch insert"""
     vectors = [
-        {"id": f"vec{i}", "embedding": [float(i)] * 128, "metadata": {"index": i}}
+        {"id": f"vec{i}", "vector": [float(i)] * 128, "metadata": {"index": i}}
         for i in range(100)
     ]
     indices = db.set(vectors)
@@ -33,7 +33,7 @@ def test_insert_empty_list(db):
 
 def test_insert_without_metadata(db):
     """Test inserting vector without metadata field"""
-    vector = {"id": "test1", "embedding": [0.1] * 128}
+    vector = {"id": "test1", "vector": [0.1] * 128}
     indices = db.set([vector])
 
     assert len(indices) == 1
@@ -44,7 +44,11 @@ def test_insert_without_metadata(db):
 
 def test_insert_invalid_dimensions(db):
     """Test inserting vector with wrong dimensions"""
-    vector = {"id": "test1", "embedding": [0.1] * 64, "metadata": {}}  # Wrong: 64 instead of 128
+    vector = {
+        "id": "test1",
+        "vector": [0.1] * 64,
+        "metadata": {},
+    }  # Wrong: 64 instead of 128
 
     with pytest.raises(ValueError, match="dimension"):
         db.set([vector])
@@ -52,23 +56,23 @@ def test_insert_invalid_dimensions(db):
 
 def test_insert_missing_id(db):
     """Test inserting vector without ID"""
-    vector = {"embedding": [0.1] * 128, "metadata": {}}
+    vector = {"vector": [0.1] * 128, "metadata": {}}
 
     with pytest.raises(ValueError, match="id"):
         db.set([vector])
 
 
-def test_insert_missing_embedding(db):
-    """Test inserting vector without embedding"""
-    vector = {"id": "test1", "metadata": {}}
+def test_insert_missing_vector(db):
+    """Test inserting item without vector field"""
+    item = {"id": "test1", "metadata": {}}
 
-    with pytest.raises(ValueError, match="embedding"):
-        db.set([vector])
+    with pytest.raises(ValueError, match="vector"):
+        db.set([item])
 
 
 def test_insert_not_list(db):
     """Test passing non-list to set"""
-    vector = {"id": "test1", "embedding": [0.1] * 128, "metadata": {}}
+    vector = {"id": "test1", "vector": [0.1] * 128, "metadata": {}}
 
     with pytest.raises((TypeError, ValueError)):
         db.set(vector)  # Should be [vector]
@@ -77,7 +81,7 @@ def test_insert_not_list(db):
 def test_set_updates_existing(db):
     """Test that set updates existing vectors"""
     # Insert initial vector
-    vector1 = {"id": "test1", "embedding": [0.1] * 128, "metadata": {"version": 1}}
+    vector1 = {"id": "test1", "vector": [0.1] * 128, "metadata": {"version": 1}}
     db.set([vector1])
 
     # Search to verify initial value
@@ -85,7 +89,7 @@ def test_set_updates_existing(db):
     assert results[0]["metadata"]["version"] == 1
 
     # Update with new embedding and metadata
-    vector2 = {"id": "test1", "embedding": [0.2] * 128, "metadata": {"version": 2}}
+    vector2 = {"id": "test1", "vector": [0.2] * 128, "metadata": {"version": 2}}
     db.set([vector2])
 
     # Should still have 1 vector
@@ -102,16 +106,16 @@ def test_set_mixed_new_and_updates(db):
     """Test set with mix of new and existing vectors"""
     # Insert initial vectors
     initial = [
-        {"id": "vec1", "embedding": [0.1] * 128, "metadata": {"v": 1}},
-        {"id": "vec2", "embedding": [0.2] * 128, "metadata": {"v": 1}},
+        {"id": "vec1", "vector": [0.1] * 128, "metadata": {"v": 1}},
+        {"id": "vec2", "vector": [0.2] * 128, "metadata": {"v": 1}},
     ]
     db.set(initial)
     assert len(db) == 2
 
     # Set mix of updates and new
     mixed = [
-        {"id": "vec1", "embedding": [0.15] * 128, "metadata": {"v": 2}},  # Update
-        {"id": "vec3", "embedding": [0.3] * 128, "metadata": {"v": 1}},   # New
+        {"id": "vec1", "vector": [0.15] * 128, "metadata": {"v": 2}},  # Update
+        {"id": "vec3", "vector": [0.3] * 128, "metadata": {"v": 1}},  # New
     ]
     db.set(mixed)
 
@@ -128,10 +132,10 @@ def test_set_mixed_new_and_updates(db):
 def test_insert_special_characters_in_id(db):
     """Test inserting vectors with special characters in ID"""
     vectors = [
-        {"id": "test-1", "embedding": [0.1] * 128, "metadata": {}},
-        {"id": "test_2", "embedding": [0.2] * 128, "metadata": {}},
-        {"id": "test.3", "embedding": [0.3] * 128, "metadata": {}},
-        {"id": "test/4", "embedding": [0.4] * 128, "metadata": {}},
+        {"id": "test-1", "vector": [0.1] * 128, "metadata": {}},
+        {"id": "test_2", "vector": [0.2] * 128, "metadata": {}},
+        {"id": "test.3", "vector": [0.3] * 128, "metadata": {}},
+        {"id": "test/4", "vector": [0.4] * 128, "metadata": {}},
     ]
     indices = db.set(vectors)
 
@@ -143,11 +147,11 @@ def test_insert_unicode_metadata(db):
     """Test inserting vectors with Unicode metadata"""
     vector = {
         "id": "test1",
-        "embedding": [0.1] * 128,
+        "vector": [0.1] * 128,
         "metadata": {
             "text": "Hello 世界 🌍",
             "language": "中文",
-        }
+        },
     }
     db.set([vector])
 
@@ -160,14 +164,11 @@ def test_insert_nested_metadata(db):
     """Test inserting vectors with nested metadata"""
     vector = {
         "id": "test1",
-        "embedding": [0.1] * 128,
+        "vector": [0.1] * 128,
         "metadata": {
-            "user": {
-                "name": "Alice",
-                "age": 30
-            },
-            "tags": ["important", "verified"]
-        }
+            "user": {"name": "Alice", "age": 30},
+            "tags": ["important", "verified"],
+        },
     }
     db.set([vector])
 
@@ -180,8 +181,8 @@ def test_insert_with_document(db):
     """Test inserting vectors with document field"""
     vector = {
         "id": "doc1",
-        "embedding": [0.1] * 128,
-        "document": "This is the original text content."
+        "vector": [0.1] * 128,
+        "document": "This is the original text content.",
     }
     db.set([vector])
 
@@ -194,9 +195,9 @@ def test_insert_document_with_metadata(db):
     """Test document field is merged with existing metadata"""
     vector = {
         "id": "doc1",
-        "embedding": [0.1] * 128,
+        "vector": [0.1] * 128,
         "document": "Some text",
-        "metadata": {"title": "Test Document", "author": "Alice"}
+        "metadata": {"title": "Test Document", "author": "Alice"},
     }
     db.set([vector])
 
@@ -210,9 +211,9 @@ def test_insert_document_overwrites_metadata_document(db):
     """Test document field overwrites metadata['document'] if both provided"""
     vector = {
         "id": "doc1",
-        "embedding": [0.1] * 128,
+        "vector": [0.1] * 128,
         "document": "Document field value",
-        "metadata": {"document": "Metadata document value"}
+        "metadata": {"document": "Metadata document value"},
     }
     db.set([vector])
 
