@@ -20,12 +20,12 @@ const db = open("./vectors", { dimensions: 384 });
 db.set([
   {
     id: "doc1",
-    embedding: new Float32Array(384).fill(0.1),
+    vector: new Float32Array(384).fill(0.1),
     metadata: { title: "Hello" },
   },
   {
     id: "doc2",
-    embedding: new Float32Array(384).fill(0.2),
+    vector: new Float32Array(384).fill(0.2),
     metadata: { title: "World" },
   },
 ]);
