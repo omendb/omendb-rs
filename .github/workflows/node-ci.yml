@@ -148,8 +148,8 @@ jobs:
           done
         working-directory: node
 
-      - name: Create npm packages
-        run: npm exec napi pre-publish -- -p npm
+      - name: Create npm package directories
+        run: npm exec napi create-npm-dirs -- -p npm
         working-directory: node
 
       - name: Move artifacts to packages
