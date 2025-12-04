@@ -668,7 +668,7 @@ dependencies = [
 
 [[package]]
 name = "omendb"
-version = "0.0.1-alpha"
+version = "0.0.2-alpha.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "omendb-python"
-version = "0.0.1-alpha"
+version = "0.0.2-alpha.1"
 dependencies = [
  "anyhow",
  "numpy",
@@ -1050,9 +1050,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seerdb"
-version = "0.0.3"
+version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8007a877bf3b61290e95c021ce6bdc54b80515a0b82a16590887a874e28d4d97"
+checksum = "6d1a2779c32b794525f634d8a22f27f22a1edb7e09b2660b58bc6142ba5c726b"
 dependencies = [
  "anyhow",
  "arc-swap",
