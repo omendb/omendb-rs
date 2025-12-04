@@ -137,9 +137,23 @@ jobs:
         with:
           path: node/artifacts
 
-      - name: Move artifacts
+      - name: List downloaded artifacts
         run: |
-          npm exec napi artifacts
+          echo "=== Artifacts directory ==="
+          ls -la artifacts/
+          echo "=== Contents of each artifact ==="
+          for dir in artifacts/*/; do
+            echo "--- $dir ---"
+            ls -la "$dir"
+          done
+        working-directory: node
+
+      - name: Create npm packages
+        run: npm exec napi prepublish -t npm
+        working-directory: node
+
+      - name: Move artifacts to packages
+        run: npm exec napi artifacts -- --artifacts-dir ./artifacts --dist ./npm
         working-directory: node
 
       - name: List packages
