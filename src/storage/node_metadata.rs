@@ -22,26 +22,18 @@ pub struct NodeMetadataStorage {
 impl NodeMetadataStorage {
     /// Create new node metadata storage at path
     pub fn new(path: PathBuf, config: &StorageConfig) -> Result<Self> {
-        let options = DBOptions {
-            data_dir: path,
-
-            // Configurable durability
-            wal_sync_policy: if config.sync_writes {
-                SyncPolicy::SyncData
-            } else {
-                SyncPolicy::None
-            },
-
-            // Smaller memtable for metadata (default 16MB or derived from config)
-            // We use 1/8th of the main config capacity for metadata
-            memtable_capacity: config.memtable_capacity / 8,
-
-            background_compaction: config.background_compaction,
-
-            ..Default::default()
+        let sync_policy = if config.sync_writes {
+            SyncPolicy::SyncData
+        } else {
+            SyncPolicy::None
         };
 
-        let db = DB::open(options).map_err(|e| OmenDBError::Backend(e.to_string()))?;
+        let db = DBOptions::default()
+            .sync_policy(sync_policy)
+            .memtable_capacity(config.memtable_capacity / 8) // 1/8th of main capacity
+            .background_compaction(config.background_compaction)
+            .open(&path)
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }

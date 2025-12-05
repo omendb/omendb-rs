@@ -22,26 +22,18 @@ pub struct VectorMetadataStorage {
 impl VectorMetadataStorage {
     /// Create new vector metadata storage at path
     pub fn new(path: PathBuf, config: &StorageConfig) -> Result<Self> {
-        let options = DBOptions {
-            data_dir: path,
-
-            // Configurable durability
-            wal_sync_policy: if config.sync_writes {
-                SyncPolicy::SyncData
-            } else {
-                SyncPolicy::None
-            },
-
-            // Medium memtable for metadata (32MB default or derived)
-            // We use 1/4th of the main config capacity
-            memtable_capacity: config.memtable_capacity / 4,
-
-            background_compaction: config.background_compaction,
-
-            ..Default::default()
+        let sync_policy = if config.sync_writes {
+            SyncPolicy::SyncData
+        } else {
+            SyncPolicy::None
         };
 
-        let db = DB::open(options).map_err(|e| OmenDBError::Backend(e.to_string()))?;
+        let db = DBOptions::default()
+            .sync_policy(sync_policy)
+            .memtable_capacity(config.memtable_capacity / 4) // 1/4th of main capacity
+            .background_compaction(config.background_compaction)
+            .open(&path)
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }
