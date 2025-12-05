@@ -18,9 +18,7 @@ For production benchmarks, use Fedora (quieter, x86-64):
 """
 
 import argparse
-import os
 import struct
-import sys
 import tempfile
 import time
 import urllib.request
@@ -122,9 +120,9 @@ def benchmark_synthetic(
     k: int = 10,
 ) -> dict:
     """Run synthetic benchmark with random vectors."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Synthetic Benchmark: {n_vectors:,} vectors, {dim}D")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     vectors = generate_vectors(n_vectors, dim)
     queries = generate_vectors(n_queries, dim, seed=999)
@@ -160,7 +158,9 @@ def benchmark_synthetic(
         search_time = time.perf_counter() - start
         search_qps = n_queries / search_time
         latencies.sort()
-        print(f"Search:     {search_qps:>10,.0f} QPS    (p50={latencies[len(latencies)//2]:.2f}ms, p99={latencies[int(len(latencies)*0.99)]:.2f}ms)")
+        print(
+            f"Search:     {search_qps:>10,.0f} QPS    (p50={latencies[len(latencies) // 2]:.2f}ms, p99={latencies[int(len(latencies) * 0.99)]:.2f}ms)"
+        )
         results["search_qps"] = search_qps
         results["search_p99_ms"] = latencies[int(len(latencies) * 0.99)]
 
@@ -197,9 +197,9 @@ def benchmark_sift1m(
     ef_values: list = [10, 50, 100, 200],
 ) -> dict:
     """Run SIFT1M benchmark with ground truth verification."""
-    print(f"\n{'='*60}")
-    print(f"SIFT1M Benchmark (Ground Truth Verification)")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("SIFT1M Benchmark (Ground Truth Verification)")
+    print(f"{'=' * 60}")
 
     # Check/download dataset
     base_path = DATA_DIR / "sift_base.fvecs"
@@ -240,7 +240,7 @@ def benchmark_sift1m(
     results = {"n_vectors": n_base, "dim": dim, "results": []}
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        config = {"hnsw": {"m": 16, "ef_construction": 200}}
+        config = {"hnsw": {"m": 16, "ef_construction": 200, "ef_search": 100}}
         db = omendb.open(f"{tmpdir}/sift", dimensions=dim, config=config)
 
         # Build
@@ -255,11 +255,11 @@ def benchmark_sift1m(
             ]
             db.set(batch)
         build_time = time.perf_counter() - start
-        print(f"  Build: {build_time:.1f}s ({n_base/build_time:.0f} vec/s)")
+        print(f"  Build: {build_time:.1f}s ({n_base / build_time:.0f} vec/s)")
         results["build_time_s"] = build_time
 
         # Test at different ef values
-        print(f"\n{'ef':>6} | {'Recall@'+str(k):>10} | {'QPS':>10} | Status")
+        print(f"\n{'ef':>6} | {'Recall@' + str(k):>10} | {'QPS':>10} | Status")
         print("-" * 50)
 
         for ef in ef_values:
@@ -324,10 +324,16 @@ Examples:
 """,
     )
     parser.add_argument("--full", action="store_true", help="Full benchmark suite")
-    parser.add_argument("--sift1m", action="store_true", help="SIFT1M correctness benchmark")
+    parser.add_argument(
+        "--sift1m", action="store_true", help="SIFT1M correctness benchmark"
+    )
     parser.add_argument("-d", "--dim", type=int, default=128, help="Vector dimension")
-    parser.add_argument("-n", "--vectors", type=int, default=10000, help="Number of vectors")
-    parser.add_argument("-q", "--queries", type=int, default=1000, help="Number of queries")
+    parser.add_argument(
+        "-n", "--vectors", type=int, default=10000, help="Number of vectors"
+    )
+    parser.add_argument(
+        "-q", "--queries", type=int, default=1000, help="Number of queries"
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -354,7 +360,9 @@ Examples:
             benchmark_synthetic(n_vectors=n, dim=768, n_queries=1000)
     else:
         # Quick single benchmark
-        benchmark_synthetic(n_vectors=args.vectors, dim=args.dim, n_queries=args.queries)
+        benchmark_synthetic(
+            n_vectors=args.vectors, dim=args.dim, n_queries=args.queries
+        )
 
     print("\n" + "=" * 60)
     print("Benchmark complete")
