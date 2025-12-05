@@ -18,6 +18,136 @@ use std::path::Path;
 #[cfg(test)]
 mod tests;
 
+// ============================================================================
+// VectorStoreOptions - Builder pattern for VectorStore configuration
+// ============================================================================
+
+/// Configuration options for opening or creating a vector store.
+///
+/// Follows the `std::fs::OpenOptions` pattern for familiar, ergonomic API.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use omendb::vector::store::VectorStoreOptions;
+///
+/// // Simple persistent store
+/// let store = VectorStoreOptions::default()
+///     .dimensions(384)
+///     .open("./vectors")?;
+///
+/// // With custom HNSW parameters
+/// let store = VectorStoreOptions::default()
+///     .dimensions(384)
+///     .m(32)
+///     .ef_construction(400)
+///     .ef_search(100)
+///     .open("./vectors")?;
+///
+/// // In-memory store
+/// let store = VectorStoreOptions::default()
+///     .dimensions(384)
+///     .build()?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct VectorStoreOptions {
+    /// Vector dimensionality (0 = infer from first insert or existing data)
+    dimensions: usize,
+
+    /// HNSW M parameter: neighbors per node (default: 16)
+    m: Option<usize>,
+
+    /// HNSW ef_construction: build quality (default: 100)
+    ef_construction: Option<usize>,
+
+    /// HNSW ef_search: search quality/speed tradeoff (default: 100)
+    ef_search: Option<usize>,
+
+    /// Expected number of vectors for capacity planning
+    expected_capacity: Option<usize>,
+
+    /// RaBitQ quantization parameters
+    quantization: Option<RaBitQParams>,
+}
+
+impl VectorStoreOptions {
+    /// Create new options with defaults.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set vector dimensionality.
+    ///
+    /// If not set, dimensions will be inferred from:
+    /// 1. Existing data when opening a persistent store
+    /// 2. First inserted vector
+    #[must_use]
+    pub fn dimensions(mut self, dim: usize) -> Self {
+        self.dimensions = dim;
+        self
+    }
+
+    /// Set HNSW M parameter (neighbors per node).
+    ///
+    /// Higher M = better recall, more memory. Range: 4-64, default: 16.
+    #[must_use]
+    pub fn m(mut self, m: usize) -> Self {
+        self.m = Some(m);
+        self
+    }
+
+    /// Set HNSW ef_construction (build quality).
+    ///
+    /// Higher = better graph quality, slower build. Default: 100.
+    #[must_use]
+    pub fn ef_construction(mut self, ef: usize) -> Self {
+        self.ef_construction = Some(ef);
+        self
+    }
+
+    /// Set HNSW ef_search (search quality/speed tradeoff).
+    ///
+    /// Higher = better recall, slower search. Default: 100.
+    #[must_use]
+    pub fn ef_search(mut self, ef: usize) -> Self {
+        self.ef_search = Some(ef);
+        self
+    }
+
+    /// Set expected vector count for capacity planning.
+    ///
+    /// Helps optimize HNSW parameters for your dataset size.
+    #[must_use]
+    pub fn expected_capacity(mut self, capacity: usize) -> Self {
+        self.expected_capacity = Some(capacity);
+        self
+    }
+
+    /// Enable RaBitQ quantization for memory-efficient storage.
+    ///
+    /// Provides 4-16x compression with ~1-2% recall loss.
+    #[must_use]
+    pub fn quantization(mut self, params: RaBitQParams) -> Self {
+        self.quantization = Some(params);
+        self
+    }
+
+    /// Open or create a persistent vector store at the given path.
+    ///
+    /// Creates the directory if it doesn't exist.
+    /// Loads existing data if the store already exists.
+    pub fn open(&self, path: impl AsRef<Path>) -> Result<VectorStore> {
+        VectorStore::open_with_options(path, self)
+    }
+
+    /// Build an in-memory vector store (no persistence).
+    pub fn build(&self) -> Result<VectorStore> {
+        VectorStore::build_with_options(self)
+    }
+}
+
 /// Metadata filter for vector search (MongoDB-style operators)
 #[derive(Debug, Clone)]
 pub enum MetadataFilter {
@@ -349,6 +479,156 @@ impl VectorStore {
             }
         }
         Ok(store)
+    }
+
+    /// Open a persistent vector store with custom options.
+    ///
+    /// This is the internal implementation used by `VectorStoreOptions::open()`.
+    pub fn open_with_options(path: impl AsRef<Path>, options: &VectorStoreOptions) -> Result<Self> {
+        let path = path.as_ref();
+
+        // If path exists, load existing data
+        if path.exists() {
+            let mut store = Self::open(path)?;
+
+            // Apply dimension if specified and store has none
+            if store.dimensions == 0 && options.dimensions > 0 {
+                store.dimensions = options.dimensions;
+                if let Some(ref storage) = store.storage {
+                    storage.put_config("dimensions", options.dimensions as u64)?;
+                }
+            }
+
+            // Apply ef_search if specified
+            if let Some(ef) = options.ef_search {
+                store.set_ef_search(ef);
+            }
+
+            return Ok(store);
+        }
+
+        // Create new persistent store with options
+        let storage = SeerDBStorage::open(path)?;
+        let dimensions = options.dimensions;
+
+        // Initialize HNSW if we have parameters
+        let hnsw_index = if options.m.is_some() || options.ef_construction.is_some() {
+            let m = options.m.unwrap_or(16);
+            let ef_construction = options.ef_construction.unwrap_or(100);
+            let ef_search = options.ef_search.unwrap_or(100);
+            let capacity = options.expected_capacity.unwrap_or(10_000);
+
+            if dimensions > 0 {
+                Some(HNSWIndex::new_with_params(
+                    capacity.max(10_000),
+                    dimensions,
+                    m,
+                    ef_construction,
+                    ef_search,
+                )?)
+            } else {
+                None // Will be lazily initialized on first insert
+            }
+        } else if let Some(capacity) = options.expected_capacity {
+            // Use adaptive params based on capacity
+            let (m, ef_construction, ef_search) = Self::adaptive_hnsw_params(capacity);
+            if dimensions > 0 {
+                Some(HNSWIndex::new_with_params(
+                    capacity.max(10_000),
+                    dimensions,
+                    m,
+                    ef_construction,
+                    ef_search,
+                )?)
+            } else {
+                None
+            }
+        } else {
+            None // Will be lazily initialized
+        };
+
+        // Initialize quantizer if specified
+        let quantizer = options
+            .quantization
+            .as_ref()
+            .map(|p| RaBitQ::new(p.clone()));
+
+        // Save dimensions to storage if set
+        if dimensions > 0 {
+            storage.put_config("dimensions", dimensions as u64)?;
+        }
+
+        Ok(Self {
+            vectors: Vec::new(),
+            hnsw_index,
+            dimensions,
+            quantizer,
+            quantized_vectors: Vec::new(),
+            metadata: HashMap::new(),
+            id_to_index: HashMap::new(),
+            deleted: HashMap::new(),
+            storage: Some(storage),
+        })
+    }
+
+    /// Build an in-memory vector store with custom options.
+    ///
+    /// This is the internal implementation used by `VectorStoreOptions::build()`.
+    pub fn build_with_options(options: &VectorStoreOptions) -> Result<Self> {
+        let dimensions = options.dimensions;
+
+        // Initialize HNSW if we have parameters
+        let hnsw_index = if options.m.is_some() || options.ef_construction.is_some() {
+            let m = options.m.unwrap_or(16);
+            let ef_construction = options.ef_construction.unwrap_or(100);
+            let ef_search = options.ef_search.unwrap_or(100);
+            let capacity = options.expected_capacity.unwrap_or(10_000);
+
+            if dimensions > 0 {
+                Some(HNSWIndex::new_with_params(
+                    capacity.max(10_000),
+                    dimensions,
+                    m,
+                    ef_construction,
+                    ef_search,
+                )?)
+            } else {
+                None
+            }
+        } else if let Some(capacity) = options.expected_capacity {
+            let (m, ef_construction, ef_search) = Self::adaptive_hnsw_params(capacity);
+            if dimensions > 0 {
+                Some(HNSWIndex::new_with_params(
+                    capacity.max(10_000),
+                    dimensions,
+                    m,
+                    ef_construction,
+                    ef_search,
+                )?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Initialize quantizer if specified
+        let quantizer = options
+            .quantization
+            .as_ref()
+            .map(|p| RaBitQ::new(p.clone()));
+
+        Ok(Self {
+            vectors: Vec::new(),
+            hnsw_index,
+            dimensions,
+            quantizer,
+            quantized_vectors: Vec::new(),
+            metadata: HashMap::new(),
+            id_to_index: HashMap::new(),
+            deleted: HashMap::new(),
+            storage: None,
+        })
     }
 
     /// Insert vector and return its ID

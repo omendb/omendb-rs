@@ -10,5 +10,5 @@ pub mod types;
 // Re-export main types
 pub use hnsw_index::HNSWIndex;
 pub use rabitq::{QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams};
-pub use store::{MetadataFilter, VectorStore};
+pub use store::{MetadataFilter, VectorStore, VectorStoreOptions};
 pub use types::Vector;
