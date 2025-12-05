@@ -1,8 +1,9 @@
 """Basic tests for OmenDB Python bindings"""
 
-import omendb
-import tempfile
 import os
+import tempfile
+
+import omendb
 
 
 def test_open_database():
@@ -20,23 +21,25 @@ def test_set_and_search():
         db = omendb.open(db_path, dimensions=3)
 
         # Set some vectors
-        db.set([
-            {
-                "id": "doc1",
-                "vector": [1.0, 0.0, 0.0],
-                "metadata": {"title": "Document 1", "year": 2024}
-            },
-            {
-                "id": "doc2",
-                "vector": [0.0, 1.0, 0.0],
-                "metadata": {"title": "Document 2", "year": 2023}
-            },
-            {
-                "id": "doc3",
-                "vector": [0.0, 0.0, 1.0],
-                "metadata": {"title": "Document 3", "year": 2024}
-            },
-        ])
+        db.set(
+            [
+                {
+                    "id": "doc1",
+                    "vector": [1.0, 0.0, 0.0],
+                    "metadata": {"title": "Document 1", "year": 2024},
+                },
+                {
+                    "id": "doc2",
+                    "vector": [0.0, 1.0, 0.0],
+                    "metadata": {"title": "Document 2", "year": 2023},
+                },
+                {
+                    "id": "doc3",
+                    "vector": [0.0, 0.0, 1.0],
+                    "metadata": {"title": "Document 3", "year": 2024},
+                },
+            ]
+        )
 
         # Search for nearest neighbors
         results = db.search(query=[1.0, 0.0, 0.0], k=2)
@@ -55,30 +58,28 @@ def test_search_with_filter():
         db = omendb.open(db_path, dimensions=3)
 
         # Set vectors
-        db.set([
-            {
-                "id": "doc1",
-                "vector": [1.0, 0.0, 0.0],
-                "metadata": {"title": "Document 1", "year": 2024}
-            },
-            {
-                "id": "doc2",
-                "vector": [0.9, 0.1, 0.0],
-                "metadata": {"title": "Document 2", "year": 2023}
-            },
-            {
-                "id": "doc3",
-                "vector": [0.8, 0.2, 0.0],
-                "metadata": {"title": "Document 3", "year": 2024}
-            },
-        ])
+        db.set(
+            [
+                {
+                    "id": "doc1",
+                    "vector": [1.0, 0.0, 0.0],
+                    "metadata": {"title": "Document 1", "year": 2024},
+                },
+                {
+                    "id": "doc2",
+                    "vector": [0.9, 0.1, 0.0],
+                    "metadata": {"title": "Document 2", "year": 2023},
+                },
+                {
+                    "id": "doc3",
+                    "vector": [0.8, 0.2, 0.0],
+                    "metadata": {"title": "Document 3", "year": 2024},
+                },
+            ]
+        )
 
         # Search with filter for year >= 2024
-        results = db.search(
-            query=[1.0, 0.0, 0.0],
-            k=10,
-            filter={"year": {"$gte": 2024}}
-        )
+        results = db.search(query=[1.0, 0.0, 0.0], k=10, filter={"year": {"$gte": 2024}})
 
         # Should only return doc1 and doc3
         assert len(results) == 2
@@ -93,22 +94,10 @@ def test_set_update():
         db = omendb.open(db_path, dimensions=3)
 
         # Insert initial document
-        db.set([
-            {
-                "id": "doc1",
-                "vector": [1.0, 0.0, 0.0],
-                "metadata": {"title": "Original"}
-            }
-        ])
+        db.set([{"id": "doc1", "vector": [1.0, 0.0, 0.0], "metadata": {"title": "Original"}}])
 
         # Set with same ID (should update)
-        db.set([
-            {
-                "id": "doc1",
-                "vector": [0.0, 1.0, 0.0],
-                "metadata": {"title": "Updated"}
-            }
-        ])
+        db.set([{"id": "doc1", "vector": [0.0, 1.0, 0.0], "metadata": {"title": "Updated"}}])
 
         # Get the document
         doc = db.get("doc1")
@@ -124,18 +113,12 @@ def test_delete():
         db = omendb.open(db_path, dimensions=3)
 
         # Insert documents
-        db.set([
-            {
-                "id": "doc1",
-                "vector": [1.0, 0.0, 0.0],
-                "metadata": {"title": "Document 1"}
-            },
-            {
-                "id": "doc2",
-                "vector": [0.0, 1.0, 0.0],
-                "metadata": {"title": "Document 2"}
-            },
-        ])
+        db.set(
+            [
+                {"id": "doc1", "vector": [1.0, 0.0, 0.0], "metadata": {"title": "Document 1"}},
+                {"id": "doc2", "vector": [0.0, 1.0, 0.0], "metadata": {"title": "Document 2"}},
+            ]
+        )
 
         # Delete doc1
         deleted_count = db.delete(["doc1"])
@@ -153,13 +136,7 @@ def test_save_and_load():
 
         # Create and populate database
         db = omendb.open(db_path, dimensions=3)
-        db.set([
-            {
-                "id": "doc1",
-                "vector": [1.0, 0.0, 0.0],
-                "metadata": {"title": "Document 1"}
-            }
-        ])
+        db.set([{"id": "doc1", "vector": [1.0, 0.0, 0.0], "metadata": {"title": "Document 1"}}])
 
         # Save database
         db.save()

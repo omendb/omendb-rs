@@ -1,10 +1,11 @@
 """Tests for ef_search runtime tuning API"""
 
-import omendb
-import tempfile
+import math
 import os
 import random
-import math
+import tempfile
+
+import omendb
 
 # ef_search API now implemented
 
@@ -17,9 +18,7 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         embedding = [random.gauss(0, 1) for _ in range(dim)]
         norm = math.sqrt(sum(x * x for x in embedding))
         embedding = [x / norm for x in embedding]
-        vectors.append(
-            {"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i}}
-        )
+        vectors.append({"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i}})
     return vectors
 
 

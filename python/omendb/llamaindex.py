@@ -22,14 +22,14 @@ Example:
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Dict
+from typing import Any
 
+from llama_index.core.schema import BaseNode, TextNode
 from llama_index.core.vector_stores.types import (
     BasePydanticVectorStore,
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
-from llama_index.core.schema import BaseNode, TextNode
 
 
 class OmenDBVectorStore(BasePydanticVectorStore):
@@ -64,7 +64,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
 
     # Pydantic fields
     path: str = "./omendb-vectors"
-    dimensions: Optional[int] = None
+    dimensions: int | None = None
 
     # Private attributes (not serialized)
     _db: Any = None
@@ -73,7 +73,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
     def __init__(
         self,
         path: str = "./omendb-vectors",
-        dimensions: Optional[int] = None,
+        dimensions: int | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize OmenDBVectorStore.
@@ -88,7 +88,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
         self._db = None
         self._initialized = False
 
-    def _ensure_db(self, dimensions: Optional[int] = None) -> None:
+    def _ensure_db(self, dimensions: int | None = None) -> None:
         """Ensure database is initialized."""
         if self._db is not None:
             return
@@ -97,9 +97,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
 
         # Use provided dimensions or fall back to stored
         dims = dimensions or self.dimensions or 1536  # Default to OpenAI dimensions
-        self._db = omendb.open(
-            self.path, dimensions=dims, **getattr(self, "_kwargs", {})
-        )
+        self._db = omendb.open(self.path, dimensions=dims, **getattr(self, "_kwargs", {}))
         self._initialized = True
 
     @classmethod
@@ -115,9 +113,9 @@ class OmenDBVectorStore(BasePydanticVectorStore):
 
     def add(
         self,
-        nodes: List[BaseNode],
+        nodes: list[BaseNode],
         **kwargs: Any,
-    ) -> List[str]:
+    ) -> list[str]:
         """Add nodes to the vector store.
 
         Args:
@@ -185,7 +183,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
 
     def delete_nodes(
         self,
-        node_ids: Optional[List[str]] = None,
+        node_ids: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
         """Delete specific nodes by their IDs.
@@ -267,7 +265,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
             ids=ids,
         )
 
-    def _convert_filters(self, filters: Any) -> Optional[Dict[str, Any]]:
+    def _convert_filters(self, filters: Any) -> dict[str, Any] | None:
         """Convert LlamaIndex MetadataFilters to OmenDB filter format.
 
         Args:
@@ -280,10 +278,10 @@ class OmenDBVectorStore(BasePydanticVectorStore):
             return None
 
         from llama_index.core.vector_stores.types import (
-            MetadataFilters,
-            MetadataFilter,
-            FilterOperator,
             FilterCondition,
+            FilterOperator,
+            MetadataFilter,
+            MetadataFilters,
         )
 
         if not isinstance(filters, MetadataFilters):

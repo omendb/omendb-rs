@@ -1,12 +1,14 @@
 """Stress tests for OmenDB - large scale operations"""
 
-import pytest
-import omendb
-import tempfile
+import math
 import os
 import random
-import math
+import tempfile
 import time
+
+import pytest
+
+import omendb
 
 
 def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
@@ -17,11 +19,9 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         embedding = [random.gauss(0, 1) for _ in range(dim)]
         norm = math.sqrt(sum(x * x for x in embedding))
         embedding = [x / norm for x in embedding]
-        vectors.append({
-            "id": f"vec_{i}",
-            "vector": embedding,
-            "metadata": {"index": i, "group": i % 100}
-        })
+        vectors.append(
+            {"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i, "group": i % 100}}
+        )
     return vectors
 
 
@@ -42,7 +42,7 @@ class TestLargeScaleInsert:
             elapsed = time.time() - start
 
             assert len(db) == 10000
-            print(f"\n10K insert: {elapsed:.2f}s ({10000/elapsed:.0f} vec/s)")
+            print(f"\n10K insert: {elapsed:.2f}s ({10000 / elapsed:.0f} vec/s)")
 
     @pytest.mark.slow
     def test_insert_100k_vectors(self):
@@ -58,7 +58,7 @@ class TestLargeScaleInsert:
             elapsed = time.time() - start
 
             assert len(db) == 100000
-            print(f"\n100K insert: {elapsed:.2f}s ({100000/elapsed:.0f} vec/s)")
+            print(f"\n100K insert: {elapsed:.2f}s ({100000 / elapsed:.0f} vec/s)")
 
 
 class TestLargeScaleSearch:
@@ -76,8 +76,10 @@ class TestLargeScaleSearch:
 
             # Run multiple queries
             num_queries = 100
-            queries = [generate_random_vectors(1, 128, seed=1000 + i)[0]["vector"]
-                      for i in range(num_queries)]
+            queries = [
+                generate_random_vectors(1, 128, seed=1000 + i)[0]["vector"]
+                for i in range(num_queries)
+            ]
 
             start = time.time()
             for query in queries:
@@ -100,8 +102,10 @@ class TestLargeScaleSearch:
             db.set(vectors)
 
             num_queries = 100
-            queries = [generate_random_vectors(1, 128, seed=2000 + i)[0]["vector"]
-                      for i in range(num_queries)]
+            queries = [
+                generate_random_vectors(1, 128, seed=2000 + i)[0]["vector"]
+                for i in range(num_queries)
+            ]
 
             start = time.time()
             for query in queries:
@@ -130,9 +134,7 @@ class TestBatchOperations:
 
             start = time.time()
             for batch_num in range(num_batches):
-                vectors = generate_random_vectors(
-                    batch_size, 64, seed=batch_num * batch_size
-                )
+                vectors = generate_random_vectors(batch_size, 64, seed=batch_num * batch_size)
                 # Update IDs to be unique across batches
                 for i, v in enumerate(vectors):
                     v["id"] = f"vec_{batch_num * batch_size + i}"
@@ -182,18 +184,16 @@ class TestFilteredSearchScale:
             db.set(vectors)
 
             num_queries = 50
-            queries = [generate_random_vectors(1, 128, seed=3000 + i)[0]["vector"]
-                      for i in range(num_queries)]
+            queries = [
+                generate_random_vectors(1, 128, seed=3000 + i)[0]["vector"]
+                for i in range(num_queries)
+            ]
 
             # Test with different selectivities
             for group_filter in [0, 50]:  # 1% and 1% selectivity
                 start = time.time()
                 for query in queries:
-                    results = db.search(
-                        query,
-                        k=10,
-                        filter={"group": group_filter}
-                    )
+                    results = db.search(query, k=10, filter={"group": group_filter})
                     # Should find some results (100 vectors per group)
                     assert len(results) <= 10
                     assert all(r["metadata"]["group"] == group_filter for r in results)

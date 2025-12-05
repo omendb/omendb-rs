@@ -23,11 +23,12 @@ Example:
 from __future__ import annotations
 
 import uuid
-from typing import Any, Iterable, Optional, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
-from langchain_core.vectorstores import VectorStore
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from langchain_core.vectorstores import VectorStore
 
 
 class OmenDBVectorStore(VectorStore):
@@ -66,7 +67,7 @@ class OmenDBVectorStore(VectorStore):
         self,
         embedding: Embeddings,
         path: str = "./omendb-vectors",
-        dimensions: Optional[int] = None,
+        dimensions: int | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize OmenDBVectorStore.
@@ -99,8 +100,8 @@ class OmenDBVectorStore(VectorStore):
     def add_texts(
         self,
         texts: Iterable[str],
-        metadatas: Optional[list[dict]] = None,
-        ids: Optional[list[str]] = None,
+        metadatas: list[dict] | None = None,
+        ids: list[str] | None = None,
         **kwargs: Any,
     ) -> list[str]:
         """Add texts to the vector store.
@@ -129,9 +130,7 @@ class OmenDBVectorStore(VectorStore):
 
         # Build batch for set
         items = []
-        for text, embedding, id_, metadata in zip(
-            texts_list, embeddings, ids, metadatas
-        ):
+        for text, embedding, id_, metadata in zip(texts_list, embeddings, ids, metadatas):
             # Store page_content in metadata for retrieval
             item_metadata = {**metadata, "page_content": text}
             items.append(
@@ -148,7 +147,7 @@ class OmenDBVectorStore(VectorStore):
     def add_documents(
         self,
         documents: list[Document],
-        ids: Optional[list[str]] = None,
+        ids: list[str] | None = None,
         **kwargs: Any,
     ) -> list[str]:
         """Add documents to the vector store.
@@ -167,9 +166,9 @@ class OmenDBVectorStore(VectorStore):
 
     def delete(
         self,
-        ids: Optional[list[str]] = None,
+        ids: list[str] | None = None,
         **kwargs: Any,
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """Delete documents by ID.
 
         Args:
@@ -189,7 +188,7 @@ class OmenDBVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[dict] = None,
+        filter: dict | None = None,
         **kwargs: Any,
     ) -> list[Document]:
         """Search for similar documents by text query.
@@ -210,7 +209,7 @@ class OmenDBVectorStore(VectorStore):
         self,
         embedding: list[float],
         k: int = 4,
-        filter: Optional[dict] = None,
+        filter: dict | None = None,
         **kwargs: Any,
     ) -> list[Document]:
         """Search for similar documents by vector.
@@ -245,7 +244,7 @@ class OmenDBVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[dict] = None,
+        filter: dict | None = None,
         **kwargs: Any,
     ) -> list[tuple[Document, float]]:
         """Search for similar documents with relevance scores.
@@ -307,11 +306,11 @@ class OmenDBVectorStore(VectorStore):
         cls,
         texts: list[str],
         embedding: Embeddings,
-        metadatas: Optional[list[dict]] = None,
-        ids: Optional[list[str]] = None,
+        metadatas: list[dict] | None = None,
+        ids: list[str] | None = None,
         path: str = "./omendb-vectors",
         **kwargs: Any,
-    ) -> "OmenDBVectorStore":
+    ) -> OmenDBVectorStore:
         """Create a vector store from texts.
 
         Args:
@@ -342,10 +341,10 @@ class OmenDBVectorStore(VectorStore):
         cls,
         documents: list[Document],
         embedding: Embeddings,
-        ids: Optional[list[str]] = None,
+        ids: list[str] | None = None,
         path: str = "./omendb-vectors",
         **kwargs: Any,
-    ) -> "OmenDBVectorStore":
+    ) -> OmenDBVectorStore:
         """Create a vector store from documents.
 
         Args:

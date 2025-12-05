@@ -1,20 +1,20 @@
 """Tests for LlamaIndex VectorStore integration."""
 
-import pytest
-import tempfile
 import shutil
-from typing import List
+import tempfile
+
+import pytest
 
 # Skip all tests if llama-index-core is not installed
 pytest.importorskip("llama_index.core")
 
 from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores.types import (
-    VectorStoreQuery,
-    MetadataFilters,
-    MetadataFilter,
-    FilterOperator,
     FilterCondition,
+    FilterOperator,
+    MetadataFilter,
+    MetadataFilters,
+    VectorStoreQuery,
 )
 
 from omendb.llamaindex import OmenDBVectorStore
@@ -26,27 +26,28 @@ class FakeEmbedding:
     def __init__(self, dimensions: int = 128):
         self.dimensions = dimensions
 
-    def get_query_embedding(self, query: str) -> List[float]:
+    def get_query_embedding(self, query: str) -> list[float]:
         """Generate deterministic embedding from query."""
         return self._embed(query)
 
-    def get_text_embedding(self, text: str) -> List[float]:
+    def get_text_embedding(self, text: str) -> list[float]:
         """Generate deterministic embedding from text."""
         return self._embed(text)
 
-    def _embed(self, text: str) -> List[float]:
+    def _embed(self, text: str) -> list[float]:
         """Generate deterministic embedding based on text hash."""
         import hashlib
+
         h = hashlib.md5(text.encode()).hexdigest()
         # Convert hex to floats
         embedding = []
         for i in range(0, min(len(h), self.dimensions * 2), 2):
-            val = int(h[i:i+2], 16) / 255.0
+            val = int(h[i : i + 2], 16) / 255.0
             embedding.append(val)
         # Pad with zeros if needed
         while len(embedding) < self.dimensions:
             embedding.append(0.0)
-        return embedding[:self.dimensions]
+        return embedding[: self.dimensions]
 
 
 class TestOmenDBVectorStore:
@@ -240,7 +241,9 @@ class TestOmenDBVectorStore:
         store = OmenDBVectorStore(path=db_path, dimensions=128)
 
         nodes = [
-            TextNode(text=f"Node {i}", id_=f"n{i}", embedding=fake_embed.get_text_embedding(f"Node {i}"))
+            TextNode(
+                text=f"Node {i}", id_=f"n{i}", embedding=fake_embed.get_text_embedding(f"Node {i}")
+            )
             for i in range(5)
         ]
         store.add(nodes)

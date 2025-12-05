@@ -10,20 +10,24 @@ Run with: pytest python/tests/test_p2_hardening.py -v
 Run soak test: pytest python/tests/test_p2_hardening.py -v -m soak --timeout=600
 """
 
-import pytest
-import omendb
-import tempfile
+import gc
+import math
 import os
+import random
+import tempfile
 import threading
 import time
-import random
-import math
-import gc
 from concurrent.futures import (
     ThreadPoolExecutor,
     as_completed,
+)
+from concurrent.futures import (
     TimeoutError as FuturesTimeoutError,
 )
+
+import pytest
+
+import omendb
 
 
 def generate_random_vector(dim: int, seed: int = None) -> list:
@@ -71,9 +75,7 @@ class TestGILDeadlock:
                     for i in range(num_ops):
                         op = (thread_id + i) % 4
                         if op == 0:
-                            db.search(
-                                generate_random_vector(64, thread_id * 1000 + i), k=5
-                            )
+                            db.search(generate_random_vector(64, thread_id * 1000 + i), k=5)
                         elif op == 1:
                             db.get(f"v{i % 100}")
                         elif op == 2:
@@ -174,8 +176,7 @@ class TestGILDeadlock:
                 try:
                     for _ in range(5):
                         queries = [
-                            generate_random_vector(64, thread_id * 100 + j)
-                            for j in range(20)
+                            generate_random_vector(64, thread_id * 100 + j) for j in range(20)
                         ]
                         results = db.search_batch(queries, k=5)
                         assert len(results) == 20
@@ -422,9 +423,7 @@ class TestFileHandleLeaks:
                     expected_count += 10
 
                     # Verify count
-                    assert len(db) == expected_count, (
-                        f"Expected {expected_count}, got {len(db)}"
-                    )
+                    assert len(db) == expected_count, f"Expected {expected_count}, got {len(db)}"
 
                     del db
                     gc.collect()
@@ -436,9 +435,7 @@ class TestFileHandleLeaks:
             # Final verification
             db = omendb.open(db_path, dimensions=64)
             assert len(db) == expected_count
-            print(
-                f"\n30 open/close cycles with writes: {expected_count} vectors persisted"
-            )
+            print(f"\n30 open/close cycles with writes: {expected_count} vectors persisted")
 
     def test_concurrent_open_different_paths(self):
         """Multiple databases open concurrently (different paths)"""
@@ -522,9 +519,7 @@ class TestSoakTest:
 
                 try:
                     # Random operation mix
-                    op = random.choice(
-                        ["search", "search", "search", "set", "delete", "get"]
-                    )
+                    op = random.choice(["search", "search", "search", "set", "delete", "get"])
 
                     if op == "search":
                         query = generate_random_vector(64)
@@ -589,10 +584,7 @@ class TestSoakTest:
             db = omendb.open(db_path, dimensions=64)
 
             # Initial population
-            vectors = [
-                {"id": f"v{i}", "vector": generate_random_vector(64, i)}
-                for i in range(500)
-            ]
+            vectors = [{"id": f"v{i}", "vector": generate_random_vector(64, i)} for i in range(500)]
             db.set(vectors)
 
             # Force garbage collection to establish baseline
@@ -622,9 +614,7 @@ class TestSoakTest:
             top_stats = final_snapshot.compare_to(initial_snapshot, "lineno")
 
             # Calculate total memory growth
-            total_growth = sum(
-                stat.size_diff for stat in top_stats if stat.size_diff > 0
-            )
+            total_growth = sum(stat.size_diff for stat in top_stats if stat.size_diff > 0)
             total_growth_mb = total_growth / (1024 * 1024)
 
             print("\nMemory stability test:")
@@ -633,9 +623,7 @@ class TestSoakTest:
             print(f"  Memory growth: {total_growth_mb:.2f}MB")
 
             # Allow some memory growth but flag if excessive (>50MB)
-            assert total_growth_mb < 50, (
-                f"Excessive memory growth: {total_growth_mb:.2f}MB"
-            )
+            assert total_growth_mb < 50, f"Excessive memory growth: {total_growth_mb:.2f}MB"
 
 
 # Custom marker for soak tests

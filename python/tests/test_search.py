@@ -123,9 +123,7 @@ def test_search_with_filter_lt(db_with_vectors):
 
 def test_search_with_filter_in(db_with_vectors):
     """Test search with $in filter"""
-    results = db_with_vectors.search(
-        [0.2] * 128, k=10, filter={"label": {"$in": ["A", "C"]}}
-    )
+    results = db_with_vectors.search([0.2] * 128, k=10, filter={"label": {"$in": ["A", "C"]}})
 
     assert len(results) == 3  # vec1, vec3, vec4
     assert all(r["metadata"]["label"] in ["A", "C"] for r in results)

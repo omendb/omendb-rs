@@ -1,7 +1,6 @@
 """Tests for delete operations"""
 
 
-
 def test_delete_single_vector(db_with_vectors):
     """Test deleting a single vector"""
     initial_count = len(db_with_vectors)
@@ -82,11 +81,7 @@ def test_delete_then_insert_same_id(db_with_vectors):
     db_with_vectors.delete(["vec1"])
 
     # Re-insert with same ID
-    new_vector = {
-        "id": "vec1",
-        "vector": [0.9] * 128,
-        "metadata": {"status": "new"}
-    }
+    new_vector = {"id": "vec1", "vector": [0.9] * 128, "metadata": {"status": "new"}}
     db_with_vectors.set([new_vector])
 
     # Should be able to search and find it

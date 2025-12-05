@@ -1,14 +1,16 @@
 """Concurrent access tests for OmenDB - P0 production hardening"""
 
-import pytest
-import omendb
-import tempfile
+import math
 import os
+import random
+import tempfile
 import threading
 import time
-import random
-import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import pytest
+
+import omendb
 
 
 def generate_random_vector(dim: int, seed: int = None) -> list:
@@ -63,9 +65,7 @@ class TestConcurrentReaders:
                             results_count.append(len(results))
                         if len(results) != 10:
                             with lock:
-                                errors.append(
-                                    f"Thread {thread_id} got {len(results)} results"
-                                )
+                                errors.append(f"Thread {thread_id} got {len(results)} results")
                 except Exception as e:
                     with lock:
                         errors.append(f"Thread {thread_id} error: {e}")
@@ -86,9 +86,7 @@ class TestConcurrentReaders:
             assert len(errors) == 0, f"Errors: {errors}"
             assert len(results_count) == 500  # 10 threads * 50 searches
             assert all(r == 10 for r in results_count)
-            print(
-                f"\n10 threads, 500 searches: {elapsed:.2f}s ({500 / elapsed:.0f} QPS)"
-            )
+            print(f"\n10 threads, 500 searches: {elapsed:.2f}s ({500 / elapsed:.0f} QPS)")
 
     def test_concurrent_get_threads(self):
         """Multiple threads calling get() concurrently"""
@@ -186,9 +184,7 @@ class TestConcurrentWriters:
                 try:
                     for i in range(num_vectors):
                         vec_id = f"thread_{thread_id}_vec_{i}"
-                        embedding = generate_random_vector(
-                            64, seed=thread_id * 10000 + i
-                        )
+                        embedding = generate_random_vector(64, seed=thread_id * 10000 + i)
                         db.set(
                             [
                                 {
@@ -280,9 +276,7 @@ class TestConcurrentWriters:
             def update_worker(thread_id: int, num_updates: int):
                 try:
                     for i in range(num_updates):
-                        embedding = generate_random_vector(
-                            64, seed=thread_id * 1000 + i
-                        )
+                        embedding = generate_random_vector(64, seed=thread_id * 1000 + i)
                         db.update(
                             "shared",
                             embedding,
@@ -333,9 +327,7 @@ class TestMixedReadWrite:
                     i = 0
                     while not stop_flag.is_set():
                         vec_id = f"new_thread_{thread_id}_vec_{i}"
-                        embedding = generate_random_vector(
-                            64, seed=thread_id * 100000 + i
-                        )
+                        embedding = generate_random_vector(64, seed=thread_id * 100000 + i)
                         db.set(
                             [
                                 {
@@ -548,9 +540,7 @@ class TestStressConditions:
                             db.get("hot_key")
                         else:
                             # Generate new embedding for update
-                            embedding = generate_random_vector(
-                                64, seed=thread_id * 1000 + i
-                            )
+                            embedding = generate_random_vector(64, seed=thread_id * 1000 + i)
                             db.update(
                                 "hot_key",
                                 embedding,

@@ -53,8 +53,17 @@ dev = [
     "maturin>=1.0",
     "pytest>=8.3.5",
     "pytest-timeout>=2.3.0",
+    "ruff>=0.8.0",
     "chromadb>=1.0.0",
     "langchain-core>=0.2.0",
     "llama-index-core>=0.10.0",
     "sentence-transformers>=5.1.2",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]  # line length handled separately

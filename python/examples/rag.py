@@ -13,8 +13,9 @@ Note: Uses mock embeddings. Replace with real model in production:
 - Cohere embed
 """
 
-import omendb
 import hashlib
+
+import omendb
 
 
 # --- Mock Embedding (replace with real model) ---
@@ -28,16 +29,31 @@ def embed(text: str, dim: int = 128) -> list[float]:
 
 # --- Sample Documents ---
 DOCS = [
-    {"id": "intro", "text": "OmenDB is a fast embedded vector database for Python.",
-     "source": "readme"},
-    {"id": "install", "text": "Install with: pip install omendb. Requires Python 3.9+.",
-     "source": "quickstart"},
-    {"id": "search", "text": "Use db.search(query, k=10) to find similar vectors.",
-     "source": "api"},
-    {"id": "filters", "text": "Filter search with MongoDB-style operators: $eq, $gt, $in.",
-     "source": "api"},
-    {"id": "persist", "text": "Data persists automatically. Use db.save() to flush.",
-     "source": "api"},
+    {
+        "id": "intro",
+        "text": "OmenDB is a fast embedded vector database for Python.",
+        "source": "readme",
+    },
+    {
+        "id": "install",
+        "text": "Install with: pip install omendb. Requires Python 3.9+.",
+        "source": "quickstart",
+    },
+    {
+        "id": "search",
+        "text": "Use db.search(query, k=10) to find similar vectors.",
+        "source": "api",
+    },
+    {
+        "id": "filters",
+        "text": "Filter search with MongoDB-style operators: $eq, $gt, $in.",
+        "source": "api",
+    },
+    {
+        "id": "persist",
+        "text": "Data persists automatically. Use db.save() to flush.",
+        "source": "api",
+    },
 ]
 
 
@@ -46,10 +62,7 @@ def main():
     db = omendb.open(":memory:", dimensions=128)
 
     # Index documents
-    items = [
-        {"id": doc["id"], "vector": embed(doc["text"]), "metadata": doc}
-        for doc in DOCS
-    ]
+    items = [{"id": doc["id"], "vector": embed(doc["text"]), "metadata": doc} for doc in DOCS]
     db.set(items)
     print(f"Indexed {len(db)} documents\n")
 

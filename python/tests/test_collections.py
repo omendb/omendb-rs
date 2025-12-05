@@ -1,8 +1,10 @@
 """Tests for Collections API."""
 
-import pytest
-import tempfile
 import shutil
+import tempfile
+
+import pytest
+
 import omendb
 
 
@@ -22,9 +24,7 @@ class TestCollections:
         users = db.collection("users")
 
         # Collection should be usable
-        users.set(
-            [{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}]
-        )
+        users.set([{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}])
 
         assert len(users) == 1
         result = users.get("user1")
@@ -41,9 +41,7 @@ class TestCollections:
         # Insert same ID into both collections - should not conflict
         users.set([{"id": "doc1", "vector": [0.1] * 128, "metadata": {"type": "user"}}])
 
-        products.set(
-            [{"id": "doc1", "vector": [0.2] * 128, "metadata": {"type": "product"}}]
-        )
+        products.set([{"id": "doc1", "vector": [0.2] * 128, "metadata": {"type": "product"}}])
 
         # Both should have 1 item each
         assert len(users) == 1
@@ -78,9 +76,7 @@ class TestCollections:
 
         # Create and populate a collection
         users = db.collection("users")
-        users.set(
-            [{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}]
-        )
+        users.set([{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}])
 
         # Verify it exists
         assert "users" in db.collections()
@@ -126,14 +122,10 @@ class TestCollections:
         # Create and populate collections
         db1 = omendb.open(db_path, dimensions=128)
         users1 = db1.collection("users")
-        users1.set(
-            [{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}]
-        )
+        users1.set([{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}])
 
         products1 = db1.collection("products")
-        products1.set(
-            [{"id": "prod1", "vector": [0.2] * 128, "metadata": {"price": 99.99}}]
-        )
+        products1.set([{"id": "prod1", "vector": [0.2] * 128, "metadata": {"price": 99.99}}])
 
         # Close by going out of scope
         del db1, users1, products1
@@ -218,9 +210,7 @@ class TestCollections:
 
         # Create and populate
         users = db.collection("users")
-        users.set(
-            [{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}]
-        )
+        users.set([{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}])
 
         # Delete
         db.delete_collection("users")
@@ -231,9 +221,7 @@ class TestCollections:
         assert len(users2) == 0  # Should be empty
 
         # Add new data
-        users2.set(
-            [{"id": "user2", "vector": [0.2] * 128, "metadata": {"name": "Bob"}}]
-        )
+        users2.set([{"id": "user2", "vector": [0.2] * 128, "metadata": {"name": "Bob"}}])
 
         assert len(users2) == 1
         assert users2.get("user2") is not None

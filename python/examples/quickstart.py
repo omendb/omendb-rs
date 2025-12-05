@@ -12,11 +12,13 @@ import omendb
 db = omendb.open(":memory:", dimensions=128)
 
 # Add some vectors with metadata
-db.set([
-    {"id": "doc1", "vector": [0.1] * 128, "metadata": {"title": "First doc"}},
-    {"id": "doc2", "vector": [0.2] * 128, "metadata": {"title": "Second doc"}},
-    {"id": "doc3", "vector": [0.15] * 128, "metadata": {"title": "Third doc"}},
-])
+db.set(
+    [
+        {"id": "doc1", "vector": [0.1] * 128, "metadata": {"title": "First doc"}},
+        {"id": "doc2", "vector": [0.2] * 128, "metadata": {"title": "Second doc"}},
+        {"id": "doc3", "vector": [0.15] * 128, "metadata": {"title": "Third doc"}},
+    ]
+)
 
 # Search for similar vectors
 results = db.search(query=[0.1] * 128, k=2)

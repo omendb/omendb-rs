@@ -1,10 +1,13 @@
 """1M vector scale test for production hardening"""
-import omendb
-import tempfile
-import time
-import random
+
 import math
 import os
+import random
+import tempfile
+import time
+
+import omendb
+
 
 def generate_random_vectors(n, dim, seed=42):
     random.seed(seed)
@@ -15,6 +18,7 @@ def generate_random_vectors(n, dim, seed=42):
         embedding = [x / norm for x in embedding]
         vectors.append({"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i}})
     return vectors
+
 
 def main():
     print("=" * 60)
@@ -51,7 +55,9 @@ def main():
 
         insert_time = time.time() - start
         insert_rate = total_vectors / insert_time
-        print(f"\n   INSERT COMPLETE: {total_vectors:,} in {insert_time:.1f}s ({insert_rate:,.0f} vec/s)")
+        print(
+            f"\n   INSERT COMPLETE: {total_vectors:,} in {insert_time:.1f}s ({insert_rate:,.0f} vec/s)"
+        )
 
         # Test search performance
         print("\n3. Testing search performance...")
@@ -105,6 +111,7 @@ def main():
         print(f"Load time:    {load_time:.1f}s")
         print("=" * 60)
         print("✅ 1M SCALE TEST PASSED")
+
 
 if __name__ == "__main__":
     main()

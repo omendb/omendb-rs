@@ -1,8 +1,7 @@
 """Tests for LangChain VectorStore integration."""
 
-import tempfile
 import shutil
-from typing import List
+import tempfile
 
 import pytest
 
@@ -13,7 +12,7 @@ class FakeEmbeddings:
     def __init__(self, dimensions: int = 128):
         self.dimensions = dimensions
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Generate deterministic embeddings from text."""
         embeddings = []
         for text in texts:
@@ -23,12 +22,12 @@ class FakeEmbeddings:
             embeddings.append(embedding)
         return embeddings
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         """Generate deterministic embedding from query text."""
         seed = hash(text) % 2**31
         return self._generate_embedding(seed)
 
-    def _generate_embedding(self, seed: int) -> List[float]:
+    def _generate_embedding(self, seed: int) -> list[float]:
         """Generate a deterministic embedding from seed using LCG."""
         s = seed
         embedding = []
@@ -88,6 +87,7 @@ class TestOmenDBVectorStore:
     def test_from_documents(self, temp_db_path, embeddings):
         """Test creating a vector store from documents."""
         from langchain_core.documents import Document
+
         from omendb.langchain import OmenDBVectorStore
 
         docs = [
@@ -198,6 +198,7 @@ class TestOmenDBVectorStore:
     def test_add_documents(self, temp_db_path, embeddings):
         """Test adding documents."""
         from langchain_core.documents import Document
+
         from omendb.langchain import OmenDBVectorStore
 
         store = OmenDBVectorStore(
@@ -357,8 +358,9 @@ class TestOmenDBVectorStoreScaleTest:
     @pytest.mark.slow
     def test_1k_vectors(self, temp_db_path, embeddings):
         """Test with 1K vectors."""
-        from omendb.langchain import OmenDBVectorStore
         import time
+
+        from omendb.langchain import OmenDBVectorStore
 
         n_vectors = 1000
         texts = [f"Document number {i} with some content" for i in range(n_vectors)]

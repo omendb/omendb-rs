@@ -13,9 +13,9 @@ These tests verify:
 - Performance at scale
 """
 
+import random
 import tempfile
 import time
-import random
 
 import pytest
 
@@ -28,9 +28,7 @@ def generate_embedding(dim: int, seed: int) -> list[float]:
     return [random.gauss(0, 1) for _ in range(dim)]
 
 
-def brute_force_knn(
-    query: list[float], vectors: list[list[float]], k: int
-) -> list[int]:
+def brute_force_knn(query: list[float], vectors: list[list[float]], k: int) -> list[int]:
     """Compute exact k-NN using brute force (L2 distance)."""
     distances = []
     for i, vec in enumerate(vectors):
@@ -76,7 +74,7 @@ class TestEmbeddingDimensions:
 
             # Check recall vs brute force
             ground_truth = set(brute_force_knn(query, vectors, k))
-            result_ids = set(int(r["id"].split("_")[1]) for r in results)
+            result_ids = {int(r["id"].split("_")[1]) for r in results}
             recall = len(ground_truth & result_ids) / k
 
             assert recall >= 0.8, f"{name} ({dim}D): recall {recall:.0%} < 80%"
@@ -125,7 +123,7 @@ class TestRecallAccuracy:
                 results = db.search(query, k=k)
 
                 ground_truth = set(brute_force_knn(query, vectors, k))
-                result_ids = set(int(r["id"].split("_")[1]) for r in results)
+                result_ids = {int(r["id"].split("_")[1]) for r in results}
                 recall = len(ground_truth & result_ids) / k
                 recalls.append(recall)
 
@@ -156,7 +154,7 @@ class TestRecallAccuracy:
             for ef in [50, 100, 200]:
                 db.set_ef_search(ef)
                 results = db.search(query, k=k)
-                result_ids = set(int(r["id"].split("_")[1]) for r in results)
+                result_ids = {int(r["id"].split("_")[1]) for r in results}
                 recalls[ef] = len(ground_truth & result_ids) / k
 
             # Higher ef should give equal or better recall
@@ -284,9 +282,7 @@ class TestPerformance:
             ]
             db.set(vectors)
 
-            queries = [
-                generate_embedding(dim, seed=10000 + i) for i in range(n_queries)
-            ]
+            queries = [generate_embedding(dim, seed=10000 + i) for i in range(n_queries)]
 
             # Individual searches
             start = time.time()

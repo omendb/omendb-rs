@@ -7,12 +7,13 @@ Key scenarios:
 3. Crash after delete but before save() - tests delete durability
 """
 
-import pytest
-import os
-import signal
 import multiprocessing
-import tempfile
+import os
 import shutil
+import signal
+import tempfile
+
+import pytest
 
 
 def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str):
@@ -76,9 +77,7 @@ def child_delete_and_crash(db_path: str, dims: int, ids_to_delete: list):
     os.kill(os.getpid(), signal.SIGKILL)
 
 
-def child_update_and_crash(
-    db_path: str, dims: int, update_id: str, new_embedding: list
-):
+def child_update_and_crash(db_path: str, dims: int, update_id: str, new_embedding: list):
     """Child process that updates then crashes without saving"""
     import omendb
 
@@ -192,9 +191,7 @@ class TestCrashRecoveryWithExistingData:
         results = db2.search([0.1] * dims, k=100)
         initial_ids = {r["id"] for r in results if r["id"].startswith("initial_")}
         # At least 90% of initial vectors should be found
-        assert len(initial_ids) >= 45, (
-            f"Missing too many initial vectors: {50 - len(initial_ids)}"
-        )
+        assert len(initial_ids) >= 45, f"Missing too many initial vectors: {50 - len(initial_ids)}"
 
     def test_crash_during_delete_persists_with_wal(self, temp_db_path):
         """With seerdb WAL, deletes persist immediately (durable writes)"""
@@ -204,8 +201,7 @@ class TestCrashRecoveryWithExistingData:
         # Create and save data
         db = omendb.open(temp_db_path, dimensions=dims)
         vectors = [
-            {"id": f"vec_{i}", "vector": [float(i)] * dims, "metadata": {}}
-            for i in range(100)
+            {"id": f"vec_{i}", "vector": [float(i)] * dims, "metadata": {}} for i in range(100)
         ]
         db.set(vectors)
         db.save()
@@ -241,7 +237,7 @@ class TestCrashRecoveryEdgeCases:
         del db
 
         # Multiple crash cycles
-        for cycle in range(3):
+        for _cycle in range(3):
             p = multiprocessing.Process(
                 target=child_insert_and_crash, args=(temp_db_path, dims, 10, "sigkill")
             )
@@ -265,7 +261,7 @@ class TestCrashRecoveryEdgeCases:
         del db
 
         # Rapid crash cycles (using quick exit instead of SIGKILL for speed)
-        for i in range(5):
+        for _i in range(5):
             p = multiprocessing.Process(
                 target=child_insert_and_crash, args=(temp_db_path, dims, 5, "exit")
             )
@@ -285,12 +281,7 @@ class TestCrashRecoveryEdgeCases:
 
         # Save initial data
         db = omendb.open(temp_db_path, dimensions=dims)
-        db.set(
-            [
-                {"id": f"safe_{i}", "vector": [0.1] * dims, "metadata": {}}
-                for i in range(100)
-            ]
-        )
+        db.set([{"id": f"safe_{i}", "vector": [0.1] * dims, "metadata": {}} for i in range(100)])
         db.save()
         del db
 
@@ -311,9 +302,7 @@ class TestCrashRecoveryEdgeCases:
         results = db2.search([0.1] * dims, k=100)
         safe_ids = {r["id"] for r in results if r["id"].startswith("safe_")}
         # Verify at least half of safe vectors are found (HNSW recall limitation)
-        assert len(safe_ids) >= 40, (
-            f"Missing too many safe vectors: {100 - len(safe_ids)}"
-        )
+        assert len(safe_ids) >= 40, f"Missing too many safe vectors: {100 - len(safe_ids)}"
 
         # Verify database is not corrupt - can still write and search
         db2.set([{"id": "after_crash", "vector": [0.2] * dims, "metadata": {}}])

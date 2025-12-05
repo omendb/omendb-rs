@@ -1,8 +1,9 @@
 """Pytest configuration and shared fixtures for OmenDB tests"""
 
-import pytest
-import tempfile
 import os
+import tempfile
+
+import pytest
 
 
 @pytest.fixture
@@ -16,6 +17,7 @@ def temp_db_path():
 def db(temp_db_path):
     """Create a fresh database instance for each test"""
     import omendb
+
     return omendb.open(temp_db_path, dimensions=128)
 
 
@@ -23,6 +25,7 @@ def db(temp_db_path):
 def db_with_vectors(temp_db_path):
     """Create a database with sample vectors"""
     import omendb
+
     db = omendb.open(temp_db_path, dimensions=128)
 
     vectors = [

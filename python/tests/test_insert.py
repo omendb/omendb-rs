@@ -15,8 +15,7 @@ def test_insert_single_vector(db):
 def test_insert_multiple_vectors(db):
     """Test batch insert"""
     vectors = [
-        {"id": f"vec{i}", "vector": [float(i)] * 128, "metadata": {"index": i}}
-        for i in range(100)
+        {"id": f"vec{i}", "vector": [float(i)] * 128, "metadata": {"index": i}} for i in range(100)
     ]
     indices = db.set(vectors)
 
