@@ -1,7 +1,9 @@
 //! SIMD-accelerated distance calculations for HNSW.
 //!
 //! Uses `std::simd` (portable SIMD) for cross-platform acceleration.
-//! Compiles to AVX2 (8 lanes), SSE2/NEON (4 lanes), or scalar fallback.
+//! Runtime dispatch via `multiversion` selects optimal ISA:
+//! - x86_64: AVX-512 → AVX2 → SSE4.1 (8-lane or 4-lane portable SIMD)
+//! - aarch64: SVE (Graviton 3+) → NEON (baseline)
 //!
 //! ## Optimizations
 //!
@@ -9,6 +11,7 @@
 //! - Breaks dependency chains for better pipeline utilization
 //! - 10-40% faster than naive SIMD at high dimensions
 
+use multiversion::multiversion;
 use std::simd::{num::SimdFloat, LaneCount, Simd, SupportedLaneCount};
 
 /// L2 (Euclidean) distance with SIMD acceleration.
@@ -19,6 +22,13 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// L2 distance squared (no sqrt) for comparisons.
+#[multiversion(targets(
+    "x86_64+avx512f",
+    "x86_64+avx2",
+    "x86_64+sse4.1",
+    "aarch64+sve",
+    "aarch64+neon",
+))]
 #[inline]
 #[must_use]
 pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
@@ -30,6 +40,13 @@ pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Dot product with SIMD acceleration.
+#[multiversion(targets(
+    "x86_64+avx512f",
+    "x86_64+avx2",
+    "x86_64+sse4.1",
+    "aarch64+sve",
+    "aarch64+neon",
+))]
 #[inline]
 #[must_use]
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {

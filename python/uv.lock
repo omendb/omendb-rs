@@ -2396,7 +2396,7 @@ wheels = [
 
 [[package]]
 name = "omendb"
-version = "0.0.1a3"
+version = "0.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
