@@ -13,9 +13,10 @@ export declare class VectorDatabase {
    * @param query - Query vector (number[] or Float32Array)
    * @param k - Number of results to return
    * @param ef - Optional search width override
+   * @param filter - Optional metadata filter (e.g., {category: "foo"} or {price: {$gt: 10}})
    * @returns Array of {id, distance, metadata}
    */
-  search(query: Array<number> | Float32Array, k: number, ef?: number | undefined | null): Array<SearchResult>
+  search(query: Array<number> | Float32Array, k: number, ef?: number | undefined | null, filter?: Record<string, unknown> | undefined): Array<SearchResult>
   /**
    * Batch search with parallel execution (async).
    *
