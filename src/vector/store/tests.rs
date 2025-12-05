@@ -1036,3 +1036,203 @@ mod incremental_tests {
         assert_eq!(results.len(), 3, "Should find all three vectors");
     }
 }
+
+// ============================================================================
+// Text Search / Hybrid Search Tests
+// ============================================================================
+
+#[test]
+fn test_enable_text_search() {
+    let mut store = VectorStore::new(4);
+
+    assert!(!store.has_text_search());
+
+    store.enable_text_search().unwrap();
+
+    assert!(store.has_text_search());
+
+    // Enabling again should be a no-op
+    store.enable_text_search().unwrap();
+    assert!(store.has_text_search());
+}
+
+#[test]
+fn test_set_with_text() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    let idx = store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "machine learning is awesome",
+            serde_json::json!({"type": "article"}),
+        )
+        .unwrap();
+
+    assert_eq!(idx, 0);
+    assert_eq!(store.len(), 1);
+
+    // Text search should find it
+    let results = store.text_search("machine", 10).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "doc1");
+}
+
+#[test]
+fn test_set_with_text_requires_enabled() {
+    let mut store = VectorStore::new(4);
+
+    // Should fail without enabling text search
+    let result = store.set_with_text(
+        "doc1".to_string(),
+        Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+        "test text",
+        serde_json::json!({}),
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_text_search_bm25() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    // Add documents with different term frequencies
+    store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "rust programming language",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    store
+        .set_with_text(
+            "doc2".to_string(),
+            Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+            "rust rust systems programming",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // Search for "rust" - doc2 should rank higher (higher term frequency)
+    let results = store.text_search("rust", 10).unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].0, "doc2"); // Higher BM25 score
+    assert_eq!(results[1].0, "doc1");
+}
+
+#[test]
+fn test_hybrid_search() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    // doc1: similar vector, relevant text
+    store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "machine learning algorithms",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // doc2: different vector, relevant text
+    store
+        .set_with_text(
+            "doc2".to_string(),
+            Vector::new(vec![0.0, 0.0, 0.0, 1.0]),
+            "machine learning models",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // doc3: similar vector, irrelevant text
+    store
+        .set_with_text(
+            "doc3".to_string(),
+            Vector::new(vec![0.9, 0.1, 0.0, 0.0]),
+            "cooking recipes",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // Query: similar to doc1/doc3 vectors, text matches doc1/doc2
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+    let results = store.hybrid_search(&query, "machine learning", 3).unwrap();
+
+    assert!(!results.is_empty());
+
+    // doc1 should rank highest (both vector similarity and text match)
+    assert_eq!(results[0].0, "doc1");
+}
+
+#[test]
+fn test_hybrid_search_with_filter() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "machine learning",
+            serde_json::json!({"year": 2024}),
+        )
+        .unwrap();
+
+    store
+        .set_with_text(
+            "doc2".to_string(),
+            Vector::new(vec![0.9, 0.1, 0.0, 0.0]),
+            "machine learning",
+            serde_json::json!({"year": 2023}),
+        )
+        .unwrap();
+
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+    let filter = MetadataFilter::Eq("year".to_string(), serde_json::json!(2024));
+
+    let results = store
+        .hybrid_search_with_filter(&query, "machine", 10, &filter)
+        .unwrap();
+
+    // Only doc1 should match the filter
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "doc1");
+}
+
+#[test]
+fn test_text_search_options_builder() {
+    let store = VectorStoreOptions::default()
+        .dimensions(4)
+        .text_search(true)
+        .build()
+        .unwrap();
+
+    assert!(store.has_text_search());
+}
+
+#[test]
+fn test_hybrid_search_empty_text() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "test content",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+
+    // Empty text query should still return vector search results
+    let results = store.hybrid_search(&query, "", 10).unwrap();
+    assert_eq!(results.len(), 1);
+}
