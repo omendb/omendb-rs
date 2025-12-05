@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "omendb"
-version = "0.0.2-alpha.2"
+version = "0.0.2"
 edition = "2021"
 authors = ["OmenDB Inc."]
 description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
