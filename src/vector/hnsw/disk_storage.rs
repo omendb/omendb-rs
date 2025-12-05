@@ -49,8 +49,8 @@ fn vbyte_encode(mut value: u32, buf: &mut [u8]) -> usize {
     i + 1
 }
 
-/// Decode a vbyte-encoded value from a byte slice
-/// Returns (value, bytes_read), or (0, 0) if buffer is empty/invalid
+/// Decode a vbyte-encoded value from a byte slice.
+/// Returns (value, `bytes_read`), or (0, 0) if buffer is empty/invalid.
 #[inline]
 fn vbyte_decode(buf: &[u8]) -> (u32, usize) {
     if buf.is_empty() {
@@ -360,12 +360,12 @@ impl DiskStorage {
         Ok(())
     }
 
-    /// Save graph to `layer_0.graph` using vbyte encoding (FORMAT_VERSION 2)
+    /// Save graph to `layer_0.graph` using vbyte encoding (`FORMAT_VERSION` 2)
     ///
     /// Format per node:
-    /// - num_levels: u32 (4 bytes)
+    /// - `num_levels`: u32 (4 bytes)
     /// - For each level:
-    ///   - neighbor_count: u32 (4 bytes)
+    ///   - `neighbor_count`: u32 (4 bytes)
     ///   - neighbors: vbyte encoded absolute IDs (preserves original order)
     fn save_graph(path: &Path, nodes: &[Vec<Vec<NodeId>>]) -> Result<()> {
         let graph_path = path.join("layer_0.graph");

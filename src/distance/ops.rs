@@ -2,8 +2,8 @@
 //!
 //! Uses `std::simd` (portable SIMD) for cross-platform acceleration.
 //! Runtime dispatch via `multiversion` selects optimal ISA:
-//! - x86_64: AVX-512 → AVX2 → SSE4.1 (8-lane or 4-lane portable SIMD)
-//! - aarch64: SVE (Graviton 3+) → NEON (baseline)
+//! - `x86_64`: AVX-512 → AVX2 → SSE4.1 (8-lane or 4-lane portable SIMD)
+//! - `aarch64`: SVE (Graviton 3+) → NEON (baseline)
 //!
 //! ## Optimizations
 //!
