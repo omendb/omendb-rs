@@ -84,6 +84,7 @@ pub mod config;
 pub mod distance;
 pub mod sampling;
 pub mod storage;
+pub mod text;
 pub mod types;
 pub mod vector;
 

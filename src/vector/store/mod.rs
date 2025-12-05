@@ -4,16 +4,19 @@
 //! using HNSW (Hierarchical Navigable Small World) algorithm.
 //!
 //! Optional Extended `RaBitQ` quantization for memory-efficient storage.
+//!
+//! Optional tantivy-based full-text search for hybrid (vector + BM25) retrieval.
 
 use super::hnsw_index::HNSWIndex;
 use super::storage::SeerDBStorage;
 use super::types::Vector;
 use crate::compression::{QuantizedVector, RaBitQ, RaBitQParams};
+use crate::text::{reciprocal_rank_fusion, TextIndex};
 use anyhow::Result;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod tests;
@@ -69,6 +72,9 @@ pub struct VectorStoreOptions {
 
     /// `RaBitQ` quantization parameters
     quantization: Option<RaBitQParams>,
+
+    /// Enable tantivy-based full-text search for hybrid retrieval
+    text_search: bool,
 }
 
 impl VectorStoreOptions {
@@ -131,6 +137,16 @@ impl VectorStoreOptions {
     #[must_use]
     pub fn quantization(mut self, params: RaBitQParams) -> Self {
         self.quantization = Some(params);
+        self
+    }
+
+    /// Enable tantivy-based full-text search for hybrid retrieval.
+    ///
+    /// When enabled, you can use `set_with_text()` to index text alongside vectors,
+    /// and `hybrid_search()` to search both with RRF fusion.
+    #[must_use]
+    pub fn text_search(mut self, enabled: bool) -> Self {
+        self.text_search = enabled;
         self
     }
 
@@ -237,6 +253,12 @@ pub struct VectorStore {
 
     /// Persistent storage backend (seerdb LSM)
     storage: Option<SeerDBStorage>,
+
+    /// Storage path (for TextIndex subdirectory)
+    storage_path: Option<PathBuf>,
+
+    /// Optional tantivy text index for hybrid search
+    text_index: Option<TextIndex>,
 }
 
 impl VectorStore {
@@ -253,6 +275,8 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
+            storage_path: None,
+            text_index: None,
         }
     }
 
@@ -303,6 +327,8 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
+            storage_path: None,
+            text_index: None,
         }
     }
 
@@ -344,6 +370,8 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
+            storage_path: None,
+            text_index: None,
         }
     }
 
@@ -385,6 +413,8 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
+            storage_path: None,
+            text_index: None,
         })
     }
 
@@ -403,7 +433,8 @@ impl VectorStore {
     /// // Data is automatically persisted
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let storage = SeerDBStorage::open(&path)?;
+        let path = path.as_ref();
+        let storage = SeerDBStorage::open(path)?;
 
         // Load existing data from storage
         let vectors_data = storage.load_all_vectors()?;
@@ -454,6 +485,14 @@ impl VectorStore {
             Some(index)
         };
 
+        // Try to open existing text index if it exists
+        let text_index_path = path.join("text_index");
+        let text_index = if text_index_path.exists() {
+            Some(TextIndex::open(&text_index_path)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             vectors,
             hnsw_index,
@@ -464,6 +503,8 @@ impl VectorStore {
             id_to_index,
             deleted,
             storage: Some(storage),
+            storage_path: Some(path.to_path_buf()),
+            text_index,
         })
     }
 
@@ -558,6 +599,14 @@ impl VectorStore {
             storage.put_config("dimensions", dimensions as u64)?;
         }
 
+        // Initialize text index if enabled
+        let text_index = if options.text_search {
+            let text_path = path.join("text_index");
+            Some(TextIndex::open(&text_path)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             vectors: Vec::new(),
             hnsw_index,
@@ -568,6 +617,8 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             deleted: HashMap::new(),
             storage: Some(storage),
+            storage_path: Some(path.to_path_buf()),
+            text_index,
         })
     }
 
@@ -621,6 +672,13 @@ impl VectorStore {
             .as_ref()
             .map(|p| RaBitQ::new(p.clone()));
 
+        // Initialize in-memory text index if enabled
+        let text_index = if options.text_search {
+            Some(TextIndex::open_in_memory()?)
+        } else {
+            None
+        };
+
         Ok(Self {
             vectors: Vec::new(),
             hnsw_index,
@@ -631,6 +689,8 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
+            storage_path: None,
+            text_index,
         })
     }
 
@@ -878,6 +938,187 @@ impl VectorStore {
 
         Ok(result_indices)
     }
+
+    // ============================================================================
+    // Text Search Methods (Hybrid Search)
+    // ============================================================================
+
+    /// Enable text search on this store (creates in-memory text index).
+    ///
+    /// For persistent stores, the text index is stored at `{path}/text_index`.
+    /// For in-memory stores, the text index is also in-memory.
+    pub fn enable_text_search(&mut self) -> Result<()> {
+        if self.text_index.is_some() {
+            return Ok(()); // Already enabled
+        }
+
+        self.text_index = if let Some(ref path) = self.storage_path {
+            let text_path = path.join("text_index");
+            Some(TextIndex::open(&text_path)?)
+        } else {
+            Some(TextIndex::open_in_memory()?)
+        };
+
+        Ok(())
+    }
+
+    /// Check if text search is enabled.
+    #[must_use]
+    pub fn has_text_search(&self) -> bool {
+        self.text_index.is_some()
+    }
+
+    /// Upsert vector with text content for hybrid search.
+    ///
+    /// Like `set()`, but also indexes text content for BM25 search.
+    /// Requires text search to be enabled.
+    ///
+    /// # Arguments
+    /// * `id` - Unique string identifier
+    /// * `vector` - Vector embedding
+    /// * `text` - Text content for full-text search
+    /// * `metadata` - Optional JSON metadata
+    ///
+    /// # Example
+    /// ```ignore
+    /// store.enable_text_search()?;
+    /// store.set_with_text(
+    ///     "doc1".to_string(),
+    ///     embed("machine learning"),
+    ///     "Machine learning is a branch of AI",
+    ///     json!({"type": "article"})
+    /// )?;
+    /// ```
+    pub fn set_with_text(
+        &mut self,
+        id: String,
+        vector: Vector,
+        text: &str,
+        metadata: JsonValue,
+    ) -> Result<usize> {
+        let Some(ref mut text_index) = self.text_index else {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        };
+
+        // Index text content
+        text_index.index_document(&id, text)?;
+        text_index.commit()?;
+
+        // Store vector and metadata
+        self.set(id, vector, metadata)
+    }
+
+    /// Search text index only (BM25 scoring).
+    ///
+    /// Returns Vec of (id, BM25_score) tuples, sorted by score descending.
+    pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<(String, f32)>> {
+        let Some(ref text_index) = self.text_index else {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        };
+
+        text_index.search(query, k)
+    }
+
+    /// Hybrid search combining vector similarity and BM25 text relevance.
+    ///
+    /// Uses Reciprocal Rank Fusion (RRF) to combine results from:
+    /// - HNSW vector search (by embedding similarity)
+    /// - Tantivy text search (by BM25 relevance)
+    ///
+    /// # Arguments
+    /// * `query_vector` - Query embedding for vector search
+    /// * `query_text` - Query text for BM25 search
+    /// * `k` - Number of results to return
+    ///
+    /// # Returns
+    /// Vec of (id, RRF_score) tuples, sorted by combined score descending.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let results = store.hybrid_search(&query_embedding, "machine learning", 10)?;
+    /// for (id, score) in results {
+    ///     println!("{}: {}", id, score);
+    /// }
+    /// ```
+    pub fn hybrid_search(
+        &mut self,
+        query_vector: &Vector,
+        query_text: &str,
+        k: usize,
+    ) -> Result<Vec<(String, f32)>> {
+        // Over-fetch from both sources for better fusion
+        let fetch_k = k * 2;
+
+        // Vector search
+        let vector_results = self.knn_search(query_vector, fetch_k)?;
+
+        // Convert vector results to (id, distance) format
+        let vector_results: Vec<(String, f32)> = vector_results
+            .into_iter()
+            .filter_map(|(idx, distance)| {
+                // Find string ID for this index
+                self.id_to_index
+                    .iter()
+                    .find(|(_, &i)| i == idx)
+                    .map(|(id, _)| (id.clone(), distance))
+            })
+            .collect();
+
+        // Text search
+        let text_results = self.text_search(query_text, fetch_k).unwrap_or_default();
+
+        // Fuse results with RRF (k=60 is standard)
+        Ok(reciprocal_rank_fusion(vector_results, text_results, k, 60))
+    }
+
+    /// Hybrid search with filter (combining vector + text + metadata filter).
+    ///
+    /// Like `hybrid_search()`, but also applies a metadata filter.
+    pub fn hybrid_search_with_filter(
+        &mut self,
+        query_vector: &Vector,
+        query_text: &str,
+        k: usize,
+        filter: &MetadataFilter,
+    ) -> Result<Vec<(String, f32)>> {
+        let fetch_k = k * 2;
+
+        // Filtered vector search
+        let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
+
+        // Convert to (id, distance) format
+        let vector_results: Vec<(String, f32)> = vector_results
+            .into_iter()
+            .filter_map(|(idx, distance, _)| {
+                self.id_to_index
+                    .iter()
+                    .find(|(_, &i)| i == idx)
+                    .map(|(id, _)| (id.clone(), distance))
+            })
+            .collect();
+
+        // Text search (unfiltered - filter applied post-fusion)
+        let text_results = self
+            .text_search(query_text, fetch_k * 2)
+            .unwrap_or_default();
+
+        // Filter text results by metadata
+        let text_results: Vec<(String, f32)> = text_results
+            .into_iter()
+            .filter(|(id, _)| {
+                self.id_to_index
+                    .get(id)
+                    .and_then(|&idx| self.metadata.get(&idx))
+                    .is_some_and(|meta| filter.matches(meta))
+            })
+            .collect();
+
+        Ok(reciprocal_rank_fusion(vector_results, text_results, k, 60))
+    }
+
+    // ============================================================================
+    // Update Methods
+    // ============================================================================
 
     /// Update existing vector by index (internal method)
     fn update_by_index(
@@ -1803,6 +2044,8 @@ impl VectorStore {
                 id_to_index,
                 deleted,
                 storage: None, // Legacy file-based loading doesn't use seerdb
+                storage_path: None,
+                text_index: None,
             })
         } else {
             // Fallback: Load vectors and rebuild HNSW
@@ -1874,6 +2117,8 @@ impl VectorStore {
                 id_to_index,
                 deleted,
                 storage: None, // Legacy file-based loading doesn't use seerdb
+                storage_path: None,
+                text_index: None,
             };
 
             if !store.vectors.is_empty() {
