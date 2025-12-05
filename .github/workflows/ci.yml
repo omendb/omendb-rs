@@ -75,7 +75,7 @@ jobs:
 
       - name: Test
         working-directory: python
-        run: uv run pytest tests/ -x --timeout=60
+        run: uv run pytest tests/ -x --timeout=60 -m "not slow and not soak"
 
   # ==========================================================================
   # Node: Build, Test

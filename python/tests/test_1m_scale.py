@@ -1,5 +1,9 @@
 """1M vector scale test for production hardening"""
 
+import pytest
+
+pytestmark = pytest.mark.slow  # Skip in CI
+
 import math
 import os
 import random
