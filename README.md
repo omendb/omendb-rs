@@ -5,7 +5,7 @@
 
 Embedded vector database for Python. No server, no setup, just `pip install`.
 
-> **Alpha**: This is an early release. The API may change. Please report issues.
+> **v0.0.2**: First stable release. API may still evolve. [Report issues](https://github.com/omendb/omendb/issues).
 
 ## Quick Start
 
@@ -45,11 +45,11 @@ results = db.search([1.0, 0.0, 0.0, 0.0], k=2, filter={"type": {"$eq": "cat"}})
 
 On a 10K vector dataset (128D, M3 Max):
 
-| Operation | Throughput |
-|-----------|------------|
-| Batch search (100 queries) | ~40,000 QPS |
-| Single search | ~6,000 QPS |
-| Insert | ~17,000 vec/s |
+| Operation                  | Throughput    |
+| -------------------------- | ------------- |
+| Batch search (100 queries) | ~40,000 QPS   |
+| Single search              | ~6,000 QPS    |
+| Insert                     | ~17,000 vec/s |
 
 Run `python benchmark.py` to measure on your hardware.
 
