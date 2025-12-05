@@ -58,16 +58,16 @@ pub struct VectorStoreOptions {
     /// HNSW M parameter: neighbors per node (default: 16)
     m: Option<usize>,
 
-    /// HNSW ef_construction: build quality (default: 100)
+    /// HNSW `ef_construction`: build quality (default: 100)
     ef_construction: Option<usize>,
 
-    /// HNSW ef_search: search quality/speed tradeoff (default: 100)
+    /// HNSW `ef_search`: search quality/speed tradeoff (default: 100)
     ef_search: Option<usize>,
 
     /// Expected number of vectors for capacity planning
     expected_capacity: Option<usize>,
 
-    /// RaBitQ quantization parameters
+    /// `RaBitQ` quantization parameters
     quantization: Option<RaBitQParams>,
 }
 
@@ -98,7 +98,7 @@ impl VectorStoreOptions {
         self
     }
 
-    /// Set HNSW ef_construction (build quality).
+    /// Set HNSW `ef_construction` (build quality).
     ///
     /// Higher = better graph quality, slower build. Default: 100.
     #[must_use]
@@ -107,7 +107,7 @@ impl VectorStoreOptions {
         self
     }
 
-    /// Set HNSW ef_search (search quality/speed tradeoff).
+    /// Set HNSW `ef_search` (search quality/speed tradeoff).
     ///
     /// Higher = better recall, slower search. Default: 100.
     #[must_use]
@@ -125,7 +125,7 @@ impl VectorStoreOptions {
         self
     }
 
-    /// Enable RaBitQ quantization for memory-efficient storage.
+    /// Enable `RaBitQ` quantization for memory-efficient storage.
     ///
     /// Provides 4-16x compression with ~1-2% recall loss.
     #[must_use]

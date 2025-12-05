@@ -1,4 +1,6 @@
 #![feature(portable_simd)]
+// Allow retpoline cfg values from multiversion crate's target feature detection
+#![allow(unexpected_cfgs)]
 #![warn(clippy::pedantic)]
 #![allow(
     // Naming

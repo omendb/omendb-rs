@@ -963,7 +963,7 @@ fn simd_cosine_distance(v1: &[f32], v2: &[f32]) -> f32 {
             return unsafe { cosine_distance_sse2(v1, v2) };
         }
         // Scalar fallback for x86_64 without SIMD
-        return cosine_distance_scalar(v1, v2);
+        cosine_distance_scalar(v1, v2)
     }
 
     #[cfg(target_arch = "aarch64")]
