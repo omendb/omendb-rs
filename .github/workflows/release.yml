@@ -177,6 +177,7 @@ jobs:
         uses: rust-lang/crates-io-auth-action@v1
         id: crates-io-auth
       - name: Publish to crates.io
+        continue-on-error: true
         run: cargo publish --token ${{ steps.crates-io-auth.outputs.token }}
 
   publish-pypi:
@@ -194,10 +195,11 @@ jobs:
       - name: List wheels
         run: ls -la dist/
       - name: Publish to PyPI
+        continue-on-error: true
         uses: PyO3/maturin-action@v1
         with:
           command: upload
-          args: --non-interactive dist/*
+          args: --non-interactive --skip-existing dist/*
 
   publish-npm:
     needs: [publish-pypi]
@@ -248,17 +250,20 @@ jobs:
         working-directory: node
 
       - name: Publish platform packages
+        continue-on-error: true
         run: |
           for dir in npm/*/; do
             echo "Publishing $dir"
-            npm publish "$dir" --provenance --access public ${{ steps.npm-tag.outputs.tag }}
+            npm publish "$dir" --provenance --access public ${{ steps.npm-tag.outputs.tag }} || true
           done
         working-directory: node
 
       - name: Publish @omendb/omendb
+        continue-on-error: true
         run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
         working-directory: node
 
       - name: Publish omendb wrapper
+        continue-on-error: true
         run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
         working-directory: node/wrapper
