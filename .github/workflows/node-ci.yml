@@ -180,14 +180,14 @@ jobs:
         run: |
           for dir in npm/*/; do
             echo "Publishing $dir"
-            npm publish "$dir" --provenance --access public ${{ steps.npm-tag.outputs.tag }}
+            npm publish "$dir" --provenance --access public ${{ steps.npm-tag.outputs.tag }} || echo "Already published or failed"
           done
         working-directory: node
 
       - name: Publish @omendb/omendb
-        run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }} || echo "Already published or failed"
         working-directory: node
 
       - name: Publish omendb wrapper
-        run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }} || echo "Already published or failed"
         working-directory: node/wrapper
