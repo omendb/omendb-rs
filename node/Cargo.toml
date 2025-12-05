@@ -2,7 +2,7 @@
 
 [package]
 name = "omendb-node"
-version = "0.0.2"
+version = "0.0.5"
 edition = "2024"
 license = "AGPL-3.0"
 repository = "https://github.com/nijaru/omendb"
