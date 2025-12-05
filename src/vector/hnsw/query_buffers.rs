@@ -84,7 +84,7 @@ impl VisitedList {
             let ptr = self.visited.as_ptr().wrapping_add(idx);
             #[cfg(target_arch = "x86_64")]
             unsafe {
-                std::arch::x86_64::_mm_prefetch(ptr as *const i8, std::arch::x86_64::_MM_HINT_T0);
+                std::arch::x86_64::_mm_prefetch(ptr.cast::<i8>(), std::arch::x86_64::_MM_HINT_T0);
             }
             #[cfg(target_arch = "aarch64")]
             unsafe {

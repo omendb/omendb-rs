@@ -864,7 +864,7 @@ impl VectorStorage {
             // SAFETY: ptr is valid and aligned since it comes from a valid Vec
             #[cfg(target_arch = "x86_64")]
             unsafe {
-                std::arch::x86_64::_mm_prefetch(ptr as *const i8, std::arch::x86_64::_MM_HINT_T0);
+                std::arch::x86_64::_mm_prefetch(ptr.cast::<i8>(), std::arch::x86_64::_MM_HINT_T0);
             }
             #[cfg(target_arch = "aarch64")]
             unsafe {
@@ -889,7 +889,7 @@ impl VectorStorage {
                 #[cfg(target_arch = "x86_64")]
                 unsafe {
                     std::arch::x86_64::_mm_prefetch(
-                        ptr as *const i8,
+                        ptr.cast::<i8>(),
                         std::arch::x86_64::_MM_HINT_T0,
                     );
                 }
