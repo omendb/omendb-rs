@@ -1,7 +1,7 @@
 extern crate omendb as omendb_core;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
-use omendb_core::vector::{MetadataFilter, Vector, VectorStore};
+use omendb_core::vector::{MetadataFilter, RaBitQParams, Vector, VectorStore, VectorStoreOptions};
 use parking_lot::RwLock;
 use pyo3::conversion::IntoPyObject;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -10,8 +10,6 @@ use pyo3::types::{PyDict, PyList};
 use pyo3::Py;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-
-use omendb_core::vector::rabitq::RaBitQParams;
 
 /// Convert quantization bits to RaBitQParams
 ///
@@ -858,51 +856,73 @@ fn open(
 
     // Check if this is a directory (persistent storage) or needs to become one
     if db_path.is_dir() || !db_path.exists() {
-        // Modern persistent storage mode
-        let mut store = if db_path.exists() {
-            // Load existing database
-            let loaded = VectorStore::open(&path).map_err(convert_error)?;
+        // Build options from parameters
+        let mut options = VectorStoreOptions::default().dimensions(effective_dims);
 
-            // Cannot enable quantization on existing database
-            if quantization.is_some() && loaded.len() > 0 {
-                return Err(PyValueError::new_err(
-                    "Cannot enable quantization on existing database. Create a new database with quantization.",
-                ));
-            }
-            loaded
-        } else if let Some(bits) = quantization {
-            // Create new with quantization (top-level param takes precedence)
-            VectorStore::new_with_quantization(effective_dims, rabitq_params(bits))
-        } else if let Some(cfg) = config {
-            // Create new with config dict (backward compatibility)
-            create_store_with_config(effective_dims, cfg)?
-        } else if m.is_some() || ef_construction.is_some() {
-            // Create with explicit HNSW params
-            let m_val = m.unwrap_or(16);
-            let ef_con = ef_construction.unwrap_or(100);
-            let ef_s = ef_search.unwrap_or(100);
-            VectorStore::new_with_params(effective_dims, m_val, ef_con, ef_s)
-                .map_err(|e| PyValueError::new_err(format!("Failed to create HNSW index: {}", e)))?
-        } else {
-            // Create with defaults
-            VectorStore::open_with_dimensions(&path, effective_dims).map_err(convert_error)?
-        };
-
-        // Apply ef_search from top-level param (takes precedence over config dict)
+        if let Some(m_val) = m {
+            options = options.m(m_val);
+        }
+        if let Some(ef_con) = ef_construction {
+            options = options.ef_construction(ef_con);
+        }
         if let Some(ef_s) = ef_search {
-            store.set_ef_search(ef_s);
-        } else if let Some(cfg) = config {
-            // Backward compat: check config dict for ef_search
+            options = options.ef_search(ef_s);
+        }
+        if let Some(bits) = quantization {
+            options = options.quantization(rabitq_params(bits));
+        }
+
+        // Handle config dict for backward compatibility
+        if let Some(cfg) = config {
             if let Some(hnsw_dict) = cfg.get_item("hnsw")? {
                 let hnsw = hnsw_dict
                     .cast::<PyDict>()
                     .map_err(|_| PyValueError::new_err("'hnsw' must be a dict"))?;
-                if let Some(ef) = hnsw.get_item("ef_search")? {
-                    let ef_val: usize = ef.extract()?;
-                    store.set_ef_search(ef_val);
+
+                if m.is_none() {
+                    if let Some(m_item) = hnsw.get_item("m")? {
+                        options = options.m(m_item.extract()?);
+                    }
+                }
+                if ef_construction.is_none() {
+                    if let Some(ef_item) = hnsw.get_item("ef_construction")? {
+                        options = options.ef_construction(ef_item.extract()?);
+                    }
+                }
+                if ef_search.is_none() {
+                    if let Some(ef_item) = hnsw.get_item("ef_search")? {
+                        options = options.ef_search(ef_item.extract()?);
+                    }
                 }
             }
+            if quantization.is_none() {
+                if let Some(quant_dict) = cfg.get_item("quantization")? {
+                    let quant = quant_dict
+                        .cast::<PyDict>()
+                        .map_err(|_| PyValueError::new_err("'quantization' must be a dict"))?;
+                    if let Some(bits_item) = quant.get_item("bits")? {
+                        let bits: u8 = bits_item.extract()?;
+                        options = options.quantization(rabitq_params(bits));
+                    }
+                }
+            }
+            if let Some(expected) = cfg.get_item("expected_vectors")? {
+                options = options.expected_capacity(expected.extract()?);
+            }
         }
+
+        // Check if enabling quantization on existing non-empty database
+        if db_path.exists() && quantization.is_some() {
+            let existing = VectorStore::open(&path).map_err(convert_error)?;
+            if existing.len() > 0 {
+                return Err(PyValueError::new_err(
+                    "Cannot enable quantization on existing database. Create a new database with quantization.",
+                ));
+            }
+        }
+
+        // Open with options
+        let store = options.open(&path).map_err(convert_error)?;
 
         return Ok(VectorDatabase {
             inner: RwLock::new(VectorDatabaseInner {
@@ -943,23 +963,25 @@ fn open(
             is_persistent: false,
         })
     } else {
-        // Create new database with configuration
-        let mut store = if let Some(bits) = quantization {
-            VectorStore::new_with_quantization(effective_dims, rabitq_params(bits))
-        } else if m.is_some() || ef_construction.is_some() {
-            let m_val = m.unwrap_or(16);
-            let ef_con = ef_construction.unwrap_or(100);
-            let ef_s = ef_search.unwrap_or(100);
-            VectorStore::new_with_params(effective_dims, m_val, ef_con, ef_s)
-                .map_err(|e| PyValueError::new_err(format!("Failed to create HNSW index: {}", e)))?
-        } else {
-            VectorStore::new_with_capacity(effective_dims, 10_000)
-        };
+        // Create new in-memory database with configuration
+        let mut options = VectorStoreOptions::default().dimensions(effective_dims);
 
-        // Apply ef_search if specified
-        if let Some(ef_s) = ef_search {
-            store.set_ef_search(ef_s);
+        if let Some(m_val) = m {
+            options = options.m(m_val);
         }
+        if let Some(ef_con) = ef_construction {
+            options = options.ef_construction(ef_con);
+        }
+        if let Some(ef_s) = ef_search {
+            options = options.ef_search(ef_s);
+        }
+        if let Some(bits) = quantization {
+            options = options.quantization(rabitq_params(bits));
+        }
+
+        let store = options
+            .build()
+            .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
 
         Ok(VectorDatabase {
             inner: RwLock::new(VectorDatabaseInner {

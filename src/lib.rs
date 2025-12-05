@@ -89,7 +89,7 @@ pub mod vector;
 pub mod ffi;
 
 // Re-export core types
-pub use vector::{MetadataFilter, Vector, VectorStore};
+pub use vector::{MetadataFilter, Vector, VectorStore, VectorStoreOptions};
 
 // Re-export storage types
 pub use config::StorageConfig;

@@ -4,7 +4,7 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use omendb::vector::{MetadataFilter, Vector, VectorStore};
+use omendb::vector::{MetadataFilter, RaBitQParams, Vector, VectorStore, VectorStoreOptions};
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -624,8 +624,6 @@ pub struct OpenOptions {
 /// ```
 #[napi]
 pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase> {
-    use omendb::vector::rabitq::RaBitQParams;
-
     let opts = options.unwrap_or(OpenOptions {
         dimensions: None,
         m: None,
@@ -668,35 +666,33 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         }
     }
 
+    // Build options from parameters
+    let mut store_options = VectorStoreOptions::default().dimensions(dimensions);
+
+    if let Some(m_val) = m {
+        store_options = store_options.m(m_val);
+    }
+    if let Some(ef_con) = ef_construction {
+        store_options = store_options.ef_construction(ef_con);
+    }
+    if let Some(ef_s) = ef_search {
+        store_options = store_options.ef_search(ef_s);
+    }
+    if let Some(bits) = quantization {
+        let params = match bits {
+            2 => RaBitQParams::bits2(),
+            4 => RaBitQParams::bits4(),
+            8 => RaBitQParams::bits8(),
+            _ => unreachable!(),
+        };
+        store_options = store_options.quantization(params);
+    }
+
     // Handle :memory: for in-memory database
     if path == ":memory:" {
-        let mut store = if let Some(bits) = quantization {
-            // Create quantized store
-            let params = match bits {
-                2 => RaBitQParams::bits2(),
-                4 => RaBitQParams::bits4(),
-                8 => RaBitQParams::bits8(),
-                _ => unreachable!(), // Already validated above
-            };
-            VectorStore::new_with_quantization(dimensions, params)
-        } else if m.is_some() || ef_construction.is_some() {
-            let m_val = m.unwrap_or(16);
-            let ef_con = ef_construction.unwrap_or(100);
-            let ef_s = ef_search.unwrap_or(100.max(m_val * 4));
-            VectorStore::new_with_params(dimensions, m_val, ef_con, ef_s).map_err(|e| {
-                Error::new(
-                    Status::InvalidArg,
-                    format!("Failed to create HNSW index: {}", e),
-                )
-            })?
-        } else {
-            VectorStore::new_with_capacity(dimensions, 10_000)
-        };
-
-        // Apply ef_search if specified
-        if let Some(ef_s) = ef_search {
-            store.set_ef_search(ef_s);
-        }
+        let store = store_options.build().map_err(|e| {
+            Error::new(Status::GenericFailure, format!("Failed to create store: {}", e))
+        })?;
 
         return Ok(VectorDatabase {
             inner: RwLock::new(VectorDatabaseInner {
@@ -710,42 +706,20 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         });
     }
 
-    // Persistent storage
+    // Check if enabling quantization on existing non-empty database
     let db_path = std::path::Path::new(&path);
-    let mut store = if db_path.exists() {
-        // Load existing database
-        let loaded = if dimensions == 0 {
-            VectorStore::open(&path).map_err(convert_error)?
-        } else {
-            VectorStore::open_with_dimensions(&path, dimensions).map_err(convert_error)?
-        };
-
-        // Cannot enable quantization on existing database with data
-        if quantization.is_some() && loaded.len() > 0 {
+    if db_path.exists() && quantization.is_some() {
+        let existing = VectorStore::open(&path).map_err(convert_error)?;
+        if existing.len() > 0 {
             return Err(Error::new(
                 Status::InvalidArg,
                 "Cannot enable quantization on existing database. Create a new database with quantization.",
             ));
         }
-        loaded
-    } else if let Some(bits) = quantization {
-        // Create new quantized persistent store
-        let params = match bits {
-            2 => RaBitQParams::bits2(),
-            4 => RaBitQParams::bits4(),
-            8 => RaBitQParams::bits8(),
-            _ => unreachable!(),
-        };
-        VectorStore::new_with_quantization(dimensions, params)
-    } else {
-        // Create new persistent store with default settings
-        VectorStore::open_with_dimensions(&path, dimensions).map_err(convert_error)?
-    };
-
-    // Apply ef_search if specified
-    if let Some(ef_s) = ef_search {
-        store.set_ef_search(ef_s);
     }
+
+    // Open persistent store with options
+    let store = store_options.open(&path).map_err(convert_error)?;
 
     Ok(VectorDatabase {
         inner: RwLock::new(VectorDatabaseInner {
