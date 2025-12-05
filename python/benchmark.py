@@ -149,7 +149,7 @@ def benchmark_batch_search(db, queries: np.ndarray, k: int = 10) -> dict:
     queries_list = [q.tolist() for q in queries]
 
     start = time.time()
-    results = db.batch_search(queries_list, k=k)
+    results = db.search_batch(queries_list, k=k)
     total = time.time() - start
 
     return {
@@ -185,7 +185,7 @@ def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000):
         )
 
         # Filtered search (10% selectivity)
-        filtered = benchmark_filtered_search(db, queries, {"cat": {"$eq": 5}})
+        filtered = benchmark_filtered_search(db, queries, {"cat": 5})
         print(
             f"Filtered: {filtered['qps']:>10,.0f} QPS    ({filtered['latency_ms']:.2f}ms, 10% selectivity)"
         )
