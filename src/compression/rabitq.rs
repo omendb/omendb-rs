@@ -341,6 +341,11 @@ impl ADCTable {
     }
 
     /// Fast path for 4-bit quantization (most common case)
+    ///
+    /// # Safety invariants (maintained by ADCTable::new)
+    /// - `self.table.len() == self.dimensions`
+    /// - Each `table[i]` has exactly 16 entries (4-bit = 2^4 codes)
+    /// - Input `data` has `ceil(dimensions/2)` bytes (2 values per byte)
     #[inline]
     fn distance_squared_4bit(&self, data: &[u8]) -> f32 {
         let mut sum = 0.0f32;
@@ -352,11 +357,16 @@ impl ADCTable {
                 break;
             }
 
+            // SAFETY: i < num_pairs <= data.len() (checked above)
             let byte = unsafe { *data.get_unchecked(i) };
-            let code_hi = (byte >> 4) as usize;
-            let code_lo = (byte & 0x0F) as usize;
+            let code_hi = (byte >> 4) as usize; // 0..=15
+            let code_lo = (byte & 0x0F) as usize; // 0..=15
 
-            // Lookup precomputed distances
+            // SAFETY:
+            // - i*2 < dimensions (since i < num_pairs = dimensions/2)
+            // - i*2+1 < dimensions (same reasoning)
+            // - code_hi, code_lo in 0..16 (4-bit mask guarantees this)
+            // - table has 16 entries per dimension (4-bit quantization)
             sum += unsafe {
                 *self.table.get_unchecked(i * 2).get_unchecked(code_hi)
                     + *self.table.get_unchecked(i * 2 + 1).get_unchecked(code_lo)
@@ -365,8 +375,12 @@ impl ADCTable {
 
         // Handle odd dimension
         if self.dimensions % 2 == 1 && num_pairs < data.len() {
+            // SAFETY: num_pairs < data.len() checked above
             let byte = unsafe { *data.get_unchecked(num_pairs) };
-            let code_hi = (byte >> 4) as usize;
+            let code_hi = (byte >> 4) as usize; // 0..=15
+                                                // SAFETY:
+                                                // - dimensions-1 is valid index (dimensions >= 1 when odd)
+                                                // - code_hi in 0..16 (4-bit mask)
             sum += unsafe {
                 *self
                     .table
@@ -379,6 +393,11 @@ impl ADCTable {
     }
 
     /// Fast path for 2-bit quantization
+    ///
+    /// # Safety invariants (maintained by ADCTable::new)
+    /// - `self.table.len() == self.dimensions`
+    /// - Each `table[i]` has exactly 4 entries (2-bit = 2^2 codes)
+    /// - Input `data` has `ceil(dimensions/4)` bytes (4 values per byte)
     #[inline]
     fn distance_squared_2bit(&self, data: &[u8]) -> f32 {
         let mut sum = 0.0f32;
@@ -390,8 +409,13 @@ impl ADCTable {
                 break;
             }
 
+            // SAFETY: i < num_quads <= data.len() (checked above)
             let byte = unsafe { *data.get_unchecked(i) };
 
+            // SAFETY:
+            // - i*4+k < dimensions for k in 0..4 (since i < num_quads = dimensions/4)
+            // - all codes in 0..4 (2-bit mask guarantees this)
+            // - table has 4 entries per dimension (2-bit quantization)
             sum += unsafe {
                 *self
                     .table
@@ -415,9 +439,13 @@ impl ADCTable {
         // Handle remainder
         let remaining = self.dimensions % 4;
         if remaining > 0 && num_quads < data.len() {
+            // SAFETY: num_quads < data.len() checked above
             let byte = unsafe { *data.get_unchecked(num_quads) };
             for j in 0..remaining {
-                let code = ((byte >> (j * 2)) & 0b11) as usize;
+                let code = ((byte >> (j * 2)) & 0b11) as usize; // 0..=3
+                                                                // SAFETY:
+                                                                // - num_quads*4+j < dimensions (j < remaining = dimensions%4)
+                                                                // - code in 0..4 (2-bit mask)
                 sum += unsafe {
                     *self
                         .table
@@ -431,11 +459,20 @@ impl ADCTable {
     }
 
     /// Fast path for 8-bit quantization
+    ///
+    /// # Safety invariants (maintained by ADCTable::new)
+    /// - `self.table.len() == self.dimensions`
+    /// - Each `table[i]` has exactly 256 entries (8-bit = 2^8 codes)
+    /// - Input `data` has `dimensions` bytes (1 value per byte)
     #[inline]
     fn distance_squared_8bit(&self, data: &[u8]) -> f32 {
         let mut sum = 0.0f32;
 
         for (i, &byte) in data.iter().enumerate().take(self.dimensions) {
+            // SAFETY:
+            // - i < dimensions (take() ensures this)
+            // - byte as usize in 0..256 (u8 range)
+            // - table has 256 entries per dimension (8-bit quantization)
             sum += unsafe { *self.table.get_unchecked(i).get_unchecked(byte as usize) };
         }
 
@@ -780,8 +817,11 @@ impl RaBitQ {
                 values.to_vec()
             }
             _ => {
-                // For other bit widths (3, 5, 7), use 8-bit for now
-                // TODO: Implement efficient bit-packing for non-power-of-2 bits
+                // 3, 5, 7-bit: fall back to 8-bit storage
+                // Not implementing proper bit-packing because:
+                // - Public API only exposes 2, 4, 8-bit (see python/src/lib.rs)
+                // - Cross-byte packing is complex with marginal compression benefit
+                // - 4-bit (8x) vs 5-bit (~6x) isn't worth the code complexity
                 values.to_vec()
             }
         }
