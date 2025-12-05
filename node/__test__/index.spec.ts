@@ -14,9 +14,7 @@ describe("VectorDatabase", () => {
 
 		describe("set", () => {
 			it("should insert single vector", () => {
-				const indices = db.set([
-					{ id: "doc1", vector: Array(128).fill(0.1) },
-				]);
+				const indices = db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
 				expect(indices).toHaveLength(1);
 				expect(db.count).toBe(1);
 			});
@@ -114,6 +112,45 @@ describe("VectorDatabase", () => {
 			it("should respect ef parameter", () => {
 				const results = db.search(Array(128).fill(0.5), 2, 200);
 				expect(results).toHaveLength(2);
+			});
+
+			it("should filter results by metadata", () => {
+				// Add vectors with different categories
+				db.set([
+					{
+						id: "cat1",
+						vector: Array(128).fill(0.4),
+						metadata: { category: "A" },
+					},
+					{
+						id: "cat2",
+						vector: Array(128).fill(0.6),
+						metadata: { category: "B" },
+					},
+				]);
+
+				// Search with filter - should only return category A
+				const filtered = db.search(Array(128).fill(0.5), 10, undefined, {
+					category: "A",
+				});
+				expect(filtered.every((r) => r.metadata?.category === "A")).toBe(true);
+			});
+
+			it("should filter with comparison operators", () => {
+				db.set([
+					{ id: "n1", vector: Array(128).fill(0.4), metadata: { score: 10 } },
+					{ id: "n2", vector: Array(128).fill(0.5), metadata: { score: 50 } },
+					{ id: "n3", vector: Array(128).fill(0.6), metadata: { score: 90 } },
+				]);
+
+				// Filter for score > 40 (should match n2=50 and n3=90)
+				const filtered = db.search(Array(128).fill(0.5), 10, undefined, {
+					score: { $gt: 40 },
+				});
+				expect(filtered).toHaveLength(2);
+				expect(filtered.every((r) => (r.metadata?.score as number) > 40)).toBe(
+					true,
+				);
 			});
 		});
 

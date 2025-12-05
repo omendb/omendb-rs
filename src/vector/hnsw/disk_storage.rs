@@ -24,11 +24,86 @@ use std::sync::Arc;
 /// Magic number for file format validation
 const MAGIC_NUMBER: &[u8; 8] = b"OMENDBIF"; // OmenDB Inverted File
 
-/// Current file format version
-const FORMAT_VERSION: u32 = 1;
+/// Current file format version (2 = delta encoding with vbyte)
+const FORMAT_VERSION: u32 = 2;
 
 /// Metadata header size (64 bytes, cache-line aligned)
+/// Note: Not page-aligned since metadata is read once at startup, not mmap'd for random access
 const METADATA_HEADER_SIZE: usize = 64;
+
+// ============================================================================
+// Variable-byte (VByte) encoding for delta-compressed neighbor IDs
+// ============================================================================
+
+/// Encode a u32 value using variable-byte encoding (7 bits per byte, MSB=continuation)
+/// Returns the number of bytes written
+#[inline]
+fn vbyte_encode(mut value: u32, buf: &mut [u8]) -> usize {
+    let mut i = 0;
+    while value >= 0x80 {
+        buf[i] = (value as u8) | 0x80;
+        value >>= 7;
+        i += 1;
+    }
+    buf[i] = value as u8;
+    i + 1
+}
+
+/// Decode a vbyte-encoded value from a byte slice
+/// Returns (value, bytes_read), or (0, 0) if buffer is empty/invalid
+#[inline]
+fn vbyte_decode(buf: &[u8]) -> (u32, usize) {
+    if buf.is_empty() {
+        return (0, 0);
+    }
+    let mut value: u32 = 0;
+    let mut shift = 0;
+    let mut i = 0;
+    loop {
+        if i >= buf.len() {
+            // Truncated vbyte - return what we have
+            return (value, i);
+        }
+        let byte = buf[i];
+        value |= ((byte & 0x7F) as u32) << shift;
+        i += 1;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        if shift >= 35 {
+            // Overflow protection (max 5 bytes for u32)
+            break;
+        }
+    }
+    (value, i)
+}
+
+/// Write neighbor IDs as vbyte-encoded absolute values (shared helper)
+/// Preserves original order for HNSW distance-based neighbor lists
+fn write_neighbors_vbyte<W: Write>(writer: &mut W, neighbors: &[NodeId]) -> std::io::Result<()> {
+    let mut vbyte_buf = [0u8; 5]; // Max 5 bytes for u32 vbyte
+    for &neighbor_id in neighbors {
+        let len = vbyte_encode(neighbor_id, &mut vbyte_buf);
+        writer.write_all(&vbyte_buf[..len])?;
+    }
+    Ok(())
+}
+
+/// Write neighbor IDs as vbyte and return total bytes written
+fn write_neighbors_vbyte_counted<W: Write>(
+    writer: &mut W,
+    neighbors: &[NodeId],
+) -> std::io::Result<usize> {
+    let mut vbyte_buf = [0u8; 5];
+    let mut total = 0;
+    for &neighbor_id in neighbors {
+        let len = vbyte_encode(neighbor_id, &mut vbyte_buf);
+        writer.write_all(&vbyte_buf[..len])?;
+        total += len;
+    }
+    Ok(total)
+}
 
 /// Disk storage using memory-mapped files
 ///
@@ -285,7 +360,13 @@ impl DiskStorage {
         Ok(())
     }
 
-    /// Save graph to `layer_0.graph`
+    /// Save graph to `layer_0.graph` using vbyte encoding (FORMAT_VERSION 2)
+    ///
+    /// Format per node:
+    /// - num_levels: u32 (4 bytes)
+    /// - For each level:
+    ///   - neighbor_count: u32 (4 bytes)
+    ///   - neighbors: vbyte encoded absolute IDs (preserves original order)
     fn save_graph(path: &Path, nodes: &[Vec<Vec<NodeId>>]) -> Result<()> {
         let graph_path = path.join("layer_0.graph");
         let file = OpenOptions::new()
@@ -310,10 +391,8 @@ impl DiskStorage {
                 let count = neighbors.len() as u32;
                 writer.write_all(&count.to_le_bytes())?;
 
-                // Write neighbor IDs
-                for &neighbor_id in neighbors {
-                    writer.write_all(&neighbor_id.to_le_bytes())?;
-                }
+                // Write neighbors as vbyte-encoded absolute IDs (preserves distance order)
+                write_neighbors_vbyte(&mut writer, neighbors)?;
             }
         }
 
@@ -393,6 +472,7 @@ impl DiskStorage {
     fn calculate_offset(&self, target_node_id: NodeId) -> Result<usize> {
         let mut offset = 0;
         let mut current_node = 0u32;
+        let is_v2 = self.metadata.version >= 2;
 
         while current_node < target_node_id {
             if offset + 4 > self.graph_mmap.len() {
@@ -423,8 +503,20 @@ impl DiskStorage {
                 ]) as usize;
                 offset += 4;
 
-                // Skip neighbors
-                offset += count * 4;
+                if is_v2 {
+                    // v2 format: all neighbors are vbyte encoded
+                    for _ in 0..count {
+                        // Skip vbyte: read until MSB=0
+                        while offset < self.graph_mmap.len() && self.graph_mmap[offset] & 0x80 != 0
+                        {
+                            offset += 1;
+                        }
+                        offset += 1; // Skip the final byte (MSB=0)
+                    }
+                } else {
+                    // v1 format: all neighbors are 4 bytes each
+                    offset += count * 4;
+                }
             }
 
             current_node += 1;
@@ -433,8 +525,17 @@ impl DiskStorage {
         Ok(offset)
     }
 
-    /// Parse node entry at given offset
+    /// Parse node entry at given offset (handles both v1 and v2 formats)
     fn parse_node_at_offset(&self, offset: usize) -> Result<NodeEntry> {
+        if self.metadata.version >= 2 {
+            self.parse_node_v2(offset)
+        } else {
+            self.parse_node_v1(offset)
+        }
+    }
+
+    /// Parse v1 format (raw u32 neighbor IDs)
+    fn parse_node_v1(&self, offset: usize) -> Result<NodeEntry> {
         if offset + 4 > self.graph_mmap.len() {
             return Err(HNSWError::Storage("Offset out of bounds".to_string()));
         }
@@ -480,6 +581,61 @@ impl DiskStorage {
                 ]);
                 neighbors.push(neighbor_id);
                 current_offset += 4;
+            }
+
+            neighbors_per_level.push(neighbors);
+        }
+
+        Ok(NodeEntry {
+            num_levels,
+            neighbors_per_level,
+        })
+    }
+
+    /// Parse v2 format (vbyte-encoded absolute IDs)
+    fn parse_node_v2(&self, offset: usize) -> Result<NodeEntry> {
+        if offset + 4 > self.graph_mmap.len() {
+            return Err(HNSWError::Storage("Offset out of bounds".to_string()));
+        }
+
+        // Read num_levels
+        let num_levels = u32::from_le_bytes([
+            self.graph_mmap[offset],
+            self.graph_mmap[offset + 1],
+            self.graph_mmap[offset + 2],
+            self.graph_mmap[offset + 3],
+        ]);
+        let mut current_offset = offset + 4;
+
+        let mut neighbors_per_level = Vec::with_capacity(num_levels as usize);
+
+        // Read each level's neighbors
+        for _ in 0..num_levels {
+            if current_offset + 4 > self.graph_mmap.len() {
+                return Err(HNSWError::Storage("Unexpected end of file".to_string()));
+            }
+
+            // Read neighbor count
+            let count = u32::from_le_bytes([
+                self.graph_mmap[current_offset],
+                self.graph_mmap[current_offset + 1],
+                self.graph_mmap[current_offset + 2],
+                self.graph_mmap[current_offset + 3],
+            ]) as usize;
+            current_offset += 4;
+
+            // Read all neighbors as vbyte-encoded absolute IDs
+            let mut neighbors = Vec::with_capacity(count);
+            for _ in 0..count {
+                if current_offset >= self.graph_mmap.len() {
+                    return Err(HNSWError::Storage("Unexpected end of file".to_string()));
+                }
+                let (neighbor_id, bytes_read) = vbyte_decode(&self.graph_mmap[current_offset..]);
+                if bytes_read == 0 {
+                    return Err(HNSWError::Storage("Invalid vbyte encoding".to_string()));
+                }
+                neighbors.push(neighbor_id);
+                current_offset += bytes_read;
             }
 
             neighbors_per_level.push(neighbors);
@@ -675,7 +831,7 @@ impl WritableDiskStorage {
             .map_err(|e| HNSWError::Storage(format!("Write failed: {e}")))?;
         self.current_offset += 4;
 
-        // Write each level's neighbors
+        // Write each level's neighbors as vbyte-encoded absolute IDs (preserves order)
         for neighbors in neighbors_per_level {
             // Write neighbor count
             let count = neighbors.len() as u32;
@@ -684,13 +840,10 @@ impl WritableDiskStorage {
                 .map_err(|e| HNSWError::Storage(format!("Write failed: {e}")))?;
             self.current_offset += 4;
 
-            // Write neighbor IDs
-            for &neighbor_id in neighbors {
-                self.file
-                    .write_all(&neighbor_id.to_le_bytes())
-                    .map_err(|e| HNSWError::Storage(format!("Write failed: {e}")))?;
-                self.current_offset += 4;
-            }
+            // Write neighbors as vbyte and track bytes written
+            let bytes_written = write_neighbors_vbyte_counted(&mut self.file, neighbors)
+                .map_err(|e| HNSWError::Storage(format!("Write failed: {e}")))?;
+            self.current_offset += bytes_written as u64;
         }
 
         Ok(())
@@ -707,18 +860,16 @@ impl WritableDiskStorage {
     /// # Errors
     /// Returns error if flush, offset save, or open fails
     pub fn finalize(mut self) -> Result<DiskStorage> {
-        // Flush and close file before accessing other fields
+        // Flush and close graph file
         self.file
             .flush()
             .map_err(|e| HNSWError::Storage(format!("Flush failed: {e}")))?;
+        drop(self.file);
 
-        // Extract fields we need before moving self.file
+        // Extract fields we need
         let path = self.path.clone();
         let offset_index = std::mem::take(&mut self.offset_index);
         let mut metadata = self.metadata.clone();
-
-        // Drop file explicitly
-        drop(self.file);
 
         // Save offset index
         let offset_path = path.join("layer_0.offsets");

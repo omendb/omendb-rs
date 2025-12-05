@@ -4,7 +4,7 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use omendb::vector::{Vector, VectorStore};
+use omendb::vector::{MetadataFilter, Vector, VectorStore};
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -30,6 +30,88 @@ fn convert_error(err: anyhow::Error) -> Error {
         Error::new(Status::GenericFailure, msg)
     } else {
         Error::new(Status::GenericFailure, msg)
+    }
+}
+
+/// Parse a numeric comparison operator ($gt, $gte, $lt, $lte)
+fn parse_numeric_op(op: &str, key: &str, value: &JsonValue) -> Result<MetadataFilter> {
+    let num = value.as_f64().ok_or_else(|| {
+        Error::new(Status::InvalidArg, format!("{} requires a number", op))
+    })?;
+    Ok(match op {
+        "$gt" => MetadataFilter::Gt(key.to_string(), num),
+        "$gte" => MetadataFilter::Gte(key.to_string(), num),
+        "$lt" => MetadataFilter::Lt(key.to_string(), num),
+        "$lte" => MetadataFilter::Lte(key.to_string(), num),
+        _ => unreachable!(),
+    })
+}
+
+/// Parse JavaScript filter object into MetadataFilter
+/// Supports: equality, $gt, $gte, $lt, $lte, $in, $contains, $and, $or
+fn parse_filter(filter: &JsonValue) -> Result<MetadataFilter> {
+    let obj = filter
+        .as_object()
+        .ok_or_else(|| Error::new(Status::InvalidArg, "Filter must be an object"))?;
+
+    // Handle $and
+    if let Some(and_value) = obj.get("$and") {
+        let arr = and_value
+            .as_array()
+            .ok_or_else(|| Error::new(Status::InvalidArg, "$and must be an array"))?;
+        let sub_filters: Result<Vec<MetadataFilter>> = arr.iter().map(parse_filter).collect();
+        return Ok(MetadataFilter::And(sub_filters?));
+    }
+
+    // Handle $or
+    if let Some(or_value) = obj.get("$or") {
+        let arr = or_value
+            .as_array()
+            .ok_or_else(|| Error::new(Status::InvalidArg, "$or must be an array"))?;
+        let sub_filters: Result<Vec<MetadataFilter>> = arr.iter().map(parse_filter).collect();
+        return Ok(MetadataFilter::Or(sub_filters?));
+    }
+
+    // Parse field filters
+    let mut filters = Vec::new();
+
+    for (key, value) in obj {
+        if let Some(op_obj) = value.as_object() {
+            // Operator object: {"field": {"$gt": 5}}
+            for (op, op_value) in op_obj {
+                let filter = match op.as_str() {
+                    "$gt" | "$gte" | "$lt" | "$lte" => parse_numeric_op(op, key, op_value)?,
+                    "$in" => {
+                        let arr = op_value.as_array().ok_or_else(|| {
+                            Error::new(Status::InvalidArg, "$in requires an array")
+                        })?;
+                        MetadataFilter::In(key.clone(), arr.clone())
+                    }
+                    "$contains" => {
+                        let s = op_value.as_str().ok_or_else(|| {
+                            Error::new(Status::InvalidArg, "$contains requires a string")
+                        })?;
+                        MetadataFilter::Contains(key.clone(), s.to_string())
+                    }
+                    _ => {
+                        return Err(Error::new(
+                            Status::InvalidArg,
+                            format!("Unknown filter operator: {}", op),
+                        ));
+                    }
+                };
+                filters.push(filter);
+            }
+        } else {
+            // Direct equality: {"field": value}
+            filters.push(MetadataFilter::Eq(key.clone(), value.clone()));
+        }
+    }
+
+    if filters.len() == 1 {
+        Ok(filters.into_iter().next().expect("checked len == 1"))
+    } else {
+        Ok(MetadataFilter::And(filters))
     }
 }
 
@@ -135,6 +217,7 @@ impl VectorDatabase {
     /// @param query - Query vector (number[] or Float32Array)
     /// @param k - Number of results to return
     /// @param ef - Optional search width override
+    /// @param filter - Optional metadata filter (e.g., {category: "foo"} or {price: {$gt: 10}})
     /// @returns Array of {id, distance, metadata}
     #[napi]
     pub fn search(
@@ -142,9 +225,11 @@ impl VectorDatabase {
         query: Either<Vec<f64>, Float32Array>,
         k: u32,
         ef: Option<u32>,
+        #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
     ) -> Result<Vec<SearchResult>> {
         let query_vec = Vector::new(extract_query_vector(query));
         let ef_usize = ef.map(|e| e as usize);
+        let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
 
         // Fast path: read lock when cache is valid
         {
@@ -152,7 +237,12 @@ impl VectorDatabase {
             if inner.cache_valid && !inner.store.needs_index_rebuild() {
                 let results = inner
                     .store
-                    .search_with_ef_readonly(&query_vec, k as usize, None, ef_usize)
+                    .search_with_ef_readonly(
+                        &query_vec,
+                        k as usize,
+                        metadata_filter.as_ref(),
+                        ef_usize,
+                    )
                     .map_err(convert_error)?;
 
                 return Ok(results
@@ -189,7 +279,7 @@ impl VectorDatabase {
 
         let results = inner
             .store
-            .search_with_ef_readonly(&query_vec, k as usize, None, ef_usize)
+            .search_with_ef_readonly(&query_vec, k as usize, metadata_filter.as_ref(), ef_usize)
             .map_err(convert_error)?;
 
         Ok(results
@@ -241,9 +331,11 @@ impl VectorDatabase {
 
         // Run parallel search
         let inner = self.inner.read();
-        let all_results = inner
-            .store
-            .batch_search_parallel_with_metadata(&query_vecs, k as usize, ef.map(|e| e as usize));
+        let all_results = inner.store.batch_search_parallel_with_metadata(
+            &query_vecs,
+            k as usize,
+            ef.map(|e| e as usize),
+        );
 
         // Convert results
         let mut output = Vec::with_capacity(all_results.len());

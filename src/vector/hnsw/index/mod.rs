@@ -1448,14 +1448,37 @@ impl HNSWIndex {
         })
     }
 
-    /// Asymmetric search layer for `RaBitQ` quantized storage (CLOUD MOAT - HOT PATH)
+    /// Compute distance using ADC table if available, with fallback to asymmetric distance
+    #[inline]
+    fn distance_with_adc(
+        &self,
+        query: &[f32],
+        id: u32,
+        adc_table: Option<&crate::compression::ADCTable>,
+    ) -> Result<f32> {
+        if let Some(adc) = adc_table {
+            if let Some(dist) = self.vectors.distance_adc(adc, id) {
+                return Ok(dist);
+            }
+            // ADC failed, try asymmetric distance
+            if let Ok(dist) = self.distance_asymmetric(query, id) {
+                return Ok(dist);
+            }
+            // Both failed - log and return max distance to push to end of results
+            warn!(
+                id,
+                "ADC and asymmetric distance both failed, using f32::MAX"
+            );
+            Ok(f32::MAX)
+        } else {
+            self.distance_asymmetric(query, id)
+        }
+    }
+
+    /// Asymmetric search layer for `RaBitQ` quantized storage
     ///
-    /// Same algorithm as `search_layer` but uses asymmetric distance:
-    /// - Query stays full precision
-    /// - Candidates use quantized representation
-    /// - 2-3x faster than full precision search
-    ///
-    /// Falls back to regular `distance_cmp` for non-RaBitQ storage.
+    /// Uses ADC (Asymmetric Distance Computation) lookup tables for fast distance.
+    /// Falls back to regular distance for non-RaBitQ storage.
     fn search_layer_asymmetric(
         &self,
         query: &[f32],
@@ -1465,15 +1488,16 @@ impl HNSWIndex {
     ) -> Result<Vec<u32>> {
         use super::query_buffers;
 
+        let adc_table = self.vectors.build_adc_table(query);
+
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
             let candidates = &mut buffers.candidates;
             let working = &mut buffers.working;
             let unvisited = &mut buffers.unvisited;
 
-            // Initialize with entry points
             for &ep in entry_points {
-                let dist = self.distance_asymmetric(query, ep)?;
+                let dist = self.distance_with_adc(query, ep, adc_table.as_ref())?;
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -1511,7 +1535,7 @@ impl HNSWIndex {
 
                     visited.insert(neighbor_id);
 
-                    let dist = self.distance_asymmetric(query, neighbor_id)?;
+                    let dist = self.distance_with_adc(query, neighbor_id, adc_table.as_ref())?;
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     if let Some(&farthest) = working.peek() {

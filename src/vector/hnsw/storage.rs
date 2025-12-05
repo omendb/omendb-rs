@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::compression::{QuantizedVector, RaBitQ, RaBitQParams};
+use crate::compression::{ADCTable, QuantizedVector, RaBitQ, RaBitQParams};
 
 /// Empty neighbor list constant (avoid allocation for empty results)
 static EMPTY_NEIGHBORS: &[u32] = &[];
@@ -789,6 +789,34 @@ impl VectorStorage {
     pub fn quantizer(&self) -> Option<&RaBitQ> {
         match self {
             Self::RaBitQQuantized { quantizer, .. } => quantizer.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Build ADC lookup table for a query (5-10x faster than per-candidate decompression)
+    #[must_use]
+    pub fn build_adc_table(&self, query: &[f32]) -> Option<ADCTable> {
+        match self {
+            Self::RaBitQQuantized { quantizer, .. } => {
+                let q = quantizer.as_ref()?;
+                // Fixed scale=1.0 since per-vector scales vary.
+                // This preserves ranking order (suitable for k-NN search) but
+                // absolute distances are approximate (not suitable for threshold filtering).
+                Some(q.build_adc_table(query, 1.0))
+            }
+            _ => None,
+        }
+    }
+
+    /// Compute distance using precomputed ADC table
+    #[inline]
+    #[must_use]
+    pub fn distance_adc(&self, adc: &ADCTable, id: u32) -> Option<f32> {
+        match self {
+            Self::RaBitQQuantized { quantized, .. } => {
+                let qv = quantized.get(id as usize)?;
+                Some(adc.distance(&qv.data))
+            }
             _ => None,
         }
     }
