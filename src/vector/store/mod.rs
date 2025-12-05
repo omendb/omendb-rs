@@ -608,6 +608,9 @@ impl VectorStore {
             } else {
                 None
             }
+        } else if dimensions > 0 {
+            // Create default HNSW index when dimensions are known
+            Some(HNSWIndex::new(10_000, dimensions)?)
         } else {
             None
         };
