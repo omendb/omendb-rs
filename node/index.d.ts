@@ -61,15 +61,55 @@ export interface GetResult {
  * Open or create a vector database.
  *
  * @param path - Database directory path (use ":memory:" for in-memory)
- * @param options - Optional configuration
+ * @param options - Optional configuration (see OpenOptions for defaults)
  * @returns VectorDatabase instance
+ *
+ * @example
+ * ```javascript
+ * // Simple usage with defaults
+ * const db = omendb.open("./mydb");
+ *
+ * // With custom HNSW parameters
+ * const db = omendb.open("./mydb", {
+ *   dimensions: 384,
+ *   m: 32,
+ *   efConstruction: 200,
+ *   efSearch: 150
+ * });
+ *
+ * // With RaBitQ quantization (8x memory reduction)
+ * const db = omendb.open("./mydb", {
+ *   dimensions: 128,
+ *   quantization: 4  // 4-bit quantization
+ * });
+ * ```
  */
 export declare function open(path: string, options?: OpenOptions | undefined | null): VectorDatabase
 
+/**
+ * Configuration options for opening a vector database.
+ *
+ * All fields are optional with sensible defaults:
+ * - dimensions: 128 (auto-detected on first insert if not specified)
+ * - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
+ * - efConstruction: 100 (build quality, higher = better graph, slower build)
+ * - efSearch: 100 (search quality, higher = better recall, slower search)
+ * - quantization: null (RaBitQ bit width: 2, 4, or 8 for compression)
+ */
 export interface OpenOptions {
+  /** Vector dimensions (default: 128, auto-detected on first insert) */
   dimensions?: number
+  /** HNSW M parameter: neighbors per node (default: 16, range: 4-64) */
   m?: number
+  /** HNSW ef_construction: build quality (default: 100, must be >= m) */
   efConstruction?: number
+  /** HNSW ef_search: search quality/speed tradeoff (default: 100) */
+  efSearch?: number
+  /**
+   * RaBitQ quantization bits: 2, 4, or 8 (default: null = no quantization)
+   * Enables 4-16x memory compression with ~1-2% recall loss
+   */
+  quantization?: number
 }
 
 export interface SearchResult {
