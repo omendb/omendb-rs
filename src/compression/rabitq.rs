@@ -342,7 +342,7 @@ impl ADCTable {
 
     /// Fast path for 4-bit quantization (most common case)
     ///
-    /// # Safety invariants (maintained by ADCTable::new)
+    /// # Safety invariants (maintained by `ADCTable::new`)
     /// - `self.table.len() == self.dimensions`
     /// - Each `table[i]` has exactly 16 entries (4-bit = 2^4 codes)
     /// - Input `data` has `ceil(dimensions/2)` bytes (2 values per byte)
@@ -394,7 +394,7 @@ impl ADCTable {
 
     /// Fast path for 2-bit quantization
     ///
-    /// # Safety invariants (maintained by ADCTable::new)
+    /// # Safety invariants (maintained by `ADCTable::new`)
     /// - `self.table.len() == self.dimensions`
     /// - Each `table[i]` has exactly 4 entries (2-bit = 2^2 codes)
     /// - Input `data` has `ceil(dimensions/4)` bytes (4 values per byte)
@@ -460,7 +460,7 @@ impl ADCTable {
 
     /// Fast path for 8-bit quantization
     ///
-    /// # Safety invariants (maintained by ADCTable::new)
+    /// # Safety invariants (maintained by `ADCTable::new`)
     /// - `self.table.len() == self.dimensions`
     /// - Each `table[i]` has exactly 256 entries (8-bit = 2^8 codes)
     /// - Input `data` has `dimensions` bytes (1 value per byte)

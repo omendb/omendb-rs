@@ -6,9 +6,9 @@
 //! Optional Extended `RaBitQ` quantization for memory-efficient storage.
 
 use super::hnsw_index::HNSWIndex;
-use super::rabitq::{QuantizedVector, RaBitQ, RaBitQParams};
 use super::storage::SeerDBStorage;
 use super::types::Vector;
+use crate::compression::{QuantizedVector, RaBitQ, RaBitQParams};
 use anyhow::Result;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;

@@ -173,7 +173,7 @@ fn test_rebuild_index() {
 
 #[test]
 fn test_quantization_insert() {
-    use crate::vector::rabitq::RaBitQParams;
+    use crate::compression::RaBitQParams;
 
     // Create store with 4-bit quantization
     let params = RaBitQParams::bits4();
@@ -192,7 +192,7 @@ fn test_quantization_insert() {
 
 #[test]
 fn test_quantization_search_accuracy() {
-    use crate::vector::rabitq::RaBitQParams;
+    use crate::compression::RaBitQParams;
 
     // Create store with 4-bit quantization
     let params = RaBitQParams::bits4();
@@ -218,7 +218,7 @@ fn test_quantization_search_accuracy() {
 
 #[test]
 fn test_quantization_persistence() {
-    use crate::vector::rabitq::RaBitQParams;
+    use crate::compression::RaBitQParams;
     use std::fs;
 
     let test_dir = "/tmp/omendb_test_quantization";
@@ -261,7 +261,7 @@ fn test_quantization_persistence() {
 
 #[test]
 fn test_quantization_batch_insert() {
-    use crate::vector::rabitq::RaBitQParams;
+    use crate::compression::RaBitQParams;
 
     // Create store with 4-bit quantization
     let params = RaBitQParams::bits4();
