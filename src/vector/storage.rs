@@ -28,23 +28,19 @@ impl SeerDBStorage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
 
-        let options = DBOptions {
-            data_dir: path.clone(),
-            memtable_capacity: 64 * 1024 * 1024, // 64MB (smaller for embedded)
-            wal_sync_policy: SyncPolicy::SyncData, // Durable by default
-            background_compaction: true,
-            ..Default::default()
-        };
-
-        let db = DB::open(options)?;
+        let db = DBOptions::default()
+            .memtable_capacity(64 * 1024 * 1024)
+            .sync_policy(SyncPolicy::SyncData)
+            .background_compaction(true)
+            .open(&path)?;
 
         Ok(Self { db, path })
     }
 
     /// Open with custom options for testing/tuning
-    pub fn open_with_options(path: impl AsRef<Path>, options: DBOptions) -> Result<Self> {
+    pub fn open_with_options(path: impl AsRef<Path>, options: &DBOptions) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let db = DB::open(options)?;
+        let db = options.open(&path)?;
         Ok(Self { db, path })
     }
 

@@ -25,35 +25,21 @@ pub struct EdgeStorage {
 impl EdgeStorage {
     /// Create new edge storage at path
     pub fn new(path: PathBuf, config: &StorageConfig) -> Result<Self> {
-        // Optimal configuration for HNSW graph storage
-        let options = DBOptions {
-            data_dir: path,
-
-            // Configurable durability (default: None for performance)
-            wal_sync_policy: if config.sync_writes {
-                SyncPolicy::SyncData
-            } else {
-                SyncPolicy::None
-            },
-
-            // Large memtable: Fewer flushes during graph construction
-            memtable_capacity: config.memtable_capacity,
-
-            // Large cache: High hit rate for adjacency list lookups
-            block_cache_capacity: config.block_cache_capacity,
-
-            // Background compaction: Non-blocking writes
-            background_compaction: config.background_compaction,
-
-            // Use vLog for large neighbor lists if needed
-            // M=48 -> 384 bytes (inline)
-            // M=1000 -> 8000 bytes (vLog)
-            vlog_threshold: Some(4096),
-
-            ..Default::default()
+        let sync_policy = if config.sync_writes {
+            SyncPolicy::SyncData
+        } else {
+            SyncPolicy::None
         };
 
-        let db = DB::open(options).map_err(|e| OmenDBError::Backend(e.to_string()))?;
+        let db = DBOptions::default()
+            .sync_policy(sync_policy)
+            .memtable_capacity(config.memtable_capacity)
+            .block_cache_capacity(config.block_cache_capacity)
+            .background_compaction(config.background_compaction)
+            // vLog for large neighbor lists: M=48 → 384B (inline), M=1000 → 8KB (vLog)
+            .vlog_threshold(Some(4096))
+            .open(&path)
+            .map_err(|e| OmenDBError::Backend(e.to_string()))?;
 
         Ok(Self { db: Arc::new(db) })
     }
