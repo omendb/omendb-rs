@@ -7,10 +7,6 @@ Key scenarios:
 3. Crash after delete but before save() - tests delete durability
 """
 
-import pytest
-
-pytestmark = pytest.mark.slow  # Uses multiprocessing, skip in CI
-
 import multiprocessing
 import os
 import shutil
@@ -18,6 +14,8 @@ import signal
 import tempfile
 
 import pytest
+
+pytestmark = pytest.mark.slow  # Uses multiprocessing, skip in CI
 
 
 def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str):
