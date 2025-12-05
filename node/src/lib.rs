@@ -570,11 +570,27 @@ impl VectorDatabase {
 // Open Options
 // ============================================================================
 
+/// Configuration options for opening a vector database.
+///
+/// All fields are optional with sensible defaults:
+/// - dimensions: 128 (auto-detected on first insert if not specified)
+/// - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
+/// - efConstruction: 100 (build quality, higher = better graph, slower build)
+/// - efSearch: 100 (search quality, higher = better recall, slower search)
+/// - quantization: null (RaBitQ bit width: 2, 4, or 8 for compression)
 #[napi(object)]
 pub struct OpenOptions {
+    /// Vector dimensions (default: 128, auto-detected on first insert)
     pub dimensions: Option<u32>,
+    /// HNSW M parameter: neighbors per node (default: 16, range: 4-64)
     pub m: Option<u32>,
+    /// HNSW ef_construction: build quality (default: 100, must be >= m)
     pub ef_construction: Option<u32>,
+    /// HNSW ef_search: search quality/speed tradeoff (default: 100)
+    pub ef_search: Option<u32>,
+    /// RaBitQ quantization bits: 2, 4, or 8 (default: null = no quantization)
+    /// Enables 4-16x memory compression with ~1-2% recall loss
+    pub quantization: Option<u8>,
 }
 
 // ============================================================================
@@ -584,19 +600,45 @@ pub struct OpenOptions {
 /// Open or create a vector database.
 ///
 /// @param path - Database directory path (use ":memory:" for in-memory)
-/// @param options - Optional configuration
+/// @param options - Optional configuration (see OpenOptions for defaults)
 /// @returns VectorDatabase instance
+///
+/// @example
+/// ```javascript
+/// // Simple usage with defaults
+/// const db = omendb.open("./mydb");
+///
+/// // With custom HNSW parameters
+/// const db = omendb.open("./mydb", {
+///   dimensions: 384,
+///   m: 32,
+///   efConstruction: 200,
+///   efSearch: 150
+/// });
+///
+/// // With RaBitQ quantization (8x memory reduction)
+/// const db = omendb.open("./mydb", {
+///   dimensions: 128,
+///   quantization: 4  // 4-bit quantization
+/// });
+/// ```
 #[napi]
 pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase> {
+    use omendb::vector::rabitq::RaBitQParams;
+
     let opts = options.unwrap_or(OpenOptions {
         dimensions: None,
         m: None,
         ef_construction: None,
+        ef_search: None,
+        quantization: None,
     });
 
     let dimensions = opts.dimensions.unwrap_or(128) as usize;
     let m = opts.m.map(|v| v as usize);
     let ef_construction = opts.ef_construction.map(|v| v as usize);
+    let ef_search = opts.ef_search.map(|v| v as usize);
+    let quantization = opts.quantization;
 
     // Validate parameters
     if let Some(m_val) = m {
@@ -617,13 +659,31 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         }
     }
 
+    if let Some(bits) = quantization {
+        if !matches!(bits, 2 | 4 | 8) {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!("quantization must be 2, 4, or 8, got {}", bits),
+            ));
+        }
+    }
+
     // Handle :memory: for in-memory database
     if path == ":memory:" {
-        let store = if m.is_some() || ef_construction.is_some() {
+        let mut store = if let Some(bits) = quantization {
+            // Create quantized store
+            let params = match bits {
+                2 => RaBitQParams::bits2(),
+                4 => RaBitQParams::bits4(),
+                8 => RaBitQParams::bits8(),
+                _ => unreachable!(), // Already validated above
+            };
+            VectorStore::new_with_quantization(dimensions, params)
+        } else if m.is_some() || ef_construction.is_some() {
             let m_val = m.unwrap_or(16);
             let ef_con = ef_construction.unwrap_or(100);
-            let ef_search = 100.max(m_val * 4);
-            VectorStore::new_with_params(dimensions, m_val, ef_con, ef_search).map_err(|e| {
+            let ef_s = ef_search.unwrap_or(100.max(m_val * 4));
+            VectorStore::new_with_params(dimensions, m_val, ef_con, ef_s).map_err(|e| {
                 Error::new(
                     Status::InvalidArg,
                     format!("Failed to create HNSW index: {}", e),
@@ -632,6 +692,11 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         } else {
             VectorStore::new_with_capacity(dimensions, 10_000)
         };
+
+        // Apply ef_search if specified
+        if let Some(ef_s) = ef_search {
+            store.set_ef_search(ef_s);
+        }
 
         return Ok(VectorDatabase {
             inner: RwLock::new(VectorDatabaseInner {
@@ -646,11 +711,41 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     }
 
     // Persistent storage
-    let store = if dimensions == 0 {
-        VectorStore::open(&path).map_err(convert_error)?
+    let db_path = std::path::Path::new(&path);
+    let mut store = if db_path.exists() {
+        // Load existing database
+        let loaded = if dimensions == 0 {
+            VectorStore::open(&path).map_err(convert_error)?
+        } else {
+            VectorStore::open_with_dimensions(&path, dimensions).map_err(convert_error)?
+        };
+
+        // Cannot enable quantization on existing database with data
+        if quantization.is_some() && loaded.len() > 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Cannot enable quantization on existing database. Create a new database with quantization.",
+            ));
+        }
+        loaded
+    } else if let Some(bits) = quantization {
+        // Create new quantized persistent store
+        let params = match bits {
+            2 => RaBitQParams::bits2(),
+            4 => RaBitQParams::bits4(),
+            8 => RaBitQParams::bits8(),
+            _ => unreachable!(),
+        };
+        VectorStore::new_with_quantization(dimensions, params)
     } else {
+        // Create new persistent store with default settings
         VectorStore::open_with_dimensions(&path, dimensions).map_err(convert_error)?
     };
+
+    // Apply ef_search if specified
+    if let Some(ef_s) = ef_search {
+        store.set_ef_search(ef_s);
+    }
 
     Ok(VectorDatabase {
         inner: RwLock::new(VectorDatabaseInner {

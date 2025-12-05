@@ -62,11 +62,17 @@ def generate_vectors(n: int, dim: int, seed: int = 42) -> np.ndarray:
 
 
 def benchmark_build(
-    db_path: str, vectors: np.ndarray, with_metadata: bool = True
+    db_path: str,
+    vectors: np.ndarray,
+    with_metadata: bool = True,
+    quantize_bits: int = 0,
 ) -> dict:
     """Benchmark index build throughput."""
     n, dim = vectors.shape
-    db = omendb.open(db_path, dimensions=dim)
+    if quantize_bits > 0:
+        db = omendb.open(db_path, dimensions=dim, quantization=quantize_bits)
+    else:
+        db = omendb.open(db_path, dimensions=dim)
 
     if with_metadata:
         batch = [
@@ -160,10 +166,13 @@ def benchmark_batch_search(db, queries: np.ndarray, k: int = 10) -> dict:
     }
 
 
-def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000):
+def run_benchmark(
+    n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits: int = 0
+):
     """Run full benchmark suite for given parameters."""
+    mode = f"RaBitQ-{quantize_bits}bit" if quantize_bits > 0 else "f32"
     print(f"\n{'=' * 60}")
-    print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D")
+    print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode})")
     print(f"{'=' * 60}")
 
     vectors = generate_vectors(n_vectors, dim)
@@ -171,7 +180,7 @@ def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Build
-        build = benchmark_build(f"{tmpdir}/db", vectors)
+        build = benchmark_build(f"{tmpdir}/db", vectors, quantize_bits=quantize_bits)
         print(
             f"\nBuild:    {build['vec_per_s']:>10,.0f} vec/s  ({build['time_s']:.2f}s)"
         )
@@ -198,7 +207,12 @@ def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000):
 
     # Return serializable results (no db object)
     return {
-        "config": {"n_vectors": n_vectors, "dimensions": dim, "n_queries": n_queries},
+        "config": {
+            "n_vectors": n_vectors,
+            "dimensions": dim,
+            "n_queries": n_queries,
+            "quantize_bits": quantize_bits,
+        },
         "build": {k: v for k, v in build.items() if k != "db"},
         "search": search,
         "filtered": filtered,
@@ -221,6 +235,13 @@ def main():
     parser.add_argument("--full", action="store_true", help="Run full benchmark suite")
     parser.add_argument("--dimension", type=int, default=128, help="Vector dimension")
     parser.add_argument("--vectors", type=int, default=10000, help="Number of vectors")
+    parser.add_argument(
+        "--quantize",
+        type=int,
+        choices=[0, 2, 4, 8],
+        default=0,
+        help="RaBitQ quantization bits (0=none, 2/4/8=quantized)",
+    )
     parser.add_argument("--output", "-o", type=str, help="Save results to JSON file")
     args = parser.parse_args()
 
@@ -247,7 +268,9 @@ def main():
             result = run_benchmark(n, 768)
             all_results.append(result)
     else:
-        result = run_benchmark(args.vectors, args.dimension)
+        result = run_benchmark(
+            args.vectors, args.dimension, quantize_bits=args.quantize
+        )
         all_results.append(result)
 
     print("\n" + "=" * 60)
