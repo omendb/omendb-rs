@@ -18,7 +18,7 @@ Example (LangChain):
 """
 
 # Re-export everything from native Rust module
-from omendb.omendb import open, VectorDatabase
+from omendb.omendb import VectorDatabase, open
 
 __all__ = ["open", "VectorDatabase"]
 __version__ = "0.0.1a1"

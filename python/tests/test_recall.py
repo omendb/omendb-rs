@@ -1,11 +1,13 @@
 """Recall verification tests - compare HNSW results to brute-force KNN"""
 
-import pytest
-import omendb
-import tempfile
+import math
 import os
 import random
-import math
+import tempfile
+
+import pytest
+
+import omendb
 
 
 def euclidean_distance(v1: list, v2: list) -> float:
@@ -55,9 +57,7 @@ def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
         # Normalize to unit length
         norm = math.sqrt(sum(x * x for x in embedding))
         embedding = [x / norm for x in embedding]
-        vectors.append(
-            {"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i}}
-        )
+        vectors.append({"id": f"vec_{i}", "vector": embedding, "metadata": {"index": i}})
     return vectors
 
 

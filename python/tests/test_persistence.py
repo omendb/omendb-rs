@@ -1,8 +1,10 @@
 """Tests for persistence (save/load) operations"""
 
-import pytest
-import omendb
 import os
+
+import pytest
+
+import omendb
 
 
 def test_save_and_load(temp_db_path):
@@ -65,8 +67,8 @@ def test_load_preserves_metadata(temp_db_path):
                 "title": "Test Doc",
                 "tags": ["a", "b"],
                 "count": 42,
-                "nested": {"key": "value"}
-            }
+                "nested": {"key": "value"},
+            },
         }
     ]
     db.set(vectors)
@@ -234,10 +236,12 @@ def test_delete_after_reload(temp_db_path):
     """Test that delete works after reload"""
     # Initial save
     db = omendb.open(temp_db_path, dimensions=128)
-    db.set([
-        {"id": "v1", "vector": [0.1] * 128, "metadata": {}},
-        {"id": "v2", "vector": [0.2] * 128, "metadata": {}},
-    ])
+    db.set(
+        [
+            {"id": "v1", "vector": [0.1] * 128, "metadata": {}},
+            {"id": "v2", "vector": [0.2] * 128, "metadata": {}},
+        ]
+    )
     db.save()
     del db
 

@@ -1,7 +1,10 @@
 """Tests for graph merge operations."""
-import pytest
-import tempfile
+
 import shutil
+import tempfile
+
+import pytest
+
 import omendb
 
 
@@ -28,18 +31,20 @@ class TestMerge:
         db2 = omendb.open(db_path2, dimensions=128)
 
         # Populate db1
-        db1.set([{
-            "id": f"db1_vec{i}",
-            "vector": [0.1 * i] * 128,
-            "metadata": {"source": "db1"}
-        } for i in range(10)])
+        db1.set(
+            [
+                {"id": f"db1_vec{i}", "vector": [0.1 * i] * 128, "metadata": {"source": "db1"}}
+                for i in range(10)
+            ]
+        )
 
         # Populate db2
-        db2.set([{
-            "id": f"db2_vec{i}",
-            "vector": [0.2 * i] * 128,
-            "metadata": {"source": "db2"}
-        } for i in range(20)])
+        db2.set(
+            [
+                {"id": f"db2_vec{i}", "vector": [0.2 * i] * 128, "metadata": {"source": "db2"}}
+                for i in range(20)
+            ]
+        )
 
         assert len(db1) == 10
         assert len(db2) == 20
@@ -61,16 +66,8 @@ class TestMerge:
         db2 = omendb.open(db_path2, dimensions=64)  # Different dimensions
 
         # Populate both dbs
-        db1.set([{
-            "id": "vec1",
-            "vector": [0.1] * 128,
-            "metadata": {}
-        }])
-        db2.set([{
-            "id": "vec2",
-            "vector": [0.1] * 64,
-            "metadata": {}
-        }])
+        db1.set([{"id": "vec1", "vector": [0.1] * 128, "metadata": {}}])
+        db2.set([{"id": "vec2", "vector": [0.1] * 64, "metadata": {}}])
 
         # Different dimensions should raise an error
         with pytest.raises(RuntimeError, match="Dimension mismatch"):
@@ -86,11 +83,12 @@ class TestMerge:
         db1.delete(["temp"])
 
         # Populate only db2
-        db2.set([{
-            "id": f"vec{i}",
-            "vector": [i * 0.1] * 128,
-            "metadata": {"index": i}
-        } for i in range(50)])
+        db2.set(
+            [
+                {"id": f"vec{i}", "vector": [i * 0.1] * 128, "metadata": {"index": i}}
+                for i in range(50)
+            ]
+        )
 
         merged_count = db1.merge_from(db2)
 
@@ -103,21 +101,20 @@ class TestMerge:
         db2 = omendb.open(db_path2, dimensions=128)
 
         # Same ID in both databases
-        db1.set([{
-            "id": "shared_id",
-            "vector": [0.1] * 128,
-            "metadata": {"source": "db1", "value": 1}
-        }])
+        db1.set(
+            [{"id": "shared_id", "vector": [0.1] * 128, "metadata": {"source": "db1", "value": 1}}]
+        )
 
-        db2.set([{
-            "id": "shared_id",
-            "vector": [0.2] * 128,
-            "metadata": {"source": "db2", "value": 2}
-        }, {
-            "id": "unique_id",
-            "vector": [0.3] * 128,
-            "metadata": {"source": "db2"}
-        }])
+        db2.set(
+            [
+                {
+                    "id": "shared_id",
+                    "vector": [0.2] * 128,
+                    "metadata": {"source": "db2", "value": 2},
+                },
+                {"id": "unique_id", "vector": [0.3] * 128, "metadata": {"source": "db2"}},
+            ]
+        )
 
         merged_count = db1.merge_from(db2)
 
@@ -136,23 +133,23 @@ class TestMerge:
         db2 = omendb.open(db_path2, dimensions=128)
 
         # First establish dimensions in db1 by inserting a vector
-        db1.set([{
-            "id": "placeholder",
-            "vector": [0.0] * 128,
-            "metadata": {}
-        }])
+        db1.set([{"id": "placeholder", "vector": [0.0] * 128, "metadata": {}}])
 
         # Complex metadata in db2
-        db2.set([{
-            "id": "complex_meta",
-            "vector": [0.5] * 128,
-            "metadata": {
-                "nested": {"key": "value"},
-                "array": [1, 2, 3],
-                "unicode": "Hello 世界",
-                "number": 42.5
-            }
-        }])
+        db2.set(
+            [
+                {
+                    "id": "complex_meta",
+                    "vector": [0.5] * 128,
+                    "metadata": {
+                        "nested": {"key": "value"},
+                        "array": [1, 2, 3],
+                        "unicode": "Hello 世界",
+                        "number": 42.5,
+                    },
+                }
+            ]
+        )
 
         db1.merge_from(db2)
 
@@ -168,17 +165,25 @@ class TestMerge:
         db2 = omendb.open(db_path2, dimensions=128)
 
         # Insert distinctive vectors
-        db1.set([{
-            "id": "db1_unique",
-            "vector": [1.0] * 128,  # All 1s
-            "metadata": {"source": "db1"}
-        }])
+        db1.set(
+            [
+                {
+                    "id": "db1_unique",
+                    "vector": [1.0] * 128,  # All 1s
+                    "metadata": {"source": "db1"},
+                }
+            ]
+        )
 
-        db2.set([{
-            "id": "db2_unique",
-            "vector": [0.0] * 128,  # All 0s
-            "metadata": {"source": "db2"}
-        }])
+        db2.set(
+            [
+                {
+                    "id": "db2_unique",
+                    "vector": [0.0] * 128,  # All 0s
+                    "metadata": {"source": "db2"},
+                }
+            ]
+        )
 
         db1.merge_from(db2)
 
@@ -198,17 +203,19 @@ class TestMerge:
         db2 = omendb.open(db_path2, dimensions=128)
 
         # Insert 500 vectors into each
-        db1.set([{
-            "id": f"db1_{i}",
-            "vector": [i * 0.002] * 128,
-            "metadata": {"idx": i}
-        } for i in range(500)])
+        db1.set(
+            [
+                {"id": f"db1_{i}", "vector": [i * 0.002] * 128, "metadata": {"idx": i}}
+                for i in range(500)
+            ]
+        )
 
-        db2.set([{
-            "id": f"db2_{i}",
-            "vector": [1.0 + i * 0.002] * 128,
-            "metadata": {"idx": i}
-        } for i in range(500)])
+        db2.set(
+            [
+                {"id": f"db2_{i}", "vector": [1.0 + i * 0.002] * 128, "metadata": {"idx": i}}
+                for i in range(500)
+            ]
+        )
 
         assert len(db1) == 500
         assert len(db2) == 500

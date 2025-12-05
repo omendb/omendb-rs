@@ -10,9 +10,10 @@ Demonstrates core CRUD operations:
 - Persistence to disk
 """
 
-import omendb
 import tempfile
 from pathlib import Path
+
+import omendb
 
 
 def main():
@@ -40,9 +41,7 @@ def main():
         results = db.search(query=[1.0, 0.0, 0.0], k=3)
         print("\nSearch results for [1, 0, 0]:")
         for r in results:
-            print(
-                f"  {r['id']}: distance={r['distance']:.3f}, axis={r['metadata']['axis']}"
-            )
+            print(f"  {r['id']}: distance={r['distance']:.3f}, axis={r['metadata']['axis']}")
 
         # --- GET ---
         # Retrieve by ID
@@ -80,8 +79,7 @@ def main():
         import random
 
         batch = [
-            {"id": f"rand_{i}", "vector": [random.random() for _ in range(3)]}
-            for i in range(100)
+            {"id": f"rand_{i}", "vector": [random.random() for _ in range(3)]} for i in range(100)
         ]
         db2.set(batch)
         print(f"After batch insert: {len(db2)} vectors")
@@ -89,9 +87,7 @@ def main():
         # Batch search
         queries = [[random.random() for _ in range(3)] for _ in range(10)]
         results = db2.search_batch(queries, k=5)
-        print(
-            f"Batch search: {len(results)} result sets, {len(results[0])} results each"
-        )
+        print(f"Batch search: {len(results)} result sets, {len(results[0])} results each")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dry-run:
-        description: "Build and test only, don't publish"
+        description: "Build only, don't publish"
         required: false
         type: boolean
         default: false
@@ -14,63 +14,39 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pin toolchain version - must match rust-toolchain.toml
+  RUST_TOOLCHAIN: nightly-2025-12-04
 
 jobs:
   # ============================================================================
-  # STAGE 1: TESTS (parallel, fail-fast gate)
+  # STAGE 1: Quick verification (same checks as CI)
   # ============================================================================
 
-  test-rust:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: clippy
-      - run: cargo test --lib
-      - run: cargo clippy -- -D warnings
 
-  test-node:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: dtolnay/rust-toolchain@master
         with:
-          node-version: 20
-      - uses: dtolnay/rust-toolchain@nightly
-      - run: npm install
-        working-directory: node
-      - run: npm run build
-        working-directory: node
-      - run: npm test
-        working-directory: node
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
 
-  test-python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@nightly
-      - name: Install uv
-        run: pip install uv
-      - name: Install dependencies
-        run: uv sync
-        working-directory: python
-      - name: Build
-        run: uv run maturin develop --release
-        working-directory: python
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
       - name: Test
-        run: uv run pytest tests/test_basic.py tests/test_config.py -v --timeout=60
-        working-directory: python
+        run: cargo test --lib
 
   # ============================================================================
-  # STAGE 2: BUILDS (parallel, fail-fast, only after ALL tests pass)
+  # STAGE 2: Build all artifacts (parallel, fail-fast)
   # ============================================================================
 
   build-python-linux:
-    needs: [test-rust, test-node, test-python]
+    needs: [verify]
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: true
@@ -93,7 +69,7 @@ jobs:
           path: dist
 
   build-python-macos:
-    needs: [test-rust, test-node, test-python]
+    needs: [verify]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
@@ -119,7 +95,7 @@ jobs:
           path: dist
 
   build-python-sdist:
-    needs: [test-rust, test-node, test-python]
+    needs: [verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -134,7 +110,7 @@ jobs:
           path: dist
 
   build-node:
-    needs: [test-rust, test-node, test-python]
+    needs: [verify]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -166,8 +142,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - run: npm install
         working-directory: node
@@ -181,7 +158,7 @@ jobs:
           if-no-files-found: error
 
   # ============================================================================
-  # STAGE 3: PUBLISH (sequential, only after ALL builds pass, skip if dry-run)
+  # STAGE 3: Publish (sequential, only after ALL builds pass, skip if dry-run)
   # ============================================================================
 
   publish-crates:
@@ -189,11 +166,18 @@ jobs:
       [build-python-linux, build-python-macos, build-python-sdist, build-node]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Get crates.io token via OIDC
+        uses: rust-lang/crates-io-auth-action@v1
+        id: crates-io-auth
       - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --token ${{ steps.crates-io-auth.outputs.token }}
 
   publish-pypi:
     needs: [publish-crates]

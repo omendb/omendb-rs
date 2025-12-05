@@ -10,34 +10,99 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
+  # ==========================================================================
+  # Rust: Format, Lint, Test
+  # ==========================================================================
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: clippy
-      - name: Run Rust tests
-        run: cargo test --lib
-      - name: Run clippy
-        run: cargo clippy --lib
 
-  test-python:
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-04
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        run: cargo test --lib
+
+  # ==========================================================================
+  # Python: Format, Lint, Test
+  # ==========================================================================
+  python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: actions/setup-python@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-04
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install uv
+
+      - name: Setup uv
         uses: astral-sh/setup-uv@v4
+
       - name: Install dependencies
         working-directory: python
         run: uv sync
-      - name: Build and install
+
+      - name: Check formatting (ruff)
+        working-directory: python
+        run: uv run ruff format --check .
+
+      - name: Lint (ruff)
+        working-directory: python
+        run: uv run ruff check .
+
+      - name: Build
         working-directory: python
         run: uv run maturin develop --release
-      - name: Run Python tests
+
+      - name: Test
         working-directory: python
-        run: uv run pytest tests/test_basic.py tests/test_search.py tests/test_delete.py tests/test_insert.py tests/test_config.py tests/test_persistence.py -x --timeout=30
+        run: uv run pytest tests/ -x --timeout=60
+
+  # ==========================================================================
+  # Node: Build, Test
+  # ==========================================================================
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-04
+
+      - name: Install dependencies
+        working-directory: node
+        run: npm install
+
+      - name: Build
+        working-directory: node
+        run: npm run build
+
+      - name: Test
+        working-directory: node
+        run: npm test

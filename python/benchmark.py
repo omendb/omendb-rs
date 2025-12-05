@@ -12,11 +12,13 @@ Usage:
 """
 
 import argparse
+import json
 import platform
 import subprocess
 import tempfile
 import time
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
@@ -155,7 +157,7 @@ def benchmark_batch_search(db, queries: np.ndarray, k: int = 10) -> dict:
     queries_list = [q.tolist() for q in queries]
 
     start = time.time()
-    results = db.search_batch(queries_list, k=k)
+    db.search_batch(queries_list, k=k)
     total = time.time() - start
 
     return {
@@ -166,9 +168,7 @@ def benchmark_batch_search(db, queries: np.ndarray, k: int = 10) -> dict:
     }
 
 
-def run_benchmark(
-    n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits: int = 0
-):
+def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits: int = 0):
     """Run full benchmark suite for given parameters."""
     mode = f"RaBitQ-{quantize_bits}bit" if quantize_bits > 0 else "f32"
     print(f"\n{'=' * 60}")
@@ -181,9 +181,7 @@ def run_benchmark(
     with tempfile.TemporaryDirectory() as tmpdir:
         # Build
         build = benchmark_build(f"{tmpdir}/db", vectors, quantize_bits=quantize_bits)
-        print(
-            f"\nBuild:    {build['vec_per_s']:>10,.0f} vec/s  ({build['time_s']:.2f}s)"
-        )
+        print(f"\nBuild:    {build['vec_per_s']:>10,.0f} vec/s  ({build['time_s']:.2f}s)")
 
         db = build["db"]
 
@@ -201,9 +199,7 @@ def run_benchmark(
 
         # Batch search
         batch = benchmark_batch_search(db, queries)
-        print(
-            f"Batch:    {batch['qps']:>10,.0f} QPS    ({batch['latency_ms']:.3f}ms per query)"
-        )
+        print(f"Batch:    {batch['qps']:>10,.0f} QPS    ({batch['latency_ms']:.3f}ms per query)")
 
     # Return serializable results (no db object)
     return {
@@ -268,9 +264,7 @@ def main():
             result = run_benchmark(n, 768)
             all_results.append(result)
     else:
-        result = run_benchmark(
-            args.vectors, args.dimension, quantize_bits=args.quantize
-        )
+        result = run_benchmark(args.vectors, args.dimension, quantize_bits=args.quantize)
         all_results.append(result)
 
     print("\n" + "=" * 60)
