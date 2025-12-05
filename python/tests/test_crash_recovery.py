@@ -7,6 +7,10 @@ Key scenarios:
 3. Crash after delete but before save() - tests delete durability
 """
 
+import pytest
+
+pytestmark = pytest.mark.slow  # Uses multiprocessing, skip in CI
+
 import multiprocessing
 import os
 import shutil
