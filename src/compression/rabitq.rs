@@ -24,6 +24,7 @@ use std::fmt;
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::{vaddq_f32, vaddvq_f32, vdupq_n_f32, vfmaq_f32, vld1q_f32, vsubq_f32};
 #[cfg(target_arch = "x86_64")]
+#[allow(clippy::wildcard_imports)]
 use std::arch::x86_64::*;
 
 /// Maximum number of codes per subspace (16 for 4-bit quantization)
@@ -1100,7 +1101,7 @@ fn simd_l2_distance(v1: &[f32], v2: &[f32]) -> f32 {
             return unsafe { l2_distance_sse2(v1, v2) };
         }
         // Scalar fallback for x86_64 without SIMD
-        return l2_distance_scalar(v1, v2);
+        l2_distance_scalar(v1, v2)
     }
 
     #[cfg(target_arch = "aarch64")]
