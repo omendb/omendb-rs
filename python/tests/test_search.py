@@ -4,15 +4,9 @@ import pytest
 
 
 def test_search_empty_database(db):
-    """Test searching empty database returns empty list or dimension error.
-
-    Note: Currently raises dimension error because empty db reports 0 dimensions.
-    This is a known limitation - ideally should return empty list.
-    """
-    # Empty database should return empty results, but currently raises
-    # dimension mismatch because db dimensions are 0 until first insert
-    with pytest.raises(ValueError, match="dimension"):
-        db.search([0.1] * 128, k=10)
+    """Test searching empty database returns empty list."""
+    results = db.search([0.1] * 128, k=10)
+    assert results == []
 
 
 def test_search_basic(db_with_vectors):
