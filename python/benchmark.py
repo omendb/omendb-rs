@@ -8,6 +8,7 @@ Usage:
     python benchmark.py              # Quick benchmark (10K vectors)
     python benchmark.py --full       # Full benchmark (10K, 50K, 100K)
     python benchmark.py --dimension 1536  # Specific dimension
+    python benchmark.py --output results.json  # Save to JSON
 """
 
 import argparse
@@ -195,7 +196,24 @@ def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000):
             f"Batch:    {batch['qps']:>10,.0f} QPS    ({batch['latency_ms']:.3f}ms per query)"
         )
 
-    return {"build": build, "search": search, "filtered": filtered, "batch": batch}
+    # Return serializable results (no db object)
+    return {
+        "config": {"n_vectors": n_vectors, "dimensions": dim, "n_queries": n_queries},
+        "build": {k: v for k, v in build.items() if k != "db"},
+        "search": search,
+        "filtered": filtered,
+        "batch": batch,
+    }
+
+
+def save_results(output_path: str, metadata: dict, results: list):
+    """Save benchmark results to JSON file."""
+    output = {"metadata": metadata, "results": results}
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(output, f, indent=2)
+    print(f"\nResults saved to: {path}")
 
 
 def main():
@@ -203,6 +221,7 @@ def main():
     parser.add_argument("--full", action="store_true", help="Run full benchmark suite")
     parser.add_argument("--dimension", type=int, default=128, help="Vector dimension")
     parser.add_argument("--vectors", type=int, default=10000, help="Number of vectors")
+    parser.add_argument("--output", "-o", type=str, help="Save results to JSON file")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -212,23 +231,32 @@ def main():
     metadata = get_benchmark_metadata()
     print_metadata(metadata)
 
+    all_results = []
+
     if args.full:
         # Multiple dimensions
         for dim in [128, 384, 768, 1536]:
-            run_benchmark(10000, dim)
+            result = run_benchmark(10000, dim)
+            all_results.append(result)
 
-        # Multiple scales at 128D
+        # Multiple scales at 768D
         print("\n" + "=" * 60)
-        print("Scale Test (128D)")
+        print("Scale Test (768D)")
         print("=" * 60)
-        for n in [1000, 10000, 50000]:
-            run_benchmark(n, 128)
+        for n in [10000, 50000, 100000]:
+            result = run_benchmark(n, 768)
+            all_results.append(result)
     else:
-        run_benchmark(args.vectors, args.dimension)
+        result = run_benchmark(args.vectors, args.dimension)
+        all_results.append(result)
 
     print("\n" + "=" * 60)
     print("Benchmark complete")
     print("=" * 60)
+
+    # Save to JSON if output specified
+    if args.output:
+        save_results(args.output, metadata, all_results)
 
 
 if __name__ == "__main__":
