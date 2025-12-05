@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dry-run:
-        description: "Dry run (build but don't publish)"
+        description: "Build and test only, don't publish"
         required: false
         type: boolean
         default: false
@@ -17,19 +17,18 @@ env:
 
 jobs:
   # ============================================================================
-  # Rust Tests
+  # STAGE 1: TESTS (parallel, fail-fast gate)
   # ============================================================================
-  rust-test:
+
+  test-rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo test --lib
+      - run: cargo clippy -- -D warnings
 
-  # ============================================================================
-  # Node Tests
-  # ============================================================================
-  node-test:
+  test-node:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,13 +43,35 @@ jobs:
       - run: npm test
         working-directory: node
 
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        run: uv sync
+        working-directory: python
+      - name: Build
+        run: uv run maturin develop --release
+        working-directory: python
+      - name: Test
+        run: uv run pytest tests/test_basic.py tests/test_config.py -v --timeout=60
+        working-directory: python
+
   # ============================================================================
-  # Python Wheels - Linux
+  # STAGE 2: BUILDS (parallel, fail-fast, only after ALL tests pass)
   # ============================================================================
-  python-linux:
-    needs: [rust-test]
+
+  build-python-linux:
+    needs: [test-rust, test-node, test-python]
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: true
       matrix:
         target: [x86_64, aarch64]
     steps:
@@ -69,13 +90,11 @@ jobs:
           name: wheels-linux-${{ matrix.target }}
           path: dist
 
-  # ============================================================================
-  # Python Wheels - macOS
-  # ============================================================================
-  python-macos:
-    needs: [rust-test]
+  build-python-macos:
+    needs: [test-rust, test-node, test-python]
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: true
       matrix:
         include:
           - runner: macos-13
@@ -97,11 +116,8 @@ jobs:
           name: wheels-macos-${{ matrix.target }}
           path: dist
 
-  # ============================================================================
-  # Python sdist
-  # ============================================================================
-  python-sdist:
-    needs: [rust-test]
+  build-python-sdist:
+    needs: [test-rust, test-node, test-python]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,11 +131,9 @@ jobs:
           name: wheels-sdist
           path: dist
 
-  # ============================================================================
-  # Node Binaries
-  # ============================================================================
-  node-build:
-    needs: [node-test]
+  build-node:
+    needs: [test-rust, test-node, test-python]
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
@@ -145,7 +159,6 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             build: npm run build -- --target aarch64-unknown-linux-gnu --platform --use-napi-cross
-    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -166,66 +179,65 @@ jobs:
           if-no-files-found: error
 
   # ============================================================================
-  # Publish - Only after ALL builds succeed
+  # STAGE 3: PUBLISH (sequential, only after ALL builds pass, skip if dry-run)
   # ============================================================================
-  publish:
-    needs: [python-linux, python-macos, python-sdist, node-build]
+
+  publish-crates:
+    needs:
+      [build-python-linux, build-python-macos, build-python-sdist, build-node]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
-
-      # Download all artifacts
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: List artifacts
-        run: ls -R artifacts/
-
-      # ----------------------------------------
-      # Publish to crates.io
-      # ----------------------------------------
       - uses: dtolnay/rust-toolchain@nightly
       - name: Publish to crates.io
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      # ----------------------------------------
-      # Publish to PyPI
-      # ----------------------------------------
-      - name: Merge Python wheels
-        run: |
-          mkdir -p dist
-          cp artifacts/wheels-*/* dist/ || true
-          ls -la dist/
-
+  publish-pypi:
+    needs: [publish-crates]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: List wheels
+        run: ls -la dist/
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1
         with:
           command: upload
-          args: --non-interactive --skip-existing dist/*
+          args: --non-interactive dist/*
 
-      # ----------------------------------------
-      # Publish to npm
-      # ----------------------------------------
+  publish-npm:
+    needs: [publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - run: npm install -g npm@latest
       - run: npm install
         working-directory: node
 
-      - name: Setup Node artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: node-*
+          path: node/artifacts
+
+      - name: Setup artifacts
         run: |
-          mkdir -p artifacts
-          for dir in ../artifacts/node-*/; do
+          for dir in artifacts/node-*/; do
             target=$(basename "$dir" | sed 's/node-//')
             mkdir -p "artifacts/bindings-$target"
-            cp "$dir"*.node "artifacts/bindings-$target/" || true
+            cp "$dir"*.node "artifacts/bindings-$target/"
           done
           ls -R artifacts/
         working-directory: node
@@ -249,7 +261,7 @@ jobs:
           fi
         working-directory: node
 
-      - name: Publish npm platform packages
+      - name: Publish platform packages
         run: |
           for dir in npm/*/; do
             echo "Publishing $dir"
