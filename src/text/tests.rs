@@ -289,3 +289,211 @@ fn test_weighted_rrf_alpha_clamping() {
 fn test_default_rrf_k_constant() {
     assert_eq!(DEFAULT_RRF_K, 60);
 }
+
+#[test]
+fn test_concurrent_reads() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let mut index = TextIndex::open_in_memory().unwrap();
+
+    // Index some documents
+    for i in 0..100 {
+        index
+            .index_document(&format!("doc{}", i), &format!("content {} searchable", i))
+            .unwrap();
+    }
+    index.commit().unwrap();
+
+    // Share the reader across threads
+    let reader = Arc::new(index.reader().clone());
+    let index_ref = Arc::new(index.index().clone());
+
+    let handles: Vec<_> = (0..4)
+        .map(|thread_id| {
+            let reader = Arc::clone(&reader);
+            let index = Arc::clone(&index_ref);
+            thread::spawn(move || {
+                let searcher = reader.searcher();
+                let text_field = index.schema().get_field("text").unwrap();
+                let query_parser = tantivy::query::QueryParser::for_index(&index, vec![text_field]);
+
+                // Each thread performs multiple searches
+                for i in 0..25 {
+                    let query = query_parser.parse_query("searchable").unwrap();
+                    let results = searcher
+                        .search(&query, &tantivy::collector::TopDocs::with_limit(10))
+                        .unwrap();
+                    assert!(!results.is_empty(), "Thread {} iteration {}", thread_id, i);
+                }
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().expect("Thread panicked");
+    }
+}
+
+#[test]
+fn test_read_while_write() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().join("text_index");
+
+    // Create index and add initial documents
+    let mut index = TextIndex::open(&path).unwrap();
+    for i in 0..50 {
+        index
+            .index_document(&format!("doc{}", i), &format!("initial content {}", i))
+            .unwrap();
+    }
+    index.commit().unwrap();
+
+    // Share reader for concurrent reads
+    let reader = Arc::new(index.reader().clone());
+    let index_ref = Arc::new(index.index().clone());
+
+    // Spawn reader threads
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let reader = Arc::clone(&reader);
+            let index = Arc::clone(&index_ref);
+            thread::spawn(move || {
+                let text_field = index.schema().get_field("text").unwrap();
+                let query_parser = tantivy::query::QueryParser::for_index(&index, vec![text_field]);
+
+                for _ in 0..50 {
+                    let searcher = reader.searcher();
+                    let query = query_parser.parse_query("content").unwrap();
+                    let results = searcher
+                        .search(&query, &tantivy::collector::TopDocs::with_limit(10))
+                        .unwrap();
+                    // Results may vary as writes happen, but should never error
+                    assert!(results.len() <= 10);
+                    thread::sleep(std::time::Duration::from_millis(1));
+                }
+            })
+        })
+        .collect();
+
+    // Continue writing while reads happen
+    for i in 50..100 {
+        index
+            .index_document(&format!("doc{}", i), &format!("new content {}", i))
+            .unwrap();
+        if i % 10 == 0 {
+            index.commit().unwrap();
+        }
+    }
+    index.commit().unwrap();
+
+    for h in handles {
+        h.join().expect("Reader thread panicked");
+    }
+
+    // Final verification
+    let results = index.search("content", 200).unwrap();
+    assert_eq!(results.len(), 100);
+}
+
+#[test]
+fn test_high_throughput_indexing() {
+    let mut index = TextIndex::open_in_memory().unwrap();
+
+    // Rapid indexing without commits
+    for i in 0..1000 {
+        index
+            .index_document(&format!("doc{}", i), &format!("bulk content {}", i))
+            .unwrap();
+    }
+    index.commit().unwrap();
+
+    let results = index.search("bulk", 1000).unwrap();
+    assert_eq!(results.len(), 1000);
+}
+
+#[test]
+fn test_update_heavy_workload() {
+    let mut index = TextIndex::open_in_memory().unwrap();
+
+    // Create initial documents
+    for i in 0..100 {
+        index
+            .index_document(&format!("doc{}", i), &format!("version0 content {}", i))
+            .unwrap();
+    }
+    index.commit().unwrap();
+
+    // Repeatedly update the same documents
+    for version in 1..10 {
+        for i in 0..100 {
+            index
+                .index_document(
+                    &format!("doc{}", i),
+                    &format!("version{} content {}", version, i),
+                )
+                .unwrap();
+        }
+        index.commit().unwrap();
+
+        // Verify old version is gone
+        let old_results = index
+            .search(&format!("version{}", version - 1), 100)
+            .unwrap();
+        assert_eq!(old_results.len(), 0, "Old version should be deleted");
+
+        // Verify new version is present
+        let new_results = index.search(&format!("version{}", version), 100).unwrap();
+        assert_eq!(new_results.len(), 100, "New version should exist");
+    }
+}
+
+#[test]
+fn test_mixed_operations_workload() {
+    let mut index = TextIndex::open_in_memory().unwrap();
+
+    // Interleaved inserts, updates, and deletes
+    for round in 0..5 {
+        // Insert new docs
+        for i in 0..20 {
+            let id = round * 20 + i;
+            index
+                .index_document(
+                    &format!("doc{}", id),
+                    &format!("workload data round{} item{}", round, i),
+                )
+                .unwrap();
+        }
+
+        // Update some previous docs (if any exist)
+        if round > 0 {
+            for i in 0..10 {
+                let id = (round - 1) * 20 + i;
+                index
+                    .index_document(
+                        &format!("doc{}", id),
+                        &format!("workload updated in round{}", round),
+                    )
+                    .unwrap();
+            }
+        }
+
+        // Delete some docs
+        if round > 1 {
+            for i in 0..5 {
+                let id = (round - 2) * 20 + i;
+                index.delete_document(&format!("doc{}", id)).unwrap();
+            }
+        }
+
+        index.commit().unwrap();
+    }
+
+    // Verify final state: search for term present in all documents
+    let all_results = index.search("workload", 200).unwrap();
+    // 5 rounds * 20 docs = 100, minus 3 rounds * 5 deletions = 85
+    assert_eq!(all_results.len(), 85);
+}
