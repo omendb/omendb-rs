@@ -1070,6 +1070,9 @@ fn test_set_with_text() {
         )
         .unwrap();
 
+    // Flush to commit text index changes
+    store.flush().unwrap();
+
     assert_eq!(idx, 0);
     assert_eq!(store.len(), 1);
 
@@ -1118,6 +1121,9 @@ fn test_text_search_bm25() {
         )
         .unwrap();
 
+    // Commit text index changes
+    store.flush().unwrap();
+
     // Search for "rust" - doc2 should rank higher (higher term frequency)
     let results = store.text_search("rust", 10).unwrap();
     assert_eq!(results.len(), 2);
@@ -1160,6 +1166,9 @@ fn test_hybrid_search() {
         )
         .unwrap();
 
+    // Commit text index changes
+    store.flush().unwrap();
+
     // Query: similar to doc1/doc3 vectors, text matches doc1/doc2
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
     let results = store.hybrid_search(&query, "machine learning", 3).unwrap();
@@ -1192,6 +1201,9 @@ fn test_hybrid_search_with_filter() {
             serde_json::json!({"year": 2023}),
         )
         .unwrap();
+
+    // Commit text index changes
+    store.flush().unwrap();
 
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
     let filter = MetadataFilter::Eq("year".to_string(), serde_json::json!(2024));
@@ -1229,6 +1241,9 @@ fn test_hybrid_search_empty_text() {
             serde_json::json!({}),
         )
         .unwrap();
+
+    // Commit text index changes
+    store.flush().unwrap();
 
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
 
