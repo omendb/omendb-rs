@@ -1131,7 +1131,26 @@ impl VectorStore {
         query_text: &str,
         k: usize,
         alpha: Option<f32>,
-    ) -> Result<Vec<(String, f32)>> {
+    ) -> Result<Vec<(String, f32, JsonValue)>> {
+        self.hybrid_search_with_rrf_k(query_vector, query_text, k, alpha, None)
+    }
+
+    /// Hybrid search with configurable RRF k constant.
+    ///
+    /// # Arguments
+    /// * `query_vector` - Query embedding for vector search
+    /// * `query_text` - Query text for BM25 search
+    /// * `k` - Number of results to return
+    /// * `alpha` - Weight for vector vs text (0.0 = text only, 1.0 = vector only, None = 0.5)
+    /// * `rrf_k` - RRF constant (None = 60, higher values reduce rank influence)
+    pub fn hybrid_search_with_rrf_k(
+        &mut self,
+        query_vector: &Vector,
+        query_text: &str,
+        k: usize,
+        alpha: Option<f32>,
+        rrf_k: Option<usize>,
+    ) -> Result<Vec<(String, f32, JsonValue)>> {
         // Over-fetch from both sources for better fusion
         let fetch_k = k * 2;
 
@@ -1150,13 +1169,16 @@ impl VectorStore {
         let text_results = self.text_search(query_text, fetch_k).unwrap_or_default();
 
         // Fuse results with weighted RRF
-        Ok(weighted_reciprocal_rank_fusion(
+        let fused = weighted_reciprocal_rank_fusion(
             vector_results,
             text_results,
             k,
-            DEFAULT_RRF_K,
+            rrf_k.unwrap_or(DEFAULT_RRF_K),
             alpha.unwrap_or(0.5),
-        ))
+        );
+
+        // Attach metadata to results
+        Ok(self.attach_metadata(fused))
     }
 
     /// Hybrid search with filter (combining vector + text + metadata filter).
@@ -1176,7 +1198,20 @@ impl VectorStore {
         k: usize,
         filter: &MetadataFilter,
         alpha: Option<f32>,
-    ) -> Result<Vec<(String, f32)>> {
+    ) -> Result<Vec<(String, f32, JsonValue)>> {
+        self.hybrid_search_with_filter_rrf_k(query_vector, query_text, k, filter, alpha, None)
+    }
+
+    /// Hybrid search with filter and configurable RRF k constant.
+    pub fn hybrid_search_with_filter_rrf_k(
+        &mut self,
+        query_vector: &Vector,
+        query_text: &str,
+        k: usize,
+        filter: &MetadataFilter,
+        alpha: Option<f32>,
+        rrf_k: Option<usize>,
+    ) -> Result<Vec<(String, f32, JsonValue)>> {
         let fetch_k = k * 2;
 
         // Filtered vector search
@@ -1206,13 +1241,32 @@ impl VectorStore {
             })
             .collect();
 
-        Ok(weighted_reciprocal_rank_fusion(
+        let fused = weighted_reciprocal_rank_fusion(
             vector_results,
             text_results,
             k,
-            DEFAULT_RRF_K,
+            rrf_k.unwrap_or(DEFAULT_RRF_K),
             alpha.unwrap_or(0.5),
-        ))
+        );
+
+        // Attach metadata to results
+        Ok(self.attach_metadata(fused))
+    }
+
+    /// Attach metadata to fused results.
+    fn attach_metadata(&self, results: Vec<(String, f32)>) -> Vec<(String, f32, JsonValue)> {
+        results
+            .into_iter()
+            .map(|(id, score)| {
+                let metadata = self
+                    .id_to_index
+                    .get(&id)
+                    .and_then(|&idx| self.metadata.get(&idx))
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+                (id, score, metadata)
+            })
+            .collect()
     }
 
     // ============================================================================

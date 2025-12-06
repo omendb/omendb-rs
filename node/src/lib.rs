@@ -179,6 +179,8 @@ pub struct VectorItemWithText {
 pub struct TextSearchResult {
     pub id: String,
     pub score: f64,
+    #[napi(ts_type = "Record<string, unknown>")]
+    pub metadata: JsonValue,
 }
 
 // ============================================================================
@@ -659,7 +661,8 @@ impl VectorDatabase {
     /// @param k - Number of results
     /// @param filter - Optional metadata filter
     /// @param alpha - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
-    /// @returns Array of {id, score}
+    /// @param rrfK - RRF constant (default=60, higher reduces rank influence)
+    /// @returns Array of {id, score, metadata}
     #[napi]
     pub fn hybrid_search(
         &self,
@@ -668,30 +671,40 @@ impl VectorDatabase {
         k: u32,
         #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
         alpha: Option<f64>,
+        rrf_k: Option<u32>,
     ) -> Result<Vec<TextSearchResult>> {
         let query_vec = Vector::new(extract_query_vector(query_vector));
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
         let alpha_f32 = alpha.map(|a| a as f32);
+        let rrf_k_usize = rrf_k.map(|k| k as usize);
 
         let mut inner = self.inner.write();
 
         let results = if let Some(f) = metadata_filter {
             inner
                 .store
-                .hybrid_search_with_filter(&query_vec, &query_text, k as usize, &f, alpha_f32)
+                .hybrid_search_with_filter_rrf_k(
+                    &query_vec,
+                    &query_text,
+                    k as usize,
+                    &f,
+                    alpha_f32,
+                    rrf_k_usize,
+                )
                 .map_err(convert_error)?
         } else {
             inner
                 .store
-                .hybrid_search(&query_vec, &query_text, k as usize, alpha_f32)
+                .hybrid_search_with_rrf_k(&query_vec, &query_text, k as usize, alpha_f32, rrf_k_usize)
                 .map_err(convert_error)?
         };
 
         Ok(results
             .into_iter()
-            .map(|(id, score)| TextSearchResult {
+            .map(|(id, score, metadata)| TextSearchResult {
                 id,
                 score: score as f64,
+                metadata,
             })
             .collect())
     }

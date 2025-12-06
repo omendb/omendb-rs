@@ -746,13 +746,17 @@ pub unsafe extern "C" fn omendb_text_search(
 /// * `query_text` - Text query string
 /// * `k` - Number of results
 /// * `alpha` - Weight for vector vs text (0.0=text only, 1.0=vector only, <0 for default 0.5)
+/// * `rrf_k` - RRF constant (0 for default 60)
+/// * `filter_json` - Optional filter JSON string (NULL for no filter)
 /// * `result` - Output pointer for result JSON
 ///
 /// # Returns
 /// 0 on success, -1 on error
 ///
+/// Result JSON format: `[{"id": "...", "score": 0.5, "metadata": {...}}, ...]`
+///
 /// # Safety
-/// - All pointer arguments must be valid
+/// - All pointer arguments must be valid (except filter_json which can be NULL)
 #[no_mangle]
 pub unsafe extern "C" fn omendb_hybrid_search(
     db: *mut OmenDB,
@@ -761,6 +765,8 @@ pub unsafe extern "C" fn omendb_hybrid_search(
     query_text: *const c_char,
     k: usize,
     alpha: f32,
+    rrf_k: usize,
+    filter_json: *const c_char,
     result: *mut *mut c_char,
 ) -> i32 {
     clear_last_error();
@@ -801,18 +807,61 @@ pub unsafe extern "C" fn omendb_hybrid_search(
 
     // Use None for default (0.5), otherwise use provided alpha
     let alpha_opt = if alpha < 0.0 { None } else { Some(alpha) };
+    let rrf_k_opt = if rrf_k == 0 { None } else { Some(rrf_k) };
 
-    let search_results = match db.store.hybrid_search(&vector, text_str, k, alpha_opt) {
-        Ok(r) => r,
-        Err(e) => {
-            set_last_error(format!("Hybrid search failed: {e}"));
-            return -1;
+    // Parse optional filter
+    let filter = if !filter_json.is_null() {
+        let filter_str = match CStr::from_ptr(filter_json).to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(format!("Invalid filter string: {e}"));
+                return -1;
+            }
+        };
+        match serde_json::from_str::<JsonValue>(filter_str) {
+            Ok(v) => match crate::vector::store::MetadataFilter::from_json(&v) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    set_last_error(format!("Invalid filter format: {e}"));
+                    return -1;
+                }
+            },
+            Err(e) => {
+                set_last_error(format!("Invalid filter JSON: {e}"));
+                return -1;
+            }
+        }
+    } else {
+        None
+    };
+
+    let search_results = if let Some(f) = filter {
+        match db
+            .store
+            .hybrid_search_with_filter_rrf_k(&vector, text_str, k, &f, alpha_opt, rrf_k_opt)
+        {
+            Ok(r) => r,
+            Err(e) => {
+                set_last_error(format!("Hybrid search failed: {e}"));
+                return -1;
+            }
+        }
+    } else {
+        match db
+            .store
+            .hybrid_search_with_rrf_k(&vector, text_str, k, alpha_opt, rrf_k_opt)
+        {
+            Ok(r) => r,
+            Err(e) => {
+                set_last_error(format!("Hybrid search failed: {e}"));
+                return -1;
+            }
         }
     };
 
     let json_results: Vec<JsonValue> = search_results
         .into_iter()
-        .map(|(id, score)| json!({"id": id, "score": score}))
+        .map(|(id, score, metadata)| json!({"id": id, "score": score, "metadata": metadata}))
         .collect();
 
     let json_str = match serde_json::to_string(&json_results) {
