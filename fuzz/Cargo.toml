@@ -1,0 +1,32 @@
+[package]
+name = "omendb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3.14"
+serde_json = "1.0"
+
+[dependencies.omendb]
+path = ".."
+
+[[bin]]
+name = "db_operations"
+path = "fuzz_targets/db_operations.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "distance_ops"
+path = "fuzz_targets/distance_ops.rs"
+test = false
+doc = false
+bench = false
