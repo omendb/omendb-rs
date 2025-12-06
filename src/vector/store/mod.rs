@@ -287,13 +287,13 @@ pub struct VectorStore {
     /// Persistent storage backend (seerdb LSM)
     storage: Option<SeerDBStorage>,
 
-    /// Storage path (for TextIndex subdirectory)
+    /// Storage path (for `TextIndex` subdirectory)
     storage_path: Option<PathBuf>,
 
     /// Optional tantivy text index for hybrid search
     text_index: Option<TextIndex>,
 
-    /// Text search configuration (stored for enable_text_search)
+    /// Text search configuration (used by `enable_text_search`)
     text_search_config: Option<TextSearchConfig>,
 }
 
@@ -1010,11 +1010,13 @@ impl VectorStore {
             return Ok(()); // Already enabled
         }
 
+        let config = self.text_search_config.clone().unwrap_or_default();
+
         self.text_index = if let Some(ref path) = self.storage_path {
             let text_path = path.join("text_index");
-            Some(TextIndex::open(&text_path)?)
+            Some(TextIndex::open_with_config(&text_path, &config)?)
         } else {
-            Some(TextIndex::open_in_memory()?)
+            Some(TextIndex::open_in_memory_with_config(&config)?)
         };
 
         Ok(())
@@ -1094,7 +1096,7 @@ impl VectorStore {
 
     /// Search text index only (BM25 scoring).
     ///
-    /// Returns Vec of (id, BM25_score) tuples, sorted by score descending.
+    /// Returns Vec of (id, score) tuples, sorted by score descending.
     pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<(String, f32)>> {
         let Some(ref text_index) = self.text_index else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
@@ -1115,7 +1117,7 @@ impl VectorStore {
     /// * `k` - Number of results to return
     ///
     /// # Returns
-    /// Vec of (id, RRF_score) tuples, sorted by combined score descending.
+    /// Vec of (id, score) tuples, sorted by combined score descending.
     ///
     /// # Example
     /// ```ignore
@@ -1195,7 +1197,12 @@ impl VectorStore {
             })
             .collect();
 
-        Ok(reciprocal_rank_fusion(vector_results, text_results, k, 60))
+        Ok(reciprocal_rank_fusion(
+            vector_results,
+            text_results,
+            k,
+            DEFAULT_RRF_K,
+        ))
     }
 
     // ============================================================================
