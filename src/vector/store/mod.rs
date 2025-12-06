@@ -11,12 +11,15 @@ use super::hnsw_index::HNSWIndex;
 use super::storage::SeerDBStorage;
 use super::types::Vector;
 use crate::compression::{QuantizedVector, RaBitQ, RaBitQParams};
-use crate::text::{reciprocal_rank_fusion, TextIndex};
+use crate::text::{reciprocal_rank_fusion, TextIndex, TextSearchConfig};
 use anyhow::Result;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Default RRF constant (k=60 is industry standard per Cormack et al. 2009)
+const DEFAULT_RRF_K: usize = 60;
 
 #[cfg(test)]
 mod tests;
@@ -73,8 +76,8 @@ pub struct VectorStoreOptions {
     /// `RaBitQ` quantization parameters
     quantization: Option<RaBitQParams>,
 
-    /// Enable tantivy-based full-text search for hybrid retrieval
-    text_search: bool,
+    /// Text search configuration (None = disabled)
+    text_search_config: Option<TextSearchConfig>,
 }
 
 impl VectorStoreOptions {
@@ -140,13 +143,40 @@ impl VectorStoreOptions {
         self
     }
 
-    /// Enable tantivy-based full-text search for hybrid retrieval.
+    /// Enable tantivy-based full-text search with default configuration.
     ///
     /// When enabled, you can use `set_with_text()` to index text alongside vectors,
     /// and `hybrid_search()` to search both with RRF fusion.
+    ///
+    /// Uses 50MB writer buffer by default. For custom memory settings,
+    /// use `text_search_config()` instead.
     #[must_use]
     pub fn text_search(mut self, enabled: bool) -> Self {
-        self.text_search = enabled;
+        self.text_search_config = if enabled {
+            Some(TextSearchConfig::default())
+        } else {
+            None
+        };
+        self
+    }
+
+    /// Enable text search with custom configuration.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Mobile: lower memory
+    /// let store = VectorStoreOptions::default()
+    ///     .text_search_config(TextSearchConfig { writer_buffer_mb: 15 })
+    ///     .open("./db")?;
+    ///
+    /// // Cloud: higher throughput
+    /// let store = VectorStoreOptions::default()
+    ///     .text_search_config(TextSearchConfig { writer_buffer_mb: 200 })
+    ///     .open("./db")?;
+    /// ```
+    #[must_use]
+    pub fn text_search_config(mut self, config: TextSearchConfig) -> Self {
+        self.text_search_config = Some(config);
         self
     }
 
@@ -248,6 +278,9 @@ pub struct VectorStore {
     /// Map from string IDs to internal indices (public for Python bindings)
     pub id_to_index: HashMap<String, usize>,
 
+    /// Reverse map from internal indices to string IDs (O(1) lookup for search results)
+    index_to_id: HashMap<usize, String>,
+
     /// Deleted vector IDs (tombstones for MVCC)
     deleted: HashMap<usize, bool>,
 
@@ -259,6 +292,9 @@ pub struct VectorStore {
 
     /// Optional tantivy text index for hybrid search
     text_index: Option<TextIndex>,
+
+    /// Text search configuration (stored for enable_text_search)
+    text_search_config: Option<TextSearchConfig>,
 }
 
 impl VectorStore {
@@ -273,10 +309,12 @@ impl VectorStore {
             quantized_vectors: Vec::new(),
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
+            index_to_id: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
             storage_path: None,
             text_index: None,
+            text_search_config: None,
         }
     }
 
@@ -325,10 +363,12 @@ impl VectorStore {
             quantized_vectors: Vec::new(),
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
+            index_to_id: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
             storage_path: None,
             text_index: None,
+            text_search_config: None,
         }
     }
 
@@ -368,10 +408,12 @@ impl VectorStore {
             quantized_vectors: Vec::new(),
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
+            index_to_id: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
             storage_path: None,
             text_index: None,
+            text_search_config: None,
         }
     }
 
@@ -411,10 +453,12 @@ impl VectorStore {
             quantized_vectors: Vec::new(),
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
+            index_to_id: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
             storage_path: None,
             text_index: None,
+            text_search_config: None,
         })
     }
 
@@ -493,6 +537,12 @@ impl VectorStore {
             None
         };
 
+        // Build reverse map for O(1) index→id lookup
+        let index_to_id: HashMap<usize, String> = id_to_index
+            .iter()
+            .map(|(id, &idx)| (idx, id.clone()))
+            .collect();
+
         Ok(Self {
             vectors,
             hnsw_index,
@@ -501,10 +551,12 @@ impl VectorStore {
             quantized_vectors: Vec::new(),
             metadata,
             id_to_index,
+            index_to_id,
             deleted,
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
             text_index,
+            text_search_config: None,
         })
     }
 
@@ -600,9 +652,9 @@ impl VectorStore {
         }
 
         // Initialize text index if enabled
-        let text_index = if options.text_search {
+        let text_index = if let Some(ref config) = options.text_search_config {
             let text_path = path.join("text_index");
-            Some(TextIndex::open(&text_path)?)
+            Some(TextIndex::open_with_config(&text_path, config)?)
         } else {
             None
         };
@@ -615,10 +667,12 @@ impl VectorStore {
             quantized_vectors: Vec::new(),
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
+            index_to_id: HashMap::new(),
             deleted: HashMap::new(),
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
             text_index,
+            text_search_config: options.text_search_config.clone(),
         })
     }
 
@@ -673,8 +727,8 @@ impl VectorStore {
             .map(|p| RaBitQ::new(p.clone()));
 
         // Initialize in-memory text index if enabled
-        let text_index = if options.text_search {
-            Some(TextIndex::open_in_memory()?)
+        let text_index = if let Some(ref config) = options.text_search_config {
+            Some(TextIndex::open_in_memory_with_config(config)?)
         } else {
             None
         };
@@ -687,10 +741,12 @@ impl VectorStore {
             quantized_vectors: Vec::new(),
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
+            index_to_id: HashMap::new(),
             deleted: HashMap::new(),
             storage: None,
             storage_path: None,
             text_index,
+            text_search_config: options.text_search_config.clone(),
         })
     }
 
@@ -781,6 +837,7 @@ impl VectorStore {
         // Store metadata and ID mapping
         self.metadata.insert(index, metadata.clone());
         self.id_to_index.insert(id.clone(), index);
+        self.index_to_id.insert(index, id.clone());
 
         // Persist to storage if available
         if let Some(ref storage) = self.storage {
@@ -931,6 +988,7 @@ impl VectorStore {
 
                 self.vectors.push(vector);
                 self.metadata.insert(idx, metadata);
+                self.index_to_id.insert(idx, id.clone());
                 self.id_to_index.insert(id, idx);
                 result_indices.push(idx);
             }
@@ -988,6 +1046,7 @@ impl VectorStore {
     ///     "Machine learning is a branch of AI",
     ///     json!({"type": "article"})
     /// )?;
+    /// store.flush()?; // Commit text index changes
     /// ```
     pub fn set_with_text(
         &mut self,
@@ -1000,12 +1059,37 @@ impl VectorStore {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
 
-        // Index text content
+        // Index text content (commit deferred to flush() for batch efficiency)
         text_index.index_document(&id, text)?;
-        text_index.commit()?;
 
         // Store vector and metadata
         self.set(id, vector, metadata)
+    }
+
+    /// Batch upsert vectors with text content for hybrid search.
+    ///
+    /// Like `set_batch()`, but also indexes text content for BM25 search.
+    /// More efficient than repeated `set_with_text()` calls.
+    pub fn set_batch_with_text(
+        &mut self,
+        batch: Vec<(String, Vector, String, JsonValue)>,
+    ) -> Result<Vec<usize>> {
+        let Some(ref mut text_index) = self.text_index else {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        };
+
+        // Index all text content
+        for (id, _, text, _) in &batch {
+            text_index.index_document(id, text)?;
+        }
+
+        // Convert to set_batch format (without text)
+        let vector_batch: Vec<(String, Vector, JsonValue)> = batch
+            .into_iter()
+            .map(|(id, vector, _, metadata)| (id, vector, metadata))
+            .collect();
+
+        self.set_batch(vector_batch)
     }
 
     /// Search text index only (BM25 scoring).
@@ -1052,23 +1136,24 @@ impl VectorStore {
         // Vector search
         let vector_results = self.knn_search(query_vector, fetch_k)?;
 
-        // Convert vector results to (id, distance) format
+        // Convert vector results to (id, distance) format - O(1) lookup via reverse map
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|(idx, distance)| {
-                // Find string ID for this index
-                self.id_to_index
-                    .iter()
-                    .find(|(_, &i)| i == idx)
-                    .map(|(id, _)| (id.clone(), distance))
+                self.index_to_id.get(&idx).map(|id| (id.clone(), distance))
             })
             .collect();
 
         // Text search
         let text_results = self.text_search(query_text, fetch_k).unwrap_or_default();
 
-        // Fuse results with RRF (k=60 is standard)
-        Ok(reciprocal_rank_fusion(vector_results, text_results, k, 60))
+        // Fuse results with RRF
+        Ok(reciprocal_rank_fusion(
+            vector_results,
+            text_results,
+            k,
+            DEFAULT_RRF_K,
+        ))
     }
 
     /// Hybrid search with filter (combining vector + text + metadata filter).
@@ -1086,14 +1171,11 @@ impl VectorStore {
         // Filtered vector search
         let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
 
-        // Convert to (id, distance) format
+        // Convert to (id, distance) format - O(1) lookup via reverse map
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|(idx, distance, _)| {
-                self.id_to_index
-                    .iter()
-                    .find(|(_, &i)| i == idx)
-                    .map(|(id, _)| (id.clone(), distance))
+                self.index_to_id.get(&idx).map(|id| (id.clone(), distance))
             })
             .collect();
 
@@ -1213,8 +1295,14 @@ impl VectorStore {
             storage.delete_id_mapping(id)?;
         }
 
-        // Remove from ID mapping
+        // Remove from text index if enabled
+        if let Some(ref mut text_index) = self.text_index {
+            text_index.delete_document(id)?;
+        }
+
+        // Remove from ID mappings
         self.id_to_index.remove(id);
+        self.index_to_id.remove(&index);
 
         Ok(())
     }
@@ -2018,7 +2106,7 @@ impl VectorStore {
 
             // Try to load ID to index mapping
             let id_mapping_path = directory.join(format!("{filename}.id_mapping.json"));
-            let id_to_index = if id_mapping_path.exists() {
+            let id_to_index: HashMap<String, usize> = if id_mapping_path.exists() {
                 let id_mapping_json = fs::read_to_string(&id_mapping_path)?;
                 serde_json::from_str(&id_mapping_json)?
             } else {
@@ -2027,12 +2115,18 @@ impl VectorStore {
 
             // Try to load deleted tombstones
             let deleted_path = directory.join(format!("{filename}.deleted.json"));
-            let deleted = if deleted_path.exists() {
+            let deleted: HashMap<usize, bool> = if deleted_path.exists() {
                 let deleted_json = fs::read_to_string(&deleted_path)?;
                 serde_json::from_str(&deleted_json)?
             } else {
                 HashMap::new()
             };
+
+            // Build reverse map for O(1) lookup
+            let index_to_id: HashMap<usize, String> = id_to_index
+                .iter()
+                .map(|(id, &idx)| (idx, id.clone()))
+                .collect();
 
             Ok(Self {
                 vectors,
@@ -2042,10 +2136,12 @@ impl VectorStore {
                 quantized_vectors,
                 metadata,
                 id_to_index,
+                index_to_id,
                 deleted,
                 storage: None, // Legacy file-based loading doesn't use seerdb
                 storage_path: None,
                 text_index: None,
+                text_search_config: None,
             })
         } else {
             // Fallback: Load vectors and rebuild HNSW
@@ -2090,7 +2186,7 @@ impl VectorStore {
 
             // Try to load ID to index mapping
             let id_mapping_path = directory.join(format!("{filename}.id_mapping.json"));
-            let id_to_index = if id_mapping_path.exists() {
+            let id_to_index: HashMap<String, usize> = if id_mapping_path.exists() {
                 let id_mapping_json = fs::read_to_string(&id_mapping_path)?;
                 serde_json::from_str(&id_mapping_json)?
             } else {
@@ -2099,12 +2195,18 @@ impl VectorStore {
 
             // Try to load deleted tombstones
             let deleted_path = directory.join(format!("{filename}.deleted.json"));
-            let deleted = if deleted_path.exists() {
+            let deleted: HashMap<usize, bool> = if deleted_path.exists() {
                 let deleted_json = fs::read_to_string(&deleted_path)?;
                 serde_json::from_str(&deleted_json)?
             } else {
                 HashMap::new()
             };
+
+            // Build reverse map for O(1) lookup
+            let index_to_id: HashMap<usize, String> = id_to_index
+                .iter()
+                .map(|(id, &idx)| (idx, id.clone()))
+                .collect();
 
             // Create VectorStore and rebuild HNSW index
             let mut store = Self {
@@ -2115,10 +2217,12 @@ impl VectorStore {
                 quantized_vectors,
                 metadata,
                 id_to_index,
+                index_to_id,
                 deleted,
                 storage: None, // Legacy file-based loading doesn't use seerdb
                 storage_path: None,
                 text_index: None,
+                text_search_config: None,
             };
 
             if !store.vectors.is_empty() {
@@ -2129,11 +2233,24 @@ impl VectorStore {
         }
     }
 
-    /// Add a flush method to explicitly sync data to disk
-    pub fn flush(&self) -> Result<()> {
+    /// Flush all pending changes to disk.
+    ///
+    /// This commits:
+    /// - Vector/metadata changes to seerdb storage
+    /// - Text index changes to tantivy (if enabled)
+    ///
+    /// Call after batch inserts for durability.
+    pub fn flush(&mut self) -> Result<()> {
+        // Flush vector storage
         if let Some(ref storage) = self.storage {
             storage.flush()?;
         }
+
+        // Commit text index if enabled
+        if let Some(ref mut text_index) = self.text_index {
+            text_index.commit()?;
+        }
+
         Ok(())
     }
 

@@ -13,6 +13,38 @@ use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocumen
 #[cfg(test)]
 mod tests;
 
+/// Configuration for text search functionality.
+///
+/// # Example
+/// ```ignore
+/// // Default: 50MB buffer (good for most use cases)
+/// let config = TextSearchConfig::default();
+///
+/// // Mobile/constrained: reduce buffer
+/// let config = TextSearchConfig { writer_buffer_mb: 15 };
+///
+/// // Cloud/high-throughput: increase buffer
+/// let config = TextSearchConfig { writer_buffer_mb: 200 };
+/// ```
+#[derive(Debug, Clone)]
+pub struct TextSearchConfig {
+    /// Writer buffer size in MB (default: 50).
+    ///
+    /// Larger buffers reduce segment merge frequency but use more memory.
+    /// - 15MB: Mobile/constrained environments
+    /// - 50MB: Default, good for laptops/servers/desktop apps
+    /// - 100-200MB: High-throughput server workloads
+    pub writer_buffer_mb: usize,
+}
+
+impl Default for TextSearchConfig {
+    fn default() -> Self {
+        Self {
+            writer_buffer_mb: 50,
+        }
+    }
+}
+
 /// Full-text search index backed by tantivy.
 ///
 /// Provides BM25 scoring for text search, designed to work alongside
@@ -26,10 +58,7 @@ pub struct TextIndex {
 }
 
 impl TextIndex {
-    /// Create or open a text index at the given path.
-    ///
-    /// # Arguments
-    /// * `path` - Directory for the tantivy index
+    /// Create or open a text index at the given path with default config.
     ///
     /// # Example
     /// ```no_run
@@ -37,6 +66,18 @@ impl TextIndex {
     /// let index = TextIndex::open("./text_index").unwrap();
     /// ```
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::open_with_config(path, &TextSearchConfig::default())
+    }
+
+    /// Create or open a text index with custom configuration.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use omendb::text::{TextIndex, TextSearchConfig};
+    /// let config = TextSearchConfig { writer_buffer_mb: 100 };
+    /// let index = TextIndex::open_with_config("./text_index", &config).unwrap();
+    /// ```
+    pub fn open_with_config<P: AsRef<Path>>(path: P, config: &TextSearchConfig) -> Result<Self> {
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
 
@@ -51,8 +92,8 @@ impl TextIndex {
             Index::create_in_dir(path, schema.clone())?
         };
 
-        // 50MB writer buffer (smaller than default for embedded use)
-        let writer = index.writer(50_000_000)?;
+        let buffer_bytes = config.writer_buffer_mb * 1_000_000;
+        let writer = index.writer(buffer_bytes)?;
 
         let reader = index
             .reader_builder()
@@ -68,15 +109,21 @@ impl TextIndex {
         })
     }
 
-    /// Create an in-memory text index (for testing or temporary use).
+    /// Create an in-memory text index with default config.
     pub fn open_in_memory() -> Result<Self> {
+        Self::open_in_memory_with_config(&TextSearchConfig::default())
+    }
+
+    /// Create an in-memory text index with custom configuration.
+    pub fn open_in_memory_with_config(config: &TextSearchConfig) -> Result<Self> {
         let schema = Self::create_schema();
         let id_field = schema.get_field("id").expect("id field exists");
         let text_field = schema.get_field("text").expect("text field exists");
 
         let index = Index::create_in_ram(schema);
 
-        let writer = index.writer(50_000_000)?;
+        let buffer_bytes = config.writer_buffer_mb * 1_000_000;
+        let writer = index.writer(buffer_bytes)?;
 
         let reader = index
             .reader_builder()
@@ -194,7 +241,7 @@ impl TextIndex {
 /// # Arguments
 /// * `vector_results` - Results from vector search as (id, distance)
 /// * `text_results` - Results from text search as (id, BM25_score)
-/// * `k` - Maximum results to return
+/// * `limit` - Maximum results to return
 /// * `rrf_k` - RRF constant (default: 60)
 ///
 /// # Returns
@@ -202,7 +249,7 @@ impl TextIndex {
 pub fn reciprocal_rank_fusion(
     vector_results: Vec<(String, f32)>,
     text_results: Vec<(String, f32)>,
-    k: usize,
+    limit: usize,
     rrf_k: usize,
 ) -> Vec<(String, f32)> {
     use std::collections::HashMap;
@@ -225,8 +272,8 @@ pub fn reciprocal_rank_fusion(
 
     // Sort by RRF score descending
     let mut results: Vec<_> = scores.into_iter().collect();
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(k);
+    results.sort_by(|a, b| b.1.total_cmp(&a.1));
+    results.truncate(limit);
 
     results
 }
