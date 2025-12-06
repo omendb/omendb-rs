@@ -142,8 +142,8 @@ fn test_rrf_basic() {
     let doc1_score = results.iter().find(|(id, _)| id == "doc1").unwrap().1;
     let doc2_score = results.iter().find(|(id, _)| id == "doc2").unwrap().1;
 
-    // Both should have same RRF score: 1/61 + 1/62
-    let expected = 1.0 / 61.0 + 1.0 / 62.0;
+    // Both should have same RRF score: 0.5*(1/61) + 0.5*(1/62) (default alpha=0.5)
+    let expected = 0.5 * (1.0 / 61.0 + 1.0 / 62.0);
     assert!((doc1_score - expected).abs() < 0.0001);
     assert!((doc2_score - expected).abs() < 0.0001);
 }
@@ -189,4 +189,103 @@ fn test_rrf_empty_inputs() {
     let results = reciprocal_rank_fusion(vector_only, vec![], 10, 60);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].0, "doc1");
+}
+
+#[test]
+fn test_weighted_rrf_alpha_extremes() {
+    let vector_results = vec![
+        ("vec_doc".to_string(), 0.1), // rank 0 in vector
+    ];
+
+    let text_results = vec![
+        ("text_doc".to_string(), 10.0), // rank 0 in text
+    ];
+
+    // alpha=1.0: vector only
+    let results =
+        weighted_reciprocal_rank_fusion(vector_results.clone(), text_results.clone(), 10, 60, 1.0);
+    assert_eq!(results[0].0, "vec_doc");
+    // text_doc should have score 0
+    let text_score = results.iter().find(|(id, _)| id == "text_doc").unwrap().1;
+    assert!(text_score < 0.0001);
+
+    // alpha=0.0: text only
+    let results =
+        weighted_reciprocal_rank_fusion(vector_results.clone(), text_results.clone(), 10, 60, 0.0);
+    assert_eq!(results[0].0, "text_doc");
+    // vec_doc should have score 0
+    let vec_score = results.iter().find(|(id, _)| id == "vec_doc").unwrap().1;
+    assert!(vec_score < 0.0001);
+}
+
+#[test]
+fn test_weighted_rrf_alpha_balanced() {
+    let vector_results = vec![
+        ("doc1".to_string(), 0.1), // rank 0
+        ("doc2".to_string(), 0.2), // rank 1
+    ];
+
+    let text_results = vec![
+        ("doc2".to_string(), 10.0), // rank 0
+        ("doc1".to_string(), 8.0),  // rank 1
+    ];
+
+    // alpha=0.5 (default): balanced
+    let results =
+        weighted_reciprocal_rank_fusion(vector_results.clone(), text_results.clone(), 10, 60, 0.5);
+
+    let doc1_score = results.iter().find(|(id, _)| id == "doc1").unwrap().1;
+    let doc2_score = results.iter().find(|(id, _)| id == "doc2").unwrap().1;
+
+    // With alpha=0.5, both get equal weight
+    // doc1: 0.5 * 1/61 + 0.5 * 1/62
+    // doc2: 0.5 * 1/62 + 0.5 * 1/61
+    // Should be equal
+    assert!((doc1_score - doc2_score).abs() < 0.0001);
+}
+
+#[test]
+fn test_weighted_rrf_alpha_bias_vector() {
+    let vector_results = vec![
+        ("vec_winner".to_string(), 0.1), // rank 0
+    ];
+
+    let text_results = vec![
+        ("text_winner".to_string(), 10.0), // rank 0
+    ];
+
+    // alpha=0.8: heavily favor vector
+    let results =
+        weighted_reciprocal_rank_fusion(vector_results.clone(), text_results.clone(), 10, 60, 0.8);
+
+    let vec_score = results.iter().find(|(id, _)| id == "vec_winner").unwrap().1;
+    let text_score = results
+        .iter()
+        .find(|(id, _)| id == "text_winner")
+        .unwrap()
+        .1;
+
+    // vec should score 4x higher (0.8 vs 0.2)
+    assert!((vec_score / text_score - 4.0).abs() < 0.01);
+}
+
+#[test]
+fn test_weighted_rrf_alpha_clamping() {
+    let vector_results = vec![("doc1".to_string(), 0.1)];
+    let text_results = vec![("doc2".to_string(), 10.0)];
+
+    // alpha > 1.0 should clamp to 1.0
+    let results =
+        weighted_reciprocal_rank_fusion(vector_results.clone(), text_results.clone(), 10, 60, 1.5);
+    assert_eq!(results[0].0, "doc1"); // vector only
+
+    // alpha < 0.0 should clamp to 0.0
+    let results =
+        weighted_reciprocal_rank_fusion(vector_results.clone(), text_results.clone(), 10, 60, -0.5);
+    assert_eq!(results[0].0, "doc2"); // text only
+}
+
+#[test]
+fn test_default_rrf_k_constant() {
+    assert_eq!(DEFAULT_RRF_K, 60);
 }

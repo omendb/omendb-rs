@@ -236,6 +236,9 @@ impl TextIndex {
     }
 }
 
+/// Default RRF constant (k=60 per Cormack et al. 2009).
+pub const DEFAULT_RRF_K: usize = 60;
+
 /// Reciprocal Rank Fusion for combining vector and text search results.
 ///
 /// RRF combines rankings from multiple sources without requiring score normalization.
@@ -256,7 +259,37 @@ pub fn reciprocal_rank_fusion(
     limit: usize,
     rrf_k: usize,
 ) -> Vec<(String, f32)> {
+    weighted_reciprocal_rank_fusion(vector_results, text_results, limit, rrf_k, 0.5)
+}
+
+/// Weighted Reciprocal Rank Fusion for hybrid search with tunable balance.
+///
+/// Like [`reciprocal_rank_fusion`], but allows weighting vector vs text results.
+///
+/// # Arguments
+/// * `vector_results` - Results from vector search as (id, distance)
+/// * `text_results` - Results from text search as (id, score)
+/// * `limit` - Maximum results to return
+/// * `rrf_k` - RRF constant (default: 60)
+/// * `alpha` - Weight for vector results (0.0 = text only, 1.0 = vector only, 0.5 = balanced)
+///
+/// # Example
+/// ```ignore
+/// // 70% vector, 30% text
+/// let results = weighted_reciprocal_rank_fusion(vec_results, text_results, 10, 60, 0.7);
+/// ```
+#[must_use]
+pub fn weighted_reciprocal_rank_fusion(
+    vector_results: Vec<(String, f32)>,
+    text_results: Vec<(String, f32)>,
+    limit: usize,
+    rrf_k: usize,
+    alpha: f32,
+) -> Vec<(String, f32)> {
     use std::collections::HashMap;
+
+    // Clamp alpha to valid range
+    let alpha = alpha.clamp(0.0, 1.0);
 
     let mut scores: HashMap<String, f32> = HashMap::new();
 
@@ -264,14 +297,14 @@ pub fn reciprocal_rank_fusion(
     // Results are already sorted by distance ascending
     for (rank, (id, _distance)) in vector_results.iter().enumerate() {
         let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
-        *scores.entry(id.clone()).or_default() += rrf_score;
+        *scores.entry(id.clone()).or_default() += alpha * rrf_score;
     }
 
     // Add text search contributions (higher BM25 = higher rank)
     // Results are already sorted by score descending
     for (rank, (id, _score)) in text_results.iter().enumerate() {
         let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
-        *scores.entry(id.clone()).or_default() += rrf_score;
+        *scores.entry(id.clone()).or_default() += (1.0 - alpha) * rrf_score;
     }
 
     // Sort by RRF score descending

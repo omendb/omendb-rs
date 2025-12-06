@@ -11,15 +11,12 @@ use super::hnsw_index::HNSWIndex;
 use super::storage::SeerDBStorage;
 use super::types::Vector;
 use crate::compression::{QuantizedVector, RaBitQ, RaBitQParams};
-use crate::text::{reciprocal_rank_fusion, TextIndex, TextSearchConfig};
+use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
-/// Default RRF constant (k=60 is industry standard per Cormack et al. 2009)
-const DEFAULT_RRF_K: usize = 60;
 
 #[cfg(test)]
 mod tests;
@@ -1115,22 +1112,25 @@ impl VectorStore {
     /// * `query_vector` - Query embedding for vector search
     /// * `query_text` - Query text for BM25 search
     /// * `k` - Number of results to return
+    /// * `alpha` - Weight for vector vs text (0.0 = text only, 1.0 = vector only, None = 0.5)
     ///
     /// # Returns
     /// Vec of (id, score) tuples, sorted by combined score descending.
     ///
     /// # Example
     /// ```ignore
-    /// let results = store.hybrid_search(&query_embedding, "machine learning", 10)?;
-    /// for (id, score) in results {
-    ///     println!("{}: {}", id, score);
-    /// }
+    /// // Balanced hybrid search
+    /// let results = store.hybrid_search(&query_embedding, "machine learning", 10, None)?;
+    ///
+    /// // Favor vector similarity (70% vector, 30% text)
+    /// let results = store.hybrid_search(&query_embedding, "machine learning", 10, Some(0.7))?;
     /// ```
     pub fn hybrid_search(
         &mut self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
+        alpha: Option<f32>,
     ) -> Result<Vec<(String, f32)>> {
         // Over-fetch from both sources for better fusion
         let fetch_k = k * 2;
@@ -1149,24 +1149,33 @@ impl VectorStore {
         // Text search
         let text_results = self.text_search(query_text, fetch_k).unwrap_or_default();
 
-        // Fuse results with RRF
-        Ok(reciprocal_rank_fusion(
+        // Fuse results with weighted RRF
+        Ok(weighted_reciprocal_rank_fusion(
             vector_results,
             text_results,
             k,
             DEFAULT_RRF_K,
+            alpha.unwrap_or(0.5),
         ))
     }
 
     /// Hybrid search with filter (combining vector + text + metadata filter).
     ///
     /// Like `hybrid_search()`, but also applies a metadata filter.
+    ///
+    /// # Arguments
+    /// * `query_vector` - Query embedding for vector search
+    /// * `query_text` - Query text for BM25 search
+    /// * `k` - Number of results to return
+    /// * `filter` - Metadata filter to apply
+    /// * `alpha` - Weight for vector vs text (0.0 = text only, 1.0 = vector only, None = 0.5)
     pub fn hybrid_search_with_filter(
         &mut self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
         filter: &MetadataFilter,
+        alpha: Option<f32>,
     ) -> Result<Vec<(String, f32)>> {
         let fetch_k = k * 2;
 
@@ -1197,11 +1206,12 @@ impl VectorStore {
             })
             .collect();
 
-        Ok(reciprocal_rank_fusion(
+        Ok(weighted_reciprocal_rank_fusion(
             vector_results,
             text_results,
             k,
             DEFAULT_RRF_K,
+            alpha.unwrap_or(0.5),
         ))
     }
 
