@@ -77,9 +77,9 @@ def test_text_search():
 
         results = db.text_search("Python", k=10)
 
-        assert len(results) >= 2
+        assert len(results) == 2
         ids = [r["id"] for r in results]
-        assert "doc1" in ids or "doc3" in ids
+        assert "doc1" in ids and "doc3" in ids
 
         for r in results:
             assert "id" in r

@@ -648,8 +648,8 @@ impl VectorDatabase {
             .map(|(id, score)| {
                 let metadata = inner
                     .store
-                    .get_by_id(&id)
-                    .map(|(_, meta)| meta.clone())
+                    .get_metadata_by_id(&id)
+                    .cloned()
                     .unwrap_or(serde_json::json!({}));
                 TextSearchResult {
                     id,
