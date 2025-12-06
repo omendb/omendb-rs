@@ -745,6 +745,7 @@ pub unsafe extern "C" fn omendb_text_search(
 /// * `query_len` - Length of query vector
 /// * `query_text` - Text query string
 /// * `k` - Number of results
+/// * `alpha` - Weight for vector vs text (0.0=text only, 1.0=vector only, <0 for default 0.5)
 /// * `result` - Output pointer for result JSON
 ///
 /// # Returns
@@ -759,6 +760,7 @@ pub unsafe extern "C" fn omendb_hybrid_search(
     query_len: usize,
     query_text: *const c_char,
     k: usize,
+    alpha: f32,
     result: *mut *mut c_char,
 ) -> i32 {
     clear_last_error();
@@ -797,7 +799,10 @@ pub unsafe extern "C" fn omendb_hybrid_search(
         }
     };
 
-    let search_results = match db.store.hybrid_search(&vector, text_str, k) {
+    // Use None for default (0.5), otherwise use provided alpha
+    let alpha_opt = if alpha < 0.0 { None } else { Some(alpha) };
+
+    let search_results = match db.store.hybrid_search(&vector, text_str, k, alpha_opt) {
         Ok(r) => r,
         Err(e) => {
             set_last_error(format!("Hybrid search failed: {e}"));

@@ -870,6 +870,7 @@ impl VectorDatabase {
     ///     query_text (str): Text query for BM25
     ///     k (int): Number of results to return
     ///     filter (dict, optional): Metadata filter
+    ///     alpha (float, optional): Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
     ///
     /// Returns:
     ///     list[dict]: Results with {id, score} sorted by RRF score descending
@@ -881,7 +882,10 @@ impl VectorDatabase {
     ///
     ///     With filter:
     ///     >>> results = db.hybrid_search(vec, "ML", k=10, filter={"category": "tech"})
-    #[pyo3(name = "hybrid_search", signature = (query_vector, query_text, k, filter=None))]
+    ///
+    ///     Favor vector similarity (70% vector, 30% text):
+    ///     >>> results = db.hybrid_search(vec, "ML", k=10, alpha=0.7)
+    #[pyo3(name = "hybrid_search", signature = (query_vector, query_text, k, filter=None, alpha=None))]
     fn hybrid_search(
         &self,
         py: Python<'_>,
@@ -889,6 +893,7 @@ impl VectorDatabase {
         query_text: &str,
         k: usize,
         filter: Option<&Bound<'_, PyDict>>,
+        alpha: Option<f32>,
     ) -> PyResult<Vec<Py<PyDict>>> {
         let query_vec = Vector::new(extract_query_vector(query_vector)?);
         let rust_filter = filter.map(parse_filter).transpose()?;
@@ -898,12 +903,12 @@ impl VectorDatabase {
         let results = if let Some(f) = rust_filter {
             inner
                 .store
-                .hybrid_search_with_filter(&query_vec, query_text, k, &f)
+                .hybrid_search_with_filter(&query_vec, query_text, k, &f, alpha)
                 .map_err(convert_error)?
         } else {
             inner
                 .store
-                .hybrid_search(&query_vec, query_text, k)
+                .hybrid_search(&query_vec, query_text, k, alpha)
                 .map_err(convert_error)?
         };
 

@@ -1171,7 +1171,9 @@ fn test_hybrid_search() {
 
     // Query: similar to doc1/doc3 vectors, text matches doc1/doc2
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
-    let results = store.hybrid_search(&query, "machine learning", 3).unwrap();
+    let results = store
+        .hybrid_search(&query, "machine learning", 3, None)
+        .unwrap();
 
     assert!(!results.is_empty());
 
@@ -1209,7 +1211,7 @@ fn test_hybrid_search_with_filter() {
     let filter = MetadataFilter::Eq("year".to_string(), serde_json::json!(2024));
 
     let results = store
-        .hybrid_search_with_filter(&query, "machine", 10, &filter)
+        .hybrid_search_with_filter(&query, "machine", 10, &filter, None)
         .unwrap();
 
     // Only doc1 should match the filter
@@ -1248,6 +1250,48 @@ fn test_hybrid_search_empty_text() {
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
 
     // Empty text query should still return vector search results
-    let results = store.hybrid_search(&query, "", 10).unwrap();
+    let results = store.hybrid_search(&query, "", 10, None).unwrap();
     assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn test_hybrid_search_alpha_weighting() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    // doc1: closest vector, weak text match
+    store
+        .set_with_text(
+            "vec_winner".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "unrelated words here",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // doc2: far vector, strong text match
+    store
+        .set_with_text(
+            "text_winner".to_string(),
+            Vector::new(vec![0.0, 0.0, 0.0, 1.0]),
+            "machine learning algorithms",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    store.flush().unwrap();
+
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+
+    // alpha=1.0: vector only - vec_winner should win
+    let results = store
+        .hybrid_search(&query, "machine learning", 2, Some(1.0))
+        .unwrap();
+    assert_eq!(results[0].0, "vec_winner");
+
+    // alpha=0.0: text only - text_winner should win
+    let results = store
+        .hybrid_search(&query, "machine learning", 2, Some(0.0))
+        .unwrap();
+    assert_eq!(results[0].0, "text_winner");
 }

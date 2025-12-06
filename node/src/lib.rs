@@ -658,6 +658,7 @@ impl VectorDatabase {
     /// @param queryText - Text query for BM25
     /// @param k - Number of results
     /// @param filter - Optional metadata filter
+    /// @param alpha - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
     /// @returns Array of {id, score}
     #[napi]
     pub fn hybrid_search(
@@ -666,21 +667,23 @@ impl VectorDatabase {
         query_text: String,
         k: u32,
         #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
+        alpha: Option<f64>,
     ) -> Result<Vec<TextSearchResult>> {
         let query_vec = Vector::new(extract_query_vector(query_vector));
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
+        let alpha_f32 = alpha.map(|a| a as f32);
 
         let mut inner = self.inner.write();
 
         let results = if let Some(f) = metadata_filter {
             inner
                 .store
-                .hybrid_search_with_filter(&query_vec, &query_text, k as usize, &f)
+                .hybrid_search_with_filter(&query_vec, &query_text, k as usize, &f, alpha_f32)
                 .map_err(convert_error)?
         } else {
             inner
                 .store
-                .hybrid_search(&query_vec, &query_text, k as usize)
+                .hybrid_search(&query_vec, &query_text, k as usize, alpha_f32)
                 .map_err(convert_error)?
         };
 
