@@ -1,6 +1,6 @@
 [workspace]
 members = ["."]
-exclude = ["python", "node"]
+exclude = ["python", "node", "fuzz"]
 resolver = "2"
 
 [package]

@@ -1,0 +1,85 @@
+name: Fuzzing
+
+on:
+  schedule:
+    # Daily at 3 AM UTC
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Fuzz duration per target (seconds)"
+        required: false
+        default: "300"
+        type: string
+      target:
+        description: "Specific target (or 'all')"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - db_operations
+          - distance_ops
+
+env:
+  CARGO_TERM_COLOR: always
+  FUZZ_DURATION: ${{ inputs.duration || '300' }}
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - db_operations
+          - distance_ops
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Check if target selected
+        id: check
+        run: |
+          TARGET="${{ inputs.target || 'all' }}"
+          if [ "$TARGET" = "all" ] || [ "$TARGET" = "${{ matrix.target }}" ]; then
+            echo "run=true" >> $GITHUB_OUTPUT
+          else
+            echo "run=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run fuzzer
+        if: steps.check.outputs.run == 'true'
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=${{ env.FUZZ_DURATION }} \
+            -max_len=65536
+        timeout-minutes: 15
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-${{ matrix.target }}
+          path: |
+            fuzz/artifacts/${{ matrix.target }}
+            fuzz/corpus/${{ matrix.target }}
+          retention-days: 30
+
+      - name: Upload corpus
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}
+          retention-days: 7

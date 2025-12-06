@@ -8,54 +8,101 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Pin nightly for reproducibility (update monthly)
+  RUST_NIGHTLY: nightly-2025-12-04
 
 jobs:
   # ==========================================================================
-  # Rust: Format, Lint, Test
+  # Stage 1: Fast checks (parallel, fail fast on lint)
   # ==========================================================================
-  rust:
+
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-12-04
-          components: rustfmt, clippy
+          components: rustfmt
+      - run: cargo fmt --check
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (lib)
+        run: |
+          cargo clippy --lib -- \
+            -D warnings \
+            -D clippy::correctness \
+            -W clippy::suspicious
+      - name: Clippy (tests)
+        run: |
+          cargo clippy --tests -- \
+            -D clippy::correctness \
+            -W clippy::suspicious
 
-      - name: Check formatting
-        run: cargo fmt --check
+  # ==========================================================================
+  # Stage 2: Rust tests (after lint passes)
+  # ==========================================================================
 
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Test
+  test:
+    name: Test (Rust)
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit tests
         run: cargo test --lib
+        timeout-minutes: 10
+
+  proptest:
+    name: Property Tests
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Property-based tests
+        run: cargo test --lib proptest
+        timeout-minutes: 15
+        env:
+          PROPTEST_CASES: 500
 
   # ==========================================================================
-  # Python: Format, Lint, Test
+  # Stage 2: Python bindings (parallel with Rust tests)
   # ==========================================================================
+
   python:
+    name: Test (Python)
     runs-on: ubuntu-latest
+    needs: [fmt, clippy]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-04
+          toolchain: ${{ env.RUST_NIGHTLY }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
         working-directory: python
@@ -78,22 +125,23 @@ jobs:
         run: uv run pytest tests/ -x --timeout=60 -m "not slow and not soak"
 
   # ==========================================================================
-  # Node: Build, Test
+  # Stage 2: Node.js bindings (parallel with Rust tests)
   # ==========================================================================
+
   node:
+    name: Test (Node.js)
     runs-on: ubuntu-latest
+    needs: [fmt, clippy]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-04
+          toolchain: ${{ env.RUST_NIGHTLY }}
 
       - name: Install dependencies
         working-directory: node
