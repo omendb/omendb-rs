@@ -129,14 +129,15 @@ fn results_to_py(
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
-        dict.set_item("id", id)?;
-        dict.set_item("distance", *distance)?;
+        // Use interned strings for dict keys (hot path optimization)
+        dict.set_item(pyo3::intern!(py, "id"), id)?;
+        dict.set_item(pyo3::intern!(py, "distance"), *distance)?;
 
         // Convert metadata to Python dict
         let metadata_dict = json_to_pyobject(py, metadata)?;
-        dict.set_item("metadata", metadata_dict)?;
+        dict.set_item(pyo3::intern!(py, "metadata"), metadata_dict)?;
 
-        py_results.push(dict.into());
+        py_results.push(dict.unbind());
     }
 
     Ok(py_results)
