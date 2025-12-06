@@ -406,6 +406,7 @@ def main():
     parser.add_argument("--hybrid", action="store_true", help="Run hybrid search benchmarks")
     parser.add_argument("--dimension", type=int, default=128, help="Vector dimension")
     parser.add_argument("--vectors", type=int, default=10000, help="Number of vectors")
+    parser.add_argument("--queries", type=int, default=1000, help="Number of queries")
     parser.add_argument(
         "--quantize",
         type=int,
@@ -450,7 +451,9 @@ def main():
         result = run_hybrid_benchmark(10000, 384)
         all_results.append(result)
     else:
-        result = run_benchmark(args.vectors, args.dimension, quantize_bits=args.quantize)
+        result = run_benchmark(
+            args.vectors, args.dimension, n_queries=args.queries, quantize_bits=args.quantize
+        )
         all_results.append(result)
 
     print("\n" + "=" * 60)
