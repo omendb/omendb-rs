@@ -730,21 +730,14 @@ impl VectorDatabase {
     fn enable_text_search(&self, buffer_mb: Option<usize>) -> PyResult<()> {
         let mut inner = self.inner.write();
 
-        if let Some(mb) = buffer_mb {
-            let config = TextSearchConfig {
-                writer_buffer_mb: mb,
-            };
-            // Store config for later use - need to set it before enabling
-            // Since we can't modify text_search_config after construction,
-            // we'll need to create the text index directly with config
-            if inner.store.has_text_search() {
-                return Ok(()); // Already enabled
-            }
-            // For now, just enable with default - config support requires store changes
-            let _ = config; // suppress unused warning
-        }
+        let config = buffer_mb.map(|mb| TextSearchConfig {
+            writer_buffer_mb: mb,
+        });
 
-        inner.store.enable_text_search().map_err(convert_error)
+        inner
+            .store
+            .enable_text_search_with_config(config)
+            .map_err(convert_error)
     }
 
     /// Check if text search is enabled.

@@ -1003,11 +1003,24 @@ impl VectorStore {
     /// For persistent stores, the text index is stored at `{path}/text_index`.
     /// For in-memory stores, the text index is also in-memory.
     pub fn enable_text_search(&mut self) -> Result<()> {
+        self.enable_text_search_with_config(None)
+    }
+
+    /// Enable text search with custom configuration.
+    ///
+    /// # Arguments
+    /// * `config` - Text search configuration (None = use store's default or system default)
+    pub fn enable_text_search_with_config(
+        &mut self,
+        config: Option<TextSearchConfig>,
+    ) -> Result<()> {
         if self.text_index.is_some() {
             return Ok(()); // Already enabled
         }
 
-        let config = self.text_search_config.clone().unwrap_or_default();
+        let config = config
+            .or_else(|| self.text_search_config.clone())
+            .unwrap_or_default();
 
         self.text_index = if let Some(ref path) = self.storage_path {
             let text_path = path.join("text_index");
@@ -1165,8 +1178,8 @@ impl VectorStore {
             })
             .collect();
 
-        // Text search
-        let text_results = self.text_search(query_text, fetch_k).unwrap_or_default();
+        // Text search - propagate errors (hybrid requires text search enabled)
+        let text_results = self.text_search(query_text, fetch_k)?;
 
         // Fuse results with weighted RRF
         let fused = weighted_reciprocal_rank_fusion(
@@ -1226,9 +1239,7 @@ impl VectorStore {
             .collect();
 
         // Text search (unfiltered - filter applied post-fusion)
-        let text_results = self
-            .text_search(query_text, fetch_k * 2)
-            .unwrap_or_default();
+        let text_results = self.text_search(query_text, fetch_k * 2)?;
 
         // Filter text results by metadata
         let text_results: Vec<(String, f32)> = text_results
@@ -1400,6 +1411,18 @@ impl VectorStore {
             self.vectors
                 .get(index)
                 .and_then(|vec| self.metadata.get(&index).map(|meta| (vec, meta)))
+        })
+    }
+
+    /// Get metadata by string ID (without loading vector data).
+    ///
+    /// More efficient than `get_by_id` when only metadata is needed.
+    pub fn get_metadata_by_id(&self, id: &str) -> Option<&JsonValue> {
+        self.id_to_index.get(id).and_then(|&index| {
+            if self.deleted.contains_key(&index) {
+                return None;
+            }
+            self.metadata.get(&index)
         })
     }
 
