@@ -63,6 +63,51 @@ def generate_vectors(n: int, dim: int, seed: int = 42) -> np.ndarray:
     return np.random.randn(n, dim).astype(np.float32)
 
 
+def generate_text_corpus(n: int, seed: int = 42) -> list[str]:
+    """Generate random text documents for hybrid search benchmarks."""
+    words = [
+        "database",
+        "vector",
+        "search",
+        "query",
+        "index",
+        "storage",
+        "memory",
+        "performance",
+        "fast",
+        "efficient",
+        "scalable",
+        "distributed",
+        "embedded",
+        "machine",
+        "learning",
+        "neural",
+        "network",
+        "model",
+        "training",
+        "inference",
+        "algorithm",
+        "optimization",
+        "parallel",
+        "concurrent",
+        "async",
+        "thread",
+        "rust",
+        "python",
+        "javascript",
+        "typescript",
+        "server",
+        "client",
+    ]
+    np.random.seed(seed)
+    texts = []
+    for _ in range(n):
+        n_words = np.random.randint(5, 15)
+        doc = " ".join(np.random.choice(words, n_words))
+        texts.append(doc)
+    return texts
+
+
 def benchmark_build(
     db_path: str,
     vectors: np.ndarray,
@@ -168,6 +213,71 @@ def benchmark_batch_search(db, queries: np.ndarray, k: int = 10) -> dict:
     }
 
 
+def benchmark_text_search(db, query_texts: list[str], k: int = 10, warmup: int = 5) -> dict:
+    """Benchmark text-only (BM25) search performance."""
+    n_queries = len(query_texts)
+
+    # Warmup
+    for q in query_texts[:warmup]:
+        db.text_search(q, k=k)
+
+    # Benchmark
+    latencies = []
+    start = time.time()
+    for q in query_texts:
+        t0 = time.time()
+        db.text_search(q, k=k)
+        latencies.append((time.time() - t0) * 1000)
+    total = time.time() - start
+
+    latencies.sort()
+    return {
+        "queries": n_queries,
+        "time_s": total,
+        "qps": n_queries / total,
+        "latency_avg_ms": sum(latencies) / len(latencies),
+        "latency_p99_ms": latencies[int(len(latencies) * 0.99)] if latencies else 0,
+    }
+
+
+def benchmark_hybrid_search(
+    db,
+    query_vectors: np.ndarray,
+    query_texts: list[str],
+    k: int = 10,
+    alpha: float | None = None,
+    warmup: int = 5,
+) -> dict:
+    """Benchmark hybrid (vector + text) search performance."""
+    n_queries = len(query_vectors)
+
+    # Warmup
+    for i in range(min(warmup, n_queries)):
+        db.hybrid_search(
+            query_vectors[i].tolist(), query_texts[i % len(query_texts)], k=k, alpha=alpha
+        )
+
+    # Benchmark
+    latencies = []
+    start = time.time()
+    for i in range(n_queries):
+        t0 = time.time()
+        db.hybrid_search(
+            query_vectors[i].tolist(), query_texts[i % len(query_texts)], k=k, alpha=alpha
+        )
+        latencies.append((time.time() - t0) * 1000)
+    total = time.time() - start
+
+    latencies.sort()
+    return {
+        "queries": n_queries,
+        "time_s": total,
+        "qps": n_queries / total,
+        "latency_avg_ms": sum(latencies) / len(latencies),
+        "latency_p99_ms": latencies[int(len(latencies) * 0.99)] if latencies else 0,
+    }
+
+
 def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits: int = 0):
     """Run full benchmark suite for given parameters."""
     mode = f"RaBitQ-{quantize_bits}bit" if quantize_bits > 0 else "f32"
@@ -216,6 +326,70 @@ def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits
     }
 
 
+def run_hybrid_benchmark(n_vectors: int, dim: int, n_queries: int = 100):
+    """Run hybrid search benchmark suite."""
+    print(f"\n{'=' * 60}")
+    print(f"OmenDB Hybrid Benchmark: {n_vectors:,} vectors, {dim}D")
+    print(f"{'=' * 60}")
+
+    vectors = generate_vectors(n_vectors, dim)
+    texts = generate_text_corpus(n_vectors, seed=42)
+    query_vectors = generate_vectors(n_queries, dim, seed=999)
+    query_texts = ["vector database", "machine learning", "rust performance", "search query"]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = omendb.open(f"{tmpdir}/db", dimensions=dim)
+        db.enable_text_search()
+
+        # Build with text
+        batch = [
+            {
+                "id": f"d{i}",
+                "vector": vectors[i].tolist(),
+                "text": texts[i],
+                "metadata": {"cat": i % 10},
+            }
+            for i in range(n_vectors)
+        ]
+        start = time.time()
+        db.set(batch)
+        build_time = time.time() - start
+        print(f"\nBuild:    {n_vectors / build_time:>10,.0f} vec/s  ({build_time:.2f}s)")
+
+        # Text search (BM25 only)
+        text_result = benchmark_text_search(db, query_texts * (n_queries // 4))
+        print(
+            f"Text:     {text_result['qps']:>10,.0f} QPS    ({text_result['latency_avg_ms']:.2f}ms avg)"
+        )
+
+        # Hybrid search (balanced alpha=0.5)
+        hybrid_result = benchmark_hybrid_search(db, query_vectors, query_texts, alpha=0.5)
+        print(
+            f"Hybrid:   {hybrid_result['qps']:>10,.0f} QPS    ({hybrid_result['latency_avg_ms']:.2f}ms avg)"
+        )
+
+        # Hybrid text-only (alpha=0.0)
+        text_only = benchmark_hybrid_search(db, query_vectors, query_texts, alpha=0.0)
+        print(
+            f"α=0.0:    {text_only['qps']:>10,.0f} QPS    ({text_only['latency_avg_ms']:.2f}ms avg)"
+        )
+
+        # Hybrid vector-only (alpha=1.0)
+        vec_only = benchmark_hybrid_search(db, query_vectors, query_texts, alpha=1.0)
+        print(
+            f"α=1.0:    {vec_only['qps']:>10,.0f} QPS    ({vec_only['latency_avg_ms']:.2f}ms avg)"
+        )
+
+    return {
+        "config": {"n_vectors": n_vectors, "dimensions": dim, "n_queries": n_queries},
+        "build_time_s": build_time,
+        "text_search": text_result,
+        "hybrid_balanced": hybrid_result,
+        "hybrid_text_only": text_only,
+        "hybrid_vector_only": vec_only,
+    }
+
+
 def save_results(output_path: str, metadata: dict, results: list):
     """Save benchmark results to JSON file."""
     output = {"metadata": metadata, "results": results}
@@ -229,6 +403,7 @@ def save_results(output_path: str, metadata: dict, results: list):
 def main():
     parser = argparse.ArgumentParser(description="OmenDB Performance Benchmark")
     parser.add_argument("--full", action="store_true", help="Run full benchmark suite")
+    parser.add_argument("--hybrid", action="store_true", help="Run hybrid search benchmarks")
     parser.add_argument("--dimension", type=int, default=128, help="Vector dimension")
     parser.add_argument("--vectors", type=int, default=10000, help="Number of vectors")
     parser.add_argument(
@@ -250,7 +425,11 @@ def main():
 
     all_results = []
 
-    if args.full:
+    if args.hybrid:
+        # Hybrid search benchmarks
+        result = run_hybrid_benchmark(args.vectors, args.dimension)
+        all_results.append(result)
+    elif args.full:
         # Multiple dimensions
         for dim in [128, 384, 768, 1536]:
             result = run_benchmark(10000, dim)
@@ -263,6 +442,13 @@ def main():
         for n in [10000, 50000, 100000]:
             result = run_benchmark(n, 768)
             all_results.append(result)
+
+        # Hybrid search at 384D (common embedding dim)
+        print("\n" + "=" * 60)
+        print("Hybrid Search Test")
+        print("=" * 60)
+        result = run_hybrid_benchmark(10000, 384)
+        all_results.append(result)
     else:
         result = run_benchmark(args.vectors, args.dimension, quantize_bits=args.quantize)
         all_results.append(result)
