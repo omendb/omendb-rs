@@ -158,6 +158,30 @@ pub struct GetResult {
 }
 
 // ============================================================================
+// Vector Item With Text - input for hybrid search set operations
+// ============================================================================
+
+#[napi(object)]
+pub struct VectorItemWithText {
+    pub id: String,
+    pub vector: Vec<f64>,
+    pub text: String,
+    #[napi(ts_type = "Record<string, unknown> | undefined")]
+    pub metadata: Option<JsonValue>,
+}
+
+// ============================================================================
+// Text Search Result - returned from text/hybrid search
+// ============================================================================
+
+#[napi(object)]
+#[derive(Clone)]
+pub struct TextSearchResult {
+    pub id: String,
+    pub score: f64,
+}
+
+// ============================================================================
 // Inner State
 // ============================================================================
 
@@ -549,6 +573,138 @@ impl VectorDatabase {
             )
         })
     }
+
+    // =========================================================================
+    // Hybrid Search Methods
+    // =========================================================================
+
+    /// Enable text search for hybrid (vector + text) search.
+    ///
+    /// Must be called before using setWithText() or hybridSearch().
+    #[napi]
+    pub fn enable_text_search(&self) -> Result<()> {
+        let mut inner = self.inner.write();
+        inner.store.enable_text_search().map_err(convert_error)
+    }
+
+    /// Check if text search is enabled.
+    #[napi(getter)]
+    pub fn has_text_search(&self) -> bool {
+        let inner = self.inner.read();
+        inner.store.has_text_search()
+    }
+
+    /// Set vectors with associated text for hybrid search.
+    ///
+    /// @param items - Array of {id, vector, text, metadata?}
+    /// @returns Array of internal indices
+    #[napi]
+    pub fn set_with_text(&self, items: Vec<VectorItemWithText>) -> Result<Vec<u32>> {
+        let mut inner = self.inner.write();
+
+        if !inner.store.has_text_search() {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Text search not enabled. Call enableTextSearch() first.",
+            ));
+        }
+
+        let mut results = Vec::with_capacity(items.len());
+
+        for item in items {
+            let vector_data: Vec<f32> = item.vector.into_iter().map(|x| x as f32).collect();
+            let metadata = item.metadata.unwrap_or(serde_json::json!({}));
+
+            let index = inner
+                .store
+                .set_with_text(item.id, Vector::new(vector_data), &item.text, metadata)
+                .map_err(convert_error)?;
+
+            results.push(index as u32);
+        }
+
+        inner.cache_valid = false;
+        Ok(results)
+    }
+
+    /// Search using text only (BM25 scoring).
+    ///
+    /// @param query - Text query
+    /// @param k - Number of results
+    /// @returns Array of {id, score}
+    #[napi]
+    pub fn text_search(&self, query: String, k: u32) -> Result<Vec<TextSearchResult>> {
+        let inner = self.inner.read();
+
+        let results = inner
+            .store
+            .text_search(&query, k as usize)
+            .map_err(convert_error)?;
+
+        Ok(results
+            .into_iter()
+            .map(|(id, score)| TextSearchResult {
+                id,
+                score: score as f64,
+            })
+            .collect())
+    }
+
+    /// Hybrid search combining vector similarity and text relevance.
+    ///
+    /// Uses Reciprocal Rank Fusion (RRF) to combine HNSW and BM25 results.
+    ///
+    /// @param queryVector - Query embedding
+    /// @param queryText - Text query for BM25
+    /// @param k - Number of results
+    /// @param filter - Optional metadata filter
+    /// @returns Array of {id, score}
+    #[napi]
+    pub fn hybrid_search(
+        &self,
+        query_vector: Either<Vec<f64>, Float32Array>,
+        query_text: String,
+        k: u32,
+        #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
+    ) -> Result<Vec<TextSearchResult>> {
+        let query_vec = Vector::new(extract_query_vector(query_vector));
+        let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
+
+        let mut inner = self.inner.write();
+
+        let results = if let Some(f) = metadata_filter {
+            inner
+                .store
+                .hybrid_search_with_filter(&query_vec, &query_text, k as usize, &f)
+                .map_err(convert_error)?
+        } else {
+            inner
+                .store
+                .hybrid_search(&query_vec, &query_text, k as usize)
+                .map_err(convert_error)?
+        };
+
+        Ok(results
+            .into_iter()
+            .map(|(id, score)| TextSearchResult {
+                id,
+                score: score as f64,
+            })
+            .collect())
+    }
+
+    /// Flush pending changes to disk.
+    ///
+    /// For hybrid search, this commits text index changes.
+    #[napi]
+    pub fn flush(&self) -> Result<()> {
+        let mut inner = self.inner.write();
+        inner.store.flush().map_err(convert_error)
+    }
+
+    // =========================================================================
+    // Merge Methods
+    // =========================================================================
 
     /// Merge another database into this one.
     #[napi]
