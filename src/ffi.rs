@@ -519,6 +519,340 @@ pub unsafe extern "C" fn omendb_free_string(s: *mut c_char) {
 /// Get `OmenDB` version
 #[no_mangle]
 pub extern "C" fn omendb_version() -> *const c_char {
-    static VERSION: &[u8] = b"0.0.1\0";
+    static VERSION: &[u8] = b"0.0.5\0";
     VERSION.as_ptr().cast::<c_char>()
+}
+
+// ============================================================================
+// Hybrid Search FFI
+// ============================================================================
+
+/// Enable text search for hybrid search
+///
+/// # Returns
+/// 0 on success, -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+#[no_mangle]
+pub unsafe extern "C" fn omendb_enable_text_search(db: *mut OmenDB) -> i32 {
+    clear_last_error();
+
+    let Some(db) = db.as_mut() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    match db.store.enable_text_search() {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(format!("Failed to enable text search: {e}"));
+            -1
+        }
+    }
+}
+
+/// Check if text search is enabled
+///
+/// # Returns
+/// 1 if enabled, 0 if not, -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+#[no_mangle]
+pub unsafe extern "C" fn omendb_has_text_search(db: *const OmenDB) -> i32 {
+    let Some(db) = db.as_ref() else {
+        return -1;
+    };
+    if db.store.has_text_search() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Set vectors with text for hybrid search
+///
+/// # Arguments
+/// * `db` - Database handle
+/// * `items_json` - JSON array: `[{"id": "...", "vector": [...], "text": "...", "metadata": {...}}, ...]`
+///
+/// # Returns
+/// Number of vectors inserted, or -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+/// - `items_json` must be a valid, null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *const c_char) -> i64 {
+    clear_last_error();
+
+    let Some(db) = db.as_mut() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    if !db.store.has_text_search() {
+        set_last_error(
+            "Text search not enabled. Call omendb_enable_text_search first.".to_string(),
+        );
+        return -1;
+    }
+
+    if items_json.is_null() {
+        set_last_error("Null items_json pointer".to_string());
+        return -1;
+    }
+
+    let items_str = match CStr::from_ptr(items_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid JSON string: {e}"));
+            return -1;
+        }
+    };
+
+    let items: Vec<JsonValue> = match serde_json::from_str(items_str) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(format!("JSON parse error: {e}"));
+            return -1;
+        }
+    };
+
+    let mut count = 0i64;
+    for item in items {
+        let id = if let Some(s) = item.get("id").and_then(|v| v.as_str()) {
+            s.to_string()
+        } else {
+            set_last_error("Item missing 'id' field".to_string());
+            return -1;
+        };
+
+        let vector_data: Vec<f32> = if let Some(arr) = item.get("vector").and_then(|v| v.as_array())
+        {
+            arr.iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect()
+        } else {
+            set_last_error("Item missing 'vector' field".to_string());
+            return -1;
+        };
+
+        let text = if let Some(s) = item.get("text").and_then(|v| v.as_str()) {
+            s
+        } else {
+            set_last_error("Item missing 'text' field".to_string());
+            return -1;
+        };
+
+        let metadata = item.get("metadata").cloned().unwrap_or(json!({}));
+
+        let vector = Vector::new(vector_data);
+        if let Err(e) = db.store.set_with_text(id, vector, text, metadata) {
+            set_last_error(format!("Set with text failed: {e}"));
+            return -1;
+        }
+        count += 1;
+    }
+
+    count
+}
+
+/// Text-only search (BM25)
+///
+/// # Arguments
+/// * `db` - Database handle
+/// * `query` - Text query string
+/// * `k` - Number of results
+/// * `result` - Output pointer for result JSON
+///
+/// # Returns
+/// 0 on success, -1 on error
+///
+/// # Safety
+/// - All pointer arguments must be valid
+#[no_mangle]
+pub unsafe extern "C" fn omendb_text_search(
+    db: *mut OmenDB,
+    query: *const c_char,
+    k: usize,
+    result: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+
+    let Some(db) = db.as_ref() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    if query.is_null() {
+        set_last_error("Null query pointer".to_string());
+        return -1;
+    }
+
+    let query_str = match CStr::from_ptr(query).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid query string: {e}"));
+            return -1;
+        }
+    };
+
+    let search_results = match db.store.text_search(query_str, k) {
+        Ok(r) => r,
+        Err(e) => {
+            set_last_error(format!("Text search failed: {e}"));
+            return -1;
+        }
+    };
+
+    let json_results: Vec<JsonValue> = search_results
+        .into_iter()
+        .map(|(id, score)| json!({"id": id, "score": score}))
+        .collect();
+
+    let json_str = match serde_json::to_string(&json_results) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("JSON serialize error: {e}"));
+            return -1;
+        }
+    };
+
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
+        return -1;
+    }
+
+    match CString::new(json_str) {
+        Ok(cstr) => {
+            *result = cstr.into_raw();
+            0
+        }
+        Err(e) => {
+            set_last_error(format!("CString error: {e}"));
+            -1
+        }
+    }
+}
+
+/// Hybrid search combining vector and text
+///
+/// # Arguments
+/// * `db` - Database handle
+/// * `query_vector` - Query vector (float array)
+/// * `query_len` - Length of query vector
+/// * `query_text` - Text query string
+/// * `k` - Number of results
+/// * `result` - Output pointer for result JSON
+///
+/// # Returns
+/// 0 on success, -1 on error
+///
+/// # Safety
+/// - All pointer arguments must be valid
+#[no_mangle]
+pub unsafe extern "C" fn omendb_hybrid_search(
+    db: *mut OmenDB,
+    query_vector: *const f32,
+    query_len: usize,
+    query_text: *const c_char,
+    k: usize,
+    result: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+
+    let Some(db) = db.as_mut() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    if query_vector.is_null() {
+        set_last_error("Null query_vector pointer".to_string());
+        return -1;
+    }
+
+    if query_text.is_null() {
+        set_last_error("Null query_text pointer".to_string());
+        return -1;
+    }
+
+    if query_len != db.dimensions {
+        set_last_error(format!(
+            "Query dimension mismatch: expected {}, got {query_len}",
+            db.dimensions
+        ));
+        return -1;
+    }
+
+    let query_vec: Vec<f32> = std::slice::from_raw_parts(query_vector, query_len).to_vec();
+    let vector = Vector::new(query_vec);
+
+    let text_str = match CStr::from_ptr(query_text).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid text query: {e}"));
+            return -1;
+        }
+    };
+
+    let search_results = match db.store.hybrid_search(&vector, text_str, k) {
+        Ok(r) => r,
+        Err(e) => {
+            set_last_error(format!("Hybrid search failed: {e}"));
+            return -1;
+        }
+    };
+
+    let json_results: Vec<JsonValue> = search_results
+        .into_iter()
+        .map(|(id, score)| json!({"id": id, "score": score}))
+        .collect();
+
+    let json_str = match serde_json::to_string(&json_results) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("JSON serialize error: {e}"));
+            return -1;
+        }
+    };
+
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
+        return -1;
+    }
+
+    match CString::new(json_str) {
+        Ok(cstr) => {
+            *result = cstr.into_raw();
+            0
+        }
+        Err(e) => {
+            set_last_error(format!("CString error: {e}"));
+            -1
+        }
+    }
+}
+
+/// Flush pending changes (commits text index)
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+#[no_mangle]
+pub unsafe extern "C" fn omendb_flush(db: *mut OmenDB) -> i32 {
+    clear_last_error();
+
+    let Some(db) = db.as_mut() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    match db.store.flush() {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(format!("Flush failed: {e}"));
+            -1
+        }
+    }
 }
