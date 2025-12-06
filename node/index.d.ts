@@ -47,6 +47,49 @@ export declare class VectorDatabase {
   collections(): Array<string>
   /** Delete a collection. */
   deleteCollection(name: string): void
+  /**
+   * Enable text search for hybrid (vector + text) search.
+   *
+   * Must be called before using setWithText() or hybridSearch().
+   */
+  enableTextSearch(): void
+  /** Check if text search is enabled. */
+  get hasTextSearch(): boolean
+  /**
+   * Set vectors with associated text for hybrid search.
+   *
+   * @param items - Array of {id, vector, text, metadata?}
+   * @returns Array of internal indices
+   */
+  setWithText(items: Array<VectorItemWithText>): Array<number>
+  /**
+   * Search using text only (BM25 scoring).
+   *
+   * @param query - Text query
+   * @param k - Number of results
+   * @returns Array of {id, score, metadata}
+   */
+  textSearch(query: string, k: number): Array<TextSearchResult>
+  /**
+   * Hybrid search combining vector similarity and text relevance.
+   *
+   * Uses Reciprocal Rank Fusion (RRF) to combine HNSW and BM25 results.
+   *
+   * @param queryVector - Query embedding
+   * @param queryText - Text query for BM25
+   * @param k - Number of results
+   * @param filter - Optional metadata filter
+   * @param alpha - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
+   * @param rrfK - RRF constant (default=60, higher reduces rank influence)
+   * @returns Array of {id, score, metadata}
+   */
+  hybridSearch(queryVector: Array<number> | Float32Array, queryText: string, k: number, filter?: Record<string, unknown> | undefined, alpha?: number | undefined | null, rrfK?: number | undefined | null): Array<TextSearchResult>
+  /**
+   * Flush pending changes to disk.
+   *
+   * For hybrid search, this commits text index changes.
+   */
+  flush(): void
   /** Merge another database into this one. */
   mergeFrom(other: VectorDatabase): number
 }
@@ -119,6 +162,12 @@ export interface SearchResult {
   metadata: Record<string, unknown>
 }
 
+export interface TextSearchResult {
+  id: string
+  score: number
+  metadata: Record<string, unknown>
+}
+
 export interface VectorItem {
   id: string
   /** Vector data as array of numbers */
@@ -127,4 +176,11 @@ export interface VectorItem {
   metadata?: Record<string, unknown> | undefined
   /** Optional document text (stored in metadata.document) */
   document?: string
+}
+
+export interface VectorItemWithText {
+  id: string
+  vector: Array<number>
+  text: string
+  metadata?: Record<string, unknown> | undefined
 }

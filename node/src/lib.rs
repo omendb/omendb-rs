@@ -633,7 +633,7 @@ impl VectorDatabase {
     ///
     /// @param query - Text query
     /// @param k - Number of results
-    /// @returns Array of {id, score}
+    /// @returns Array of {id, score, metadata}
     #[napi]
     pub fn text_search(&self, query: String, k: u32) -> Result<Vec<TextSearchResult>> {
         let inner = self.inner.read();
@@ -645,9 +645,17 @@ impl VectorDatabase {
 
         Ok(results
             .into_iter()
-            .map(|(id, score)| TextSearchResult {
-                id,
-                score: score as f64,
+            .map(|(id, score)| {
+                let metadata = inner
+                    .store
+                    .get_by_id(&id)
+                    .map(|(_, meta)| meta.clone())
+                    .unwrap_or(serde_json::json!({}));
+                TextSearchResult {
+                    id,
+                    score: score as f64,
+                    metadata,
+                }
             })
             .collect())
     }
