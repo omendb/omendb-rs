@@ -1,6 +1,6 @@
 //! Full-text search using tantivy.
 //!
-//! Provides BM25-based text search that integrates with VectorStore
+//! Provides BM25-based text search that integrates with `VectorStore`
 //! for hybrid (vector + text) search capabilities.
 
 use anyhow::{anyhow, Result};
@@ -186,7 +186,7 @@ impl TextIndex {
 
     /// Search for documents matching the query.
     ///
-    /// Returns a vector of (document_id, BM25_score) tuples, sorted by score descending.
+    /// Returns a vector of (id, score) tuples, sorted by score descending.
     ///
     /// # Arguments
     /// * `query_str` - The search query (supports tantivy query syntax)
@@ -201,7 +201,7 @@ impl TextIndex {
         let query_parser = QueryParser::for_index(&self.index, vec![self.text_field]);
         let query = query_parser
             .parse_query(query_str)
-            .map_err(|e| anyhow!("Invalid query: {}", e))?;
+            .map_err(|e| anyhow!("Invalid query: {e}"))?;
 
         let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
 
@@ -218,16 +218,19 @@ impl TextIndex {
     }
 
     /// Get the number of documents in the index.
+    #[must_use]
     pub fn num_docs(&self) -> u64 {
         self.reader.searcher().num_docs()
     }
 
     /// Get a reference to the underlying tantivy index.
+    #[must_use]
     pub fn index(&self) -> &Index {
         &self.index
     }
 
     /// Get a reference to the index reader.
+    #[must_use]
     pub fn reader(&self) -> &IndexReader {
         &self.reader
     }
@@ -240,12 +243,13 @@ impl TextIndex {
 ///
 /// # Arguments
 /// * `vector_results` - Results from vector search as (id, distance)
-/// * `text_results` - Results from text search as (id, BM25_score)
+/// * `text_results` - Results from text search as (id, score)
 /// * `limit` - Maximum results to return
 /// * `rrf_k` - RRF constant (default: 60)
 ///
 /// # Returns
-/// Combined results as (id, RRF_score) sorted by score descending.
+/// Combined results as (id, score) sorted by score descending.
+#[must_use]
 pub fn reciprocal_rank_fusion(
     vector_results: Vec<(String, f32)>,
     text_results: Vec<(String, f32)>,
