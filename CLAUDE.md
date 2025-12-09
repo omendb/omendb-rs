@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OmenDB is a fast embedded vector database written in Rust with Python and Node.js bindings. It features HNSW indexing, ACORN-1 filtered search, and RaBitQ compression.
+OmenDB is a fast embedded vector database written in Rust with Python and Node.js bindings. Features HNSW indexing, ACORN-1 filtered search, RaBitQ compression, and hybrid search (vector + BM25).
 
 ## Build Commands
 
@@ -60,7 +60,7 @@ use omendb::{VectorStoreOptions, StorageConfig, StorageTier, CompressionTier, Di
 ## CI/CD
 
 - **CI**: Runs on push/PR - checks Rust (fmt, clippy, test), Python (ruff, pytest), Node (build, test)
-- **Release**: See `RELEASING.md` for full process. Quick: `./scripts/bump-version.sh && git commit && git push && gh workflow run Release`
+- **Release**: Use `/omendb-release` command or see `RELEASING.md`. Quick: `./scripts/bump-version.sh && git commit && git push && gh workflow run Release`
 
 ## Notes
 
