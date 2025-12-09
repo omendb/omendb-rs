@@ -150,11 +150,15 @@ impl VectorDatabase {
     /// If a vector with the same ID already exists, it will be replaced.
     /// Otherwise, a new vector will be inserted.
     ///
+    /// When any item includes a `text` field, text search is automatically enabled.
+    /// This allows immediate use of hybrid_search() without calling enable_text_search().
+    ///
     /// Args:
     ///     items (list[dict]): List of dictionaries, each containing:
     ///         - id (str): Unique identifier for the vector
     ///         - vector (list[float]): Vector data (must match database dimensions)
     ///         - metadata (dict, optional): Arbitrary metadata as JSON-compatible dict
+    ///         - text (str, optional): Text for hybrid search (auto-enables text search)
     ///         - document (str, optional): Document text (stored in metadata["document"])
     ///
     /// Returns:
@@ -182,6 +186,11 @@ impl VectorDatabase {
     ///
     ///     >>> db.set([{"id": "doc1", "vector": [...], "document": "Original text content"}])
     ///
+    ///     With text for hybrid search (auto-enables text search):
+    ///
+    ///     >>> db.set([{"id": "doc1", "vector": [...], "text": "Machine learning intro"}])
+    ///     >>> results = db.hybrid_search([...], "machine learning", k=10)  # Works immediately!
+    ///
     /// Performance:
     ///     - Throughput: 20,000-28,000 vec/s @ 10K vectors
     ///     - Batch operations are more efficient than individual inserts
@@ -207,8 +216,8 @@ impl VectorDatabase {
         vectors: Option<Vec<Vec<f32>>>,
         metadatas: Option<&Bound<'_, PyList>>,
     ) -> PyResult<Vec<usize>> {
-        let batch = if let (Some(ids), Some(vectors)) = (&ids, &vectors) {
-            // Batch kwargs: ids=[], vectors=[], metadatas=[]
+        // Handle kwargs batch format (no text support in this path)
+        if let (Some(ids), Some(vectors)) = (&ids, &vectors) {
             if ids.len() != vectors.len() {
                 return Err(PyValueError::new_err(format!(
                     "ids and vectors must have same length: {} vs {}",
@@ -216,7 +225,8 @@ impl VectorDatabase {
                     vectors.len()
                 )));
             }
-            ids.iter()
+            let batch: Vec<_> = ids
+                .iter()
                 .enumerate()
                 .map(|(i, id)| {
                     let meta = metadatas
@@ -226,36 +236,76 @@ impl VectorDatabase {
                         .unwrap_or_else(|| serde_json::json!({}));
                     Ok((id.clone(), Vector::new(vectors[i].clone()), meta))
                 })
-                .collect::<PyResult<Vec<_>>>()?
-        } else if let Some(id_or_items) = id_or_items {
+                .collect::<PyResult<Vec<_>>>()?;
+
+            let mut inner = self.inner.write();
+            let result = inner.store.set_batch(batch).map_err(convert_error)?;
+            inner.cache_valid = false;
+            return Ok(result);
+        }
+
+        // Handle single item: set("id", [...], {...})
+        if let Some(id_or_items) = id_or_items {
             if let Ok(id_str) = id_or_items.extract::<String>() {
-                // Single item: set("id", [...], {...})
                 let vec_data = vector
                     .ok_or_else(|| PyValueError::new_err("vector required when id is a string"))?;
                 let meta = metadata
                     .map(|m| pyobject_to_json(m.as_any()))
                     .transpose()?
                     .unwrap_or_else(|| serde_json::json!({}));
-                vec![(id_str, Vector::new(vec_data), meta)]
-            } else if let Ok(items) = id_or_items.cast::<PyList>() {
-                // Batch: set([{...}, {...}])
-                parse_batch_items(items)?
-            } else {
-                return Err(PyValueError::new_err(
-                    "First argument must be a string (id) or list of dicts",
-                ));
-            }
-        } else {
-            return Err(PyValueError::new_err(
-                "set() requires either (id, vector) or a list of items or (ids=, vectors=)",
-            ));
-        };
 
-        // Acquire write lock and perform set
-        let mut inner = self.inner.write();
-        let result = inner.store.set_batch(batch).map_err(convert_error)?;
-        inner.cache_valid = false;
-        Ok(result)
+                let mut inner = self.inner.write();
+                let result = inner
+                    .store
+                    .set(id_str, Vector::new(vec_data), meta)
+                    .map_err(convert_error)?;
+                inner.cache_valid = false;
+                return Ok(vec![result]);
+            }
+
+            // Handle batch: set([{...}, {...}])
+            if let Ok(items) = id_or_items.cast::<PyList>() {
+                let parsed = parse_batch_items_with_text(items)?;
+
+                // Check if any items have text
+                let has_text = parsed.iter().any(|item| item.text.is_some());
+
+                let mut inner = self.inner.write();
+
+                // Auto-enable text search if text field is present
+                if has_text && !inner.store.has_text_search() {
+                    inner.store.enable_text_search().map_err(convert_error)?;
+                }
+
+                // Insert items
+                let mut results = Vec::with_capacity(parsed.len());
+                for item in parsed {
+                    let result = if let Some(text) = item.text {
+                        inner
+                            .store
+                            .set_with_text(item.id, item.vector, &text, item.metadata)
+                            .map_err(convert_error)?
+                    } else {
+                        inner
+                            .store
+                            .set(item.id, item.vector, item.metadata)
+                            .map_err(convert_error)?
+                    };
+                    results.push(result);
+                }
+
+                inner.cache_valid = false;
+                return Ok(results);
+            }
+
+            return Err(PyValueError::new_err(
+                "First argument must be a string (id) or list of dicts",
+            ));
+        }
+
+        Err(PyValueError::new_err(
+            "set() requires either (id, vector) or a list of items or (ids=, vectors=)",
+        ))
     }
 
     /// Search for k nearest neighbors (single query).
@@ -838,7 +888,12 @@ impl VectorDatabase {
     ///     ...     print(f"{r['id']}: {r['score']:.4f}")
     #[pyo3(name = "text_search")]
     fn text_search(&self, py: Python<'_>, query: &str, k: usize) -> PyResult<Vec<Py<PyDict>>> {
-        let inner = self.inner.read();
+        let mut inner = self.inner.write();
+
+        // Auto-flush text index to ensure search sees latest inserts
+        if inner.store.has_text_search() {
+            inner.store.flush().map_err(convert_error)?;
+        }
 
         let results = inner.store.text_search(query, k).map_err(convert_error)?;
 
@@ -894,6 +949,11 @@ impl VectorDatabase {
         let rust_filter = filter.map(parse_filter).transpose()?;
 
         let mut inner = self.inner.write();
+
+        // Auto-flush text index to ensure search sees latest inserts
+        if inner.store.has_text_search() {
+            inner.store.flush().map_err(convert_error)?;
+        }
 
         let results = if let Some(f) = rust_filter {
             inner
@@ -1377,8 +1437,16 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
     }
 }
 
-/// Helper: Parse batch items from a list of dicts
-fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector, JsonValue)>> {
+//// Parsed batch item with optional text for hybrid search
+struct ParsedItem {
+    id: String,
+    vector: Vector,
+    metadata: JsonValue,
+    text: Option<String>,
+}
+
+// Helper: Parse batch items from a list of dicts, including optional text field
+fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<ParsedItem>> {
     let mut batch = Vec::new();
 
     for (idx, item) in items.iter().enumerate() {
@@ -1405,7 +1473,7 @@ fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector,
             serde_json::json!({})
         };
 
-        // Handle optional document field
+        // Handle optional document field (store in metadata)
         if let Some(document) = dict.get_item("document")? {
             let doc_str: String = document.extract().map_err(|_| {
                 PyValueError::new_err(format!("Item '{}': 'document' must be a string", id))
@@ -1415,10 +1483,34 @@ fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector,
             }
         }
 
-        batch.push((id, Vector::new(vector_data), metadata_json));
+        // Handle optional text field for hybrid search
+        let text: Option<String> = dict
+            .get_item("text")?
+            .map(|t| t.extract())
+            .transpose()
+            .map_err(|_| {
+                PyValueError::new_err(format!("Item '{}': 'text' must be a string", id))
+            })?;
+
+        batch.push(ParsedItem {
+            id,
+            vector: Vector::new(vector_data),
+            metadata: metadata_json,
+            text,
+        });
     }
 
     Ok(batch)
+}
+
+// Helper: Parse batch items (backwards compatible, no text)
+fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector, JsonValue)>> {
+    parse_batch_items_with_text(items).map(|items| {
+        items
+            .into_iter()
+            .map(|item| (item.id, item.vector, item.metadata))
+            .collect()
+    })
 }
 
 /// Helper: Convert Python object to serde_json::Value

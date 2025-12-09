@@ -60,7 +60,7 @@ once_cell = "1.19"
 multiversion = "0.7"
 
 # Storage
-seerdb = "0.0.8"
+seerdb = "0.0.9"
 
 # Full-text search
 tantivy = { version = "0.25", default-features = false, features = ["mmap", "lz4-compression"] }
