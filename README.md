@@ -43,13 +43,13 @@ results = db.search([1.0, 0.0, 0.0, 0.0], k=2, filter={"type": {"$eq": "cat"}})
 
 ### Performance
 
-On a 10K vector dataset (128D, M3 Max):
+On a 10K vector dataset (M3 Max):
 
-| Operation                  | Throughput    |
-| -------------------------- | ------------- |
-| Batch search (100 queries) | ~40,000 QPS   |
-| Single search              | ~6,000 QPS    |
-| Insert                     | ~17,000 vec/s |
+| Dimension | Batch Search | Single Search |
+| --------- | ------------ | ------------- |
+| 128D      | ~57,000 QPS  | ~7,000 QPS    |
+| 768D      | ~6,000 QPS   | ~1,000 QPS    |
+| 1536D     | ~2,000 QPS   | ~500 QPS      |
 
 Run `python benchmark.py` to measure on your hardware.
 
