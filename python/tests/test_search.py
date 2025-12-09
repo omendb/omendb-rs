@@ -30,7 +30,7 @@ def test_search_k_larger_than_database(db_with_vectors):
 
 def test_search_k_zero(db_with_vectors):
     """Test k=0 raises error"""
-    with pytest.raises(RuntimeError, match="k > 0"):
+    with pytest.raises(ValueError, match="k must be greater than 0"):
         db_with_vectors.search([0.1] * 128, k=0)
 
 
