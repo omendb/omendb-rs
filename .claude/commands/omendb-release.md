@@ -1,6 +1,6 @@
-# Pre-Release Checklist for OmenDB
+# OmenDB Release Checklist
 
-Run this command before any release. It validates everything that can go wrong.
+Run before any release. Validates versions, tests, docs, and performance.
 
 ## Instructions
 
