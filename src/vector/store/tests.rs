@@ -1301,3 +1301,97 @@ fn test_hybrid_search_alpha_weighting() {
         .unwrap();
     assert_eq!(results[0].0, "text_winner");
 }
+
+#[test]
+fn test_hybrid_search_k_zero() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "test document",
+            serde_json::json!({}),
+        )
+        .unwrap();
+    store.flush().unwrap();
+
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+    // k=0 should return an error (HNSW requires k > 0)
+    let result = store.hybrid_search(&query, "test", 0, None);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("k=0"));
+}
+
+#[test]
+fn test_hybrid_search_dimension_mismatch() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "test document",
+            serde_json::json!({}),
+        )
+        .unwrap();
+    store.flush().unwrap();
+
+    // Query with wrong dimension (8 instead of 4)
+    let wrong_query = Vector::new(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let result = store.hybrid_search(&wrong_query, "test", 10, None);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("dimension 8 does not match store dimension 4"));
+}
+
+#[test]
+fn test_hybrid_search_large_k() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    // Insert only 3 documents
+    for i in 0..3 {
+        store
+            .set_with_text(
+                format!("doc{i}"),
+                Vector::new(vec![1.0, 0.0, 0.0, i as f32]),
+                &format!("document {i}"),
+                serde_json::json!({}),
+            )
+            .unwrap();
+    }
+    store.flush().unwrap();
+
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+    // Request more results than available
+    let results = store.hybrid_search(&query, "document", 100, None).unwrap();
+    // Should return at most 3 (the number of documents)
+    assert!(results.len() <= 3);
+}
+
+#[test]
+fn test_hybrid_search_without_text_enabled() {
+    let mut store = VectorStore::new(4);
+    // Don't enable text search
+
+    store
+        .set(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+    let result = store.hybrid_search(&query, "test", 10, None);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Text search not enabled"));
+}
