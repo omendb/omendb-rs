@@ -335,6 +335,9 @@ impl VectorDatabase {
         ef: Option<usize>,
         filter: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Vec<Py<PyDict>>> {
+        if k == 0 {
+            return Err(PyValueError::new_err("k must be greater than 0"));
+        }
         if let Some(ef_val) = ef {
             if ef_val < k {
                 return Err(PyValueError::new_err(format!(
@@ -399,6 +402,9 @@ impl VectorDatabase {
         k: usize,
         ef: Option<usize>,
     ) -> PyResult<Vec<Vec<Py<PyDict>>>> {
+        if k == 0 {
+            return Err(PyValueError::new_err("k must be greater than 0"));
+        }
         if let Some(ef_val) = ef {
             if ef_val < k {
                 return Err(PyValueError::new_err(format!(
@@ -1129,6 +1135,11 @@ fn open(
     config: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<VectorDatabase> {
     use std::path::Path;
+
+    // Validate dimensions
+    if dimensions == 0 {
+        return Err(PyValueError::new_err("dimensions must be greater than 0"));
+    }
 
     // Validate optional params
     if let Some(m_val) = m {
