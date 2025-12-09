@@ -1,5 +1,5 @@
 [workspace]
-members = ["."]
+members = [".", "omendb-core"]
 exclude = ["python", "node", "fuzz"]
 resolver = "2"
 
@@ -58,6 +58,9 @@ once_cell = "1.19"
 
 # SIMD multiversioning
 multiversion = "0.7"
+
+# Core algorithms (extracted)
+omendb-core = { path = "omendb-core" }
 
 # Storage
 seerdb = "0.0.9"
