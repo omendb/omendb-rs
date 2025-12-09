@@ -54,7 +54,7 @@ fi
 
 # Get published version (source of truth)
 echo "Fetching published versions..."
-PYPI_VERSION=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.releases | keys | sort_by(split(".") | map(tonumber)) | .[-1]' 2>/dev/null || echo "0.0.0")
+PYPI_VERSION=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.info.version' 2>/dev/null || echo "0.0.0")
 CRATES_VERSION=$(curl -sf https://crates.io/api/v1/crates/omendb | jq -r '.versions[0].num' 2>/dev/null || echo "0.0.0")
 
 echo "  PyPI:   $PYPI_VERSION"
@@ -119,7 +119,7 @@ PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
 NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
 NODE_V=$(grep '"version"' node/package.json | head -1 | cut -d'"' -f4)
 WRAPPER_V=$(grep '"version"' node/wrapper/package.json | head -1 | cut -d'"' -f4)
-WRAPPER_DEP_V=$(grep '@omendb/omendb' node/wrapper/package.json | cut -d'"' -f4)
+WRAPPER_DEP_V=$(jq -r '.dependencies["@omendb/omendb"]' node/wrapper/package.json)
 
 ALL_MATCH=true
 echo "  Cargo.toml:              $CARGO_V"
