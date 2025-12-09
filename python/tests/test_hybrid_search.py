@@ -303,7 +303,7 @@ def test_hybrid_search_without_enable():
 
         try:
             db.set_with_text([{"id": "doc1", "vector": [1.0, 0.0, 0.0, 0.0], "text": "test"}])
-            assert False, "Should have raised an error"
+            raise AssertionError("Should have raised an error")
         except RuntimeError as e:
             assert "not enabled" in str(e).lower()
 
