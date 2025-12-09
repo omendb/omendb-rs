@@ -14,24 +14,32 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Pin toolchain version - must match rust-toolchain.toml
   RUST_TOOLCHAIN: nightly-2025-12-04
 
 jobs:
   # ============================================================================
-  # STAGE 1: Quick verification (same checks as CI)
+  # STAGE 1: Verify VERSION file matches all package files
   # ============================================================================
 
   verify:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate versions
+      - name: Verify all versions match VERSION file
+        id: version
         run: |
           set -e
+          VERSION=$(cat VERSION | tr -d '\n')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION file: $VERSION"
+          echo ""
 
-          # Get ALL code versions (6 locations)
+          # Check all package files match VERSION
+          ERRORS=0
+
           CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
           PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
           NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
@@ -39,59 +47,58 @@ jobs:
           WRAPPER_V=$(jq -r .version node/wrapper/package.json)
           WRAPPER_DEP=$(jq -r '.dependencies["@omendb/omendb"]' node/wrapper/package.json)
 
-          echo "Code versions:"
-          echo "  Cargo.toml:           $CARGO_V"
-          echo "  python/Cargo.toml:    $PYTHON_V"
-          echo "  node/Cargo.toml:      $NODE_CARGO_V"
-          echo "  node/package.json:    $NODE_V"
-          echo "  wrapper version:      $WRAPPER_V"
-          echo "  wrapper @omendb:      $WRAPPER_DEP"
+          echo "Checking versions against VERSION file ($VERSION):"
 
-          # All 6 version locations must match
-          for v in "$PYTHON_V" "$NODE_CARGO_V" "$NODE_V" "$WRAPPER_V" "$WRAPPER_DEP"; do
-            if [ "$v" != "$CARGO_V" ]; then
-              echo "ERROR: Version mismatch! Expected $CARGO_V, got $v"
-              exit 1
+          check_version() {
+            local file=$1
+            local actual=$2
+            if [ "$actual" = "$VERSION" ]; then
+              echo "  $file: $actual"
+            else
+              echo "  $file: $actual (MISMATCH - expected $VERSION)"
+              ERRORS=$((ERRORS + 1))
             fi
-          done
-          echo "All 6 version locations match: $CARGO_V"
+          }
 
-          # Get published versions
-          PYPI_V=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.releases | keys | sort_by(split(".") | map(tonumber)) | .[-1]' || echo "0.0.0")
+          check_version "Cargo.toml" "$CARGO_V"
+          check_version "python/Cargo.toml" "$PYTHON_V"
+          check_version "node/Cargo.toml" "$NODE_CARGO_V"
+          check_version "node/package.json" "$NODE_V"
+          check_version "node/wrapper version" "$WRAPPER_V"
+          check_version "node/wrapper @omendb" "$WRAPPER_DEP"
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo ""
+            echo "ERROR: $ERRORS version mismatch(es) found!"
+            echo "Run: ./scripts/sync-version.sh"
+            exit 1
+          fi
+
+          echo ""
+          echo "All 6 package files match VERSION: $VERSION"
+
+      - name: Check not already published
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+
+          PYPI_V=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.info.version' || echo "0.0.0")
           CRATES_V=$(curl -sf https://crates.io/api/v1/crates/omendb | jq -r '.versions[0].num' || echo "0.0.0")
 
-          echo ""
           echo "Published versions:"
-          echo "  PyPI:     $PYPI_V"
-          echo "  crates:   $CRATES_V"
-
-          # Version must be higher than published
-          if [ "$CARGO_V" = "$PYPI_V" ]; then
-            echo "ERROR: Version $CARGO_V already published to PyPI"
-            exit 1
-          fi
-          if [ "$CARGO_V" = "$CRATES_V" ]; then
-            echo "ERROR: Version $CARGO_V already published to crates.io"
-            exit 1
-          fi
-
-          # Check sequential (simplified: just ensure it's higher)
-          BASE_V="$PYPI_V"
-          IFS='.' read -r B_MAJ B_MIN B_PAT <<< "$BASE_V"
-          IFS='.' read -r N_MAJ N_MIN N_PAT <<< "$CARGO_V"
-
-          VALID=false
-          [ "$N_MAJ" -gt "$B_MAJ" ] && VALID=true
-          [ "$N_MAJ" -eq "$B_MAJ" ] && [ "$N_MIN" -gt "$B_MIN" ] && VALID=true
-          [ "$N_MAJ" -eq "$B_MAJ" ] && [ "$N_MIN" -eq "$B_MIN" ] && [ "$N_PAT" -gt "$B_PAT" ] && VALID=true
-
-          if [ "$VALID" = "false" ]; then
-            echo "ERROR: Version $CARGO_V is not higher than published $BASE_V"
-            exit 1
-          fi
-
+          echo "  PyPI:      $PYPI_V"
+          echo "  crates.io: $CRATES_V"
           echo ""
-          echo "Version validation passed: $BASE_V -> $CARGO_V"
+
+          if [ "$VERSION" = "$PYPI_V" ]; then
+            echo "ERROR: Version $VERSION already published to PyPI"
+            exit 1
+          fi
+          if [ "$VERSION" = "$CRATES_V" ]; then
+            echo "ERROR: Version $VERSION already published to crates.io"
+            exit 1
+          fi
+
+          echo "Version $VERSION is new - proceeding with release"
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -108,7 +115,7 @@ jobs:
         run: cargo test --lib
 
   # ============================================================================
-  # STAGE 2: Build all artifacts (parallel, fail-fast)
+  # STAGE 2: Build all artifacts (parallel)
   # ============================================================================
 
   build-python-linux:
@@ -224,12 +231,18 @@ jobs:
           if-no-files-found: error
 
   # ============================================================================
-  # STAGE 3: Publish (sequential, only after ALL builds pass, skip if dry-run)
+  # STAGE 3: Publish (sequential, skip if dry-run)
   # ============================================================================
 
   publish-crates:
     needs:
-      [build-python-linux, build-python-macos, build-python-sdist, build-node]
+      [
+        verify,
+        build-python-linux,
+        build-python-macos,
+        build-python-sdist,
+        build-node,
+      ]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
@@ -247,7 +260,8 @@ jobs:
         run: cargo publish --token ${{ steps.crates-io-auth.outputs.token }}
 
   publish-pypi:
-    needs: [publish-crates]
+    needs: [verify, publish-crates]
+    if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -268,7 +282,8 @@ jobs:
           args: --non-interactive --skip-existing dist/*
 
   publish-npm:
-    needs: [publish-pypi]
+    needs: [verify, publish-pypi]
+    if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -307,13 +322,12 @@ jobs:
       - name: Determine npm tag
         id: npm-tag
         run: |
-          VERSION=$(node -p "require('./package.json').version")
+          VERSION=${{ needs.verify.outputs.version }}
           if [[ "$VERSION" == *"-"* ]]; then
             echo "tag=--tag alpha" >> $GITHUB_OUTPUT
           else
             echo "tag=" >> $GITHUB_OUTPUT
           fi
-        working-directory: node
 
       - name: Publish platform packages
         continue-on-error: true
