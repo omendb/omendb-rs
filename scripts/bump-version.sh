@@ -89,32 +89,58 @@ echo "Bumping:   $BASE_VERSION -> $NEW_VERSION"
 echo ""
 
 # Update all files
+echo "Updating version files..."
+
 sed -i '' "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" Cargo.toml
-echo "  Updated Cargo.toml"
+echo "  Cargo.toml"
 
 sed -i '' "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" python/Cargo.toml
-echo "  Updated python/Cargo.toml"
+echo "  python/Cargo.toml"
+
+sed -i '' "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" node/Cargo.toml
+echo "  node/Cargo.toml"
 
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" node/package.json
-echo "  Updated node/package.json"
+echo "  node/package.json"
+
+# node/wrapper needs both version AND dependency updated
+sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" node/wrapper/package.json
+sed -i '' "s/\"@omendb\/omendb\": \"[^\"]*\"/\"@omendb\/omendb\": \"$NEW_VERSION\"/" node/wrapper/package.json
+echo "  node/wrapper/package.json"
 
 sed -i '' "s/> \*\*v[0-9.]*\*\*:/> **v$NEW_VERSION**:/" README.md
-echo "  Updated README.md"
+echo "  README.md"
 
-# Verify all versions match
+# Verify ALL versions match
 echo ""
 echo "Verification:"
 CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
 PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
-NODE_V=$(grep '"version"' node/package.json | cut -d'"' -f4)
+NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
+NODE_V=$(grep '"version"' node/package.json | head -1 | cut -d'"' -f4)
+WRAPPER_V=$(grep '"version"' node/wrapper/package.json | head -1 | cut -d'"' -f4)
+WRAPPER_DEP_V=$(grep '@omendb/omendb' node/wrapper/package.json | cut -d'"' -f4)
 
-if [ "$CARGO_V" = "$NEW_VERSION" ] && [ "$PYTHON_V" = "$NEW_VERSION" ] && [ "$NODE_V" = "$NEW_VERSION" ]; then
-    echo "  All files updated to $NEW_VERSION"
+ALL_MATCH=true
+echo "  Cargo.toml:              $CARGO_V"
+echo "  python/Cargo.toml:       $PYTHON_V"
+echo "  node/Cargo.toml:         $NODE_CARGO_V"
+echo "  node/package.json:       $NODE_V"
+echo "  node/wrapper version:    $WRAPPER_V"
+echo "  node/wrapper @omendb:    $WRAPPER_DEP_V"
+
+for v in "$CARGO_V" "$PYTHON_V" "$NODE_CARGO_V" "$NODE_V" "$WRAPPER_V" "$WRAPPER_DEP_V"; do
+    if [ "$v" != "$NEW_VERSION" ]; then
+        ALL_MATCH=false
+    fi
+done
+
+if [ "$ALL_MATCH" = "true" ]; then
+    echo ""
+    echo "All 6 version locations updated to $NEW_VERSION"
 else
-    echo "  ERROR: Version mismatch!"
-    echo "    Cargo.toml:        $CARGO_V"
-    echo "    python/Cargo.toml: $PYTHON_V"
-    echo "    node/package.json: $NODE_V"
+    echo ""
+    echo "ERROR: Version mismatch detected!"
     exit 1
 fi
 

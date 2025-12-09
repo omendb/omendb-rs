@@ -31,21 +31,30 @@ jobs:
         run: |
           set -e
 
-          # Get code versions
+          # Get ALL code versions (6 locations)
           CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
           PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
+          NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
           NODE_V=$(jq -r .version node/package.json)
+          WRAPPER_V=$(jq -r .version node/wrapper/package.json)
+          WRAPPER_DEP=$(jq -r '.dependencies["@omendb/omendb"]' node/wrapper/package.json)
 
           echo "Code versions:"
-          echo "  Cargo.toml:        $CARGO_V"
-          echo "  python/Cargo.toml: $PYTHON_V"
-          echo "  node/package.json: $NODE_V"
+          echo "  Cargo.toml:           $CARGO_V"
+          echo "  python/Cargo.toml:    $PYTHON_V"
+          echo "  node/Cargo.toml:      $NODE_CARGO_V"
+          echo "  node/package.json:    $NODE_V"
+          echo "  wrapper version:      $WRAPPER_V"
+          echo "  wrapper @omendb:      $WRAPPER_DEP"
 
-          # All code versions must match
-          if [ "$CARGO_V" != "$PYTHON_V" ] || [ "$CARGO_V" != "$NODE_V" ]; then
-            echo "ERROR: Version mismatch between files!"
-            exit 1
-          fi
+          # All 6 version locations must match
+          for v in "$PYTHON_V" "$NODE_CARGO_V" "$NODE_V" "$WRAPPER_V" "$WRAPPER_DEP"; do
+            if [ "$v" != "$CARGO_V" ]; then
+              echo "ERROR: Version mismatch! Expected $CARGO_V, got $v"
+              exit 1
+            fi
+          done
+          echo "All 6 version locations match: $CARGO_V"
 
           # Get published versions
           PYPI_V=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.releases | keys | sort_by(split(".") | map(tonumber)) | .[-1]' || echo "0.0.0")
