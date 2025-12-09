@@ -278,6 +278,38 @@ def benchmark_hybrid_search(
     }
 
 
+def compute_ground_truth(vectors: np.ndarray, queries: np.ndarray, k: int = 10) -> np.ndarray:
+    """Compute ground truth neighbors using brute-force L2 search."""
+    n_queries = len(queries)
+    ground_truth = np.zeros((n_queries, k), dtype=np.int32)
+
+    for i, q in enumerate(queries):
+        # L2 distance to all vectors
+        distances = np.sum((vectors - q) ** 2, axis=1)
+        # Get k nearest indices
+        ground_truth[i] = np.argpartition(distances, k)[:k]
+
+    return ground_truth
+
+
+def benchmark_recall(db, vectors: np.ndarray, queries: np.ndarray, k: int = 10) -> dict:
+    """Measure recall@k against brute-force ground truth."""
+    n_queries = min(100, len(queries))  # Limit for speed
+    queries_subset = queries[:n_queries]
+    ground_truth = compute_ground_truth(vectors, queries_subset, k)
+
+    total_recall = 0.0
+    for i, q in enumerate(queries_subset):
+        results = db.search(q.tolist(), k=k)
+        returned_ids = {int(r["id"][1:]) for r in results}  # "d123" -> 123
+        true_ids = set(ground_truth[i])
+        recall = len(returned_ids & true_ids) / k
+        total_recall += recall
+
+    avg_recall = total_recall / n_queries
+    return {"recall_at_k": avg_recall, "k": k, "n_queries": n_queries}
+
+
 def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits: int = 0):
     """Run full benchmark suite for given parameters."""
     mode = f"RaBitQ-{quantize_bits}bit" if quantize_bits > 0 else "f32"
@@ -301,6 +333,10 @@ def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits
             f"Search:   {search['qps']:>10,.0f} QPS    ({search['latency_avg_ms']:.2f}ms avg, {search['latency_p99_ms']:.2f}ms p99)"
         )
 
+        # Recall measurement (graph quality indicator)
+        recall = benchmark_recall(db, vectors, queries)
+        print(f"Recall:   {recall['recall_at_k']:>10.1%} @{recall['k']}")
+
         # Filtered search (10% selectivity)
         filtered = benchmark_filtered_search(db, queries, {"cat": 5})
         print(
@@ -321,6 +357,7 @@ def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits
         },
         "build": {k: v for k, v in build.items() if k != "db"},
         "search": search,
+        "recall": recall,
         "filtered": filtered,
         "batch": batch,
     }

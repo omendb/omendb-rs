@@ -940,10 +940,12 @@ impl VectorStore {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
-            // Batch insert into HNSW
+            // Sequential insert: parallel batch_insert searches incomplete graphs during construction
             let base_index = self.vectors.len();
             if let Some(ref mut index) = self.hnsw_index {
-                index.batch_insert(&vectors_data)?;
+                for vector in &vectors_data {
+                    index.insert(vector)?;
+                }
             }
 
             // Batch persist to storage (atomic, high-performance)
