@@ -52,7 +52,24 @@ print(f'Single: {1000/(time.time()-start):,.0f} QPS (target: >5000)')
 "
 ```
 
-### 2. Version Validation
+### 2. Doc Review
+
+```bash
+# Check API examples match actual implementation
+grep -r "set_with_text\|enable_text_search" ../cloud/ai/  # Should be minimal
+grep -r "hybrid_search\|text_search" ../cloud/ai/         # Verify correct method names
+
+# Verify README examples work
+python -c "
+import omendb
+db = omendb.open(':memory:', dimensions=4)
+db.set([{'id': 'doc1', 'vector': [0.1, 0.2, 0.3, 0.4], 'text': 'hello world'}])
+r = db.search_hybrid([0.1, 0.2, 0.3, 0.4], 'hello', k=1)
+print('Hybrid search works:', len(r) > 0)
+"
+```
+
+### 3. Version Validation
 
 ```bash
 # Check published versions
