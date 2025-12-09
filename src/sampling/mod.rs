@@ -266,8 +266,7 @@ mod tests {
         // Similar vectors should have high collision count (>60%)
         assert!(
             collisions > (HASH_BITS * 60 / 100),
-            "Similar vectors should have high collision count, got {}",
-            collisions
+            "Similar vectors should have high collision count, got {collisions}"
         );
     }
 
@@ -286,10 +285,7 @@ mod tests {
 
         // Different vectors should have lower collision count
         // (Not always <50% due to random projections, but should be noticeably lower)
-        println!(
-            "Different vectors collision rate: {}/{}",
-            collisions, HASH_BITS
-        );
+        println!("Different vectors collision rate: {collisions}/{HASH_BITS}");
     }
 
     #[test]

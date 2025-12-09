@@ -1453,6 +1453,7 @@ unsafe fn cosine_distance_neon(v1: &[f32], v2: &[f32]) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -1663,7 +1664,7 @@ mod tests {
         // Check reconstruction is close (8-bit should be accurate)
         for (orig, recon) in vector.iter().zip(reconstructed.iter()) {
             let error = (orig - recon).abs();
-            assert!(error < 0.1, "Error too large: {} vs {}", orig, recon);
+            assert!(error < 0.1, "Error too large: {orig} vs {recon}");
         }
     }
 
@@ -1762,7 +1763,7 @@ mod tests {
         let dist = quantizer.distance_l2(&qv1, &qv2);
 
         // Distance should be approximately 1.0
-        assert!((dist - 1.0).abs() < 0.2, "Distance: {}", dist);
+        assert!((dist - 1.0).abs() < 0.2, "Distance: {dist}");
     }
 
     #[test]
@@ -1776,7 +1777,7 @@ mod tests {
         let dist = quantizer.distance_l2(&qv1, &qv2);
 
         // Identical vectors should have near-zero distance
-        assert!(dist < 0.3, "Distance should be near zero, got: {}", dist);
+        assert!(dist < 0.3, "Distance should be near zero, got: {dist}");
     }
 
     #[test]
@@ -1797,7 +1798,7 @@ mod tests {
         let dist = quantizer.distance_cosine(&qv1, &qv2);
 
         // Orthogonal vectors: cosine = 0, distance = 1
-        assert!((dist - 1.0).abs() < 0.3, "Distance: {}", dist);
+        assert!((dist - 1.0).abs() < 0.3, "Distance: {dist}");
     }
 
     #[test]
@@ -1811,7 +1812,7 @@ mod tests {
         let dist = quantizer.distance_cosine(&qv1, &qv2);
 
         // Identical vectors: cosine = 1, distance = 0
-        assert!(dist < 0.2, "Distance should be near zero, got: {}", dist);
+        assert!(dist < 0.2, "Distance should be near zero, got: {dist}");
     }
 
     #[test]
@@ -1831,7 +1832,7 @@ mod tests {
         let dist = quantizer.distance_dot(&qv1, &qv2);
 
         // Dot product of [1,0,0] with itself = 1, negated = -1
-        assert!((dist + 1.0).abs() < 0.3, "Distance: {}", dist);
+        assert!((dist + 1.0).abs() < 0.3, "Distance: {dist}");
     }
 
     #[test]
@@ -1874,7 +1875,7 @@ mod tests {
         });
 
         // Create multiple vectors
-        let vectors = vec![
+        let vectors = [
             vec![0.1, 0.2, 0.3],
             vec![0.4, 0.5, 0.6],
             vec![0.7, 0.8, 0.9],
@@ -1907,9 +1908,7 @@ mod tests {
         if ground_truth_02 > ground_truth_01 {
             assert!(
                 quantized_02 > quantized_01 * 0.8,
-                "Order not preserved: {} vs {}",
-                quantized_01,
-                quantized_02
+                "Order not preserved: {quantized_01} vs {quantized_02}"
             );
         }
     }
@@ -1996,12 +1995,7 @@ mod tests {
 
         // SIMD should match scalar within floating point precision
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(
-            diff < 0.01,
-            "SIMD vs scalar: {} vs {}",
-            dist_simd,
-            dist_scalar
-        );
+        assert!(diff < 0.01, "SIMD vs scalar: {dist_simd} vs {dist_scalar}");
     }
 
     #[test]
@@ -2023,12 +2017,7 @@ mod tests {
 
         // SIMD should match scalar within floating point precision
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(
-            diff < 0.01,
-            "SIMD vs scalar: {} vs {}",
-            dist_simd,
-            dist_scalar
-        );
+        assert!(diff < 0.01, "SIMD vs scalar: {dist_simd} vs {dist_scalar}");
     }
 
     #[test]
@@ -2049,9 +2038,7 @@ mod tests {
         let diff = (dist_scalar - dist_simd).abs();
         assert!(
             diff < 0.1,
-            "High-D SIMD vs scalar: {} vs {}",
-            dist_simd,
-            dist_scalar
+            "High-D SIMD vs scalar: {dist_simd} vs {dist_scalar}"
         );
     }
 
@@ -2165,10 +2152,7 @@ mod tests {
         let diff = (dist_asymmetric - dist_adc).abs();
         assert!(
             diff < 0.1,
-            "ADC vs asymmetric: {} vs {}, diff: {}",
-            dist_adc,
-            dist_asymmetric,
-            diff
+            "ADC vs asymmetric: {dist_adc} vs {dist_asymmetric}, diff: {diff}"
         );
     }
 
@@ -2190,7 +2174,7 @@ mod tests {
 
         // Distance should be near zero (same vector)
         let dist = adc.distance(&quantized.data);
-        assert!(dist < 0.2, "Distance should be near zero, got: {}", dist);
+        assert!(dist < 0.2, "Distance should be near zero, got: {dist}");
     }
 
     #[test]
@@ -2214,15 +2198,11 @@ mod tests {
         // Order should be preserved
         assert!(
             dist1 < dist2,
-            "v1 should be closer than v2: {} vs {}",
-            dist1,
-            dist2
+            "v1 should be closer than v2: {dist1} vs {dist2}"
         );
         assert!(
             dist2 < dist3,
-            "v2 should be closer than v3: {} vs {}",
-            dist2,
-            dist3
+            "v2 should be closer than v3: {dist2} vs {dist3}"
         );
     }
 
@@ -2249,7 +2229,7 @@ mod tests {
         let quantizer = RaBitQ::default_4bit();
 
         let query = vec![0.5, 0.5, 0.5, 0.5];
-        let candidates = vec![
+        let candidates = [
             vec![0.5, 0.5, 0.5, 0.5],
             vec![0.6, 0.6, 0.6, 0.6],
             vec![0.4, 0.4, 0.4, 0.4],
@@ -2271,7 +2251,7 @@ mod tests {
         results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
         // First result should be index 0 (identical to query)
-        assert_eq!(results[0].0, 0, "Results: {:?}", results);
+        assert_eq!(results[0].0, 0, "Results: {results:?}");
     }
 
     #[test]
@@ -2312,12 +2292,7 @@ mod tests {
 
         // SIMD should match scalar within floating point precision
         let diff = (dist_scalar - dist_simd).abs();
-        assert!(
-            diff < 0.01,
-            "SIMD vs scalar: {} vs {}",
-            dist_simd,
-            dist_scalar
-        );
+        assert!(diff < 0.01, "SIMD vs scalar: {dist_simd} vs {dist_scalar}");
     }
 
     #[test]
@@ -2349,9 +2324,7 @@ mod tests {
         let expected_min = 128 * 16 * 4;
         assert!(
             memory >= expected_min,
-            "Memory {} should be at least {}",
-            memory,
-            expected_min
+            "Memory {memory} should be at least {expected_min}"
         );
     }
 
@@ -2417,7 +2390,7 @@ mod tests {
 
         // Should be reasonably close despite lower precision
         let diff = (dist_adc - dist_asymmetric).abs();
-        assert!(diff < 0.2, "2-bit ADC diff too large: {}", diff);
+        assert!(diff < 0.2, "2-bit ADC diff too large: {diff}");
     }
 
     #[test]
@@ -2438,8 +2411,7 @@ mod tests {
         let diff = (dist_adc - dist_asymmetric).abs();
         assert!(
             diff < 0.05,
-            "8-bit ADC should be highly accurate, diff: {}",
-            diff
+            "8-bit ADC should be highly accurate, diff: {diff}"
         );
     }
 }

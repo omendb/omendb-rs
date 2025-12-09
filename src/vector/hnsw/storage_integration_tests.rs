@@ -107,12 +107,12 @@ mod tests {
 
         // Build graph: each node has random neighbors
         for node_id in 0..num_nodes {
-            let num_levels = (node_id % (max_level + 1)) as usize + 1; // 1-6 levels
+            let num_levels = (node_id % (max_level + 1)) + 1; // 1-6 levels
 
             for level in 0..num_levels {
                 // Generate neighbors (circular connections for simplicity)
                 let neighbors: Vec<u32> = (1..=m)
-                    .map(|offset| ((node_id as usize + offset) % num_nodes) as u32)
+                    .map(|offset| ((node_id + offset) % num_nodes) as u32)
                     .collect();
 
                 memory_storage

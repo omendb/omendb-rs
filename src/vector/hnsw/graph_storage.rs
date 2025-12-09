@@ -556,7 +556,7 @@ mod tests {
 
         // 30% of 10M = 3M cache capacity
         assert_eq!(config.cache_capacity.get(), 3_000_000);
-        assert_eq!(config.populate, false);
+        assert!(!config.populate);
         assert_eq!(config.path, PathBuf::from("/tmp/test.bin"));
     }
 
@@ -568,14 +568,14 @@ mod tests {
         );
 
         assert_eq!(config.cache_capacity.get(), 1_000_000);
-        assert_eq!(config.populate, false);
+        assert!(!config.populate);
     }
 
     #[test]
     fn test_disk_config_with_populate() {
         let config = DiskConfig::new(PathBuf::from("/tmp/test.bin"), 10_000).with_populate();
 
-        assert_eq!(config.populate, true);
+        assert!(config.populate);
     }
 
     #[test]
