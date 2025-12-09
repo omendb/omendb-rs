@@ -63,7 +63,7 @@ multiversion = "0.7"
 seerdb = "0.0.7"
 
 # Full-text search
-tantivy = { version = "0.22", default-features = false, features = ["mmap", "lz4-compression"] }
+tantivy = { version = "0.25", default-features = false, features = ["mmap", "lz4-compression"] }
 
 # Async (for seerdb and tantivy)
 tokio = { version = "1.48.0", features = ["full"] }
