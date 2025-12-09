@@ -60,32 +60,7 @@ use omendb::{VectorStoreOptions, StorageConfig, StorageTier, CompressionTier, Di
 ## CI/CD
 
 - **CI**: Runs on push/PR - checks Rust (fmt, clippy, test), Python (ruff, pytest), Node (build, test)
-- **Release**: Manual workflow - builds all platforms, publishes to crates.io, PyPI, npm
-- All registries use OIDC trusted publishing
-- GitHub Actions: Public repos = unlimited minutes; Private repos = 2,000 min/month free
-
-## Release Checklist (REQUIRED)
-
-**BEFORE any release, you MUST verify versions:**
-
-```bash
-# 1. Check PUBLISHED versions (not code!)
-curl -s https://pypi.org/pypi/omendb/json | jq -r '.releases | keys | sort | .[-1]'
-curl -s https://crates.io/api/v1/crates/omendb | jq -r '.versions[0].num'
-
-# 2. Verify code versions match published + 1
-grep '^version' Cargo.toml python/Cargo.toml
-grep '"version"' node/package.json
-
-# 3. Version must be sequential (0.0.5 → 0.0.6, NOT 0.0.5 → 0.0.7)
-```
-
-**Version files to update:**
-
-- `Cargo.toml` (crates.io)
-- `python/Cargo.toml` (PyPI via maturin)
-- `node/package.json` (npm)
-- `README.md` (user-facing docs)
+- **Release**: See `RELEASING.md` for full process. Quick: `./scripts/bump-version.sh && git commit && git push && gh workflow run Release`
 
 ## Notes
 
