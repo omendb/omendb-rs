@@ -516,13 +516,13 @@ impl VectorStore {
 
         // Build HNSW index with ALL vectors to maintain index alignment
         // (deleted vectors are filtered at search time, not index time)
+        // Use batch_insert for parallel construction
         let hnsw_index = if vectors.is_empty() {
             None
         } else {
             let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
-            for vector in &vectors {
-                index.insert(&vector.data)?;
-            }
+            let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
+            index.batch_insert(&vector_data)?;
             Some(index)
         };
 
