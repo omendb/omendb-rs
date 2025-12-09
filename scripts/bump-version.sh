@@ -95,7 +95,7 @@ sed -i '' "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" Cargo.toml
 echo "  Cargo.toml"
 
 sed -i '' "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" python/Cargo.toml
-echo "  python/Cargo.toml"
+echo "  python/Cargo.toml (pyproject.toml uses dynamic version from this)"
 
 sed -i '' "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" node/Cargo.toml
 echo "  node/Cargo.toml"
@@ -115,7 +115,7 @@ echo "  README.md"
 echo ""
 echo "Verification:"
 CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
-PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
+PYTHON_CARGO_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
 NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
 NODE_V=$(grep '"version"' node/package.json | head -1 | cut -d'"' -f4)
 WRAPPER_V=$(grep '"version"' node/wrapper/package.json | head -1 | cut -d'"' -f4)
@@ -123,13 +123,14 @@ WRAPPER_DEP_V=$(jq -r '.dependencies["@omendb/omendb"]' node/wrapper/package.jso
 
 ALL_MATCH=true
 echo "  Cargo.toml:              $CARGO_V"
-echo "  python/Cargo.toml:       $PYTHON_V"
+echo "  python/Cargo.toml:       $PYTHON_CARGO_V"
+echo "  python/pyproject.toml:   (dynamic from python/Cargo.toml)"
 echo "  node/Cargo.toml:         $NODE_CARGO_V"
 echo "  node/package.json:       $NODE_V"
 echo "  node/wrapper version:    $WRAPPER_V"
 echo "  node/wrapper @omendb:    $WRAPPER_DEP_V"
 
-for v in "$CARGO_V" "$PYTHON_V" "$NODE_CARGO_V" "$NODE_V" "$WRAPPER_V" "$WRAPPER_DEP_V"; do
+for v in "$CARGO_V" "$PYTHON_CARGO_V" "$NODE_CARGO_V" "$NODE_V" "$WRAPPER_V" "$WRAPPER_DEP_V"; do
     if [ "$v" != "$NEW_VERSION" ]; then
         ALL_MATCH=false
     fi

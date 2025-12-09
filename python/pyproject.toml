@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "omendb"
-version = "0.0.7"
+dynamic = ["version"]  # Read from python/Cargo.toml
 description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
 authors = [{ name = "OmenDB Team" }]
 license = { text = "AGPL-3.0" }
