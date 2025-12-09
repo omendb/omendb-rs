@@ -883,11 +883,11 @@ impl VectorDatabase {
     ///     list[dict]: Results with {id, score} sorted by BM25 score descending
     ///
     /// Examples:
-    ///     >>> results = db.text_search("machine learning", k=10)
+    ///     >>> results = db.search_text("machine learning", k=10)
     ///     >>> for r in results:
     ///     ...     print(f"{r['id']}: {r['score']:.4f}")
-    #[pyo3(name = "text_search")]
-    fn text_search(&self, py: Python<'_>, query: &str, k: usize) -> PyResult<Vec<Py<PyDict>>> {
+    #[pyo3(name = "search_text")]
+    fn search_text(&self, py: Python<'_>, query: &str, k: usize) -> PyResult<Vec<Py<PyDict>>> {
         let mut inner = self.inner.write();
 
         // Auto-flush text index to ensure search sees latest inserts
@@ -925,17 +925,17 @@ impl VectorDatabase {
     ///     list[dict]: Results with {id, score} sorted by RRF score descending
     ///
     /// Examples:
-    ///     >>> results = db.hybrid_search([0.1, 0.2, ...], "machine learning", k=10)
+    ///     >>> results = db.search_hybrid([0.1, 0.2, ...], "machine learning", k=10)
     ///     >>> for r in results:
     ///     ...     print(f"{r['id']}: {r['score']:.4f}")
     ///
     ///     With filter:
-    ///     >>> results = db.hybrid_search(vec, "ML", k=10, filter={"category": "tech"})
+    ///     >>> results = db.search_hybrid(vec, "ML", k=10, filter={"category": "tech"})
     ///
     ///     Favor vector similarity (70% vector, 30% text):
-    ///     >>> results = db.hybrid_search(vec, "ML", k=10, alpha=0.7)
-    #[pyo3(name = "hybrid_search", signature = (query_vector, query_text, k, filter=None, alpha=None, rrf_k=None))]
-    fn hybrid_search(
+    ///     >>> results = db.search_hybrid(vec, "ML", k=10, alpha=0.7)
+    #[pyo3(name = "search_hybrid", signature = (query_vector, query_text, k, filter=None, alpha=None, rrf_k=None))]
+    fn search_hybrid(
         &self,
         py: Python<'_>,
         query_vector: &Bound<'_, PyAny>,
