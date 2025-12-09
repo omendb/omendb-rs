@@ -1164,6 +1164,18 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(String, f32, JsonValue)>> {
+        // Validate inputs
+        if query_vector.data.len() != self.dimensions {
+            anyhow::bail!(
+                "Query vector dimension {} does not match store dimension {}",
+                query_vector.data.len(),
+                self.dimensions
+            );
+        }
+        if self.text_index.is_none() {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        }
+
         // Over-fetch from both sources for better fusion
         let fetch_k = k * 2;
 
@@ -1225,9 +1237,23 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(String, f32, JsonValue)>> {
-        let fetch_k = k * 2;
+        // Validate inputs
+        if query_vector.data.len() != self.dimensions {
+            anyhow::bail!(
+                "Query vector dimension {} does not match store dimension {}",
+                query_vector.data.len(),
+                self.dimensions
+            );
+        }
+        if self.text_index.is_none() {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        }
 
-        // Filtered vector search
+        // Over-fetch 4x to account for filter eliminating candidates
+        // Both sources use same multiplier for symmetric RRF ranking
+        let fetch_k = k * 4;
+
+        // Filtered vector search (filter applied during search)
         let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
 
         // Convert to (id, distance) format - O(1) lookup via reverse map
@@ -1238,8 +1264,8 @@ impl VectorStore {
             })
             .collect();
 
-        // Text search (unfiltered - filter applied post-fusion)
-        let text_results = self.text_search(query_text, fetch_k * 2)?;
+        // Text search (filter applied post-search since tantivy can't filter metadata)
+        let text_results = self.text_search(query_text, fetch_k)?;
 
         // Filter text results by metadata
         let text_results: Vec<(String, f32)> = text_results
