@@ -10,6 +10,7 @@
 //! - `cfg:count` → vector count (u64)
 
 use anyhow::Result;
+use rayon::prelude::*;
 use seerdb::{DBOptions, SyncPolicy, DB};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -166,23 +167,24 @@ impl SeerDBStorage {
         }
     }
 
-    /// Load all vectors from storage
+    /// Load all vectors from storage (parallel)
     ///
     /// Returns vectors indexed by their internal ID.
     /// Used during startup to rebuild HNSW index.
     pub fn load_all_vectors(&self) -> Result<Vec<(usize, Vec<f32>)>> {
-        let mut vectors = Vec::new();
-
         // Get the count of vectors from config
         let count = self.get_config("count")?.unwrap_or(0) as usize;
 
-        // Load each vector by ID using point lookups
-        // This is more reliable than prefix scan across reopens
-        for id in 0..count {
-            if let Some(vector) = self.get_vector(id)? {
-                vectors.push((id, vector));
-            }
+        if count == 0 {
+            return Ok(Vec::new());
         }
+
+        // Parallel load: each thread fetches vectors independently
+        // seerdb supports concurrent reads
+        let vectors: Vec<(usize, Vec<f32>)> = (0..count)
+            .into_par_iter()
+            .filter_map(|id| self.get_vector(id).ok().flatten().map(|v| (id, v)))
+            .collect();
 
         Ok(vectors)
     }
@@ -200,38 +202,45 @@ impl SeerDBStorage {
         Ok(self.get_config("count")?.unwrap_or(0) as usize)
     }
 
-    /// Load all metadata from storage
+    /// Load all metadata from storage (parallel)
     pub fn load_all_metadata(&self) -> Result<HashMap<usize, serde_json::Value>> {
-        let mut metadata = HashMap::new();
-
         // Get the count of vectors from config
         let count = self.get_config("count")?.unwrap_or(0) as usize;
 
-        // Load metadata for each vector ID
-        for id in 0..count {
-            if let Some(meta) = self.get_metadata(id)? {
-                metadata.insert(id, meta);
-            }
+        if count == 0 {
+            return Ok(HashMap::new());
         }
+
+        // Parallel load metadata
+        let metadata: HashMap<usize, serde_json::Value> = (0..count)
+            .into_par_iter()
+            .filter_map(|id| self.get_metadata(id).ok().flatten().map(|m| (id, m)))
+            .collect();
 
         Ok(metadata)
     }
 
-    /// Load all ID mappings from storage
+    /// Load all ID mappings from storage (parallel)
     ///
     /// Uses reverse mapping (index → `string_id`) to rebuild `id_to_index` on load.
     pub fn load_all_id_mappings(&self) -> Result<HashMap<String, usize>> {
-        let mut mappings = HashMap::new();
-
         // Get the count of vectors
         let count = self.get_config("count")?.unwrap_or(0) as usize;
 
-        // Load string IDs for each index using reverse mapping
-        for index in 0..count {
-            if let Some(string_id) = self.get_string_id(index)? {
-                mappings.insert(string_id, index);
-            }
+        if count == 0 {
+            return Ok(HashMap::new());
         }
+
+        // Parallel load ID mappings
+        let mappings: HashMap<String, usize> = (0..count)
+            .into_par_iter()
+            .filter_map(|index| {
+                self.get_string_id(index)
+                    .ok()
+                    .flatten()
+                    .map(|string_id| (string_id, index))
+            })
+            .collect();
 
         Ok(mappings)
     }
