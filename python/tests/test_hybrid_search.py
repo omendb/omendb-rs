@@ -75,7 +75,7 @@ def test_text_search():
         )
         db.flush()
 
-        results = db.text_search("Python", k=10)
+        results = db.search_text("Python", k=10)
 
         assert len(results) == 2
         ids = [r["id"] for r in results]
@@ -118,7 +118,7 @@ def test_hybrid_search_basic():
         )
         db.flush()
 
-        results = db.hybrid_search(query_vector=[1.0, 0.0, 0.0, 0.0], query_text="learning", k=3)
+        results = db.search_hybrid(query_vector=[1.0, 0.0, 0.0, 0.0], query_text="learning", k=3)
 
         assert len(results) >= 1
 
@@ -149,12 +149,12 @@ def test_hybrid_search_with_alpha():
         db.flush()
 
         # High alpha (favor vector) - vec_close should rank higher
-        results_vector = db.hybrid_search(
+        results_vector = db.search_hybrid(
             query_vector=[1.0, 0.0, 0.0, 0.0], query_text="query match", k=2, alpha=0.9
         )
 
         # Low alpha (favor text) - text_match should rank higher
-        results_text = db.hybrid_search(
+        results_text = db.search_hybrid(
             query_vector=[1.0, 0.0, 0.0, 0.0], query_text="query match", k=2, alpha=0.1
         )
 
@@ -188,11 +188,11 @@ def test_hybrid_search_with_rrf_k():
         db.flush()
 
         # Test with different rrf_k values
-        results_default = db.hybrid_search(
+        results_default = db.search_hybrid(
             query_vector=[1.0, 0.0, 0.0, 0.0], query_text="test", k=2
         )
 
-        results_custom = db.hybrid_search(
+        results_custom = db.search_hybrid(
             query_vector=[1.0, 0.0, 0.0, 0.0], query_text="test", k=2, rrf_k=10
         )
 
@@ -231,7 +231,7 @@ def test_hybrid_search_with_filter():
         )
         db.flush()
 
-        results = db.hybrid_search(
+        results = db.search_hybrid(
             query_vector=[1.0, 0.0, 0.0, 0.0],
             query_text="machine learning",
             k=10,
@@ -262,7 +262,7 @@ def test_hybrid_search_metadata_in_results():
         )
         db.flush()
 
-        results = db.hybrid_search(query_vector=[1.0, 0.0, 0.0, 0.0], query_text="search", k=1)
+        results = db.search_hybrid(query_vector=[1.0, 0.0, 0.0, 0.0], query_text="search", k=1)
 
         assert len(results) == 1
         result = results[0]
@@ -289,7 +289,7 @@ def test_hybrid_search_empty_results():
         db.flush()
 
         # Search for text that doesn't exist
-        results = db.text_search("xyznonexistent", k=10)
+        results = db.search_text("xyznonexistent", k=10)
 
         # Should return empty or no matches
         assert len(results) == 0
@@ -333,7 +333,7 @@ def test_hybrid_search_all_params():
         )
         db.flush()
 
-        results = db.hybrid_search(
+        results = db.search_hybrid(
             query_vector=[1.0, 0.0, 0.0, 0.0],
             query_text="comprehensive",
             k=2,
