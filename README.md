@@ -5,7 +5,7 @@
 
 Embedded vector database for Python. No server, no setup, just `pip install`.
 
-> **v0.0.2**: First stable release. API may still evolve. [Report issues](https://github.com/omendb/omendb/issues).
+> **v0.0.7**: Hybrid search (vector + text). API may still evolve. [Report issues](https://github.com/omendb/omendb/issues).
 
 ## Quick Start
 
@@ -18,9 +18,9 @@ db = omendb.open("./vectors", dimensions=4)
 
 # Add vectors
 db.set([
-    {"id": "a", "embedding": [1.0, 0.0, 0.0, 0.0], "metadata": {"type": "dog"}},
-    {"id": "b", "embedding": [0.9, 0.1, 0.0, 0.0], "metadata": {"type": "dog"}},
-    {"id": "c", "embedding": [0.0, 0.0, 1.0, 0.0], "metadata": {"type": "cat"}},
+    {"id": "a", "vector": [1.0, 0.0, 0.0, 0.0], "metadata": {"type": "dog"}},
+    {"id": "b", "vector": [0.9, 0.1, 0.0, 0.0], "metadata": {"type": "dog"}},
+    {"id": "c", "vector": [0.0, 0.0, 1.0, 0.0], "metadata": {"type": "cat"}},
 ])
 
 # Search
@@ -52,6 +52,31 @@ On a 10K vector dataset (128D, M3 Max):
 | Insert                     | ~17,000 vec/s |
 
 Run `python benchmark.py` to measure on your hardware.
+
+## Hybrid Search
+
+Combine vector similarity with BM25 text search using RRF fusion:
+
+```python
+db = omendb.open("./docs", dimensions=384)
+
+# Add vectors with text for hybrid search
+db.set([
+    {"id": "doc1", "vector": embedding1, "text": "Machine learning basics", "metadata": {"topic": "ml"}},
+    {"id": "doc2", "vector": embedding2, "text": "Deep learning neural networks", "metadata": {"topic": "dl"}},
+])
+
+# Hybrid search (vector + text)
+results = db.search_hybrid(
+    query_vector=query_embedding,
+    query_text="neural networks",
+    k=10,
+    alpha=0.5,  # 0=text only, 1=vector only
+)
+
+# Text-only search (BM25)
+results = db.search_text("machine learning", k=10)
+```
 
 ## With LangChain
 
@@ -102,12 +127,14 @@ pip install omendb[llamaindex]
 ```python
 db = omendb.open(path, dimensions)
 
-db.set(items)                  # Add/replace vectors
+db.set(items)                  # Add/replace vectors (with optional text)
 db.get(ids)                    # Get by ID
 db.delete(ids)                 # Delete
 db.update(ids, metadata)       # Update metadata only
-db.search(query, k, filter)    # Search single query
-db.search_batch(queries, k)    # Search batch (parallel)
+db.search(query, k, filter)    # Vector search
+db.search_batch(queries, k)    # Batch vector search (parallel)
+db.search_hybrid(vec, text, k) # Hybrid vector + text search
+db.search_text(text, k)        # Text-only BM25 search
 db.count()                     # Count vectors
 
 # Collections (namespaces)
