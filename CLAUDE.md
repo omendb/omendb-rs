@@ -62,6 +62,44 @@ use omendb::{VectorStoreOptions, StorageConfig, StorageTier, CompressionTier, Di
 - **CI**: Runs on push/PR - checks Rust (fmt, clippy, test), Python (ruff, pytest), Node (build, test)
 - **Release**: Use `/omendb-release` command or see `RELEASING.md`. Quick: `./scripts/bump-version.sh && git commit && git push && gh workflow run Release`
 
+## Testing & Benchmarks
+
+### Running Tests
+
+```bash
+cargo test --lib                          # Rust unit tests
+uv run pytest python/tests/               # Python tests (300+)
+uv run pytest python/tests/ -m "not slow" # Skip slow tests
+```
+
+### Benchmarks
+
+```bash
+# Python benchmark (quick: 10K vectors, full: 10K-100K)
+uv run python python/benchmark.py         # Quick (~30s)
+uv run python python/benchmark.py --full  # Full suite (~5min)
+
+# Rust criterion benchmarks
+cargo bench --bench search_bench          # Search QPS
+cargo bench --bench distance_bench        # Distance functions
+```
+
+### Expected Performance (10K vectors, 128D, M3 Max)
+
+| Metric        | Target       |
+| ------------- | ------------ |
+| Single Search | ~5,400 QPS   |
+| Batch Search  | ~52,000 QPS  |
+| Build         | ~1,500 vec/s |
+
+### Regression Detection
+
+Performance regressions typically indicate:
+
+1. **Search degradation**: Check HNSW graph quality (batch_insert vs sequential insert)
+2. **Build slowdown**: Check if batch operations are being used
+3. **Memory regression**: Profile with `cargo flamegraph`
+
 ## Notes
 
 - Requires nightly Rust (`nightly-2025-12-04` pinned in `rust-toolchain.toml`)
