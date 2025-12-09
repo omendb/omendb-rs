@@ -1219,7 +1219,7 @@ mod tests {
         let dist1 = storage.distance_asymmetric_l2(&query, 1).unwrap();
 
         // Distance to self should be very small (quantization error)
-        assert!(dist0 < 0.5, "Distance to self should be small: {}", dist0);
+        assert!(dist0 < 0.5, "Distance to self should be small: {dist0}");
         // Distance to orthogonal vector should be larger
         assert!(dist1 > dist0, "Distance to orthogonal should be larger");
     }

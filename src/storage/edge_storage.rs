@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Benchmark
+    #[ignore = "benchmark - run manually with --ignored"]
     fn bench_get_neighbors_performance() {
         use std::time::Instant;
         let temp_dir = TempDir::new().unwrap();
@@ -223,6 +223,6 @@ mod tests {
         let duration = start.elapsed();
         let avg = duration.as_micros() as f64 / iterations as f64;
 
-        println!("Get Neighbors (32 items): {:.2} us/op", avg);
+        println!("Get Neighbors (32 items): {avg:.2} us/op");
     }
 }

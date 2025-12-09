@@ -167,11 +167,11 @@ fn test_rrf_disjoint_results() {
 #[test]
 fn test_rrf_limit() {
     let vector_results: Vec<_> = (0..100)
-        .map(|i| (format!("vec_{}", i), i as f32 * 0.1))
+        .map(|i| (format!("vec_{i}"), i as f32 * 0.1))
         .collect();
 
     let text_results: Vec<_> = (0..100)
-        .map(|i| (format!("text_{}", i), 100.0 - i as f32))
+        .map(|i| (format!("text_{i}"), 100.0 - i as f32))
         .collect();
 
     let results = reciprocal_rank_fusion(vector_results, text_results, 10, 60);
@@ -300,7 +300,7 @@ fn test_concurrent_reads() {
     // Index some documents
     for i in 0..100 {
         index
-            .index_document(&format!("doc{}", i), &format!("content {} searchable", i))
+            .index_document(&format!("doc{i}"), &format!("content {i} searchable"))
             .unwrap();
     }
     index.commit().unwrap();
@@ -324,7 +324,7 @@ fn test_concurrent_reads() {
                     let results = searcher
                         .search(&query, &tantivy::collector::TopDocs::with_limit(10))
                         .unwrap();
-                    assert!(!results.is_empty(), "Thread {} iteration {}", thread_id, i);
+                    assert!(!results.is_empty(), "Thread {thread_id} iteration {i}");
                 }
             })
         })
@@ -347,7 +347,7 @@ fn test_read_while_write() {
     let mut index = TextIndex::open(&path).unwrap();
     for i in 0..50 {
         index
-            .index_document(&format!("doc{}", i), &format!("initial content {}", i))
+            .index_document(&format!("doc{i}"), &format!("initial content {i}"))
             .unwrap();
     }
     index.commit().unwrap();
@@ -382,7 +382,7 @@ fn test_read_while_write() {
     // Continue writing while reads happen
     for i in 50..100 {
         index
-            .index_document(&format!("doc{}", i), &format!("new content {}", i))
+            .index_document(&format!("doc{i}"), &format!("new content {i}"))
             .unwrap();
         if i % 10 == 0 {
             index.commit().unwrap();
@@ -406,7 +406,7 @@ fn test_high_throughput_indexing() {
     // Rapid indexing without commits
     for i in 0..1000 {
         index
-            .index_document(&format!("doc{}", i), &format!("bulk content {}", i))
+            .index_document(&format!("doc{i}"), &format!("bulk content {i}"))
             .unwrap();
     }
     index.commit().unwrap();
@@ -422,7 +422,7 @@ fn test_update_heavy_workload() {
     // Create initial documents
     for i in 0..100 {
         index
-            .index_document(&format!("doc{}", i), &format!("version0 content {}", i))
+            .index_document(&format!("doc{i}"), &format!("version0 content {i}"))
             .unwrap();
     }
     index.commit().unwrap();
@@ -431,10 +431,7 @@ fn test_update_heavy_workload() {
     for version in 1..10 {
         for i in 0..100 {
             index
-                .index_document(
-                    &format!("doc{}", i),
-                    &format!("version{} content {}", version, i),
-                )
+                .index_document(&format!("doc{i}"), &format!("version{version} content {i}"))
                 .unwrap();
         }
         index.commit().unwrap();
@@ -446,7 +443,7 @@ fn test_update_heavy_workload() {
         assert_eq!(old_results.len(), 0, "Old version should be deleted");
 
         // Verify new version is present
-        let new_results = index.search(&format!("version{}", version), 100).unwrap();
+        let new_results = index.search(&format!("version{version}"), 100).unwrap();
         assert_eq!(new_results.len(), 100, "New version should exist");
     }
 }
@@ -462,8 +459,8 @@ fn test_mixed_operations_workload() {
             let id = round * 20 + i;
             index
                 .index_document(
-                    &format!("doc{}", id),
-                    &format!("workload data round{} item{}", round, i),
+                    &format!("doc{id}"),
+                    &format!("workload data round{round} item{i}"),
                 )
                 .unwrap();
         }
@@ -474,8 +471,8 @@ fn test_mixed_operations_workload() {
                 let id = (round - 1) * 20 + i;
                 index
                     .index_document(
-                        &format!("doc{}", id),
-                        &format!("workload updated in round{}", round),
+                        &format!("doc{id}"),
+                        &format!("workload updated in round{round}"),
                     )
                     .unwrap();
             }
@@ -485,7 +482,7 @@ fn test_mixed_operations_workload() {
         if round > 1 {
             for i in 0..5 {
                 let id = (round - 2) * 20 + i;
-                index.delete_document(&format!("doc{}", id)).unwrap();
+                index.delete_document(&format!("doc{id}")).unwrap();
             }
         }
 

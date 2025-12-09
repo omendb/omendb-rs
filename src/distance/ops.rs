@@ -190,6 +190,7 @@ fn dot_scalar(a: &[f32], b: &[f32]) -> f32 {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

@@ -276,6 +276,7 @@ impl SearchResult {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp, clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 

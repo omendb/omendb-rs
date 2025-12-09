@@ -1,3 +1,5 @@
+#![allow(clippy::float_cmp, clippy::field_reassign_with_default)]
+
 use super::*;
 
 #[test]
@@ -82,7 +84,7 @@ fn test_random_level_distribution() {
     let params = HNSWParams::default();
     let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
 
-    let mut level_counts = vec![0; 8];
+    let mut level_counts = [0; 8];
 
     // Generate 1000 random levels
     for _ in 0..1000 {
@@ -193,7 +195,7 @@ fn test_hnsw_levels() {
 
     // Count how many nodes have their TOP level at each height
     // Note: All nodes exist at level 0, but node.level is their TOP level
-    let mut top_level_counts = vec![0; 8];
+    let mut top_level_counts = [0; 8];
     for node in &index.nodes {
         top_level_counts[node.level as usize] += 1;
     }
@@ -467,7 +469,7 @@ fn test_index_stats_with_vectors() {
     assert_eq!(stats.num_vectors, 50);
     assert_eq!(stats.dimensions, 3);
     assert!(stats.entry_point.is_some());
-    assert!(stats.level_distribution.len() > 0);
+    assert!(!stats.level_distribution.is_empty());
     assert!(stats.level_distribution.iter().sum::<usize>() == 50); // All nodes accounted for
     assert!(stats.avg_neighbors_l0 > 0.0); // Should have some neighbors
     assert!(stats.max_neighbors_l0 > 0);
@@ -888,7 +890,7 @@ fn test_disk_backed_workflow_end_to_end() {
         .collect();
 
     for vec in &vectors {
-        index.insert(&vec).unwrap();
+        index.insert(vec).unwrap();
     }
 
     let temp_dir = tempdir().unwrap();
@@ -917,7 +919,7 @@ fn test_disk_backed_workflow_end_to_end() {
 }
 
 #[test]
-#[ignore] // Run with: cargo test --release bench_search_qps -- --ignored --nocapture
+#[ignore = "benchmark - run with: cargo test --release bench_search_qps -- --ignored --nocapture"]
 fn bench_search_qps() {
     use std::time::Instant;
 
@@ -925,10 +927,7 @@ fn bench_search_qps() {
     let dim = 128;
     let queries = 1000;
 
-    println!(
-        "\n=== HNSW Raw Search Benchmark ({} vectors, {} queries) ===\n",
-        n, queries
-    );
+    println!("\n=== HNSW Raw Search Benchmark ({n} vectors, {queries} queries) ===\n");
 
     // Generate random vectors
     let vectors: Vec<Vec<f32>> = (0..n)
@@ -973,7 +972,7 @@ fn bench_search_qps() {
     let search_time = start.elapsed();
     let qps = queries as f64 / search_time.as_secs_f64();
 
-    println!("Search: {:?} ({:.0} QPS)", search_time, qps);
+    println!("Search: {search_time:?} ({qps:.0} QPS)");
     println!(
         "\nPer-query: {:.3}ms",
         search_time.as_secs_f64() * 1000.0 / queries as f64
@@ -981,7 +980,7 @@ fn bench_search_qps() {
 }
 
 #[test]
-#[ignore] // Run with: cargo test --release bench_vectorstore_qps -- --ignored --nocapture
+#[ignore = "benchmark - run with: cargo test --release bench_vectorstore_qps -- --ignored --nocapture"]
 fn bench_vectorstore_qps() {
     use crate::vector::{Vector, VectorStore};
     use std::time::Instant;
@@ -990,10 +989,7 @@ fn bench_vectorstore_qps() {
     let dim = 128;
     let queries = 1000;
 
-    println!(
-        "\n=== VectorStore Search Benchmark ({} vectors, {} queries) ===\n",
-        n, queries
-    );
+    println!("\n=== VectorStore Search Benchmark ({n} vectors, {queries} queries) ===\n");
 
     // Generate vectors
     let vectors: Vec<Vec<f32>> = (0..n)
@@ -1047,10 +1043,7 @@ fn bench_vectorstore_qps() {
     }
     let knn_time = start.elapsed();
     let knn_qps = queries as f64 / knn_time.as_secs_f64();
-    println!(
-        "knn_search (no metadata): {:?} ({:.0} QPS)",
-        knn_time, knn_qps
-    );
+    println!("knn_search (no metadata): {knn_time:?} ({knn_qps:.0} QPS)");
 
     // Benchmark search (with metadata lookup)
     let start = Instant::now();
@@ -1059,10 +1052,7 @@ fn bench_vectorstore_qps() {
     }
     let search_time = start.elapsed();
     let search_qps = queries as f64 / search_time.as_secs_f64();
-    println!(
-        "search (with metadata): {:?} ({:.0} QPS)",
-        search_time, search_qps
-    );
+    println!("search (with metadata): {search_time:?} ({search_qps:.0} QPS)");
 
     println!("\n=== Summary ===");
     println!(
@@ -1082,11 +1072,11 @@ fn bench_vectorstore_qps() {
 }
 
 /// Profile seerdb storage to identify optimization targets.
-/// Results written to SEERDB_PROFILE_RESULTS.md for seerdb development.
+/// Results written to `SEERDB_PROFILE_RESULTS.md` for seerdb development.
 ///
-/// Run with: cargo test --release profile_seerdb -- --ignored --nocapture
+/// Run with: cargo test --release `profile_seerdb` -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "profiling - run manually with --ignored"]
 fn profile_seerdb() {
     profile_seerdb_impl(100_000);
 }
@@ -1094,9 +1084,9 @@ fn profile_seerdb() {
 /// Comprehensive seerdb profile comparing persistent vs in-memory.
 /// Tests actual seerdb impact: startup, insert, metadata lookups.
 ///
-/// Run with: cargo test --release profile_seerdb_comprehensive -- --ignored --nocapture
+/// Run with: cargo test --release `profile_seerdb_comprehensive` -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "profiling - run manually with --ignored"]
 fn profile_seerdb_comprehensive() {
     use crate::vector::{Vector, VectorStore};
     use rand::Rng;
@@ -1108,7 +1098,7 @@ fn profile_seerdb_comprehensive() {
     let dim = 128;
     let queries = 1000;
 
-    println!("\n=== Comprehensive seerdb Profile ({} vectors) ===\n", n);
+    println!("\n=== Comprehensive seerdb Profile ({n} vectors) ===\n");
 
     // Generate random vectors
     let mut rng = rand::thread_rng();
@@ -1151,7 +1141,7 @@ fn profile_seerdb_comprehensive() {
     }
     let inmem_knn = start.elapsed();
     let inmem_knn_qps = queries as f64 / inmem_knn.as_secs_f64();
-    println!("knn_search: {:?} ({:.0} QPS)", inmem_knn, inmem_knn_qps);
+    println!("knn_search: {inmem_knn:?} ({inmem_knn_qps:.0} QPS)");
 
     // Search (with metadata lookup)
     let start = Instant::now();
@@ -1160,10 +1150,7 @@ fn profile_seerdb_comprehensive() {
     }
     let inmem_search = start.elapsed();
     let inmem_search_qps = queries as f64 / inmem_search.as_secs_f64();
-    println!(
-        "search (metadata): {:?} ({:.0} QPS)",
-        inmem_search, inmem_search_qps
-    );
+    println!("search (metadata): {inmem_search:?} ({inmem_search_qps:.0} QPS)");
 
     // === TEST 2: Persistent (seerdb) ===
     println!("\n=== 2. Persistent Mode (seerdb) ===");
@@ -1196,7 +1183,7 @@ fn profile_seerdb_comprehensive() {
     let start = Instant::now();
     persist_store.flush().unwrap();
     let flush_time = start.elapsed();
-    println!("Flush: {:?}", flush_time);
+    println!("Flush: {flush_time:?}");
 
     // Search (knn_search - no metadata)
     let start = Instant::now();
@@ -1205,7 +1192,7 @@ fn profile_seerdb_comprehensive() {
     }
     let persist_knn = start.elapsed();
     let persist_knn_qps = queries as f64 / persist_knn.as_secs_f64();
-    println!("knn_search: {:?} ({:.0} QPS)", persist_knn, persist_knn_qps);
+    println!("knn_search: {persist_knn:?} ({persist_knn_qps:.0} QPS)");
 
     // Search (with metadata lookup from seerdb)
     let start = Instant::now();
@@ -1214,10 +1201,7 @@ fn profile_seerdb_comprehensive() {
     }
     let persist_search = start.elapsed();
     let persist_search_qps = queries as f64 / persist_search.as_secs_f64();
-    println!(
-        "search (metadata): {:?} ({:.0} QPS)",
-        persist_search, persist_search_qps
-    );
+    println!("search (metadata): {persist_search:?} ({persist_search_qps:.0} QPS)");
 
     // Get seerdb stats for metadata lookups
     let stats = persist_store.storage().unwrap().stats();
@@ -1238,10 +1222,7 @@ fn profile_seerdb_comprehensive() {
     }
     let reload_knn = start.elapsed();
     let reload_knn_qps = queries as f64 / reload_knn.as_secs_f64();
-    println!(
-        "knn_search (post-reload): {:?} ({:.0} QPS)",
-        reload_knn, reload_knn_qps
-    );
+    println!("knn_search (post-reload): {reload_knn:?} ({reload_knn_qps:.0} QPS)");
 
     // === SUMMARY ===
     println!("\n=== Summary: seerdb Impact ===");
@@ -1266,8 +1247,8 @@ fn profile_seerdb_comprehensive() {
         persist_search_qps,
         (1.0 - persist_search_qps / inmem_search_qps) * 100.0
     );
-    println!("| Cold start | N/A | {:?} | - |", reload_time);
-    println!("| Flush | N/A | {:?} | - |", flush_time);
+    println!("| Cold start | N/A | {reload_time:?} | - |");
+    println!("| Flush | N/A | {flush_time:?} | - |");
 
     println!("\n=== seerdb Stats ===");
     println!("Cache hit rate: {:.1}%", stats.cache_hit_rate * 100.0);
@@ -1280,7 +1261,7 @@ fn profile_seerdb_comprehensive() {
 
     // Write comprehensive results
     let results = format!(
-        r#"# seerdb Profile Results (Comprehensive)
+        r"# seerdb Profile Results (Comprehensive)
 
 **Date**: {}
 **Dataset**: {} vectors, {} dimensions
@@ -1348,7 +1329,7 @@ Total gets: {}
 | Simple file | Simpler code | No durability, slow reload |
 | fjall | Simpler API | Less optimized for oadb use case |
 | **seerdb** | Optimized, durable | Slight insert overhead |
-"#,
+",
         chrono::Local::now().format("%Y-%m-%d"),
         n,
         dim,
@@ -1401,10 +1382,7 @@ fn profile_seerdb_impl(_n: usize) {
     let dim = 128;
     let queries = 100;
 
-    println!(
-        "\n=== seerdb Profile ({} vectors, {} queries) ===\n",
-        n, queries
-    );
+    println!("\n=== seerdb Profile ({n} vectors, {queries} queries) ===\n");
 
     // Generate random vectors
     let mut rng = rand::thread_rng();
@@ -1439,7 +1417,7 @@ fn profile_seerdb_impl(_n: usize) {
     let start = Instant::now();
     store.flush().unwrap();
     let flush_time = start.elapsed();
-    println!("Flush: {:?}", flush_time);
+    println!("Flush: {flush_time:?}");
 
     // Warm up
     for _ in 0..10 {
@@ -1479,9 +1457,9 @@ fn profile_seerdb_impl(_n: usize) {
 
     // Print results
     println!("\n=== Search Latency ===");
-    println!("Total search time: {:?}", search_time);
-    println!("Per-query: {:.2}ms", ms_per_query);
-    println!("QPS: {:.0}", qps);
+    println!("Total search time: {search_time:?}");
+    println!("Per-query: {ms_per_query:.2}ms");
+    println!("QPS: {qps:.0}");
     println!(
         "Edge lookups (seerdb gets): {} ({:.1} per query)",
         search_gets,
@@ -1489,8 +1467,8 @@ fn profile_seerdb_impl(_n: usize) {
     );
 
     println!("\n=== Cache Stats (Search Batch) ===");
-    println!("Cache hits: {}", search_cache_hits);
-    println!("Cache misses: {}", search_cache_misses);
+    println!("Cache hits: {search_cache_hits}");
+    println!("Cache misses: {search_cache_misses}");
     println!("Cache hit rate: {:.1}%", search_hit_rate * 100.0);
 
     println!("\n=== Cache Stats (Cumulative) ===");
@@ -1517,7 +1495,7 @@ fn profile_seerdb_impl(_n: usize) {
 
     // Write results to file
     let results = format!(
-        r#"# seerdb Profile Results
+        r"# seerdb Profile Results
 
 **Date**: {}
 **Dataset**: {} vectors, {} dimensions
@@ -1550,7 +1528,7 @@ fn profile_seerdb_impl(_n: usize) {
 ## Analysis
 - Cache hit rate {}: {}
 - LSM health: {}
-"#,
+",
         chrono::Local::now().format("%Y-%m-%d"),
         n,
         dim,
@@ -1641,17 +1619,12 @@ fn test_asymmetric_only_supports_l2() {
     let rabitq = RaBitQParams::bits4();
 
     // L2 should work
-    let result =
-        HNSWIndex::new_with_asymmetric(32, params.clone(), DistanceFunction::L2, rabitq.clone());
+    let result = HNSWIndex::new_with_asymmetric(32, params, DistanceFunction::L2, rabitq.clone());
     assert!(result.is_ok());
 
     // Cosine should fail
-    let result = HNSWIndex::new_with_asymmetric(
-        32,
-        params.clone(),
-        DistanceFunction::Cosine,
-        rabitq.clone(),
-    );
+    let result =
+        HNSWIndex::new_with_asymmetric(32, params, DistanceFunction::Cosine, rabitq.clone());
     assert!(result.is_err());
 
     // NegativeDotProduct should fail

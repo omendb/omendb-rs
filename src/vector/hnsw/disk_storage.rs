@@ -1223,8 +1223,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(
                     actual, *expected,
-                    "Mismatch for node {} level {}",
-                    node_id, level
+                    "Mismatch for node {node_id} level {level}"
                 );
             }
         }

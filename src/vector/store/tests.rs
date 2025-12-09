@@ -93,7 +93,7 @@ fn test_save_load_roundtrip() {
     use std::fs;
 
     let test_dir = "/tmp/omendb_test_vector_store";
-    let test_path = format!("{}/test_store", test_dir);
+    let test_path = format!("{test_dir}/test_store");
 
     // Clean up any existing test data
     let _ = fs::remove_dir_all(test_dir);
@@ -112,8 +112,8 @@ fn test_save_load_roundtrip() {
     store.save_to_disk(&test_path).unwrap();
 
     // Verify HNSW index file exists
-    assert!(fs::metadata(format!("{}/test_store.hnsw", test_dir)).is_ok());
-    assert!(fs::metadata(format!("{}/test_store.vectors.bin", test_dir)).is_ok());
+    assert!(fs::metadata(format!("{test_dir}/test_store.hnsw")).is_ok());
+    assert!(fs::metadata(format!("{test_dir}/test_store.vectors.bin")).is_ok());
 
     // Load from disk
     let loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
@@ -187,7 +187,10 @@ fn test_quantization_insert() {
     // Verify quantized vectors were created
     assert_eq!(store.vectors.len(), 50);
     assert_eq!(store.quantized_vectors.len(), 50);
-    assert!(store.quantized_vectors.iter().all(|qv| qv.is_some()));
+    assert!(store
+        .quantized_vectors
+        .iter()
+        .all(std::option::Option::is_some));
 }
 
 #[test]
@@ -222,7 +225,7 @@ fn test_quantization_persistence() {
     use std::fs;
 
     let test_dir = "/tmp/omendb_test_quantization";
-    let test_path = format!("{}/test_store", test_dir);
+    let test_path = format!("{test_dir}/test_store");
 
     // Clean up any existing test data
     let _ = fs::remove_dir_all(test_dir);
@@ -240,8 +243,8 @@ fn test_quantization_persistence() {
     store.save_to_disk(&test_path).unwrap();
 
     // Verify quantization files exist
-    assert!(fs::metadata(format!("{}/test_store.quantized.bin", test_dir)).is_ok());
-    assert!(fs::metadata(format!("{}/test_store.quantizer.json", test_dir)).is_ok());
+    assert!(fs::metadata(format!("{test_dir}/test_store.quantized.bin")).is_ok());
+    assert!(fs::metadata(format!("{test_dir}/test_store.quantizer.json")).is_ok());
 
     // Load from disk
     let mut loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
@@ -275,7 +278,10 @@ fn test_quantization_batch_insert() {
     assert_eq!(ids.len(), 100);
     assert_eq!(store.vectors.len(), 100);
     assert_eq!(store.quantized_vectors.len(), 100);
-    assert!(store.quantized_vectors.iter().all(|qv| qv.is_some()));
+    assert!(store
+        .quantized_vectors
+        .iter()
+        .all(std::option::Option::is_some));
 }
 
 //  Adaptive parameter selection tests
@@ -577,7 +583,7 @@ fn test_persistence_with_metadata() {
     use std::fs;
 
     let test_dir = "/tmp/omendb_test_metadata";
-    let test_path = format!("{}/test_store", test_dir);
+    let test_path = format!("{test_dir}/test_store");
 
     // Clean up any existing test data
     let _ = fs::remove_dir_all(test_dir);
@@ -605,8 +611,8 @@ fn test_persistence_with_metadata() {
     store.save_to_disk(&test_path).unwrap();
 
     // Verify metadata files exist
-    assert!(fs::metadata(format!("{}/test_store.metadata.json", test_dir)).is_ok());
-    assert!(fs::metadata(format!("{}/test_store.id_mapping.json", test_dir)).is_ok());
+    assert!(fs::metadata(format!("{test_dir}/test_store.metadata.json")).is_ok());
+    assert!(fs::metadata(format!("{test_dir}/test_store.id_mapping.json")).is_ok());
 
     // Load from disk
     let loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
@@ -800,7 +806,7 @@ fn test_persistent_search() {
         for i in 0..100 {
             store
                 .set(
-                    format!("vec{}", i),
+                    format!("vec{i}"),
                     random_vector(128, i),
                     serde_json::json!({"index": i}),
                 )
@@ -914,7 +920,7 @@ mod incremental_tests {
                     let id = batch * 10 + i;
                     let mut v = vec![0.0; 4];
                     v[id % 4] = 1.0 + (id as f32 * 0.01);
-                    (format!("vec{}", id), Vector::new(v), serde_json::json!({}))
+                    (format!("vec{id}"), Vector::new(v), serde_json::json!({}))
                 })
                 .collect();
 
@@ -951,7 +957,7 @@ mod incremental_tests {
             .map(|i| {
                 let mut v = vec![0.0; 4];
                 v[i % 4] = 1.0;
-                (format!("batch{}", i), Vector::new(v), serde_json::json!({}))
+                (format!("batch{i}"), Vector::new(v), serde_json::json!({}))
             })
             .collect();
         store.set_batch(batch).unwrap();

@@ -212,6 +212,7 @@ impl NodeStorage for CachedStorage {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::vector::hnsw::node_storage::MemoryStorage;
