@@ -11,7 +11,6 @@ Embedded vector database for Python. No server, no setup, just `pip install`.
 
 ```python
 import omendb
-import numpy as np
 
 # Create database
 db = omendb.open("./vectors", dimensions=4)
@@ -47,9 +46,9 @@ On a 10K vector dataset (M3 Max):
 
 | Dimension | Batch Search | Single Search |
 | --------- | ------------ | ------------- |
-| 128D      | ~57,000 QPS  | ~7,000 QPS    |
-| 768D      | ~6,000 QPS   | ~1,000 QPS    |
-| 1536D     | ~2,000 QPS   | ~500 QPS      |
+| 128D      | ~53,000 QPS  | ~5,400 QPS    |
+| 768D      | ~8,700 QPS   | ~1,600 QPS    |
+| 1536D     | ~2,800 QPS   | ~700 QPS      |
 
 Run `python benchmark.py` to measure on your hardware.
 
@@ -136,11 +135,6 @@ db.search_batch(queries, k)    # Batch vector search (parallel)
 db.search_hybrid(vec, text, k) # Hybrid vector + text search
 db.search_text(text, k)        # Text-only BM25 search
 db.count()                     # Count vectors
-
-# Collections (namespaces)
-users = db.collection("users")
-users.set([...])
-users.search([...], k=5)
 ```
 
 ## Filters
