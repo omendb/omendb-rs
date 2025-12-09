@@ -70,14 +70,18 @@ jq .version node/package.json
 gh run list --limit 3  # All should be passing
 ```
 
-## Version Files
+## Version Files (6 locations)
 
-| File                | Registry  |
-| ------------------- | --------- |
-| `Cargo.toml`        | crates.io |
-| `python/Cargo.toml` | PyPI      |
-| `node/package.json` | npm       |
-| `README.md`         | Docs      |
+| File                        | Registry  | Notes                |
+| --------------------------- | --------- | -------------------- |
+| `Cargo.toml`                | crates.io | Main Rust crate      |
+| `python/Cargo.toml`         | PyPI      | Python bindings      |
+| `node/Cargo.toml`           | -         | Node bindings (Rust) |
+| `node/package.json`         | npm       | @omendb/omendb       |
+| `node/wrapper/package.json` | npm       | omendb wrapper + dep |
+| `README.md`                 | Docs      | Version badge text   |
+
+The bump script updates all 6 locations and verifies they match.
 
 ## CI Safeguards
 

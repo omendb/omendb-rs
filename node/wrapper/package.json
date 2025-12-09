@@ -1,6 +1,6 @@
 {
 	"name": "omendb",
-	"version": "0.0.5",
+	"version": "0.0.7",
 	"description": "Fast embedded vector database with HNSW indexing (wrapper for @omendb/omendb)",
 	"main": "index.js",
 	"types": "index.d.ts",
@@ -23,6 +23,6 @@
 		"node": ">= 18"
 	},
 	"dependencies": {
-		"@omendb/omendb": "0.0.5"
+		"@omendb/omendb": "0.0.7"
 	}
 }
