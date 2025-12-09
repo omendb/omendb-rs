@@ -7,3 +7,4 @@ example_db.*
 
 # Benchmark data (large files)
 benchmarks/data/
+benchmarks/history.json

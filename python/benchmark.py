@@ -400,6 +400,34 @@ def save_results(output_path: str, metadata: dict, results: list):
     print(f"\nResults saved to: {path}")
 
 
+def append_to_history(metadata: dict, results: list):
+    """Append results to benchmarks/history.json for tracking over time."""
+    history_path = Path(__file__).parent / "benchmarks" / "history.json"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load existing history or create new
+    if history_path.exists():
+        with open(history_path) as f:
+            history = json.load(f)
+    else:
+        history = []
+
+    # Append new entry
+    entry = {
+        "metadata": metadata,
+        "results": results,
+    }
+    history.append(entry)
+
+    # Keep last 100 entries to avoid unbounded growth
+    history = history[-100:]
+
+    with open(history_path, "w") as f:
+        json.dump(history, f, indent=2)
+
+    print(f"History updated: {history_path} ({len(history)} entries)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="OmenDB Performance Benchmark")
     parser.add_argument("--full", action="store_true", help="Run full benchmark suite")
@@ -415,6 +443,7 @@ def main():
         help="RaBitQ quantization bits (0=none, 2/4/8=quantized)",
     )
     parser.add_argument("--output", "-o", type=str, help="Save results to JSON file")
+    parser.add_argument("--no-history", action="store_true", help="Don't append to history.json")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -463,6 +492,10 @@ def main():
     # Save to JSON if output specified
     if args.output:
         save_results(args.output, metadata, all_results)
+
+    # Append to history unless disabled
+    if not args.no_history:
+        append_to_history(metadata, all_results)
 
 
 if __name__ == "__main__":
