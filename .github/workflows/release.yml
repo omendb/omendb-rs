@@ -27,6 +27,63 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate versions
+        run: |
+          set -e
+
+          # Get code versions
+          CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+          PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
+          NODE_V=$(jq -r .version node/package.json)
+
+          echo "Code versions:"
+          echo "  Cargo.toml:        $CARGO_V"
+          echo "  python/Cargo.toml: $PYTHON_V"
+          echo "  node/package.json: $NODE_V"
+
+          # All code versions must match
+          if [ "$CARGO_V" != "$PYTHON_V" ] || [ "$CARGO_V" != "$NODE_V" ]; then
+            echo "ERROR: Version mismatch between files!"
+            exit 1
+          fi
+
+          # Get published versions
+          PYPI_V=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.releases | keys | sort_by(split(".") | map(tonumber)) | .[-1]' || echo "0.0.0")
+          CRATES_V=$(curl -sf https://crates.io/api/v1/crates/omendb | jq -r '.versions[0].num' || echo "0.0.0")
+
+          echo ""
+          echo "Published versions:"
+          echo "  PyPI:     $PYPI_V"
+          echo "  crates:   $CRATES_V"
+
+          # Version must be higher than published
+          if [ "$CARGO_V" = "$PYPI_V" ]; then
+            echo "ERROR: Version $CARGO_V already published to PyPI"
+            exit 1
+          fi
+          if [ "$CARGO_V" = "$CRATES_V" ]; then
+            echo "ERROR: Version $CARGO_V already published to crates.io"
+            exit 1
+          fi
+
+          # Check sequential (simplified: just ensure it's higher)
+          BASE_V="$PYPI_V"
+          IFS='.' read -r B_MAJ B_MIN B_PAT <<< "$BASE_V"
+          IFS='.' read -r N_MAJ N_MIN N_PAT <<< "$CARGO_V"
+
+          VALID=false
+          [ "$N_MAJ" -gt "$B_MAJ" ] && VALID=true
+          [ "$N_MAJ" -eq "$B_MAJ" ] && [ "$N_MIN" -gt "$B_MIN" ] && VALID=true
+          [ "$N_MAJ" -eq "$B_MAJ" ] && [ "$N_MIN" -eq "$B_MIN" ] && [ "$N_PAT" -gt "$B_PAT" ] && VALID=true
+
+          if [ "$VALID" = "false" ]; then
+            echo "ERROR: Version $CARGO_V is not higher than published $BASE_V"
+            exit 1
+          fi
+
+          echo ""
+          echo "Version validation passed: $BASE_V -> $CARGO_V"
+
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
