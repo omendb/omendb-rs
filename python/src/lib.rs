@@ -888,6 +888,10 @@ impl VectorDatabase {
     ///     ...     print(f"{r['id']}: {r['score']:.4f}")
     #[pyo3(name = "search_text")]
     fn search_text(&self, py: Python<'_>, query: &str, k: usize) -> PyResult<Vec<Py<PyDict>>> {
+        if k == 0 {
+            return Err(PyValueError::new_err("k must be greater than 0"));
+        }
+
         let mut inner = self.inner.write();
 
         // Auto-flush text index to ensure search sees latest inserts
@@ -945,6 +949,24 @@ impl VectorDatabase {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> PyResult<Vec<Py<PyDict>>> {
+        // Validate inputs
+        if k == 0 {
+            return Err(PyValueError::new_err("k must be greater than 0"));
+        }
+        if let Some(a) = alpha {
+            if !(0.0..=1.0).contains(&a) {
+                return Err(PyValueError::new_err(format!(
+                    "alpha must be between 0.0 and 1.0, got {}",
+                    a
+                )));
+            }
+        }
+        if let Some(rrf) = rrf_k {
+            if rrf == 0 {
+                return Err(PyValueError::new_err("rrf_k must be greater than 0"));
+            }
+        }
+
         let query_vec = Vector::new(extract_query_vector(query_vector)?);
         let rust_filter = filter.map(parse_filter).transpose()?;
 
