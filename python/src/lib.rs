@@ -277,22 +277,33 @@ impl VectorDatabase {
                     inner.store.enable_text_search().map_err(convert_error)?;
                 }
 
-                // Insert items
-                let mut results = Vec::with_capacity(parsed.len());
-                for item in parsed {
-                    let result = if let Some(text) = item.text {
-                        inner
-                            .store
-                            .set_with_text(item.id, item.vector, &text, item.metadata)
-                            .map_err(convert_error)?
-                    } else {
-                        inner
-                            .store
-                            .set(item.id, item.vector, item.metadata)
-                            .map_err(convert_error)?
-                    };
-                    results.push(result);
-                }
+                // Insert items - use batch path when no text for performance
+                let results = if has_text {
+                    // Slow path: items with text must be inserted individually
+                    let mut results = Vec::with_capacity(parsed.len());
+                    for item in parsed {
+                        let result = if let Some(text) = item.text {
+                            inner
+                                .store
+                                .set_with_text(item.id, item.vector, &text, item.metadata)
+                                .map_err(convert_error)?
+                        } else {
+                            inner
+                                .store
+                                .set(item.id, item.vector, item.metadata)
+                                .map_err(convert_error)?
+                        };
+                        results.push(result);
+                    }
+                    results
+                } else {
+                    // Fast path: use set_batch for items without text
+                    let batch: Vec<_> = parsed
+                        .into_iter()
+                        .map(|item| (item.id, item.vector, item.metadata))
+                        .collect();
+                    inner.store.set_batch(batch).map_err(convert_error)?
+                };
 
                 inner.cache_valid = false;
                 return Ok(results);
