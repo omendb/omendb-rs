@@ -79,9 +79,8 @@ fn test_ef_search_tuning() {
         store.insert(random_vector(128, i)).unwrap();
     }
 
-    // Check default ef_search (lazy init uses 10K capacity → medium tier → ef_construction=200)
-    // HNSWIndex::new sets ef_search = ef_construction for consistency
-    assert_eq!(store.get_ef_search(), Some(200));
+    // Check default ef_search (fixed default: M=16, ef_construction=100, ef_search=100)
+    assert_eq!(store.get_ef_search(), Some(100));
 
     // Tune ef_search
     store.set_ef_search(600);
@@ -284,80 +283,14 @@ fn test_quantization_batch_insert() {
         .all(std::option::Option::is_some));
 }
 
-//  Adaptive parameter selection tests
+// Capacity pre-allocation tests (fixed defaults: M=16, ef=100)
 
 #[test]
-fn test_adaptive_params_small_scale() {
-    // < 50K vectors should use M=16 (fast & efficient)
-    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(10_000);
-    assert_eq!(m, 16);
-    assert_eq!(ef_construction, 200);
-    assert_eq!(ef_search, 100);
-
-    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(49_999);
-    assert_eq!(m, 16);
-    assert_eq!(ef_construction, 200);
-    assert_eq!(ef_search, 100);
-}
-
-#[test]
-fn test_adaptive_params_medium_scale() {
-    // 50K-500K vectors should use M=32 (balanced, 98% recall)
-    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(50_000);
-    assert_eq!(m, 32);
-    assert_eq!(ef_construction, 400);
-    assert_eq!(ef_search, 100);
-
-    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(100_000);
-    assert_eq!(m, 32);
-    assert_eq!(ef_construction, 400);
-    assert_eq!(ef_search, 100);
-
-    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(499_999);
-    assert_eq!(m, 32);
-    assert_eq!(ef_construction, 400);
-    assert_eq!(ef_search, 100);
-}
-
-#[test]
-fn test_adaptive_params_large_scale() {
-    // >= 500K vectors should use M=48 (high recall, 99%)
-    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(500_000);
-    assert_eq!(m, 48);
-    assert_eq!(ef_construction, 600);
-    assert_eq!(ef_search, 150);
-
-    let (m, ef_construction, ef_search) = VectorStore::adaptive_hnsw_params(1_000_000);
-    assert_eq!(m, 48);
-    assert_eq!(ef_construction, 600);
-    assert_eq!(ef_search, 150);
-}
-
-#[test]
-fn test_new_with_capacity_small() {
-    let store = VectorStore::new_with_capacity(128, 10_000);
-
-    // Should have eagerly initialized HNSW with M=16
-    assert!(store.hnsw_index.is_some());
-
-    // Verify parameters (we can't directly inspect but can test behavior)
-    assert_eq!(store.dimensions, 128);
-}
-
-#[test]
-fn test_new_with_capacity_medium() {
+fn test_new_with_capacity() {
+    // new_with_capacity uses fixed defaults (M=16, ef=100) for all sizes
+    // Users can use VectorStoreOptions for custom params
     let store = VectorStore::new_with_capacity(128, 100_000);
 
-    // Should have eagerly initialized HNSW with M=32
-    assert!(store.hnsw_index.is_some());
-    assert_eq!(store.dimensions, 128);
-}
-
-#[test]
-fn test_new_with_capacity_large() {
-    let store = VectorStore::new_with_capacity(128, 1_000_000);
-
-    // Should have eagerly initialized HNSW with M=48
     assert!(store.hnsw_index.is_some());
     assert_eq!(store.dimensions, 128);
 }

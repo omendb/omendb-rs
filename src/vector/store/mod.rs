@@ -379,26 +379,26 @@ impl VectorStore {
     ///
     /// # Example
     /// ```ignore
-    /// // For 100K vectors, automatically uses M=32 (98% recall)
+    /// // Pre-allocate for 100K vectors with industry-standard defaults (M=16, ef=100)
     /// let mut store = VectorStore::new_with_capacity(128, 100_000);
     /// ```
-    ///
-    /// # Performance Characteristics
-    /// See `ai/research/WEEK21_100K_RECALL_INVESTIGATION.md` for detailed benchmarks
     #[must_use]
     pub fn new_with_capacity(dimensions: usize, expected_vectors: usize) -> Self {
-        let (m, ef_construction, ef_search) = Self::adaptive_hnsw_params(expected_vectors);
+        // Industry standard defaults (Qdrant, ChromaDB, Milvus, pgvector)
+        // Users can use VectorStoreOptions for custom m/ef_construction
+        let m = 16;
+        let ef_construction = 100;
+        let ef_search = 100;
 
-        // SAFETY: adaptive_hnsw_params always returns valid parameters (m > 0, ef > 0)
         let hnsw_index = Some(
             HNSWIndex::new_with_params(
-                expected_vectors.max(1_000_000), // Use expected capacity, min 1M
+                expected_vectors.max(10_000),
                 dimensions,
                 m,
                 ef_construction,
                 ef_search,
             )
-            .expect("adaptive_hnsw_params returns valid parameters"),
+            .expect("fixed defaults are valid"),
         );
 
         Self {
@@ -417,29 +417,6 @@ impl VectorStore {
             storage_path: None,
             text_index: None,
             text_search_config: None,
-        }
-    }
-
-    /// Compute adaptive HNSW parameters based on expected vector count
-    ///
-    /// Optimized for balanced speed/recall tradeoff:
-    /// - `ef_search=100` provides ~98% recall with high QPS (2000+ QPS)
-    /// - `ef_construction` kept high for quality graph
-    ///
-    /// Returns: (M, `ef_construction`, `ef_search`)
-    fn adaptive_hnsw_params(expected_vectors: usize) -> (usize, usize, usize) {
-        if expected_vectors < 50_000 {
-            // Fast & efficient (10K-50K scale)
-            // ~98% recall, high QPS (~2100 QPS @ 10K)
-            (16, 200, 100)
-        } else if expected_vectors < 500_000 {
-            // Balanced (50K-500K scale)
-            // ~98% recall, good QPS
-            (32, 400, 100)
-        } else {
-            // High recall (500K+ scale)
-            // ~99% recall, moderate QPS
-            (48, 600, 150)
         }
     }
 
@@ -690,15 +667,13 @@ impl VectorStore {
                     ef_search,
                 )?)
             } else if let Some(capacity) = options.expected_capacity {
-                // Use adaptive params based on capacity
-                let (adaptive_m, adaptive_ef_construction, adaptive_ef_search) =
-                    Self::adaptive_hnsw_params(capacity);
+                // Use fixed defaults with specified capacity for pre-allocation
                 Some(HNSWIndex::new_with_params(
                     capacity.max(10_000),
                     dimensions,
-                    adaptive_m,
-                    adaptive_ef_construction,
-                    adaptive_ef_search,
+                    m,
+                    ef_construction,
+                    ef_search,
                 )?)
             } else {
                 None // Will be lazily initialized
@@ -789,14 +764,13 @@ impl VectorStore {
                     ef_search,
                 )?)
             } else if let Some(capacity) = options.expected_capacity {
-                let (adaptive_m, adaptive_ef_construction, adaptive_ef_search) =
-                    Self::adaptive_hnsw_params(capacity);
+                // Use fixed defaults with specified capacity for pre-allocation
                 Some(HNSWIndex::new_with_params(
                     capacity.max(10_000),
                     dimensions,
-                    adaptive_m,
-                    adaptive_ef_construction,
-                    adaptive_ef_search,
+                    m,
+                    ef_construction,
+                    ef_search,
                 )?)
             } else {
                 // Create default HNSW index when dimensions are known

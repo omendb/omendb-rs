@@ -65,24 +65,15 @@ impl HNSWIndex {
     /// let results = index.search(&query, 10)?;
     /// ```
     pub fn new(max_elements: usize, dimensions: usize) -> Result<Self> {
-        // Adaptive HNSW parameters based on expected dataset size
-        // Goal: Balance speed and recall appropriately for each scale
-        let (max_nb_connection, ef_construction) = if max_elements < 10_000 {
-            // Small datasets (<10K): Prioritize speed, 95%+ recall sufficient
-            (16, 100)
-        } else if max_elements < 100_000 {
-            // Medium datasets (10K-100K): Balanced approach
-            // Better recall than small dataset params, faster than large
-            (24, 200)
-        } else {
-            // Large datasets (100K+): Maximum recall (M=32 achieves 98%+ recall)
-            (32, 400)
-        };
+        // Industry standard defaults (ChromaDB, hnswlib, Milvus, pgvector)
+        // Users can override via new_with_params() if needed
+        let m = 16;
+        let ef_construction = 100;
 
         let params = CoreParams {
-            m: max_nb_connection,
+            m,
             ef_construction,
-            ml: 1.0 / (max_nb_connection as f32).ln(),
+            ml: 1.0 / (m as f32).ln(),
             seed: 42,
             max_level: 8,
         };
@@ -92,9 +83,9 @@ impl HNSWIndex {
         Ok(Self {
             index,
             max_elements,
-            max_nb_connection,
+            max_nb_connection: m,
             ef_construction,
-            ef_search: ef_construction, // Match ef_construction for consistency
+            ef_search: ef_construction,
             dimensions,
             num_vectors: 0,
         })
