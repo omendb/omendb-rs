@@ -214,6 +214,13 @@ impl HNSWIndex {
         self.vectors.is_asymmetric()
     }
 
+    /// Train the quantizer from sample vectors
+    pub fn train_quantizer(&mut self, sample_vectors: &[Vec<f32>]) -> Result<()> {
+        self.vectors
+            .train_quantization(sample_vectors)
+            .map_err(HNSWError::InvalidParams)
+    }
+
     /// Get number of vectors in index
     #[must_use]
     pub fn len(&self) -> usize {

@@ -7,4 +7,6 @@
 
 pub mod rabitq;
 
-pub use rabitq::{ADCTable, QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams};
+pub use rabitq::{
+    ADCTable, QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams, TrainedParams,
+};

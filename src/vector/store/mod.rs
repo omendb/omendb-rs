@@ -13,7 +13,7 @@ use super::storage::SeerDBStorage;
 use super::types::Vector;
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
-use omendb_core::compression::{QuantizedVector, RaBitQ, RaBitQParams};
+use omendb_core::compression::RaBitQParams;
 use omendb_core::distance::l2_distance;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
@@ -290,14 +290,6 @@ pub struct VectorStore {
     /// Vector dimensionality
     dimensions: usize,
 
-    /// Optional quantizer for memory-efficient storage (Extended `RaBitQ`)
-    /// DEPRECATED: Use asymmetric HNSW instead. Kept for backward compatibility.
-    quantizer: Option<RaBitQ>,
-
-    /// Quantized vectors (parallel to vectors, None if quantizer not enabled)
-    /// DEPRECATED: Use asymmetric HNSW instead. Kept for backward compatibility.
-    quantized_vectors: Vec<Option<QuantizedVector>>,
-
     /// Whether to rescore candidates with original vectors (default: true when quantization enabled)
     rescore_enabled: bool,
 
@@ -327,18 +319,24 @@ pub struct VectorStore {
 
     /// Text search configuration (used by `enable_text_search`)
     text_search_config: Option<TextSearchConfig>,
+
+    /// Pending quantization params (deferred until first insert for training)
+    pending_quantization: Option<RaBitQParams>,
+
+    /// HNSW parameters for lazy initialization
+    hnsw_m: usize,
+    hnsw_ef_construction: usize,
+    hnsw_ef_search: usize,
 }
 
 impl VectorStore {
-    /// Create new vector store without quantization
+    /// Create new vector store
     #[must_use]
     pub fn new(dimensions: usize) -> Self {
         Self {
             vectors: Vec::new(),
             hnsw_index: None,
             dimensions,
-            quantizer: None,
-            quantized_vectors: Vec::new(),
             rescore_enabled: false,
             oversample_factor: 3.0,
             metadata: HashMap::new(),
@@ -349,62 +347,23 @@ impl VectorStore {
             storage_path: None,
             text_index: None,
             text_search_config: None,
+            pending_quantization: None,
+            hnsw_m: 16,
+            hnsw_ef_construction: 100,
+            hnsw_ef_search: 100,
         }
     }
 
-    /// Create new vector store with pre-allocated capacity (DEPRECATED)
+    /// Create new vector store with quantization
     ///
-    /// Use `VectorStore::new()` instead. The capacity hint provides minimal benefit
-    /// and adds unnecessary API complexity. HNSW auto-grows as needed.
+    /// Quantization is trained on the first batch of vectors inserted.
     #[must_use]
-    #[deprecated(note = "Use VectorStore::new() instead - capacity hint provides minimal benefit")]
-    pub fn new_with_capacity(dimensions: usize, _expected_vectors: usize) -> Self {
-        // Industry standard defaults (Qdrant, ChromaDB, Milvus, pgvector)
-        // Users can use VectorStoreOptions for custom m/ef_construction
-        let m = 16;
-        let ef_construction = 100;
-        let ef_search = 100;
-
-        let hnsw_index = Some(
-            HNSWIndex::new_with_params(10_000, dimensions, m, ef_construction, ef_search)
-                .expect("fixed defaults are valid"),
-        );
-
-        Self {
-            vectors: Vec::new(),
-            hnsw_index,
-            dimensions,
-            quantizer: None,
-            quantized_vectors: Vec::new(),
-            rescore_enabled: false,
-            oversample_factor: 3.0,
-            metadata: HashMap::new(),
-            id_to_index: HashMap::new(),
-            index_to_id: HashMap::new(),
-            deleted: HashMap::new(),
-            storage: None,
-            storage_path: None,
-            text_index: None,
-            text_search_config: None,
-        }
-    }
-
-    /// Create new vector store with `RaBitQ` quantization (DEPRECATED)
-    ///
-    /// This constructor creates the old-style quantization that stores quantized vectors
-    /// separately. For the new asymmetric HNSW mode, use `VectorStoreOptions::quantization()`.
-    #[must_use]
-    #[deprecated(note = "Use VectorStoreOptions::quantization() for asymmetric HNSW")]
     pub fn new_with_quantization(dimensions: usize, params: RaBitQParams) -> Self {
-        let quantizer = RaBitQ::new(params);
-
         Self {
             vectors: Vec::new(),
             hnsw_index: None,
             dimensions,
-            quantizer: Some(quantizer),
-            quantized_vectors: Vec::new(),
-            rescore_enabled: false,
+            rescore_enabled: true,
             oversample_factor: 3.0,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
@@ -414,29 +373,20 @@ impl VectorStore {
             storage_path: None,
             text_index: None,
             text_search_config: None,
+            pending_quantization: Some(params),
+            hnsw_m: 16,
+            hnsw_ef_construction: 100,
+            hnsw_ef_search: 100,
         }
     }
 
     /// Create new vector store with custom HNSW parameters
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality
-    /// * `m` - Number of bidirectional links per node (typical: 16-48)
-    /// * `ef_construction` - Candidate list size during construction (typical: 200-800)
-    /// * `ef_search` - Candidate list size during search (typical: 200-1000)
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Higher M for better recall at 100K+ scale
-    /// let mut store = VectorStore::new_with_params(128, 32, 400, 600)?;
-    /// ```
     pub fn new_with_params(
         dimensions: usize,
         m: usize,
         ef_construction: usize,
         ef_search: usize,
     ) -> Result<Self> {
-        // Eagerly initialize HNSW with custom parameters
         let hnsw_index = Some(HNSWIndex::new_with_params(
             1_000_000,
             dimensions,
@@ -449,8 +399,6 @@ impl VectorStore {
             vectors: Vec::new(),
             hnsw_index,
             dimensions,
-            quantizer: None,
-            quantized_vectors: Vec::new(),
             rescore_enabled: false,
             oversample_factor: 3.0,
             metadata: HashMap::new(),
@@ -461,6 +409,10 @@ impl VectorStore {
             storage_path: None,
             text_index: None,
             text_search_config: None,
+            pending_quantization: None,
+            hnsw_m: m,
+            hnsw_ef_construction: ef_construction,
+            hnsw_ef_search: ef_search,
         })
     }
 
@@ -549,8 +501,6 @@ impl VectorStore {
             vectors,
             hnsw_index,
             dimensions,
-            quantizer: None,
-            quantized_vectors: Vec::new(),
             rescore_enabled: false,
             oversample_factor: 3.0,
             metadata,
@@ -561,6 +511,10 @@ impl VectorStore {
             storage_path: Some(path.to_path_buf()),
             text_index,
             text_search_config: None,
+            pending_quantization: None,
+            hnsw_m: 16,
+            hnsw_ef_construction: 100,
+            hnsw_ef_search: 100,
         })
     }
 
@@ -613,44 +567,29 @@ impl VectorStore {
         let ef_construction = options.ef_construction.unwrap_or(100);
         let ef_search = options.ef_search.unwrap_or(100);
 
-        // Initialize HNSW - use asymmetric mode when quantization is enabled
-        let hnsw_index = if dimensions > 0 {
-            if let Some(ref quant_params) = options.quantization {
-                // Asymmetric HNSW with RaBitQ quantization
-                Some(HNSWIndex::new_with_asymmetric(
-                    dimensions,
-                    HNSWParams::default()
-                        .with_m(m)
-                        .with_ef_construction(ef_construction)
-                        .with_ef_search(ef_search),
-                    DistanceFunction::L2,
-                    quant_params.clone(),
-                )?)
-            } else if options.m.is_some() || options.ef_construction.is_some() {
-                Some(HNSWIndex::new_with_params(
-                    10_000,
-                    dimensions,
-                    m,
-                    ef_construction,
-                    ef_search,
-                )?)
+        // Initialize HNSW - defer when quantization enabled (need vectors to train)
+        // When quantization is enabled, we defer HNSW creation to set_batch()
+        // so we can train the quantizer from actual vectors first
+        let (hnsw_index, pending_quantization) = if options.quantization.is_some() {
+            // Defer HNSW creation - will be created on first insert with trained quantizer
+            (None, options.quantization.clone())
+        } else if dimensions > 0 {
+            if options.m.is_some() || options.ef_construction.is_some() {
+                (
+                    Some(HNSWIndex::new_with_params(
+                        10_000,
+                        dimensions,
+                        m,
+                        ef_construction,
+                        ef_search,
+                    )?),
+                    None,
+                )
             } else {
-                None // Will be lazily initialized
+                (None, None) // Will be lazily initialized
             }
         } else {
-            None
-        };
-
-        // Initialize quantizer for backward compatibility (deprecated path)
-        // When using asymmetric HNSW, this remains None
-        let quantizer = if options.quantization.is_some() && hnsw_index.is_none() {
-            // Only use legacy quantizer when dimensions=0 (lazy init case)
-            options
-                .quantization
-                .as_ref()
-                .map(|p| RaBitQ::new(p.clone()))
-        } else {
-            None
+            (None, None)
         };
 
         // Save dimensions to storage if set
@@ -674,8 +613,6 @@ impl VectorStore {
             vectors: Vec::new(),
             hnsw_index,
             dimensions,
-            quantizer,
-            quantized_vectors: Vec::new(),
             rescore_enabled,
             oversample_factor,
             metadata: HashMap::new(),
@@ -686,12 +623,14 @@ impl VectorStore {
             storage_path: Some(path.to_path_buf()),
             text_index,
             text_search_config: options.text_search_config.clone(),
+            pending_quantization,
+            hnsw_m: m,
+            hnsw_ef_construction: ef_construction,
+            hnsw_ef_search: ef_search,
         })
     }
 
     /// Build an in-memory vector store with custom options.
-    ///
-    /// This is the internal implementation used by `VectorStoreOptions::build()`.
     pub fn build_with_options(options: &VectorStoreOptions) -> Result<Self> {
         let dimensions = options.dimensions;
 
@@ -700,44 +639,26 @@ impl VectorStore {
         let ef_construction = options.ef_construction.unwrap_or(100);
         let ef_search = options.ef_search.unwrap_or(100);
 
-        // Initialize HNSW - use asymmetric mode when quantization is enabled
-        let hnsw_index = if dimensions > 0 {
-            if let Some(ref quant_params) = options.quantization {
-                // Asymmetric HNSW with RaBitQ quantization
-                Some(HNSWIndex::new_with_asymmetric(
-                    dimensions,
-                    HNSWParams::default()
-                        .with_m(m)
-                        .with_ef_construction(ef_construction)
-                        .with_ef_search(ef_search),
-                    DistanceFunction::L2,
-                    quant_params.clone(),
-                )?)
-            } else if options.m.is_some() || options.ef_construction.is_some() {
-                Some(HNSWIndex::new_with_params(
-                    10_000,
-                    dimensions,
-                    m,
-                    ef_construction,
-                    ef_search,
-                )?)
+        // Initialize HNSW - defer when quantization enabled (need vectors to train)
+        let (hnsw_index, pending_quantization) = if options.quantization.is_some() {
+            (None, options.quantization.clone())
+        } else if dimensions > 0 {
+            if options.m.is_some() || options.ef_construction.is_some() {
+                (
+                    Some(HNSWIndex::new_with_params(
+                        10_000,
+                        dimensions,
+                        m,
+                        ef_construction,
+                        ef_search,
+                    )?),
+                    None,
+                )
             } else {
-                // Create default HNSW index when dimensions are known
-                Some(HNSWIndex::new(10_000, dimensions)?)
+                (None, None)
             }
         } else {
-            None
-        };
-
-        // Initialize quantizer for backward compatibility (deprecated path)
-        // When using asymmetric HNSW, this remains None
-        let quantizer = if options.quantization.is_some() && hnsw_index.is_none() {
-            options
-                .quantization
-                .as_ref()
-                .map(|p| RaBitQ::new(p.clone()))
-        } else {
-            None
+            (None, None)
         };
 
         // Initialize in-memory text index if enabled
@@ -755,8 +676,6 @@ impl VectorStore {
             vectors: Vec::new(),
             hnsw_index,
             dimensions,
-            quantizer,
-            quantized_vectors: Vec::new(),
             rescore_enabled,
             oversample_factor,
             metadata: HashMap::new(),
@@ -767,6 +686,10 @@ impl VectorStore {
             storage_path: None,
             text_index,
             text_search_config: options.text_search_config.clone(),
+            pending_quantization,
+            hnsw_m: m,
+            hnsw_ef_construction: ef_construction,
+            hnsw_ef_search: ef_search,
         })
     }
 
@@ -776,15 +699,12 @@ impl VectorStore {
 
         // Lazy initialize HNSW on first insert
         if self.hnsw_index.is_none() {
-            // If dimensions == 0, infer from first vector (for compatibility with existing tests)
-            // Otherwise use store's configured dimensions
             let dimensions = if self.dimensions == 0 {
                 vector.dim()
             } else {
-                // Validate dimension matches store's expected dimensions
                 if vector.dim() != self.dimensions {
                     anyhow::bail!(
-                        "Vector dimension mismatch: store expects {}, got {}. All vectors in same store must have same dimension.",
+                        "Vector dimension mismatch: store expects {}, got {}",
                         self.dimensions,
                         vector.dim()
                     );
@@ -792,10 +712,23 @@ impl VectorStore {
                 self.dimensions
             };
 
-            // Start with small default capacity (10K vectors)
-            // Uses fast parameters (M=16, ef_construction=100)
-            // Index will automatically grow as more vectors are added
-            self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
+            // Check if we have pending quantization
+            if let Some(quant_params) = self.pending_quantization.take() {
+                let mut index = HNSWIndex::new_with_asymmetric(
+                    dimensions,
+                    HNSWParams::default()
+                        .with_m(self.hnsw_m)
+                        .with_ef_construction(self.hnsw_ef_construction)
+                        .with_ef_search(self.hnsw_ef_search),
+                    DistanceFunction::L2,
+                    quant_params,
+                )?;
+                // Train from first vector
+                index.train_quantizer(&[vector.data.clone()])?;
+                self.hnsw_index = Some(index);
+            } else {
+                self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
+            }
             self.dimensions = dimensions;
         } else {
             // Validate dimension matches existing HNSW index
@@ -812,14 +745,6 @@ impl VectorStore {
         // Insert into HNSW index
         if let Some(ref mut index) = self.hnsw_index {
             index.insert(&vector.data)?;
-        }
-
-        // Quantize vector if quantizer is enabled
-        if let Some(ref quantizer) = self.quantizer {
-            let quantized = quantizer.quantize(&vector.data);
-            self.quantized_vectors.push(Some(quantized));
-        } else {
-            self.quantized_vectors.push(None);
         }
 
         // Persist to storage if available
@@ -943,7 +868,30 @@ impl VectorStore {
                 } else {
                     self.dimensions
                 };
-                self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
+
+                // Check if we have pending quantization to train
+                if let Some(quant_params) = self.pending_quantization.take() {
+                    // Create asymmetric HNSW with quantization
+                    let mut index = HNSWIndex::new_with_asymmetric(
+                        dimensions,
+                        HNSWParams::default()
+                            .with_m(self.hnsw_m)
+                            .with_ef_construction(self.hnsw_ef_construction)
+                            .with_ef_search(self.hnsw_ef_search),
+                        DistanceFunction::L2,
+                        quant_params,
+                    )?;
+
+                    // Train quantizer from first batch of vectors
+                    let training_vectors: Vec<Vec<f32>> =
+                        inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
+                    index.train_quantizer(&training_vectors)?;
+
+                    self.hnsw_index = Some(index);
+                } else {
+                    // Standard HNSW without quantization
+                    self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
+                }
                 self.dimensions = dimensions;
             }
 
@@ -999,15 +947,6 @@ impl VectorStore {
             // Add vectors to in-memory structures
             for (i, (id, vector, metadata)) in inserts.into_iter().enumerate() {
                 let idx = base_index + i;
-
-                // Quantize if quantizer enabled
-                if let Some(ref quantizer) = self.quantizer {
-                    let quantized = quantizer.quantize(&vector.data);
-                    self.quantized_vectors.push(Some(quantized));
-                } else {
-                    self.quantized_vectors.push(None);
-                }
-
                 self.vectors.push(vector);
                 self.metadata.insert(idx, metadata);
                 self.index_to_id.insert(idx, id.clone());
@@ -1368,18 +1307,6 @@ impl VectorStore {
             if let Some(ref storage) = self.storage {
                 storage.put_vector(index, &new_vector.data)?;
             }
-
-            // Update in HNSW index (requires rebuild for now)
-            // NOTE: HNSW doesn't support in-place updates, need to rebuild
-            // For production, we'd use MVCC (mark old as deleted, insert new)
-            // For now, we'll just update the vector data
-            // The index will be out of sync until rebuild_index() is called
-
-            // Update quantized vector if quantizer enabled
-            if let Some(ref quantizer) = self.quantizer {
-                let quantized = quantizer.quantize(&new_vector.data);
-                self.quantized_vectors[index] = Some(quantized);
-            }
         }
 
         // Update metadata if provided
@@ -1511,8 +1438,25 @@ impl VectorStore {
 
         // Lazy initialize HNSW on first insert
         if self.hnsw_index.is_none() {
-            let capacity = vectors.len().max(1_000_000);
-            self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions)?);
+            if let Some(quant_params) = self.pending_quantization.take() {
+                let mut index = HNSWIndex::new_with_asymmetric(
+                    self.dimensions,
+                    HNSWParams::default()
+                        .with_m(self.hnsw_m)
+                        .with_ef_construction(self.hnsw_ef_construction)
+                        .with_ef_search(self.hnsw_ef_search),
+                    DistanceFunction::L2,
+                    quant_params,
+                )?;
+                // Train from batch
+                let training_vectors: Vec<Vec<f32>> =
+                    vectors.iter().map(|v| v.data.clone()).collect();
+                index.train_quantizer(&training_vectors)?;
+                self.hnsw_index = Some(index);
+            } else {
+                let capacity = vectors.len().max(1_000_000);
+                self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions)?);
+            }
         }
 
         let _start_id = self.vectors.len();
@@ -1530,19 +1474,6 @@ impl VectorStore {
             }
         }
 
-        // Quantize vectors if quantizer is enabled
-        if let Some(ref quantizer) = self.quantizer {
-            for vector in &vectors {
-                let quantized = quantizer.quantize(&vector.data);
-                self.quantized_vectors.push(Some(quantized));
-            }
-        } else {
-            for _ in &vectors {
-                self.quantized_vectors.push(None);
-            }
-        }
-
-        // Add vectors to storage
         self.vectors.extend(vectors);
 
         // Return IDs from HNSW
@@ -1569,16 +1500,6 @@ impl VectorStore {
         }
 
         self.hnsw_index = Some(index);
-
-        // Rebuild quantized vectors if quantizer is enabled
-        if let Some(ref quantizer) = self.quantizer {
-            self.quantized_vectors.clear();
-            for vector in &self.vectors {
-                let quantized = quantizer.quantize(&vector.data);
-                self.quantized_vectors.push(Some(quantized));
-            }
-        }
-
         Ok(())
     }
 
@@ -1647,13 +1568,6 @@ impl VectorStore {
             {
                 self.id_to_index
                     .insert(string_id.clone(), base_index + merged_count);
-            }
-
-            // Copy quantized vector if present
-            if let Some(qv) = other.quantized_vectors.get(other_idx) {
-                self.quantized_vectors.push(qv.clone());
-            } else {
-                self.quantized_vectors.push(None);
             }
 
             merged_count += 1;
@@ -2064,59 +1978,6 @@ impl VectorStore {
             .collect()
     }
 
-    /// Two-phase search with quantization + reranking
-    ///
-    /// Phase 1: Use quantized vectors for fast filtering (get k*3 candidates)
-    /// Phase 2: Rerank candidates with original vectors (get final k)
-    ///
-    /// Note: Currently unused (quantization is storage-only), but kept for future hybrid search
-    #[allow(dead_code)]
-    fn knn_search_with_reranking(&self, query: &Vector, k: usize) -> Vec<(usize, f32)> {
-        let Some(quantizer) = self.quantizer.as_ref() else {
-            return Vec::new();
-        };
-
-        // Quantize query
-        let quantized_query = quantizer.quantize(&query.data);
-
-        // Phase 1: Fast filtering with quantized vectors (oversample 3x)
-        let oversample = (k * 3).min(self.vectors.len());
-        let mut distances: Vec<(usize, f32)> = self
-            .quantized_vectors
-            .iter()
-            .enumerate()
-            .filter_map(|(id, qv_opt)| {
-                qv_opt.as_ref().map(|qv| {
-                    let dist = quantizer.distance_l2(&quantized_query, qv);
-                    (id, dist)
-                })
-            })
-            .collect();
-
-        // Sort by quantized distance and take top candidates
-        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let candidates: Vec<usize> = distances
-            .into_iter()
-            .take(oversample)
-            .map(|(id, _)| id)
-            .collect();
-
-        // Phase 2: Rerank with original vectors
-        let mut reranked: Vec<(usize, f32)> = candidates
-            .into_iter()
-            .filter_map(|id| {
-                self.vectors.get(id).map(|vec| {
-                    let dist = query.l2_distance(vec).unwrap_or(f32::MAX);
-                    (id, dist)
-                })
-            })
-            .collect();
-
-        // Sort by exact distance and return top-k
-        reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
-        reranked.into_iter().take(k).collect()
-    }
-
     /// Brute-force K-NN search (fallback, mainly for testing)
     pub fn knn_search_brute_force(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
         if query.dim() != self.dimensions {
@@ -2215,25 +2076,11 @@ impl VectorStore {
         // Create directory if needed
         fs::create_dir_all(directory)?;
 
-        // Always save vectors array (needed for get/len/verification)
+        // Save vectors array
         let vectors_path = directory.join(format!("{filename}.vectors.bin"));
         let vectors_data: Vec<Vec<f32>> = self.vectors.iter().map(|v| v.data.clone()).collect();
         let encoded = bincode::serialize(&vectors_data)?;
         fs::write(&vectors_path, encoded)?;
-
-        // Save quantized vectors if quantization is enabled
-        if let Some(quantizer) = self.quantizer.as_ref() {
-            if !self.quantized_vectors.is_empty() {
-                let quantized_path = directory.join(format!("{filename}.quantized.bin"));
-                let encoded = bincode::serialize(&self.quantized_vectors)?;
-                fs::write(&quantized_path, encoded)?;
-
-                // Save quantizer parameters
-                let params_path = directory.join(format!("{filename}.quantizer.json"));
-                let params_json = serde_json::to_string_pretty(&quantizer.params())?;
-                fs::write(&params_path, params_json)?;
-            }
-        }
 
         // Save metadata if present
         if !self.metadata.is_empty() {
@@ -2298,29 +2145,7 @@ impl VectorStore {
                 let vectors_raw: Vec<Vec<f32>> = bincode::deserialize(&vectors_data)?;
                 vectors_raw.into_iter().map(Vector::new).collect()
             } else {
-                // Fallback: empty vectors (search still works via HNSW)
                 Vec::new()
-            };
-
-            // Try to load quantizer parameters and quantized vectors
-            let params_path = directory.join(format!("{filename}.quantizer.json"));
-            let quantized_path = directory.join(format!("{filename}.quantized.bin"));
-
-            let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists()
-            {
-                // Load quantizer parameters
-                let params_json = fs::read_to_string(&params_path)?;
-                let params: RaBitQParams = serde_json::from_str(&params_json)?;
-                let quantizer = RaBitQ::new(params);
-
-                // Load quantized vectors
-                let quantized_data = fs::read(&quantized_path)?;
-                let quantized_vectors: Vec<Option<QuantizedVector>> =
-                    bincode::deserialize(&quantized_data)?;
-
-                (Some(quantizer), quantized_vectors)
-            } else {
-                (None, Vec::new())
             };
 
             // Try to load metadata
@@ -2360,18 +2185,20 @@ impl VectorStore {
                 vectors,
                 hnsw_index: Some(hnsw_index),
                 dimensions,
-                quantizer,
-                quantized_vectors,
                 rescore_enabled: false,
                 oversample_factor: 3.0,
                 metadata,
                 id_to_index,
                 index_to_id,
                 deleted,
-                storage: None, // Legacy file-based loading doesn't use seerdb
+                storage: None,
                 storage_path: None,
                 text_index: None,
                 text_search_config: None,
+                pending_quantization: None,
+                hnsw_m: 16,
+                hnsw_ef_construction: 100,
+                hnsw_ef_search: 100,
             })
         } else {
             // Fallback: Load vectors and rebuild HNSW
@@ -2383,27 +2210,6 @@ impl VectorStore {
             let vectors_data = fs::read(&vectors_path)?;
             let vectors_raw: Vec<Vec<f32>> = bincode::deserialize(&vectors_data)?;
             let vectors: Vec<Vector> = vectors_raw.into_iter().map(Vector::new).collect();
-
-            // Try to load quantizer parameters
-            let params_path = directory.join(format!("{filename}.quantizer.json"));
-            let quantized_path = directory.join(format!("{filename}.quantized.bin"));
-
-            let (quantizer, quantized_vectors) = if params_path.exists() && quantized_path.exists()
-            {
-                // Load quantizer parameters
-                let params_json = fs::read_to_string(&params_path)?;
-                let params: RaBitQParams = serde_json::from_str(&params_json)?;
-                let quantizer = RaBitQ::new(params);
-
-                // Load quantized vectors
-                let quantized_data = fs::read(&quantized_path)?;
-                let quantized_vectors: Vec<Option<QuantizedVector>> =
-                    bincode::deserialize(&quantized_data)?;
-
-                (Some(quantizer), quantized_vectors)
-            } else {
-                (None, Vec::new())
-            };
 
             // Try to load metadata
             let metadata_path = directory.join(format!("{filename}.metadata.json"));
@@ -2443,18 +2249,20 @@ impl VectorStore {
                 vectors,
                 hnsw_index: None,
                 dimensions,
-                quantizer,
-                quantized_vectors,
                 rescore_enabled: false,
                 oversample_factor: 3.0,
                 metadata,
                 id_to_index,
                 index_to_id,
                 deleted,
-                storage: None, // Legacy file-based loading doesn't use seerdb
+                storage: None,
                 storage_path: None,
                 text_index: None,
                 text_search_config: None,
+                pending_quantization: None,
+                hnsw_m: 16,
+                hnsw_ef_construction: 100,
+                hnsw_ef_search: 100,
             };
 
             if !store.vectors.is_empty() {

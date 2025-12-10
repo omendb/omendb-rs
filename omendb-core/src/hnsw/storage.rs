@@ -794,15 +794,17 @@ impl VectorStorage {
     }
 
     /// Build ADC lookup table for a query (5-10x faster than per-candidate decompression)
+    ///
+    /// Returns None if:
+    /// - Storage is not RaBitQ quantized, or
+    /// - Quantizer has not been trained
     #[must_use]
     pub fn build_adc_table(&self, query: &[f32]) -> Option<ADCTable> {
         match self {
             Self::RaBitQQuantized { quantizer, .. } => {
                 let q = quantizer.as_ref()?;
-                // Fixed scale=1.0 since per-vector scales vary.
-                // This preserves ranking order (suitable for k-NN search) but
-                // absolute distances are approximate (not suitable for threshold filtering).
-                Some(q.build_adc_table(query, 1.0))
+                // Uses trained per-dimension min/max for correct distances
+                q.build_adc_table(query)
             }
             _ => None,
         }
@@ -968,8 +970,15 @@ impl VectorStorage {
             Self::FullPrecision { .. } => {
                 Err("Cannot train quantization on full precision storage".to_string())
             }
-            Self::RaBitQQuantized { .. } => {
-                // RaBitQ uses per-vector optimal rescaling, no global training needed
+            Self::RaBitQQuantized {
+                quantizer, params, ..
+            } => {
+                if sample_vectors.is_empty() {
+                    return Err("Cannot train on empty sample".to_string());
+                }
+                // Train quantizer from sample vectors
+                let q = quantizer.get_or_insert_with(|| RaBitQ::new(params.clone()));
+                q.train_owned(sample_vectors);
                 Ok(())
             }
         }
