@@ -246,6 +246,7 @@ class TestLargeMetadata:
             assert len(results) == 1
             assert results[0]["id"] == "large1"
 
+    @pytest.mark.slow
     def test_10mb_metadata_string(self):
         """Store and retrieve 10MB string in metadata"""
         with tempfile.TemporaryDirectory() as tmpdir:
