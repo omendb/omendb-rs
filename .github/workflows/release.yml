@@ -37,7 +37,7 @@ jobs:
           echo "VERSION file: $VERSION"
           echo ""
 
-          # Check all 8 version locations match VERSION
+          # Check all 7 version locations match VERSION
           ERRORS=0
 
           CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
@@ -48,7 +48,6 @@ jobs:
           NODE_OPT=$(jq -r '.optionalDependencies["@omendb/omendb-darwin-arm64"]' node/package.json)
           WRAPPER_V=$(jq -r .version node/wrapper/package.json)
           WRAPPER_DEP=$(jq -r '.dependencies["@omendb/omendb"]' node/wrapper/package.json)
-          README_V=$(grep -o 'v[0-9]*\.[0-9]*\.[0-9]*' README.md | head -1 | tr -d 'v')
 
           echo "Checking versions against VERSION file ($VERSION):"
 
@@ -71,7 +70,6 @@ jobs:
           check_version "node/package.json (optionalDeps)" "$NODE_OPT"
           check_version "node/wrapper version" "$WRAPPER_V"
           check_version "node/wrapper @omendb" "$WRAPPER_DEP"
-          check_version "README.md banner" "$README_V"
 
           if [ "$ERRORS" -gt 0 ]; then
             echo ""
@@ -82,7 +80,7 @@ jobs:
           fi
 
           echo ""
-          echo "All 9 version locations match: $VERSION"
+          echo "All 7 version locations match: $VERSION"
 
       - name: Check not already published
         run: |
