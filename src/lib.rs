@@ -78,14 +78,13 @@
 //! let store = VectorStore::open("./vectors").unwrap();
 //! ```
 
-// Core modules
-pub mod compression;
+// Core modules (from omendb-core)
+pub use omendb_core::{compression, distance, sampling, types};
+
+// omendb-specific modules
 pub mod config;
-pub mod distance;
-pub mod sampling;
 pub mod storage;
 pub mod text;
-pub mod types;
 pub mod vector;
 
 #[cfg(feature = "ffi")]

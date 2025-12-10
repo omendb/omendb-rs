@@ -10,7 +10,7 @@ use super::graph_storage::{DiskConfig, GraphStorage};
 use super::storage::{NeighborLists, VectorStorage};
 use super::storage_tiering::StorageMode;
 use super::types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
-use crate::compression::RaBitQParams;
+use omendb_core::compression::RaBitQParams;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;

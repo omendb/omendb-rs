@@ -7,7 +7,7 @@ pub mod store;
 pub mod types;
 
 // Re-export main types
-pub use crate::compression::{QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams};
 pub use hnsw_index::HNSWIndex;
+pub use omendb_core::compression::{QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams};
 pub use store::{MetadataFilter, VectorStore, VectorStoreOptions};
 pub use types::Vector;

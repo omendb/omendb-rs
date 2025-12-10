@@ -92,6 +92,12 @@ profile_search = []
 
 [profile.release]
 debug = true
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
 
 [[bench]]
 name = "distance_bench"
