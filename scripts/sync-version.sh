@@ -6,14 +6,16 @@
 #   ./scripts/sync-version.sh 0.0.10       # Bump to specific version
 #   ./scripts/sync-version.sh --check      # Verify all versions match (no changes)
 #
-# Version Locations (7 files):
+# Version Locations (9 files):
 #   1. VERSION                    - Source of truth
 #   2. Cargo.toml                 - Main Rust crate
 #   3. omendb-core/Cargo.toml     - Core algorithms crate
 #   4. python/Cargo.toml          - Python bindings crate
-#   5. node/Cargo.toml            - Node bindings crate
-#   6. node/package.json          - npm @omendb/omendb package
-#   7. node/wrapper/package.json  - npm omendb wrapper (version + dep)
+#   5. python/omendb/__init__.py  - Python __version__
+#   6. src/ffi.rs                 - C FFI version string
+#   7. node/Cargo.toml            - Node bindings crate
+#   8. node/package.json          - npm @omendb/omendb package
+#   9. node/wrapper/package.json  - npm omendb wrapper (version + dep)
 
 set -e
 
@@ -87,14 +89,28 @@ if [ "$CHECK_ONLY" = false ] && [ "$PYTHON_V" != "$VERSION" ]; then
 fi
 check_or_update "python/Cargo.toml" "$PYTHON_V"
 
-# 5. node/Cargo.toml
+# 5. python/omendb/__init__.py (__version__)
+INIT_V=$(grep '__version__' python/omendb/__init__.py | cut -d'"' -f2)
+if [ "$CHECK_ONLY" = false ] && [ "$INIT_V" != "$VERSION" ]; then
+    sed -i '' "s/__version__ = \"[^\"]*\"/__version__ = \"$VERSION\"/" python/omendb/__init__.py
+fi
+check_or_update "python/omendb/__init__.py" "$INIT_V"
+
+# 6. src/ffi.rs (C FFI version string)
+FFI_V=$(grep 'static VERSION' src/ffi.rs | sed 's/.*b"\([0-9.]*\).*/\1/' || echo "")
+if [ "$CHECK_ONLY" = false ] && [ "$FFI_V" != "$VERSION" ]; then
+    sed -i '' "s/static VERSION: \&\[u8\] = b\"[^\"]*\\\\0\";/static VERSION: \&[u8] = b\"$VERSION\\\\0\";/" src/ffi.rs
+fi
+check_or_update "src/ffi.rs" "$FFI_V"
+
+# 7. node/Cargo.toml
 NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
 if [ "$CHECK_ONLY" = false ] && [ "$NODE_CARGO_V" != "$VERSION" ]; then
     sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" node/Cargo.toml
 fi
 check_or_update "node/Cargo.toml" "$NODE_CARGO_V"
 
-# 6. node/package.json (version + optionalDependencies)
+# 8. node/package.json (version + optionalDependencies)
 NODE_V=$(jq -r .version node/package.json)
 NODE_OPT=$(jq -r '.optionalDependencies["@omendb/omendb-darwin-arm64"]' node/package.json)
 if [ "$CHECK_ONLY" = false ] && ([ "$NODE_V" != "$VERSION" ] || [ "$NODE_OPT" != "$VERSION" ]); then
@@ -108,7 +124,7 @@ fi
 check_or_update "node/package.json (version)" "$NODE_V"
 check_or_update "node/package.json (optionalDeps)" "$NODE_OPT"
 
-# 7. node/wrapper/package.json (version + @omendb dep)
+# 9. node/wrapper/package.json (version + @omendb dep)
 WRAPPER_V=$(jq -r .version node/wrapper/package.json)
 WRAPPER_DEP=$(jq -r '.dependencies["@omendb/omendb"]' node/wrapper/package.json)
 if [ "$CHECK_ONLY" = false ] && ([ "$WRAPPER_V" != "$VERSION" ] || [ "$WRAPPER_DEP" != "$VERSION" ]); then
@@ -139,7 +155,7 @@ if [ "$ERRORS" -gt 0 ]; then
 fi
 
 if [ "$CHECK_ONLY" = true ]; then
-    echo "All 7 version locations match: $VERSION"
+    echo "All 9 version locations match: $VERSION"
 else
     echo "All files synced to version $VERSION"
     echo ""
