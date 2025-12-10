@@ -5,7 +5,7 @@
 
 Embedded vector database for Python. No server, no setup, just `pip install`.
 
-> **v0.0.8**: Hybrid search (vector + text). API may still evolve. [Report issues](https://github.com/omendb/omendb/issues).
+> **v0.0.9**: Performance optimizations and stability. API may still evolve. [Report issues](https://github.com/omendb/omendb/issues).
 
 ## Quick Start
 
