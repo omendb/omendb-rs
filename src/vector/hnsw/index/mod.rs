@@ -1023,7 +1023,7 @@ impl HNSWIndex {
     ///
     /// Falls back to regular search if not in asymmetric mode.
     #[instrument(skip(self, query), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
-    pub fn search_asymmetric(
+    pub(crate) fn search_asymmetric(
         &self,
         query: &[f32],
         k: usize,
