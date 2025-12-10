@@ -83,7 +83,7 @@ class TestEfSearchBasic:
 
             # After insert, HNSW has default ef_search (150 was not applied)
             ef = db.get_ef_search()
-            assert ef == 200  # Default value, not 150
+            assert ef == 100  # Fixed default (M=16, ef=100)
 
             # Now set_ef_search works
             db.set_ef_search(150)

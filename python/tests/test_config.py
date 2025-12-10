@@ -71,21 +71,6 @@ def test_quantization_8bit(temp_db_path):
     assert len(results) == 5
 
 
-def test_expected_vectors_config(temp_db_path):
-    """Test expected_vectors configuration (adaptive defaults)"""
-    config = {
-        "expected_vectors": 50000  # Should use M=24
-    }
-
-    db = omendb.open(temp_db_path, dimensions=128, config=config)
-
-    vectors = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(100)]
-    db.set(vectors)
-
-    results = db.search([50.0] * 128, k=10)
-    assert len(results) == 10
-
-
 def test_dimensions_parameter(temp_db_path):
     """Test different dimension sizes"""
     for dims in [64, 128, 256, 384, 512, 768, 1024, 1536]:
