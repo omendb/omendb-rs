@@ -5,8 +5,6 @@
 
 Embedded vector database for Python. No server, no setup, just `pip install`.
 
-> **v0.0.9**: Stability and performance improvements.
-
 ```bash
 pip install omendb
 ```
@@ -99,9 +97,22 @@ db = omendb.open(
 )
 ```
 
+## Examples
+
+See [`python/examples/`](python/examples/) for complete working examples:
+
+- `quickstart.py` - Minimal working example
+- `basic.py` - CRUD operations and persistence
+- `filters.py` - All filter operators
+- `rag.py` - RAG workflow with mock embeddings
+
 ## Integrations
 
 ### LangChain
+
+```bash
+pip install omendb[langchain]
+```
 
 ```python
 from langchain_openai import OpenAIEmbeddings
@@ -115,11 +126,11 @@ store = OmenDBVectorStore.from_texts(
 docs = store.similarity_search("capital of France", k=1)
 ```
 
-```bash
-pip install omendb[langchain]
-```
-
 ### LlamaIndex
+
+```bash
+pip install omendb[llamaindex]
+```
 
 ```python
 from llama_index.core import VectorStoreIndex, Document, StorageContext
@@ -133,14 +144,6 @@ index = VectorStoreIndex.from_documents(
 )
 response = index.as_query_engine().query("What is OmenDB?")
 ```
-
-```bash
-pip install omendb[llamaindex]
-```
-
-## Examples
-
-See [`python/examples/`](python/examples/) for complete working examples.
 
 ## License
 

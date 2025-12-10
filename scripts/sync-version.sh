@@ -6,7 +6,7 @@
 #   ./scripts/sync-version.sh 0.0.10       # Bump to specific version
 #   ./scripts/sync-version.sh --check      # Verify all versions match (no changes)
 #
-# Version Locations (8 files):
+# Version Locations (7 files):
 #   1. VERSION                    - Source of truth
 #   2. Cargo.toml                 - Main Rust crate
 #   3. omendb-core/Cargo.toml     - Core algorithms crate
@@ -14,7 +14,6 @@
 #   5. node/Cargo.toml            - Node bindings crate
 #   6. node/package.json          - npm @omendb/omendb package
 #   7. node/wrapper/package.json  - npm omendb wrapper (version + dep)
-#   8. README.md                  - Version banner
 
 set -e
 
@@ -119,13 +118,6 @@ fi
 check_or_update "node/wrapper/package.json (version)" "$WRAPPER_V"
 check_or_update "node/wrapper/package.json (@omendb)" "$WRAPPER_DEP"
 
-# 8. README.md version banner
-README_V=$(grep -o 'v[0-9]*\.[0-9]*\.[0-9]*' README.md | head -1 | tr -d 'v')
-if [ "$CHECK_ONLY" = false ] && [ "$README_V" != "$VERSION" ]; then
-    sed -i '' "s/v[0-9]*\.[0-9]*\.[0-9]*/v$VERSION/g" README.md
-fi
-check_or_update "README.md banner" "$README_V"
-
 echo ""
 
 # Update lockfiles (not in check mode)
@@ -147,7 +139,7 @@ if [ "$ERRORS" -gt 0 ]; then
 fi
 
 if [ "$CHECK_ONLY" = true ]; then
-    echo "All 8 version locations match: $VERSION"
+    echo "All 7 version locations match: $VERSION"
 else
     echo "All files synced to version $VERSION"
     echo ""
