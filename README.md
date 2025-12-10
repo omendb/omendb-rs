@@ -46,9 +46,9 @@ On a 10K vector dataset (M3 Max):
 
 | Dimension | Batch Search | Single Search |
 | --------- | ------------ | ------------- |
-| 128D      | ~53,000 QPS  | ~5,400 QPS    |
-| 768D      | ~8,700 QPS   | ~1,600 QPS    |
-| 1536D     | ~2,800 QPS   | ~700 QPS      |
+| 128D      | ~50,000 QPS  | ~7,700 QPS    |
+| 768D      | ~12,600 QPS  | ~2,500 QPS    |
+| 1536D     | ~4,700 QPS   | ~1,200 QPS    |
 
 Run `python benchmark.py` to measure on your hardware.
 

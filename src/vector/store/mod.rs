@@ -1957,9 +1957,14 @@ impl VectorStore {
         k: usize,
         ef: Option<usize>,
     ) -> Vec<Result<Vec<(usize, f32)>>> {
+        // Pre-compute ef once to avoid per-query Option overhead
+        let effective_ef = match ef {
+            Some(e) => e,
+            None => (k * 4).max(64).max(100),
+        };
         queries
             .par_iter()
-            .map(|q| self.knn_search_readonly(q, k, ef))
+            .map(|q| self.knn_search_ef(q, k, effective_ef))
             .collect()
     }
 
