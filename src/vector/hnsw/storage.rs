@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use omendb_core::compression::{ADCTable, QuantizedVector, RaBitQ, RaBitQParams};
+use omendb_core::compression::{ADCTable, QuantizedVector, RaBitQ, RaBitQParams, ScalarParams};
 
 /// Empty neighbor list constant (avoid allocation for empty results)
 static EMPTY_NEIGHBORS: &[u32] = &[];
@@ -540,6 +540,28 @@ pub enum VectorStorage {
         /// Vector dimensions
         dimensions: usize,
     },
+
+    /// Scalar quantized vectors (SQ8) - 4x compression, ~98% recall
+    ///
+    /// Memory: dimensions bytes per vector (u8 per dimension)
+    /// Example: 768D = 768 bytes per vector (4x compression from f32)
+    ///
+    /// Uses per-dimension min/max scaling with SIMD distance computation.
+    /// Supports both asymmetric (query f32, candidate u8) and symmetric modes.
+    ScalarQuantized {
+        /// Trained quantization parameters (min/scale per dimension)
+        params: ScalarParams,
+
+        /// Quantized vectors as flat contiguous u8 array
+        /// Access: quantized[id * dimensions..(id + 1) * dimensions]
+        quantized: Vec<u8>,
+
+        /// Number of vectors stored
+        count: usize,
+
+        /// Vector dimensions
+        dimensions: usize,
+    },
 }
 
 impl VectorStorage {
@@ -603,6 +625,7 @@ impl VectorStorage {
             Self::FullPrecision { count, .. } => *count,
             Self::BinaryQuantized { quantized, .. } => quantized.len(),
             Self::RaBitQQuantized { original_count, .. } => *original_count,
+            Self::ScalarQuantized { count, .. } => *count,
         }
     }
 
@@ -618,7 +641,8 @@ impl VectorStorage {
         match self {
             Self::FullPrecision { dimensions, .. }
             | Self::BinaryQuantized { dimensions, .. }
-            | Self::RaBitQQuantized { dimensions, .. } => *dimensions,
+            | Self::RaBitQQuantized { dimensions, .. }
+            | Self::ScalarQuantized { dimensions, .. } => *dimensions,
         }
     }
 
@@ -698,6 +722,28 @@ impl VectorStorage {
 
                 Ok(id)
             }
+            Self::ScalarQuantized {
+                params,
+                quantized,
+                count,
+                dimensions,
+            } => {
+                if vector.len() != *dimensions {
+                    return Err(format!(
+                        "Vector dimension mismatch: expected {}, got {}",
+                        dimensions,
+                        vector.len()
+                    ));
+                }
+
+                // Quantize and store (no original stored - 4x compression)
+                let quant = params.quantize(&vector);
+                let id = *count as u32;
+                quantized.extend(quant);
+                *count += 1;
+
+                Ok(id)
+            }
         }
     }
 
@@ -739,6 +785,8 @@ impl VectorStorage {
                 let end = start + *dimensions;
                 Some(&original[start..end])
             }
+            // ScalarQuantized doesn't store originals - use get_dequantized() instead
+            Self::ScalarQuantized { .. } => None,
         }
     }
 
@@ -859,6 +907,20 @@ impl VectorStorage {
             Self::RaBitQQuantized { quantized, .. } => {
                 // Prefetch quantized data (the hot path for asymmetric search)
                 quantized.get(id as usize).map(|q| q.data.as_ptr())
+            }
+            Self::ScalarQuantized {
+                quantized,
+                count,
+                dimensions,
+                ..
+            } => {
+                let idx = id as usize;
+                if idx >= *count {
+                    None
+                } else {
+                    let start = idx * *dimensions;
+                    Some(quantized[start..].as_ptr())
+                }
             }
         };
 
@@ -981,6 +1043,15 @@ impl VectorStorage {
                 q.train_owned(sample_vectors);
                 Ok(())
             }
+            Self::ScalarQuantized { params, .. } => {
+                if sample_vectors.is_empty() {
+                    return Err("Cannot train on empty sample".to_string());
+                }
+                // ScalarParams are already trained when created - retrain with new sample
+                let refs: Vec<&[f32]> = sample_vectors.iter().map(|v| v.as_slice()).collect();
+                *params = ScalarParams::train(&refs);
+                Ok(())
+            }
         }
     }
 
@@ -1015,6 +1086,15 @@ impl VectorStorage {
                 // Original vectors for reranking (flat contiguous)
                 let original_size = original.len() * std::mem::size_of::<f32>();
                 quantized_size + original_size
+            }
+            Self::ScalarQuantized {
+                quantized, params, ..
+            } => {
+                // Quantized u8 vectors + params (mins + scales)
+                let quantized_size = quantized.len();
+                let params_size =
+                    (params.mins.len() + params.scales.len()) * std::mem::size_of::<f32>();
+                quantized_size + params_size
             }
         }
     }
@@ -1101,6 +1181,25 @@ impl VectorStorage {
                     }
                 }
                 *original = new_original;
+            }
+            Self::ScalarQuantized {
+                quantized,
+                count,
+                dimensions,
+                ..
+            } => {
+                let dim = *dimensions;
+                let n = *count;
+                let mut new_quantized = vec![0u8; quantized.len()];
+                for (old_id, &new_id) in old_to_new.iter().enumerate() {
+                    if old_id < n {
+                        let old_start = old_id * dim;
+                        let new_start = new_id as usize * dim;
+                        new_quantized[new_start..new_start + dim]
+                            .copy_from_slice(&quantized[old_start..old_start + dim]);
+                    }
+                }
+                *quantized = new_quantized;
             }
         }
     }
