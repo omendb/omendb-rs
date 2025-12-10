@@ -235,8 +235,9 @@ impl HNSWIndex {
 
     /// Compute default ef value for given k
     ///
-    /// Returns max(k*4, 64, ef_search) - good balance of speed and recall.
+    /// Returns `max(k*4, 64, ef_search)` - good balance of speed and recall.
     #[inline]
+    #[must_use]
     pub fn compute_ef(&self, k: usize) -> usize {
         (k * 4).max(64).max(self.ef_search)
     }
