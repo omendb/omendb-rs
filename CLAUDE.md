@@ -1,112 +1,122 @@
-# CLAUDE.md
+# OmenDB
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Embedded vector database. Rust core with Python/Node bindings.
 
-## Project Overview
-
-OmenDB is a fast embedded vector database written in Rust with Python and Node.js bindings. Features HNSW indexing, ACORN-1 filtered search, RaBitQ compression, and hybrid search (vector + BM25).
-
-## Build Commands
-
-### Rust
+## Quick Reference
 
 ```bash
-cargo build --release        # Build
-cargo test --lib             # Test library
-cargo fmt && cargo clippy    # Lint
-```
+# Rust
+cargo test --lib
+cargo clippy && cargo fmt --check
 
-### Python Bindings
+# Python (from python/)
+uv sync && uv run maturin develop --release
+uv run pytest tests/ -x --timeout=60
+uv run ruff check . && uv run ruff format --check .
 
-```bash
-cd python
-uv sync
-uv run maturin develop --release   # Build
-uv run pytest tests/               # Test
-uv run ruff check .                # Lint
-uv run ruff format --check .       # Format check
-```
-
-### Node.js Bindings
-
-```bash
-cd node
-npm install
-npm run build    # Build
-npm test         # Test
+# Node (from node/)
+npm install && npm run build && npm test
 ```
 
 ## Architecture
 
-### Core Modules
+```
+src/
+├── vector/store/       # VectorStore API
+├── vector/hnsw/        # HNSW index
+├── vector/hnsw_index.rs # High-level HNSW wrapper
+├── text/               # BM25 hybrid search
+└── storage/            # SeerDB persistence
 
-| Path                        | Purpose                       |
-| --------------------------- | ----------------------------- |
-| `src/vector/store.rs`       | `VectorStore` - main API      |
-| `src/vector/hnsw/`          | HNSW index with SIMD distance |
-| `src/compression/rabitq.rs` | RaBitQ 2/4/8-bit quantization |
-| `src/distance/distance.rs`  | SIMD-accelerated distance     |
-| `src/storage/`              | Persistent storage (SeerDB)   |
-| `python/`                   | PyO3 bindings (maturin)       |
-| `node/`                     | NAPI-RS bindings              |
+omendb-core/            # Extracted algorithms (published separately)
+├── src/hnsw/           # Core HNSW implementation
+├── src/compression/    # RaBitQ quantization
+├── src/distance/       # SIMD distance functions
+└── src/sampling/       # Sampling utilities
 
-### Key Types
-
-```rust
-use omendb::{VectorStore, Vector, MetadataFilter};
-use omendb::{VectorStoreOptions, StorageConfig, StorageTier, CompressionTier, DistanceMetric};
+python/                 # PyO3 bindings
+node/                   # NAPI-RS bindings
 ```
 
-## CI/CD
+## Key Modules
 
-- **CI**: Runs on push/PR - checks Rust (fmt, clippy, test), Python (ruff, pytest), Node (build, test)
-- **Release**: Use `/omendb-release` command or see `RELEASING.md`. Quick: `./scripts/bump-version.sh && git commit && git push && gh workflow run Release`
+| Module                        | Purpose             | Hot Path |
+| ----------------------------- | ------------------- | -------- |
+| `vector/store/mod.rs`         | Main API, batch ops | Yes      |
+| `vector/hnsw_index.rs`        | HNSW search wrapper | Yes      |
+| `omendb-core/src/distance/`   | SIMD distance       | Yes      |
+| `omendb-core/src/hnsw/index/` | Graph traversal     | Yes      |
 
-## Testing & Benchmarks
+## Performance Notes
 
-### Running Tests
+**Hot path optimizations applied:**
+
+- `knn_search_ef()` avoids Option overhead (~40% faster)
+- `batch_search_parallel()` pre-computes ef once
+- Sequential HNSW insert (parallel degrades recall)
+
+**Benchmarks:**
 
 ```bash
-cargo test --lib                          # Rust unit tests
-uv run pytest python/tests/               # Python tests (300+)
-uv run pytest python/tests/ -m "not slow" # Skip slow tests
+cd python && uv run python ../benchmarks/run.py --quick   # Dev (~15s)
+cd python && uv run python ../benchmarks/run.py           # Full (~60s)
 ```
 
-### Benchmarks
+Expected (10K vectors, M3 Max):
+
+- 128D: ~7,700 QPS single, ~50,000 QPS batch
+- 768D: ~2,500 QPS single, ~12,600 QPS batch
+
+## Testing
 
 ```bash
-# Python benchmark (quick: 10K vectors, full: 10K-100K)
-uv run python python/benchmark.py         # Quick (~30s)
-uv run python python/benchmark.py --full  # Full suite (~5min)
-
-# Rust criterion benchmarks
-cargo bench --bench search_bench          # Search QPS
-cargo bench --bench distance_bench        # Distance functions
+cargo test --lib                              # 248 Rust tests
+cd python && uv run pytest tests/ -x          # 214 Python tests
+cd python && uv run pytest tests/test_recall.py  # Recall verification
 ```
 
-### Expected Performance (10K vectors, 128D, M3 Max)
+**Recall thresholds:** 95%+ (small), 90%+ (medium), 85%+ (large)
 
-| Metric        | Target       |
-| ------------- | ------------ |
-| Single Search | ~5,400 QPS   |
-| Batch Search  | ~52,000 QPS  |
-| Build         | ~1,500 vec/s |
+## Release Process
 
-### Regression Detection
+See `RELEASING.md`. Quick version:
 
-Performance regressions typically indicate:
+```bash
+./scripts/sync-version.sh 0.0.10   # Bump all 9 version locations
+git add -A && git commit -m "chore: Bump to 0.0.10"
+git push
+gh workflow run release.yml
+```
 
-1. **Search degradation**: Check HNSW graph quality (batch_insert vs sequential insert)
-2. **Build slowdown**: Check if batch operations are being used
-3. **Memory regression**: Profile with `cargo flamegraph`
+## CI
 
-## Notes
+| Workflow      | Trigger | What                                        |
+| ------------- | ------- | ------------------------------------------- |
+| `ci.yml`      | Push/PR | fmt, clippy, test (Rust + Python + Node)    |
+| `release.yml` | Manual  | Build wheels, publish to PyPI/crates.io/npm |
 
-- Requires nightly Rust (`nightly-2025-12-04` pinned in `rust-toolchain.toml`)
-- Python 3.9+, Node.js 18+
-- Uses `parking_lot`, `rayon`, `multiversion` for runtime SIMD detection
-- Slow tests marked with `@pytest.mark.slow` (skipped in CI)
+## Dependencies
 
-## External Context
+- **seerdb**: Storage layer (separate crate)
+- **omendb-core**: Algorithms (workspace member, published first)
+- **tantivy**: BM25 text search
 
-Design docs and roadmap: `../cloud/ai/omendb/`
+## Common Tasks
+
+**Add a new Python API method:**
+
+1. Add Rust method in `src/vector/store/mod.rs`
+2. Expose in `python/src/lib.rs`
+3. Add test in `python/tests/`
+
+**Optimize search path:**
+
+1. Profile: `cargo build --release --example profile_search && samply record ./target/release/examples/profile_search`
+2. Check for Option/closure overhead in hot loops
+3. Pre-compute values outside parallel iterators
+
+**Debug recall issues:**
+
+1. Run `pytest tests/test_recall.py -v`
+2. Check if batch_insert was used (should be sequential for new data)
+3. Increase ef_search for better recall vs speed tradeoff
