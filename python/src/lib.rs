@@ -1328,7 +1328,10 @@ fn open(
 
     // Legacy path handling for backward compatibility
     let directory = db_path.parent().unwrap_or_else(|| Path::new("."));
-    let filename = db_path.file_name().unwrap().to_str().unwrap();
+    let filename = db_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .ok_or_else(|| PyValueError::new_err("Invalid database path"))?;
     let vectors_path = directory.join(format!("{}.vectors.bin", filename));
     let hnsw_path = directory.join(format!("{}.hnsw", filename));
 
