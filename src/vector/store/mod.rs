@@ -7,12 +7,14 @@
 //!
 //! Optional tantivy-based full-text search for hybrid (vector + BM25) retrieval.
 
+use super::hnsw::{DistanceFunction, HNSWParams};
 use super::hnsw_index::HNSWIndex;
 use super::storage::SeerDBStorage;
 use super::types::Vector;
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
 use omendb_core::compression::{QuantizedVector, RaBitQ, RaBitQParams};
+use omendb_core::distance::l2_distance;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -70,8 +72,17 @@ pub struct VectorStoreOptions {
     /// Expected number of vectors for capacity planning
     expected_capacity: Option<usize>,
 
-    /// `RaBitQ` quantization parameters
+    /// `RaBitQ` quantization parameters (enables asymmetric HNSW search)
     quantization: Option<RaBitQParams>,
+
+    /// Rescore candidates with original vectors (default: true when quantization enabled)
+    /// When true, search fetches `k * oversample` candidates using quantized distance,
+    /// then reranks with full precision distance for final k results.
+    rescore: Option<bool>,
+
+    /// Oversampling factor for rescore (default: 3.0)
+    /// Fetches `k * oversample` candidates during quantized search.
+    oversample: Option<f32>,
 
     /// Text search configuration (None = disabled)
     text_search_config: Option<TextSearchConfig>,
@@ -137,6 +148,34 @@ impl VectorStoreOptions {
     #[must_use]
     pub fn quantization(mut self, params: RaBitQParams) -> Self {
         self.quantization = Some(params);
+        self
+    }
+
+    /// Enable/disable rescoring with original vectors (default: true when quantization enabled).
+    ///
+    /// When rescoring is enabled, search uses quantized vectors for fast candidate selection,
+    /// then reranks candidates using full-precision vectors for accuracy.
+    ///
+    /// # Arguments
+    /// * `enable` - Whether to rescore candidates
+    #[must_use]
+    pub fn rescore(mut self, enable: bool) -> Self {
+        self.rescore = Some(enable);
+        self
+    }
+
+    /// Set oversampling factor for rescoring (default: 3.0).
+    ///
+    /// When rescoring, fetches `k * oversample` candidates during quantized search,
+    /// then returns top k after reranking with full precision.
+    ///
+    /// Higher values improve recall but increase latency.
+    ///
+    /// # Arguments
+    /// * `factor` - Oversampling multiplier (must be >= 1.0)
+    #[must_use]
+    pub fn oversample(mut self, factor: f32) -> Self {
+        self.oversample = Some(factor.max(1.0));
         self
     }
 
@@ -254,7 +293,7 @@ impl MetadataFilter {
 
 /// Vector store with HNSW indexing
 pub struct VectorStore {
-    /// All vectors stored in memory
+    /// All vectors stored in memory (used for rescore when quantization enabled)
     pub vectors: Vec<Vector>,
 
     /// HNSW index for approximate nearest neighbor search
@@ -264,10 +303,18 @@ pub struct VectorStore {
     dimensions: usize,
 
     /// Optional quantizer for memory-efficient storage (Extended `RaBitQ`)
+    /// DEPRECATED: Use asymmetric HNSW instead. Kept for backward compatibility.
     quantizer: Option<RaBitQ>,
 
     /// Quantized vectors (parallel to vectors, None if quantizer not enabled)
+    /// DEPRECATED: Use asymmetric HNSW instead. Kept for backward compatibility.
     quantized_vectors: Vec<Option<QuantizedVector>>,
+
+    /// Whether to rescore candidates with original vectors (default: true when quantization enabled)
+    rescore_enabled: bool,
+
+    /// Oversampling factor for rescore (default: 3.0)
+    oversample_factor: f32,
 
     /// Metadata storage (indexed by internal vector ID)
     metadata: HashMap<usize, JsonValue>,
@@ -304,6 +351,8 @@ impl VectorStore {
             dimensions,
             quantizer: None,
             quantized_vectors: Vec::new(),
+            rescore_enabled: false,
+            oversample_factor: 3.0,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -358,6 +407,8 @@ impl VectorStore {
             dimensions,
             quantizer: None,
             quantized_vectors: Vec::new(),
+            rescore_enabled: false,
+            oversample_factor: 3.0,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -392,8 +443,12 @@ impl VectorStore {
         }
     }
 
-    /// Create new vector store with Extended `RaBitQ` quantization
+    /// Create new vector store with RaBitQ quantization (DEPRECATED)
+    ///
+    /// This constructor creates the old-style quantization that stores quantized vectors
+    /// separately. For the new asymmetric HNSW mode, use `VectorStoreOptions::quantization()`.
     #[must_use]
+    #[deprecated(note = "Use VectorStoreOptions::quantization() for asymmetric HNSW")]
     pub fn new_with_quantization(dimensions: usize, params: RaBitQParams) -> Self {
         let quantizer = RaBitQ::new(params);
 
@@ -403,6 +458,8 @@ impl VectorStore {
             dimensions,
             quantizer: Some(quantizer),
             quantized_vectors: Vec::new(),
+            rescore_enabled: false,
+            oversample_factor: 3.0,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -448,6 +505,8 @@ impl VectorStore {
             dimensions,
             quantizer: None,
             quantized_vectors: Vec::new(),
+            rescore_enabled: false,
+            oversample_factor: 3.0,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -546,6 +605,8 @@ impl VectorStore {
             dimensions,
             quantizer: None,
             quantized_vectors: Vec::new(),
+            rescore_enabled: false,
+            oversample_factor: 3.0,
             metadata,
             id_to_index,
             index_to_id,
@@ -601,14 +662,26 @@ impl VectorStore {
         let storage = SeerDBStorage::open(path)?;
         let dimensions = options.dimensions;
 
-        // Initialize HNSW if we have parameters
-        let hnsw_index = if options.m.is_some() || options.ef_construction.is_some() {
-            let m = options.m.unwrap_or(16);
-            let ef_construction = options.ef_construction.unwrap_or(100);
-            let ef_search = options.ef_search.unwrap_or(100);
-            let capacity = options.expected_capacity.unwrap_or(10_000);
+        // Determine HNSW parameters
+        let m = options.m.unwrap_or(16);
+        let ef_construction = options.ef_construction.unwrap_or(100);
+        let ef_search = options.ef_search.unwrap_or(100);
 
-            if dimensions > 0 {
+        // Initialize HNSW - use asymmetric mode when quantization is enabled
+        let hnsw_index = if dimensions > 0 {
+            if let Some(ref quant_params) = options.quantization {
+                // Asymmetric HNSW with RaBitQ quantization
+                Some(HNSWIndex::new_with_asymmetric(
+                    dimensions,
+                    HNSWParams::default()
+                        .with_m(m)
+                        .with_ef_construction(ef_construction)
+                        .with_ef_search(ef_search),
+                    DistanceFunction::L2,
+                    quant_params.clone(),
+                )?)
+            } else if options.m.is_some() || options.ef_construction.is_some() {
+                let capacity = options.expected_capacity.unwrap_or(10_000);
                 Some(HNSWIndex::new_with_params(
                     capacity.max(10_000),
                     dimensions,
@@ -616,32 +689,35 @@ impl VectorStore {
                     ef_construction,
                     ef_search,
                 )?)
-            } else {
-                None // Will be lazily initialized on first insert
-            }
-        } else if let Some(capacity) = options.expected_capacity {
-            // Use adaptive params based on capacity
-            let (m, ef_construction, ef_search) = Self::adaptive_hnsw_params(capacity);
-            if dimensions > 0 {
+            } else if let Some(capacity) = options.expected_capacity {
+                // Use adaptive params based on capacity
+                let (adaptive_m, adaptive_ef_construction, adaptive_ef_search) =
+                    Self::adaptive_hnsw_params(capacity);
                 Some(HNSWIndex::new_with_params(
                     capacity.max(10_000),
                     dimensions,
-                    m,
-                    ef_construction,
-                    ef_search,
+                    adaptive_m,
+                    adaptive_ef_construction,
+                    adaptive_ef_search,
                 )?)
             } else {
-                None
+                None // Will be lazily initialized
             }
         } else {
-            None // Will be lazily initialized
+            None
         };
 
-        // Initialize quantizer if specified
-        let quantizer = options
-            .quantization
-            .as_ref()
-            .map(|p| RaBitQ::new(p.clone()));
+        // Initialize quantizer for backward compatibility (deprecated path)
+        // When using asymmetric HNSW, this remains None
+        let quantizer = if options.quantization.is_some() && hnsw_index.is_none() {
+            // Only use legacy quantizer when dimensions=0 (lazy init case)
+            options
+                .quantization
+                .as_ref()
+                .map(|p| RaBitQ::new(p.clone()))
+        } else {
+            None
+        };
 
         // Save dimensions to storage if set
         if dimensions > 0 {
@@ -656,12 +732,18 @@ impl VectorStore {
             None
         };
 
+        // Determine rescore settings
+        let rescore_enabled = options.rescore.unwrap_or(options.quantization.is_some());
+        let oversample_factor = options.oversample.unwrap_or(3.0);
+
         Ok(Self {
             vectors: Vec::new(),
             hnsw_index,
             dimensions,
             quantizer,
             quantized_vectors: Vec::new(),
+            rescore_enabled,
+            oversample_factor,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -679,14 +761,26 @@ impl VectorStore {
     pub fn build_with_options(options: &VectorStoreOptions) -> Result<Self> {
         let dimensions = options.dimensions;
 
-        // Initialize HNSW if we have parameters
-        let hnsw_index = if options.m.is_some() || options.ef_construction.is_some() {
-            let m = options.m.unwrap_or(16);
-            let ef_construction = options.ef_construction.unwrap_or(100);
-            let ef_search = options.ef_search.unwrap_or(100);
-            let capacity = options.expected_capacity.unwrap_or(10_000);
+        // Determine HNSW parameters
+        let m = options.m.unwrap_or(16);
+        let ef_construction = options.ef_construction.unwrap_or(100);
+        let ef_search = options.ef_search.unwrap_or(100);
 
-            if dimensions > 0 {
+        // Initialize HNSW - use asymmetric mode when quantization is enabled
+        let hnsw_index = if dimensions > 0 {
+            if let Some(ref quant_params) = options.quantization {
+                // Asymmetric HNSW with RaBitQ quantization
+                Some(HNSWIndex::new_with_asymmetric(
+                    dimensions,
+                    HNSWParams::default()
+                        .with_m(m)
+                        .with_ef_construction(ef_construction)
+                        .with_ef_search(ef_search),
+                    DistanceFunction::L2,
+                    quant_params.clone(),
+                )?)
+            } else if options.m.is_some() || options.ef_construction.is_some() {
+                let capacity = options.expected_capacity.unwrap_or(10_000);
                 Some(HNSWIndex::new_with_params(
                     capacity.max(10_000),
                     dimensions,
@@ -694,34 +788,34 @@ impl VectorStore {
                     ef_construction,
                     ef_search,
                 )?)
-            } else {
-                None
-            }
-        } else if let Some(capacity) = options.expected_capacity {
-            let (m, ef_construction, ef_search) = Self::adaptive_hnsw_params(capacity);
-            if dimensions > 0 {
+            } else if let Some(capacity) = options.expected_capacity {
+                let (adaptive_m, adaptive_ef_construction, adaptive_ef_search) =
+                    Self::adaptive_hnsw_params(capacity);
                 Some(HNSWIndex::new_with_params(
                     capacity.max(10_000),
                     dimensions,
-                    m,
-                    ef_construction,
-                    ef_search,
+                    adaptive_m,
+                    adaptive_ef_construction,
+                    adaptive_ef_search,
                 )?)
             } else {
-                None
+                // Create default HNSW index when dimensions are known
+                Some(HNSWIndex::new(10_000, dimensions)?)
             }
-        } else if dimensions > 0 {
-            // Create default HNSW index when dimensions are known
-            Some(HNSWIndex::new(10_000, dimensions)?)
         } else {
             None
         };
 
-        // Initialize quantizer if specified
-        let quantizer = options
-            .quantization
-            .as_ref()
-            .map(|p| RaBitQ::new(p.clone()));
+        // Initialize quantizer for backward compatibility (deprecated path)
+        // When using asymmetric HNSW, this remains None
+        let quantizer = if options.quantization.is_some() && hnsw_index.is_none() {
+            options
+                .quantization
+                .as_ref()
+                .map(|p| RaBitQ::new(p.clone()))
+        } else {
+            None
+        };
 
         // Initialize in-memory text index if enabled
         let text_index = if let Some(ref config) = options.text_search_config {
@@ -730,12 +824,18 @@ impl VectorStore {
             None
         };
 
+        // Determine rescore settings
+        let rescore_enabled = options.rescore.unwrap_or(options.quantization.is_some());
+        let oversample_factor = options.oversample.unwrap_or(3.0);
+
         Ok(Self {
             vectors: Vec::new(),
             hnsw_index,
             dimensions,
             quantizer,
             quantized_vectors: Vec::new(),
+            rescore_enabled,
+            oversample_factor,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -1723,6 +1823,11 @@ impl VectorStore {
     /// This is the optimized hot path - ~40% faster than using Option<usize>.
     /// Use this in tight loops where performance is critical.
     ///
+    /// When rescore is enabled (with quantization), this:
+    /// 1. Searches for k * oversample candidates using quantized distance
+    /// 2. Rescores candidates with full-precision vectors
+    /// 3. Returns top k results
+    ///
     /// # Arguments
     /// * `query` - Query vector
     /// * `k` - Number of neighbors to return
@@ -1747,11 +1852,57 @@ impl VectorStore {
 
         // Use HNSW index if available
         if let Some(ref index) = self.hnsw_index {
+            // Check if we should rescore (asymmetric index + rescore enabled)
+            if self.rescore_enabled && index.is_asymmetric() && !self.vectors.is_empty() {
+                return self.knn_search_with_rescore(query, k, ef);
+            }
             return index.search_ef(&query.data, k, ef);
         }
 
         // Fallback to brute-force if no index (small datasets only)
         self.knn_search_brute_force(query, k)
+    }
+
+    /// K-nearest neighbors search with rescore using original vectors
+    ///
+    /// Used when asymmetric HNSW is enabled with rescore=true.
+    /// Fetches k * oversample candidates, then reranks with full precision.
+    fn knn_search_with_rescore(
+        &self,
+        query: &Vector,
+        k: usize,
+        ef: usize,
+    ) -> Result<Vec<(usize, f32)>> {
+        let index = self
+            .hnsw_index
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("HNSW index required for rescore"))?;
+
+        // Fetch k * oversample candidates using quantized distance
+        let oversample_k = ((k as f32) * self.oversample_factor).ceil() as usize;
+        let candidates = index.search_ef(&query.data, oversample_k, ef)?;
+
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Rescore candidates with full-precision L2 distance
+        let mut rescored: Vec<(usize, f32)> = candidates
+            .iter()
+            .filter_map(|&(id, _quantized_dist)| {
+                // Get original vector and compute exact distance
+                self.vectors.get(id).map(|vec| {
+                    let dist = l2_distance(&query.data, &vec.data);
+                    (id, dist)
+                })
+            })
+            .collect();
+
+        // Sort by distance and return top k
+        rescored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        rescored.truncate(k);
+
+        Ok(rescored)
     }
 
     /// K-nearest neighbors search with metadata filtering
@@ -2282,6 +2433,8 @@ impl VectorStore {
                 dimensions,
                 quantizer,
                 quantized_vectors,
+                rescore_enabled: false,
+                oversample_factor: 3.0,
                 metadata,
                 id_to_index,
                 index_to_id,
@@ -2363,6 +2516,8 @@ impl VectorStore {
                 dimensions,
                 quantizer,
                 quantized_vectors,
+                rescore_enabled: false,
+                oversample_factor: 3.0,
                 metadata,
                 id_to_index,
                 index_to_id,

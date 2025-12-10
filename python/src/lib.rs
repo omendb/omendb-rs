@@ -1128,14 +1128,20 @@ impl VectorDatabase {
 ///     # With custom HNSW parameters
 ///     >>> db = omendb.open("./vectors", dimensions=384, m=32, ef_construction=200)
 ///
-///     # With RaBitQ quantization (8x memory reduction)
+///     # With RaBitQ quantization (rescore enabled by default)
 ///     >>> db = omendb.open("./vectors", dimensions=128, quantization=4)
+///
+///     # Disable rescore for max speed (~1-2% recall loss)
+///     >>> db = omendb.open("./vectors", dimensions=128, quantization=4, rescore=False)
+///
+///     # Custom oversample factor (default 3.0)
+///     >>> db = omendb.open("./vectors", dimensions=128, quantization=4, oversample=5.0)
 ///
 ///     # Tune search quality at runtime
 ///     >>> db.set_ef_search(200)  # Higher recall, slower
 ///     >>> db.set_ef_search(50)   # Lower recall, faster
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, config=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, rescore=None, oversample=None, config=None))]
 fn open(
     path: String,
     dimensions: usize,
@@ -1143,6 +1149,8 @@ fn open(
     ef_construction: Option<usize>,
     ef_search: Option<usize>,
     quantization: Option<u8>,
+    rescore: Option<bool>,
+    oversample: Option<f32>,
     config: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<VectorDatabase> {
     use std::path::Path;
@@ -1179,6 +1187,16 @@ fn open(
         }
     }
 
+    // Validate oversample
+    if let Some(factor) = oversample {
+        if factor < 1.0 {
+            return Err(PyValueError::new_err(format!(
+                "oversample must be >= 1.0, got {}",
+                factor
+            )));
+        }
+    }
+
     // Resolve effective dimensions (use 128 as default if not specified)
     let effective_dims = if dimensions == 0 { 128 } else { dimensions };
 
@@ -1197,6 +1215,12 @@ fn open(
         }
         if let Some(bits) = quantization {
             options = options.quantization(rabitq_params(bits));
+        }
+        if let Some(rescore_val) = rescore {
+            options = options.rescore(rescore_val);
+        }
+        if let Some(oversample_val) = oversample {
+            options = options.oversample(oversample_val);
         }
 
         let store = options
@@ -1233,6 +1257,12 @@ fn open(
         }
         if let Some(bits) = quantization {
             options = options.quantization(rabitq_params(bits));
+        }
+        if let Some(rescore_val) = rescore {
+            options = options.rescore(rescore_val);
+        }
+        if let Some(oversample_val) = oversample {
+            options = options.oversample(oversample_val);
         }
 
         // Handle config dict for backward compatibility
