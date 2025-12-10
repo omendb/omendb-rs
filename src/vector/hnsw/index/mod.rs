@@ -1016,6 +1016,159 @@ impl HNSWIndex {
         Ok(results)
     }
 
+    /// Search using quantized (ADC) distances only - no exact distance calculation.
+    ///
+    /// Returns candidates with approximate distances computed via ADC tables.
+    /// Use this for fast search when rescore=False (accept quantization error).
+    ///
+    /// Falls back to regular search if not in asymmetric mode.
+    #[instrument(skip(self, query), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
+    pub fn search_asymmetric(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+    ) -> Result<Vec<SearchResult>> {
+        // Validate inputs (same as search())
+        if k == 0 {
+            return Err(HNSWError::InvalidSearchParams { k, ef });
+        }
+        if ef < k {
+            return Err(HNSWError::InvalidSearchParams { k, ef });
+        }
+        if query.len() != self.dimensions() {
+            return Err(HNSWError::DimensionMismatch {
+                expected: self.dimensions(),
+                actual: query.len(),
+            });
+        }
+        if query.iter().any(|x| !x.is_finite()) {
+            return Err(HNSWError::InvalidVector);
+        }
+        if self.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // If not asymmetric, fall back to regular search
+        if !self.is_asymmetric() {
+            return self.search(query, k, ef);
+        }
+
+        let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
+        let entry_level = self.nodes[entry_point as usize].level;
+
+        // Build ADC lookup table once for this query
+        let adc_table = self.vectors.build_adc_table(query);
+
+        // Greedy search at each layer using ADC distances
+        let mut nearest = vec![entry_point];
+        for level in (1..=entry_level).rev() {
+            nearest = self.search_layer_asymmetric(query, &nearest, 1, level)?;
+        }
+
+        // Beam search at layer 0 with ADC distances
+        let candidates = self.search_layer_asymmetric_with_distances(
+            query,
+            &nearest,
+            ef.max(k),
+            0,
+            adc_table.as_ref(),
+        )?;
+
+        // Return top k with ADC distances (no recomputation)
+        let mut results: Vec<SearchResult> = candidates
+            .into_iter()
+            .map(|(id, dist)| SearchResult::new(id, dist))
+            .collect();
+
+        results.truncate(k);
+
+        debug!(
+            num_results = results.len(),
+            closest_distance = results.first().map(|r| r.distance),
+            "Asymmetric search completed (ADC distances)"
+        );
+
+        Ok(results)
+    }
+
+    /// Search layer returning (id, distance) tuples for asymmetric mode.
+    fn search_layer_asymmetric_with_distances(
+        &self,
+        query: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+        adc_table: Option<&crate::compression::ADCTable>,
+    ) -> Result<Vec<(u32, f32)>> {
+        use super::query_buffers;
+
+        query_buffers::with_buffers(|buffers| {
+            let visited = &mut buffers.visited;
+            let candidates = &mut buffers.candidates;
+            let working = &mut buffers.working;
+            let unvisited = &mut buffers.unvisited;
+
+            for &ep in entry_points {
+                let dist = self.distance_with_adc(query, ep, adc_table)?;
+                let candidate = Candidate::new(ep, dist);
+
+                candidates.push(Reverse(candidate));
+                working.push(candidate);
+                visited.insert(ep);
+            }
+
+            while let Some(Reverse(current)) = candidates.pop() {
+                if let Some(&farthest) = working.peek() {
+                    if current.distance > farthest.distance {
+                        break;
+                    }
+                }
+
+                unvisited.clear();
+                self.neighbors
+                    .with_neighbors(current.node_id, level, |neighbors| {
+                        for &id in neighbors {
+                            if !visited.contains(id) {
+                                unvisited.push(id);
+                            }
+                        }
+                    })?;
+
+                let unvisited_slice = unvisited.as_slice();
+                for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
+                    if i + 1 < unvisited_slice.len() {
+                        self.vectors.prefetch_quantized(unvisited_slice[i + 1]);
+                    }
+
+                    visited.insert(neighbor_id);
+
+                    let dist = self.distance_with_adc(query, neighbor_id, adc_table)?;
+                    let neighbor = Candidate::new(neighbor_id, dist);
+
+                    if let Some(&farthest) = working.peek() {
+                        if dist < farthest.distance.0 || working.len() < ef {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+
+                            if working.len() > ef {
+                                working.pop();
+                            }
+                        }
+                    } else {
+                        candidates.push(Reverse(neighbor));
+                        working.push(neighbor);
+                    }
+                }
+            }
+
+            // Return (id, distance) tuples sorted by distance
+            let mut results: Vec<_> = working.drain().map(|c| (c.node_id, c.distance.0)).collect();
+            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(results)
+        })
+    }
+
     /// Search for k nearest neighbors with metadata filtering (ACORN-1)
     ///
     /// Implements ACORN-1 filtered search algorithm for efficient metadata-aware search.

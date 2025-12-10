@@ -321,6 +321,38 @@ impl HNSWIndex {
         Ok(neighbors)
     }
 
+    /// Search using quantized (ADC) distances only - no exact distance calculation.
+    ///
+    /// Use when rescore=False for maximum speed (accepts quantization error).
+    /// Falls back to regular search if not in asymmetric mode.
+    #[inline]
+    pub fn search_asymmetric_ef(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+    ) -> Result<Vec<(usize, f32)>> {
+        if query.len() != self.dimensions {
+            anyhow::bail!(
+                "Query dimension mismatch: expected {}, got {}",
+                self.dimensions,
+                query.len()
+            );
+        }
+
+        let results = self
+            .index
+            .search_asymmetric(query, k, ef)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let neighbors: Vec<(usize, f32)> = results
+            .iter()
+            .map(|r| (r.id as usize, r.distance))
+            .collect();
+
+        Ok(neighbors)
+    }
+
     /// Search with metadata filter (ACORN-1)
     ///
     /// Uses ACORN-1 filtered search algorithm for efficient metadata-aware search.
