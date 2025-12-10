@@ -5,11 +5,16 @@ OmenDB Benchmark Runner
 Runs benchmarks and records results to JSONL with full system/config context.
 
 Usage:
-    python benchmarks/run.py                    # Run all, append to history.jsonl
-    python benchmarks/run.py --quick            # Quick run, fewer iterations
-    python benchmarks/run.py --compare          # Compare last 2 runs
-    python benchmarks/run.py --history          # Show recent history
-    python benchmarks/run.py --notes "text"     # Add notes to run
+    python benchmarks/run.py                        # Run, no save (dev)
+    python benchmarks/run.py --output FILE          # Run and save to FILE
+    python benchmarks/run.py --quick                # Quick run (~15s)
+    python benchmarks/run.py --history              # Show history
+    python benchmarks/run.py --history --output F   # Show history from F
+    python benchmarks/run.py --compare              # Compare last 2 runs
+    python benchmarks/run.py --notes "text"         # Add notes to run
+
+Save to cloud/ for canonical history:
+    python benchmarks/run.py --output ../../cloud/benchmarks/history.jsonl
 """
 
 import argparse
@@ -31,7 +36,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 import omendb
 
-HISTORY_FILE = Path(__file__).parent / "history.jsonl"
+DEFAULT_HISTORY_FILE = Path(__file__).parent / "history.jsonl"
 
 
 @dataclass
@@ -213,7 +218,9 @@ def run_all_benchmarks(quick: bool = False) -> list[BenchmarkResult]:
     return results
 
 
-def save_run(results: list[BenchmarkResult], notes: str = "") -> dict:
+def save_run(
+    results: list[BenchmarkResult], history_file: Path, notes: str = ""
+) -> dict:
     """Save benchmark run to JSONL file."""
     run = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
@@ -225,19 +232,20 @@ def save_run(results: list[BenchmarkResult], notes: str = "") -> dict:
     if notes:
         run["notes"] = notes
 
-    with open(HISTORY_FILE, "a") as f:
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(history_file, "a") as f:
         f.write(json.dumps(run) + "\n")
 
     return run
 
 
-def load_history(limit: int = None) -> list[dict]:
+def load_history(history_file: Path, limit: int = None) -> list[dict]:
     """Load benchmark history from JSONL file."""
-    if not HISTORY_FILE.exists():
+    if not history_file.exists():
         return []
 
     runs = []
-    with open(HISTORY_FILE) as f:
+    with open(history_file) as f:
         for line in f:
             if line.strip():
                 runs.append(json.loads(line))
@@ -265,9 +273,9 @@ def print_summary(run: dict):
     print()
 
 
-def show_history(limit: int = 10):
+def show_history(history_file: Path, limit: int = 10):
     """Show recent benchmark history."""
-    runs = load_history(limit)
+    runs = load_history(history_file, limit)
     if not runs:
         print("No benchmark history found.")
         return
@@ -321,20 +329,22 @@ def compare_runs(run1: dict, run2: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="OmenDB Benchmark Runner")
-    parser.add_argument("--quick", action="store_true", help="Fewer iterations")
-    parser.add_argument("--no-save", action="store_true", help="Don't save results")
+    parser.add_argument("--quick", action="store_true", help="Fewer iterations (~15s)")
+    parser.add_argument("--output", "-o", type=str, help="Save results to file (JSONL)")
     parser.add_argument("--notes", type=str, default="", help="Notes to include")
     parser.add_argument("--history", action="store_true", help="Show history")
     parser.add_argument("--compare", action="store_true", help="Compare last 2 runs")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
+    history_file = Path(args.output) if args.output else DEFAULT_HISTORY_FILE
+
     if args.history:
-        show_history()
+        show_history(history_file)
         return
 
     if args.compare:
-        runs = load_history(2)
+        runs = load_history(history_file, 2)
         if len(runs) < 2:
             print("Need at least 2 runs to compare")
             return
@@ -344,17 +354,19 @@ def main():
     # Run benchmarks
     results = run_all_benchmarks(quick=args.quick)
 
-    if args.no_save:
-        run = {
-            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "sys": get_system_info(),
-            "git": get_git_info(),
-            "ver": get_version_info(),
-            "results": {r.name: {"s": r.single_qps, "b": r.batch_qps} for r in results},
-        }
-    else:
-        run = save_run(results, notes=args.notes)
-        print(f"\nSaved to: {HISTORY_FILE}")
+    run = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "sys": get_system_info(),
+        "git": get_git_info(),
+        "ver": get_version_info(),
+        "results": {r.name: {"s": r.single_qps, "b": r.batch_qps} for r in results},
+    }
+    if args.notes:
+        run["notes"] = args.notes
+
+    if args.output:
+        save_run(results, history_file, notes=args.notes)
+        print(f"\nSaved to: {history_file}")
 
     if args.json:
         print(json.dumps(run, indent=2))

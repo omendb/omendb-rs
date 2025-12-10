@@ -24,3 +24,4 @@ target
 # Benchmark results (local only, not committed)
 python/benchmark_results/
 benchmarks/results/
+benchmarks/history.jsonl
