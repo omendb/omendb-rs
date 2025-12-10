@@ -1,41 +1,159 @@
 #!/bin/bash
 # Sync version from VERSION file to all package files
-# Usage: ./scripts/sync-version.sh
+#
+# Usage:
+#   ./scripts/sync-version.sh              # Sync all files to VERSION
+#   ./scripts/sync-version.sh 0.0.10       # Bump to specific version
+#   ./scripts/sync-version.sh --check      # Verify all versions match (no changes)
+#
+# Version Locations (8 files):
+#   1. VERSION                    - Source of truth
+#   2. Cargo.toml                 - Main Rust crate
+#   3. omendb-core/Cargo.toml     - Core algorithms crate
+#   4. python/Cargo.toml          - Python bindings crate
+#   5. node/Cargo.toml            - Node bindings crate
+#   6. node/package.json          - npm @omendb/omendb package
+#   7. node/wrapper/package.json  - npm omendb wrapper (version + dep)
+#   8. README.md                  - Version banner
 
 set -e
 
 cd "$(dirname "$0")/.."
 
-VERSION=$(cat VERSION | tr -d '\n')
+# Handle arguments
+CHECK_ONLY=false
+NEW_VERSION=""
 
-echo "Syncing version: $VERSION"
+if [ "$1" = "--check" ]; then
+    CHECK_ONLY=true
+elif [ -n "$1" ]; then
+    NEW_VERSION="$1"
+fi
+
+# Get current or new version
+if [ -n "$NEW_VERSION" ]; then
+    echo "$NEW_VERSION" > VERSION
+    VERSION="$NEW_VERSION"
+else
+    VERSION=$(cat VERSION | tr -d '\n')
+fi
+
+echo "Version: $VERSION"
 echo ""
 
-# Cargo.toml (main)
-sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
-echo "  Cargo.toml"
+ERRORS=0
 
-# python/Cargo.toml
-sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" python/Cargo.toml
-echo "  python/Cargo.toml"
+check_or_update() {
+    local file=$1
+    local current=$2
 
-# node/Cargo.toml
-sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" node/Cargo.toml
-echo "  node/Cargo.toml"
+    if [ "$current" = "$VERSION" ]; then
+        echo "  [OK] $file"
+    elif [ "$CHECK_ONLY" = true ]; then
+        echo "  [MISMATCH] $file: $current (expected $VERSION)"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "  [UPDATED] $file: $current -> $VERSION"
+    fi
+}
 
-# node/package.json
-jq ".version = \"$VERSION\"" node/package.json > tmp.json && mv tmp.json node/package.json
-echo "  node/package.json"
+if [ "$CHECK_ONLY" = true ]; then
+    echo "Checking versions..."
+else
+    echo "Syncing versions..."
+fi
+echo ""
 
-# node/wrapper/package.json (version + @omendb dep)
-jq ".version = \"$VERSION\" | .dependencies[\"@omendb/omendb\"] = \"$VERSION\"" node/wrapper/package.json > tmp.json && mv tmp.json node/wrapper/package.json
-echo "  node/wrapper/package.json"
+# 1. VERSION (source of truth - already handled)
+echo "  [OK] VERSION"
 
-# Update Cargo.lock
-cargo check --quiet 2>/dev/null || true
-echo "  Cargo.lock"
+# 2. Cargo.toml (main)
+CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+if [ "$CHECK_ONLY" = false ] && [ "$CARGO_V" != "$VERSION" ]; then
+    sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
+fi
+check_or_update "Cargo.toml" "$CARGO_V"
+
+# 3. omendb-core/Cargo.toml
+CORE_V=$(grep '^version = ' omendb-core/Cargo.toml | head -1 | cut -d'"' -f2)
+if [ "$CHECK_ONLY" = false ] && [ "$CORE_V" != "$VERSION" ]; then
+    sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" omendb-core/Cargo.toml
+fi
+check_or_update "omendb-core/Cargo.toml" "$CORE_V"
+
+# 4. python/Cargo.toml
+PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
+if [ "$CHECK_ONLY" = false ] && [ "$PYTHON_V" != "$VERSION" ]; then
+    sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" python/Cargo.toml
+fi
+check_or_update "python/Cargo.toml" "$PYTHON_V"
+
+# 5. node/Cargo.toml
+NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
+if [ "$CHECK_ONLY" = false ] && [ "$NODE_CARGO_V" != "$VERSION" ]; then
+    sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" node/Cargo.toml
+fi
+check_or_update "node/Cargo.toml" "$NODE_CARGO_V"
+
+# 6. node/package.json (version + optionalDependencies)
+NODE_V=$(jq -r .version node/package.json)
+NODE_OPT=$(jq -r '.optionalDependencies["@omendb/omendb-darwin-arm64"]' node/package.json)
+if [ "$CHECK_ONLY" = false ] && ([ "$NODE_V" != "$VERSION" ] || [ "$NODE_OPT" != "$VERSION" ]); then
+    jq ".version = \"$VERSION\" |
+        .optionalDependencies[\"@omendb/omendb-darwin-x64\"] = \"$VERSION\" |
+        .optionalDependencies[\"@omendb/omendb-darwin-arm64\"] = \"$VERSION\" |
+        .optionalDependencies[\"@omendb/omendb-linux-x64-gnu\"] = \"$VERSION\" |
+        .optionalDependencies[\"@omendb/omendb-linux-arm64-gnu\"] = \"$VERSION\"" \
+        node/package.json > tmp.json && mv tmp.json node/package.json
+fi
+check_or_update "node/package.json (version)" "$NODE_V"
+check_or_update "node/package.json (optionalDeps)" "$NODE_OPT"
+
+# 7. node/wrapper/package.json (version + @omendb dep)
+WRAPPER_V=$(jq -r .version node/wrapper/package.json)
+WRAPPER_DEP=$(jq -r '.dependencies["@omendb/omendb"]' node/wrapper/package.json)
+if [ "$CHECK_ONLY" = false ] && ([ "$WRAPPER_V" != "$VERSION" ] || [ "$WRAPPER_DEP" != "$VERSION" ]); then
+    jq ".version = \"$VERSION\" | .dependencies[\"@omendb/omendb\"] = \"$VERSION\"" \
+        node/wrapper/package.json > tmp.json && mv tmp.json node/wrapper/package.json
+fi
+check_or_update "node/wrapper/package.json (version)" "$WRAPPER_V"
+check_or_update "node/wrapper/package.json (@omendb)" "$WRAPPER_DEP"
+
+# 8. README.md version banner
+README_V=$(grep -o 'v[0-9]*\.[0-9]*\.[0-9]*' README.md | head -1 | tr -d 'v')
+if [ "$CHECK_ONLY" = false ] && [ "$README_V" != "$VERSION" ]; then
+    sed -i '' "s/v[0-9]*\.[0-9]*\.[0-9]*/v$VERSION/g" README.md
+fi
+check_or_update "README.md banner" "$README_V"
 
 echo ""
-echo "All files synced to version $VERSION"
-echo ""
-echo "Next: git diff && git commit -am 'chore: Bump to $VERSION' && git push"
+
+# Update lockfiles (not in check mode)
+if [ "$CHECK_ONLY" = false ]; then
+    echo "Updating lockfiles..."
+    cargo check --quiet 2>/dev/null || true
+    echo "  [OK] Cargo.lock"
+    (cd python && cargo check --quiet 2>/dev/null || true)
+    echo "  [OK] python/Cargo.lock"
+    echo ""
+fi
+
+# Final status
+if [ "$ERRORS" -gt 0 ]; then
+    echo "ERROR: $ERRORS version mismatch(es) found!"
+    echo ""
+    echo "Run: ./scripts/sync-version.sh"
+    exit 1
+fi
+
+if [ "$CHECK_ONLY" = true ]; then
+    echo "All 8 version locations match: $VERSION"
+else
+    echo "All files synced to version $VERSION"
+    echo ""
+    echo "Next steps:"
+    echo "  1. git diff"
+    echo "  2. git add -A && git commit -m 'chore: Bump to $VERSION'"
+    echo "  3. git push"
+    echo "  4. gh workflow run release.yml (or trigger via GitHub UI)"
+fi

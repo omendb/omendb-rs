@@ -37,15 +37,18 @@ jobs:
           echo "VERSION file: $VERSION"
           echo ""
 
-          # Check all package files match VERSION
+          # Check all 8 version locations match VERSION
           ERRORS=0
 
           CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+          CORE_V=$(grep '^version = ' omendb-core/Cargo.toml | head -1 | cut -d'"' -f2)
           PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
           NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
           NODE_V=$(jq -r .version node/package.json)
+          NODE_OPT=$(jq -r '.optionalDependencies["@omendb/omendb-darwin-arm64"]' node/package.json)
           WRAPPER_V=$(jq -r .version node/wrapper/package.json)
           WRAPPER_DEP=$(jq -r '.dependencies["@omendb/omendb"]' node/wrapper/package.json)
+          README_V=$(grep -o 'v[0-9]*\.[0-9]*\.[0-9]*' README.md | head -1 | tr -d 'v')
 
           echo "Checking versions against VERSION file ($VERSION):"
 
@@ -53,29 +56,33 @@ jobs:
             local file=$1
             local actual=$2
             if [ "$actual" = "$VERSION" ]; then
-              echo "  $file: $actual"
+              echo "  [OK] $file: $actual"
             else
-              echo "  $file: $actual (MISMATCH - expected $VERSION)"
+              echo "  [MISMATCH] $file: $actual (expected $VERSION)"
               ERRORS=$((ERRORS + 1))
             fi
           }
 
           check_version "Cargo.toml" "$CARGO_V"
+          check_version "omendb-core/Cargo.toml" "$CORE_V"
           check_version "python/Cargo.toml" "$PYTHON_V"
           check_version "node/Cargo.toml" "$NODE_CARGO_V"
           check_version "node/package.json" "$NODE_V"
+          check_version "node/package.json (optionalDeps)" "$NODE_OPT"
           check_version "node/wrapper version" "$WRAPPER_V"
           check_version "node/wrapper @omendb" "$WRAPPER_DEP"
+          check_version "README.md banner" "$README_V"
 
           if [ "$ERRORS" -gt 0 ]; then
             echo ""
             echo "ERROR: $ERRORS version mismatch(es) found!"
-            echo "Run: ./scripts/sync-version.sh"
+            echo ""
+            echo "Fix locally: ./scripts/sync-version.sh"
             exit 1
           fi
 
           echo ""
-          echo "All 6 package files match VERSION: $VERSION"
+          echo "All 9 version locations match: $VERSION"
 
       - name: Check not already published
         run: |
