@@ -133,18 +133,18 @@ impl HNSWIndex {
         })
     }
 
-    /// Create new HNSW index with RaBitQ asymmetric search
+    /// Create new HNSW index with `RaBitQ` asymmetric search
     ///
     /// Uses asymmetric distance computation for 2-3x faster search:
     /// - Query vector stays full precision
-    /// - Candidate vectors use RaBitQ quantization (8x smaller)
+    /// - Candidate vectors use `RaBitQ` quantization (8x smaller)
     /// - Original vectors stored for rescore accuracy
     ///
     /// # Arguments
     /// * `dimensions` - Vector dimensionality
-    /// * `params` - HNSW parameters (m, ef_construction, ef_search)
+    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
     /// * `distance_fn` - Distance function (only L2 supported for asymmetric)
-    /// * `rabitq_params` - RaBitQ quantization parameters (2, 4, or 8 bit)
+    /// * `rabitq_params` - `RaBitQ` quantization parameters (2, 4, or 8 bit)
     ///
     /// # Example
     /// ```ignore
@@ -161,9 +161,8 @@ impl HNSWIndex {
         distance_fn: DistanceFunction,
         rabitq_params: RaBitQParams,
     ) -> Result<Self> {
-        let index =
-            CoreHNSW::new_with_asymmetric(dimensions, params.clone(), distance_fn, rabitq_params)
-                .map_err(|e| anyhow::anyhow!(e))?;
+        let index = CoreHNSW::new_with_asymmetric(dimensions, params, distance_fn, rabitq_params)
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(Self {
             index,
@@ -176,7 +175,7 @@ impl HNSWIndex {
         })
     }
 
-    /// Check if this index uses asymmetric search (RaBitQ)
+    /// Check if this index uses asymmetric search (`RaBitQ`)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
         self.index.is_asymmetric()
