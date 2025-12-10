@@ -1571,7 +1571,7 @@ fn profile_seerdb_impl(_n: usize) {
 
 #[test]
 fn test_asymmetric_hnsw_search() {
-    use crate::compression::RaBitQParams;
+    use omendb_core::compression::RaBitQParams;
 
     let params = HNSWParams::default();
     let rabitq = RaBitQParams::bits4();
@@ -1613,7 +1613,7 @@ fn test_asymmetric_hnsw_search() {
 
 #[test]
 fn test_asymmetric_only_supports_l2() {
-    use crate::compression::RaBitQParams;
+    use omendb_core::compression::RaBitQParams;
 
     let params = HNSWParams::default();
     let rabitq = RaBitQParams::bits4();

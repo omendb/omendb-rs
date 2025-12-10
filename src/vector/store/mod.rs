@@ -10,9 +10,9 @@
 use super::hnsw_index::HNSWIndex;
 use super::storage::SeerDBStorage;
 use super::types::Vector;
-use crate::compression::{QuantizedVector, RaBitQ, RaBitQParams};
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
+use omendb_core::compression::{QuantizedVector, RaBitQ, RaBitQParams};
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
