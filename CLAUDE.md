@@ -18,6 +18,29 @@ uv run ruff check . && uv run ruff format --check .
 npm install && npm run build && npm test
 ```
 
+## Configuration Defaults
+
+| Parameter       | Default               | Notes                                       |
+| --------------- | --------------------- | ------------------------------------------- |
+| m               | 16                    | HNSW neighbors per node (industry standard) |
+| ef_construction | 100                   | Build quality                               |
+| ef_search       | 100                   | Search quality                              |
+| quantization    | off                   | RaBitQ bits: 2, 4, or 8                     |
+| rescore         | true (when quantized) | Rerank with exact L2                        |
+| oversample      | 3.0                   | Fetch k×oversample candidates               |
+
+**Quantization API:**
+
+```python
+db = omendb.open("./db", dimensions=128, quantization=4)  # rescore=True by default
+db = omendb.open("./db", dimensions=128, quantization=4, rescore=False)  # max speed
+```
+
+**Insert performance** (10K vectors, 128D):
+
+- Sequential (default): 1,430 vec/s, 100% recall
+- With quantization: 3,400 vec/s, 95.7% recall
+
 ## Architecture
 
 ```

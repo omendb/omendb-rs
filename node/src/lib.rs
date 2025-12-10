@@ -758,6 +758,8 @@ impl VectorDatabase {
 /// - efConstruction: 100 (build quality, higher = better graph, slower build)
 /// - efSearch: 100 (search quality, higher = better recall, slower search)
 /// - quantization: null (RaBitQ bit width: 2, 4, or 8 for compression)
+/// - rescore: true when quantization enabled (rerank candidates with exact distance)
+/// - oversample: 3.0 (fetch k*oversample candidates when rescoring)
 #[napi(object)]
 pub struct OpenOptions {
     /// Vector dimensions (default: 128, auto-detected on first insert)
@@ -771,6 +773,12 @@ pub struct OpenOptions {
     /// RaBitQ quantization bits: 2, 4, or 8 (default: null = no quantization)
     /// Enables 4-16x memory compression with ~1-2% recall loss
     pub quantization: Option<u8>,
+    /// Rescore candidates with exact distance (default: true when quantization enabled)
+    /// Set to false for maximum speed at the cost of ~20% recall
+    pub rescore: Option<bool>,
+    /// Oversampling factor for rescoring (default: 3.0)
+    /// Fetches k*oversample candidates then reranks to return top k
+    pub oversample: Option<f64>,
 }
 
 // ============================================================================
@@ -801,6 +809,14 @@ pub struct OpenOptions {
 ///   dimensions: 128,
 ///   quantization: 4  // 4-bit quantization
 /// });
+///
+/// // Quantization with custom rescore settings
+/// const db = omendb.open("./mydb", {
+///   dimensions: 128,
+///   quantization: 4,
+///   rescore: false,    // Disable rescore for max speed
+///   oversample: 5.0    // Or increase oversample for better recall
+/// });
 /// ```
 #[napi]
 pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase> {
@@ -810,6 +826,8 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         ef_construction: None,
         ef_search: None,
         quantization: None,
+        rescore: None,
+        oversample: None,
     });
 
     let dimensions = opts.dimensions.unwrap_or(128) as usize;
@@ -817,6 +835,8 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let ef_construction = opts.ef_construction.map(|v| v as usize);
     let ef_search = opts.ef_search.map(|v| v as usize);
     let quantization = opts.quantization;
+    let rescore = opts.rescore;
+    let oversample = opts.oversample;
 
     // Validate parameters
     if let Some(m_val) = m {
@@ -846,6 +866,15 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         }
     }
 
+    if let Some(factor) = oversample {
+        if factor < 1.0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!("oversample must be >= 1.0, got {}", factor),
+            ));
+        }
+    }
+
     // Build options from parameters
     let mut store_options = VectorStoreOptions::default().dimensions(dimensions);
 
@@ -866,6 +895,12 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
             _ => unreachable!(),
         };
         store_options = store_options.quantization(params);
+    }
+    if let Some(rescore_val) = rescore {
+        store_options = store_options.rescore(rescore_val);
+    }
+    if let Some(oversample_val) = oversample {
+        store_options = store_options.oversample(oversample_val as f32);
     }
 
     // Handle :memory: for in-memory database
