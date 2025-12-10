@@ -1852,10 +1852,16 @@ impl VectorStore {
 
         // Use HNSW index if available
         if let Some(ref index) = self.hnsw_index {
-            // Check if we should rescore (asymmetric index + rescore enabled)
-            if self.rescore_enabled && index.is_asymmetric() && !self.vectors.is_empty() {
-                return self.knn_search_with_rescore(query, k, ef);
+            // Asymmetric mode with quantization
+            if index.is_asymmetric() {
+                if self.rescore_enabled && !self.vectors.is_empty() {
+                    // Rescore: get candidates with ADC, rerank with exact L2
+                    return self.knn_search_with_rescore(query, k, ef);
+                }
+                // No rescore: use ADC distances directly (fastest)
+                return index.search_asymmetric_ef(&query.data, k, ef);
             }
+            // Regular HNSW (no quantization)
             return index.search_ef(&query.data, k, ef);
         }
 
@@ -1866,7 +1872,7 @@ impl VectorStore {
     /// K-nearest neighbors search with rescore using original vectors
     ///
     /// Used when asymmetric HNSW is enabled with rescore=true.
-    /// Fetches k * oversample candidates, then reranks with full precision.
+    /// Fetches k * oversample candidates with ADC, then reranks with full precision L2.
     fn knn_search_with_rescore(
         &self,
         query: &Vector,
@@ -1878,9 +1884,9 @@ impl VectorStore {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("HNSW index required for rescore"))?;
 
-        // Fetch k * oversample candidates using quantized distance
+        // Fetch k * oversample candidates using quantized (ADC) distances
         let oversample_k = ((k as f32) * self.oversample_factor).ceil() as usize;
-        let candidates = index.search_ef(&query.data, oversample_k, ef)?;
+        let candidates = index.search_asymmetric_ef(&query.data, oversample_k, ef)?;
 
         if candidates.is_empty() {
             return Ok(Vec::new());
