@@ -1299,9 +1299,6 @@ fn open(
                     }
                 }
             }
-            if let Some(expected) = cfg.get_item("expected_vectors")? {
-                options = options.expected_capacity(expected.extract()?);
-            }
         }
 
         // Check if enabling quantization on existing non-empty database
@@ -1437,14 +1434,8 @@ fn create_store_with_config(
             dimensions,
             rabitq_params(bits),
         ))
-    }
-    // Parse expected_vectors for adaptive defaults
-    else if let Some(expected) = config.get_item("expected_vectors")? {
-        let expected_vectors: usize = expected.extract()?;
-        Ok(VectorStore::new_with_capacity(dimensions, expected_vectors))
     } else {
-        // Config dict provided but empty: use default capacity
-        Ok(VectorStore::new_with_capacity(dimensions, 10_000))
+        Ok(VectorStore::new(dimensions))
     }
 }
 

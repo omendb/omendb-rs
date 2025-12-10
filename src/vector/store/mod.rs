@@ -69,9 +69,6 @@ pub struct VectorStoreOptions {
     /// HNSW `ef_search`: search quality/speed tradeoff (default: 100)
     ef_search: Option<usize>,
 
-    /// Expected number of vectors for capacity planning
-    expected_capacity: Option<usize>,
-
     /// `RaBitQ` quantization parameters (enables asymmetric HNSW search)
     quantization: Option<RaBitQParams>,
 
@@ -130,15 +127,6 @@ impl VectorStoreOptions {
     #[must_use]
     pub fn ef_search(mut self, ef: usize) -> Self {
         self.ef_search = Some(ef);
-        self
-    }
-
-    /// Set expected vector count for capacity planning.
-    ///
-    /// Helps optimize HNSW parameters for your dataset size.
-    #[must_use]
-    pub fn expected_capacity(mut self, capacity: usize) -> Self {
-        self.expected_capacity = Some(capacity);
         self
     }
 
@@ -364,26 +352,13 @@ impl VectorStore {
         }
     }
 
-    /// Create new vector store with adaptive HNSW parameters based on expected capacity
+    /// Create new vector store with pre-allocated capacity (DEPRECATED)
     ///
-    /// Automatically selects optimal M, `ef_construction`, and `ef_search` parameters
-    /// based on the expected number of vectors:
-    ///
-    /// - < 50K vectors: M=16, `ef_construction=200`, `ef_search=100` (fast & efficient)
-    /// - 50K-500K vectors: M=32, `ef_construction=400`, `ef_search=100` (balanced, 98% recall)
-    /// - > 500K vectors: M=48, ef_construction=600, ef_search=150 (high recall, 99%)
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality
-    /// * `expected_vectors` - Expected number of vectors to be inserted
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Pre-allocate for 100K vectors with industry-standard defaults (M=16, ef=100)
-    /// let mut store = VectorStore::new_with_capacity(128, 100_000);
-    /// ```
+    /// Use `VectorStore::new()` instead. The capacity hint provides minimal benefit
+    /// and adds unnecessary API complexity. HNSW auto-grows as needed.
     #[must_use]
-    pub fn new_with_capacity(dimensions: usize, expected_vectors: usize) -> Self {
+    #[deprecated(note = "Use VectorStore::new() instead - capacity hint provides minimal benefit")]
+    pub fn new_with_capacity(dimensions: usize, _expected_vectors: usize) -> Self {
         // Industry standard defaults (Qdrant, ChromaDB, Milvus, pgvector)
         // Users can use VectorStoreOptions for custom m/ef_construction
         let m = 16;
@@ -391,14 +366,8 @@ impl VectorStore {
         let ef_search = 100;
 
         let hnsw_index = Some(
-            HNSWIndex::new_with_params(
-                expected_vectors.max(10_000),
-                dimensions,
-                m,
-                ef_construction,
-                ef_search,
-            )
-            .expect("fixed defaults are valid"),
+            HNSWIndex::new_with_params(10_000, dimensions, m, ef_construction, ef_search)
+                .expect("fixed defaults are valid"),
         );
 
         Self {
@@ -658,18 +627,8 @@ impl VectorStore {
                     quant_params.clone(),
                 )?)
             } else if options.m.is_some() || options.ef_construction.is_some() {
-                let capacity = options.expected_capacity.unwrap_or(10_000);
                 Some(HNSWIndex::new_with_params(
-                    capacity.max(10_000),
-                    dimensions,
-                    m,
-                    ef_construction,
-                    ef_search,
-                )?)
-            } else if let Some(capacity) = options.expected_capacity {
-                // Use fixed defaults with specified capacity for pre-allocation
-                Some(HNSWIndex::new_with_params(
-                    capacity.max(10_000),
+                    10_000,
                     dimensions,
                     m,
                     ef_construction,
@@ -755,18 +714,8 @@ impl VectorStore {
                     quant_params.clone(),
                 )?)
             } else if options.m.is_some() || options.ef_construction.is_some() {
-                let capacity = options.expected_capacity.unwrap_or(10_000);
                 Some(HNSWIndex::new_with_params(
-                    capacity.max(10_000),
-                    dimensions,
-                    m,
-                    ef_construction,
-                    ef_search,
-                )?)
-            } else if let Some(capacity) = options.expected_capacity {
-                // Use fixed defaults with specified capacity for pre-allocation
-                Some(HNSWIndex::new_with_params(
-                    capacity.max(10_000),
+                    10_000,
                     dimensions,
                     m,
                     ef_construction,
