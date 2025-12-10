@@ -326,7 +326,7 @@ impl HNSWIndex {
     /// Use when rescore=False for maximum speed (accepts quantization error).
     /// Falls back to regular search if not in asymmetric mode.
     #[inline]
-    pub fn search_asymmetric_ef(
+    pub(crate) fn search_asymmetric_ef(
         &self,
         query: &[f32],
         k: usize,
