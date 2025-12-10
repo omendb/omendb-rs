@@ -36,7 +36,7 @@ results = db.search([0.1] * 128, k=5, filter={"category": "science"})
 - **Persistent** - Data survives restarts automatically
 - **Filtered search** - Query by metadata using ACORN-1 algorithm
 - **Hybrid search** - Combine vector similarity with BM25 text search
-- **Compression** - RaBitQ quantization for 4-8x memory reduction
+- **RaBitQ quantization** - Two-phase search for faster candidate filtering
 
 ## API
 
@@ -96,6 +96,8 @@ db = omendb.open(
     quantization=4,      # RaBitQ bits: 2, 4, or 8 (default: None)
 )
 ```
+
+**Note:** `quantization` enables two-phase search (fast filtering with quantized vectors, then reranking with originals). This improves search speed at scale but does not reduce disk or memory usage.
 
 ## Examples
 

@@ -37,12 +37,14 @@ jobs:
           echo "VERSION file: $VERSION"
           echo ""
 
-          # Check all 7 version locations match VERSION
+          # Check all 9 version locations match VERSION
           ERRORS=0
 
           CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
           CORE_V=$(grep '^version = ' omendb-core/Cargo.toml | head -1 | cut -d'"' -f2)
           PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
+          INIT_V=$(grep '__version__' python/omendb/__init__.py | cut -d'"' -f2)
+          FFI_V=$(grep 'static VERSION' src/ffi.rs | sed 's/.*b"\([0-9.]*\).*/\1/' || echo "")
           NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
           NODE_V=$(jq -r .version node/package.json)
           NODE_OPT=$(jq -r '.optionalDependencies["@omendb/omendb-darwin-arm64"]' node/package.json)
@@ -65,6 +67,8 @@ jobs:
           check_version "Cargo.toml" "$CARGO_V"
           check_version "omendb-core/Cargo.toml" "$CORE_V"
           check_version "python/Cargo.toml" "$PYTHON_V"
+          check_version "python/omendb/__init__.py" "$INIT_V"
+          check_version "src/ffi.rs" "$FFI_V"
           check_version "node/Cargo.toml" "$NODE_CARGO_V"
           check_version "node/package.json" "$NODE_V"
           check_version "node/package.json (optionalDeps)" "$NODE_OPT"
@@ -80,7 +84,7 @@ jobs:
           fi
 
           echo ""
-          echo "All 7 version locations match: $VERSION"
+          echo "All 9 version locations match: $VERSION"
 
       - name: Check not already published
         run: |
