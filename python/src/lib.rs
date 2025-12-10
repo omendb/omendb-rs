@@ -12,18 +12,53 @@ use pyo3::Py;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-/// Convert quantization bits to RaBitQParams
+/// Parse compression parameter and return RaBitQParams if enabled
 ///
-/// # Panics
-/// Panics if bits is not 2, 4, or 8 (caller must validate)
-#[inline]
-fn rabitq_params(bits: u8) -> RaBitQParams {
-    match bits {
-        2 => RaBitQParams::bits2(),
-        4 => RaBitQParams::bits4(),
-        8 => RaBitQParams::bits8(),
-        _ => panic!("Invalid quantization bits: {bits}. Must be 2, 4, or 8."),
+/// Accepts:
+/// - True → 8x compression (recommended default)
+/// - 4 → 8-bit quantization (4x compression, ~99% recall)
+/// - 8 → 4-bit quantization (8x compression, ~96% recall)
+/// - 16 → 2-bit quantization (16x compression, ~93% recall)
+/// - None/False → no compression (full precision)
+///
+/// Returns Ok(Some(params)) if compression enabled, Ok(None) if disabled
+fn parse_compression(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<RaBitQParams>> {
+    let Some(value) = ob else {
+        return Ok(None);
+    };
+
+    // Handle boolean: True enables default (8x), False disables
+    if let Ok(b) = value.extract::<bool>() {
+        return if b {
+            Ok(Some(RaBitQParams::bits4())) // 8x compression default
+        } else {
+            Ok(None)
+        };
     }
+
+    // Handle integer compression levels
+    if let Ok(level) = value.extract::<u32>() {
+        return match level {
+            4 => Ok(Some(RaBitQParams::bits8())),  // 8-bit: 4x compression
+            8 => Ok(Some(RaBitQParams::bits4())),  // 4-bit: 8x compression
+            16 => Ok(Some(RaBitQParams::bits2())), // 2-bit: 16x compression
+            _ => Err(PyValueError::new_err(format!(
+                "compression must be 4, 8, or 16 (got {})\n\
+                  - compression=4:  ~4x smaller, ~99% recall\n\
+                  - compression=8:  ~8x smaller, ~96% recall (recommended)\n\
+                  - compression=16: ~16x smaller, ~93% recall",
+                level
+            ))),
+        };
+    }
+
+    Err(PyValueError::new_err(
+        "compression must be True, False, or an integer (4, 8, 16)\n\
+          - compression=True: ~8x smaller (recommended default)\n\
+          - compression=4:  ~4x smaller, ~99% recall\n\
+          - compression=8:  ~8x smaller, ~96% recall\n\
+          - compression=16: ~16x smaller, ~93% recall",
+    ))
 }
 
 /// Extract single query vector from Python object (list or 1D numpy array)
@@ -1103,13 +1138,19 @@ impl VectorDatabase {
 /// All parameters except `path` are optional with sensible defaults.
 ///
 /// Args:
-///     path (str): Database directory path
+///     path (str): Database directory path, or ":memory:" for in-memory
 ///     dimensions (int): Vector dimensionality (default: 128, auto-detected on first insert)
 ///     m (int): HNSW neighbors per node (default: 16, range: 4-64)
 ///     ef_construction (int): Build quality (default: 100, higher = better graph)
 ///     ef_search (int): Search quality (default: 100, higher = better recall)
-///     quantization (int): RaBitQ bits: 2, 4, or 8 (default: None = full precision)
-///         Enables 4-16x memory compression with ~1-2% recall loss
+///     compression (bool|int): Enable compression (default: None = full precision)
+///         - True: ~8x smaller (recommended default)
+///         - 4: ~4x smaller, ~99% recall
+///         - 8: ~8x smaller, ~96% recall (recommended)
+///         - 16: ~16x smaller, ~93% recall
+///         - False/None: Full precision (no compression)
+///     rescore (bool): Rerank with full precision (default: True when compressed)
+///     oversample (float): Candidate multiplier for rescoring (default: 3.0)
 ///     config (dict): Advanced config (deprecated, use top-level params instead)
 ///
 /// Returns:
@@ -1123,32 +1164,31 @@ impl VectorDatabase {
 ///     >>> import omendb
 ///
 ///     # Simple usage with defaults
-///     >>> db = omendb.open("./my_vectors")
+///     >>> db = omendb.open("./my_vectors", dimensions=768)
 ///
-///     # With custom HNSW parameters
-///     >>> db = omendb.open("./vectors", dimensions=384, m=32, ef_construction=200)
+///     # With compression enabled (8x, recommended)
+///     >>> db = omendb.open("./vectors", dimensions=768, compression=True)
 ///
-///     # With RaBitQ quantization (rescore enabled by default)
-///     >>> db = omendb.open("./vectors", dimensions=128, quantization=4)
+///     # Explicit compression level
+///     >>> db = omendb.open("./vectors", dimensions=768, compression=8)
 ///
-///     # Disable rescore for max speed (~1-2% recall loss)
-///     >>> db = omendb.open("./vectors", dimensions=128, quantization=4, rescore=False)
+///     # Maximum compression (32x, lower recall)
+///     >>> db = omendb.open("./vectors", dimensions=768, compression=32)
+///
+///     # Disable rescore for max speed (~3-4% recall loss)
+///     >>> db = omendb.open("./vectors", dimensions=768, compression=8, rescore=False)
 ///
 ///     # Custom oversample factor (default 3.0)
-///     >>> db = omendb.open("./vectors", dimensions=128, quantization=4, oversample=5.0)
-///
-///     # Tune search quality at runtime
-///     >>> db.set_ef_search(200)  # Higher recall, slower
-///     >>> db.set_ef_search(50)   # Lower recall, faster
+///     >>> db = omendb.open("./vectors", dimensions=768, compression=8, oversample=5.0)
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, rescore=None, oversample=None, config=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, compression=None, rescore=None, oversample=None, config=None))]
 fn open(
     path: String,
     dimensions: usize,
     m: Option<usize>,
     ef_construction: Option<usize>,
     ef_search: Option<usize>,
-    quantization: Option<u8>,
+    compression: Option<&Bound<'_, PyAny>>,
     rescore: Option<bool>,
     oversample: Option<f32>,
     config: Option<&Bound<'_, PyDict>>,
@@ -1170,14 +1210,9 @@ fn open(
         }
     }
 
-    if let Some(bits) = quantization {
-        if !matches!(bits, 2 | 4 | 8) {
-            return Err(PyValueError::new_err(format!(
-                "quantization must be 2, 4, or 8, got {}",
-                bits
-            )));
-        }
-    }
+    // Parse compression early to validate
+    let quant_params = parse_compression(compression)?;
+
     if let (Some(ef_val), Some(m_val)) = (ef_construction, m) {
         if ef_val < m_val {
             return Err(PyValueError::new_err(format!(
@@ -1213,8 +1248,8 @@ fn open(
         if let Some(ef_s) = ef_search {
             options = options.ef_search(ef_s);
         }
-        if let Some(bits) = quantization {
-            options = options.quantization(rabitq_params(bits));
+        if let Some(params) = quant_params.clone() {
+            options = options.quantization(params);
         }
         if let Some(rescore_val) = rescore {
             options = options.rescore(rescore_val);
@@ -1255,8 +1290,8 @@ fn open(
         if let Some(ef_s) = ef_search {
             options = options.ef_search(ef_s);
         }
-        if let Some(bits) = quantization {
-            options = options.quantization(rabitq_params(bits));
+        if let Some(params) = quant_params {
+            options = options.quantization(params);
         }
         if let Some(rescore_val) = rescore {
             options = options.rescore(rescore_val);
@@ -1288,25 +1323,14 @@ fn open(
                     }
                 }
             }
-            if quantization.is_none() {
-                if let Some(quant_dict) = cfg.get_item("quantization")? {
-                    let quant = quant_dict
-                        .cast::<PyDict>()
-                        .map_err(|_| PyValueError::new_err("'quantization' must be a dict"))?;
-                    if let Some(bits_item) = quant.get_item("bits")? {
-                        let bits: u8 = bits_item.extract()?;
-                        options = options.quantization(rabitq_params(bits));
-                    }
-                }
-            }
         }
 
-        // Check if enabling quantization on existing non-empty database
-        if db_path.exists() && quantization.is_some() {
+        // Check if enabling compression on existing non-empty database
+        if db_path.exists() && compression.is_some() {
             let existing = VectorStore::open(&path).map_err(convert_error)?;
             if existing.len() > 0 {
                 return Err(PyValueError::new_err(
-                    "Cannot enable quantization on existing database. Create a new database with quantization.",
+                    "Cannot enable compression on existing database. Create a new database with compression.",
                 ));
             }
         }
@@ -1368,8 +1392,8 @@ fn open(
         if let Some(ef_s) = ef_search {
             options = options.ef_search(ef_s);
         }
-        if let Some(bits) = quantization {
-            options = options.quantization(rabitq_params(bits));
+        if let Some(params) = parse_compression(compression)? {
+            options = options.quantization(params);
         }
 
         let store = options
@@ -1386,59 +1410,6 @@ fn open(
             dimensions: effective_dims,
             is_persistent: false,
         })
-    }
-}
-
-/// Helper: Create VectorStore with configuration
-fn create_store_with_config(
-    dimensions: usize,
-    config: &Bound<'_, PyDict>,
-) -> PyResult<VectorStore> {
-    // Parse HNSW configuration (if provided)
-    if let Some(hnsw_dict) = config.get_item("hnsw")? {
-        let hnsw = hnsw_dict
-            .cast::<PyDict>()
-            .map_err(|_| PyValueError::new_err("'hnsw' must be a dict"))?;
-
-        let m: usize = hnsw
-            .get_item("m")?
-            .ok_or_else(|| PyValueError::new_err("'hnsw.m' required"))?
-            .extract()?;
-        let ef_construction: usize = hnsw
-            .get_item("ef_construction")?
-            .ok_or_else(|| PyValueError::new_err("'hnsw.ef_construction' required"))?
-            .extract()?;
-        let ef_search: usize = hnsw
-            .get_item("ef_search")?
-            .ok_or_else(|| PyValueError::new_err("'hnsw.ef_search' required"))?
-            .extract()?;
-
-        VectorStore::new_with_params(dimensions, m, ef_construction, ef_search)
-            .map_err(|e| PyValueError::new_err(format!("Failed to create HNSW index: {}", e)))
-    }
-    // Parse quantization configuration (if provided)
-    else if let Some(quant_dict) = config.get_item("quantization")? {
-        let quant = quant_dict
-            .cast::<PyDict>()
-            .map_err(|_| PyValueError::new_err("'quantization' must be a dict"))?;
-
-        let bits: u8 = quant
-            .get_item("bits")?
-            .ok_or_else(|| PyValueError::new_err("'quantization.bits' required (2/4/8)"))?
-            .extract()?;
-
-        if !matches!(bits, 2 | 4 | 8) {
-            return Err(PyValueError::new_err(
-                "quantization.bits must be 2, 4, or 8",
-            ));
-        }
-
-        Ok(VectorStore::new_with_quantization(
-            dimensions,
-            rabitq_params(bits),
-        ))
-    } else {
-        Ok(VectorStore::new(dimensions))
     }
 }
 
