@@ -140,27 +140,44 @@ db.count()                     # Count vectors
 ## Filters
 
 ```python
-{"field": {"$eq": "value"}}    # equals
-{"field": {"$gt": 10}}         # greater than
-{"field": {"$gte": 10}}        # greater or equal
-{"field": {"$lt": 10}}         # less than
-{"field": {"$lte": 10}}        # less or equal
-{"$and": [{...}, {...}]}       # AND
-{"$or": [{...}, {...}]}        # OR
+{"field": "value"}              # equals (shorthand)
+{"field": {"$eq": "value"}}     # equals (explicit)
+{"field": {"$ne": "value"}}     # not equals
+{"field": {"$gt": 10}}          # greater than
+{"field": {"$gte": 10}}         # greater or equal
+{"field": {"$lt": 10}}          # less than
+{"field": {"$lte": 10}}         # less or equal
+{"field": {"$in": ["a", "b"]}}  # in list
+{"field": {"$contains": "sub"}} # string contains
+{"$and": [{...}, {...}]}        # AND
+{"$or": [{...}, {...}]}         # OR
 ```
 
 ## Configuration
 
 ```python
+# Persistent database
 db = omendb.open(
     "./vectors",
     dimensions=384,
-    config={
-        "hnsw": {"m": 16, "ef_construction": 200, "ef_search": 100},
-        "quantization": {"bits": 4}  # 2, 4, or 8
-    }
+    m=16,                # HNSW connections per node (default: 16)
+    ef_construction=200, # Build-time search width (default: 100)
+    ef_search=100,       # Search-time search width (default: 50)
+    quantization=4,      # RaBitQ bits: 2, 4, or 8 (default: None)
 )
+
+# In-memory database (for testing/ephemeral use)
+db = omendb.open(":memory:", dimensions=128)
 ```
+
+## Examples
+
+See [`python/examples/`](python/examples/) for complete working examples:
+
+- `quickstart.py` - Minimal working example
+- `basic.py` - CRUD operations and persistence
+- `filters.py` - All filter operators
+- `rag.py` - RAG workflow with mock embeddings
 
 ## License
 
