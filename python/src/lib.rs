@@ -1179,10 +1179,43 @@ fn open(
         }
     }
 
-    let db_path = Path::new(&path);
-
     // Resolve effective dimensions (use 128 as default if not specified)
     let effective_dims = if dimensions == 0 { 128 } else { dimensions };
+
+    // Handle :memory: for in-memory database (must check BEFORE path existence checks)
+    if path == ":memory:" {
+        let mut options = VectorStoreOptions::default().dimensions(effective_dims);
+
+        if let Some(m_val) = m {
+            options = options.m(m_val);
+        }
+        if let Some(ef_con) = ef_construction {
+            options = options.ef_construction(ef_con);
+        }
+        if let Some(ef_s) = ef_search {
+            options = options.ef_search(ef_s);
+        }
+        if let Some(bits) = quantization {
+            options = options.quantization(rabitq_params(bits));
+        }
+
+        let store = options
+            .build()
+            .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
+
+        return Ok(VectorDatabase {
+            inner: RwLock::new(VectorDatabaseInner {
+                store,
+                index_to_id_cache: HashMap::new(),
+                cache_valid: true,
+            }),
+            path,
+            dimensions: effective_dims,
+            is_persistent: false,
+        });
+    }
+
+    let db_path = Path::new(&path);
 
     // Check if this is a directory (persistent storage) or needs to become one
     if db_path.is_dir() || !db_path.exists() {
@@ -1433,6 +1466,14 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
             for (op, op_value) in op_dict.iter() {
                 let op_str: String = op.extract()?;
                 match op_str.as_str() {
+                    "$eq" => {
+                        let json_value = pyobject_to_json(&op_value)?;
+                        filters.push(MetadataFilter::Eq(key_str.clone(), json_value));
+                    }
+                    "$ne" => {
+                        let json_value = pyobject_to_json(&op_value)?;
+                        filters.push(MetadataFilter::Ne(key_str.clone(), json_value));
+                    }
                     "$gt" => {
                         let num: f64 = op_value.extract()?;
                         filters.push(MetadataFilter::Gt(key_str.clone(), num));
