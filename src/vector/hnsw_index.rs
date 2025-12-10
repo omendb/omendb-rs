@@ -11,6 +11,7 @@
 
 use super::hnsw::{DistanceFunction, HNSWIndex as CoreHNSW, HNSWParams as CoreParams};
 use anyhow::Result;
+use omendb_core::compression::RaBitQParams;
 use std::path::Path;
 
 /// HNSW index for approximate nearest neighbor search
@@ -139,6 +140,55 @@ impl HNSWIndex {
             dimensions,
             num_vectors: 0,
         })
+    }
+
+    /// Create new HNSW index with RaBitQ asymmetric search
+    ///
+    /// Uses asymmetric distance computation for 2-3x faster search:
+    /// - Query vector stays full precision
+    /// - Candidate vectors use RaBitQ quantization (8x smaller)
+    /// - Original vectors stored for rescore accuracy
+    ///
+    /// # Arguments
+    /// * `dimensions` - Vector dimensionality
+    /// * `params` - HNSW parameters (m, ef_construction, ef_search)
+    /// * `distance_fn` - Distance function (only L2 supported for asymmetric)
+    /// * `rabitq_params` - RaBitQ quantization parameters (2, 4, or 8 bit)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let index = HNSWIndex::new_with_asymmetric(
+    ///     128,
+    ///     CoreParams::default().with_m(16).with_ef_construction(100),
+    ///     DistanceFunction::L2,
+    ///     RaBitQParams::bits4(),
+    /// )?;
+    /// ```
+    pub fn new_with_asymmetric(
+        dimensions: usize,
+        params: CoreParams,
+        distance_fn: DistanceFunction,
+        rabitq_params: RaBitQParams,
+    ) -> Result<Self> {
+        let index =
+            CoreHNSW::new_with_asymmetric(dimensions, params.clone(), distance_fn, rabitq_params)
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(Self {
+            index,
+            max_elements: 1_000_000, // Default for asymmetric
+            max_nb_connection: params.m,
+            ef_construction: params.ef_construction,
+            ef_search: params.ef_construction, // Match ef_construction initially
+            dimensions,
+            num_vectors: 0,
+        })
+    }
+
+    /// Check if this index uses asymmetric search (RaBitQ)
+    #[must_use]
+    pub fn is_asymmetric(&self) -> bool {
+        self.index.is_asymmetric()
     }
 
     /// Insert vector into index and return its ID

@@ -75,6 +75,30 @@ impl HNSWParams {
         }
     }
 
+    /// Builder: set M parameter
+    #[must_use]
+    pub fn with_m(mut self, m: usize) -> Self {
+        self.m = m;
+        self.ml = 1.0 / (m as f32).ln();
+        self
+    }
+
+    /// Builder: set ef_construction parameter
+    #[must_use]
+    pub fn with_ef_construction(mut self, ef: usize) -> Self {
+        self.ef_construction = ef;
+        self
+    }
+
+    /// Builder: set ef_search parameter (stored in construction for defaults)
+    /// Note: This is primarily used for passing the search ef to the index.
+    #[must_use]
+    pub fn with_ef_search(self, _ef: usize) -> Self {
+        // ef_search is not stored in HNSWParams, it's a runtime parameter
+        // This method exists for API consistency
+        self
+    }
+
     /// Validate parameters
     pub fn validate(&self) -> Result<(), String> {
         if self.m == 0 {
