@@ -979,7 +979,6 @@ fn bench_search_qps() {
     );
 }
 
-
 #[test]
 fn test_asymmetric_hnsw_search() {
     use crate::compression::RaBitQParams;
