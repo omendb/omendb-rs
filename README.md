@@ -5,6 +5,8 @@
 
 Embedded vector database for Python. No server, no setup, just `pip install`.
 
+> **v0.0.9**: Stability and performance improvements.
+
 ```bash
 pip install omendb
 ```
