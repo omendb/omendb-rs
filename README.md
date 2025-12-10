@@ -147,4 +147,4 @@ response = index.as_query_engine().query("What is OmenDB?")
 
 ## License
 
-Apache-2.0
+[Apache-2.0](LICENSE)
