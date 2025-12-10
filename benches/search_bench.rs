@@ -28,13 +28,17 @@ fn bench_search(c: &mut Criterion) {
             store.insert(v.clone()).expect("insert");
         }
 
+        // Ensure index is ready before benchmarking
+        store.ensure_index_ready().expect("index ready");
+
+        // Benchmark readonly path (fast - no &mut self overhead)
         group.bench_with_input(
             BenchmarkId::new("knn_search", format!("{n_vectors}x{dim}D")),
             &(n_vectors, dim),
             |b, _| {
                 b.iter(|| {
                     for q in &queries {
-                        black_box(store.knn_search(q, 10).expect("search"));
+                        black_box(store.knn_search_readonly(q, 10, None).expect("search"));
                     }
                 })
             },

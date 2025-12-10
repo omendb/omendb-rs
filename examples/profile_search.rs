@@ -9,8 +9,9 @@ use rand::Rng;
 use std::time::Instant;
 
 fn main() {
-    let dim = 1536;
-    let n_vectors = 5000;
+    // Use 128D for target optimization (aim: 7K QPS)
+    let dim = 128;
+    let n_vectors = 10_000;
     let n_queries = 1000;
     let k = 10;
     let ef = 100;
