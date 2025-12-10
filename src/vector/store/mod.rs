@@ -389,7 +389,7 @@ impl VectorStore {
         }
     }
 
-    /// Create new vector store with RaBitQ quantization (DEPRECATED)
+    /// Create new vector store with `RaBitQ` quantization (DEPRECATED)
     ///
     /// This constructor creates the old-style quantization that stores quantized vectors
     /// separately. For the new asymmetric HNSW mode, use `VectorStoreOptions::quantization()`.

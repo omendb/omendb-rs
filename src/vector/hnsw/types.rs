@@ -83,14 +83,14 @@ impl HNSWParams {
         self
     }
 
-    /// Builder: set ef_construction parameter
+    /// Builder: set `ef_construction` parameter
     #[must_use]
     pub fn with_ef_construction(mut self, ef: usize) -> Self {
         self.ef_construction = ef;
         self
     }
 
-    /// Builder: set ef_search parameter (stored in construction for defaults)
+    /// Builder: set `ef_search` parameter (stored in construction for defaults)
     /// Note: This is primarily used for passing the search ef to the index.
     #[must_use]
     pub fn with_ef_search(self, _ef: usize) -> Self {
