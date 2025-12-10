@@ -92,16 +92,129 @@ pub struct RaBitQParams {
     /// Number of bits per dimension
     pub bits_per_dim: QuantizationBits,
 
-    /// Number of rescaling factors to try
+    /// Number of rescaling factors to try (DEPRECATED: use trained quantizer)
     ///
     /// Higher values = better quantization quality but slower
     /// Typical range: 8-16
     pub num_rescale_factors: usize,
 
-    /// Range of rescaling factors to try (min, max)
+    /// Range of rescaling factors to try (DEPRECATED: use trained quantizer)
     ///
     /// Typical range: (0.5, 2.0) means try scales from 0.5x to 2.0x
     pub rescale_range: (f32, f32),
+}
+
+/// Trained quantization parameters computed from data
+///
+/// Stores per-dimension min/max values learned from a representative sample.
+/// This enables consistent quantization across all vectors and correct ADC distances.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainedParams {
+    /// Minimum value per dimension
+    pub mins: Vec<f32>,
+    /// Maximum value per dimension
+    pub maxs: Vec<f32>,
+    /// Number of dimensions
+    pub dimensions: usize,
+}
+
+impl TrainedParams {
+    /// Train quantization parameters from sample vectors
+    ///
+    /// Computes per-dimension min/max using percentiles to exclude outliers.
+    /// Uses 1st and 99th percentiles by default for robustness.
+    ///
+    /// # Arguments
+    /// * `vectors` - Sample vectors to train from (should be representative)
+    ///
+    /// # Panics
+    /// Panics if vectors is empty or vectors have inconsistent dimensions.
+    #[must_use]
+    pub fn train(vectors: &[&[f32]]) -> Self {
+        Self::train_with_percentiles(vectors, 0.01, 0.99)
+    }
+
+    /// Train with custom percentile bounds
+    ///
+    /// # Arguments
+    /// * `vectors` - Sample vectors to train from
+    /// * `lower_percentile` - Lower bound percentile (e.g., 0.01 for 1st percentile)
+    /// * `upper_percentile` - Upper bound percentile (e.g., 0.99 for 99th percentile)
+    #[must_use]
+    pub fn train_with_percentiles(
+        vectors: &[&[f32]],
+        lower_percentile: f32,
+        upper_percentile: f32,
+    ) -> Self {
+        assert!(!vectors.is_empty(), "Need at least one vector to train");
+        let dimensions = vectors[0].len();
+        assert!(
+            vectors.iter().all(|v| v.len() == dimensions),
+            "All vectors must have same dimensions"
+        );
+
+        let n = vectors.len();
+        let lower_idx = ((n as f32 * lower_percentile) as usize).min(n - 1);
+        let upper_idx = ((n as f32 * upper_percentile) as usize).min(n - 1);
+
+        let mut mins = Vec::with_capacity(dimensions);
+        let mut maxs = Vec::with_capacity(dimensions);
+
+        // For each dimension, collect values and compute percentiles
+        let mut dim_values: Vec<f32> = Vec::with_capacity(n);
+        for d in 0..dimensions {
+            dim_values.clear();
+            for v in vectors {
+                dim_values.push(v[d]);
+            }
+            dim_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+            let min_val = dim_values[lower_idx];
+            let max_val = dim_values[upper_idx];
+
+            // Ensure non-zero range (add small epsilon if needed)
+            let range = max_val - min_val;
+            if range < 1e-7 {
+                mins.push(min_val - 0.5);
+                maxs.push(max_val + 0.5);
+            } else {
+                mins.push(min_val);
+                maxs.push(max_val);
+            }
+        }
+
+        Self {
+            mins,
+            maxs,
+            dimensions,
+        }
+    }
+
+    /// Quantize a single value using trained parameters for given dimension
+    #[inline]
+    #[must_use]
+    pub fn quantize_value(&self, value: f32, dim: usize, levels: usize) -> u8 {
+        let min = self.mins[dim];
+        let max = self.maxs[dim];
+        let range = max - min;
+
+        // Map value to [0, 1] range, then to [0, levels-1]
+        let normalized = (value - min) / range;
+        let level = (normalized * (levels - 1) as f32).round();
+        level.clamp(0.0, (levels - 1) as f32) as u8
+    }
+
+    /// Dequantize a code to reconstructed value for given dimension
+    #[inline]
+    #[must_use]
+    pub fn dequantize_value(&self, code: u8, dim: usize, levels: usize) -> f32 {
+        let min = self.mins[dim];
+        let max = self.maxs[dim];
+        let range = max - min;
+
+        // Map code back to original range
+        (code as f32 / (levels - 1) as f32) * range + min
+    }
 }
 
 impl Default for RaBitQParams {
@@ -203,14 +316,30 @@ impl QuantizedVector {
 
 /// `RaBitQ` quantizer
 ///
-/// Implements the `RaBitQ` algorithm from SIGMOD 2025:
-/// 1. Try multiple rescaling factors
-/// 2. For each scale, quantize to grid and compute error
-/// 3. Select scale with minimum error
-/// 4. Store quantized vector with optimal scale
-#[derive(Debug, Clone)]
+/// Implements scalar quantization with trained per-dimension ranges.
+/// Training computes min/max per dimension from sample data, enabling
+/// consistent quantization across all vectors and correct ADC distances.
+///
+/// # Usage
+///
+/// ```ignore
+/// // Create and train quantizer
+/// let mut quantizer = RaBitQ::new(RaBitQParams::bits4());
+/// quantizer.train(&sample_vectors);
+///
+/// // Quantize vectors
+/// let quantized = quantizer.quantize(&vector);
+///
+/// // ADC search (distances are mathematically correct)
+/// let adc = quantizer.build_adc_table(&query);
+/// let dist = adc.distance(&quantized.data);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaBitQ {
     params: RaBitQParams,
+    /// Trained parameters (per-dimension min/max)
+    /// When None, falls back to legacy per-vector scaling (deprecated)
+    trained: Option<TrainedParams>,
 }
 
 /// Asymmetric Distance Computation (ADC) lookup table for fast quantized search
@@ -255,10 +384,54 @@ pub struct ADCTable {
 }
 
 impl ADCTable {
-    /// Build ADC lookup table for a query vector
+    /// Build ADC lookup table using trained quantization parameters
+    ///
+    /// This is the production method that computes correct distances.
+    /// Uses per-dimension min/max ranges from training.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The uncompressed query vector
+    /// * `trained` - Trained parameters with per-dimension min/max
+    /// * `params` - Quantization parameters (bits per dimension)
+    #[must_use]
+    pub fn new_trained(query: &[f32], trained: &TrainedParams, params: &RaBitQParams) -> Self {
+        let bits = params.bits_per_dim.to_u8();
+        let num_codes = params.bits_per_dim.levels();
+        let dimensions = query.len();
+
+        let mut table = Vec::with_capacity(dimensions);
+
+        // For each dimension, compute distances to all possible codes
+        for (d, &q_value) in query.iter().enumerate() {
+            let mut dim_table = SmallVec::new();
+
+            for code in 0..num_codes {
+                // Dequantize using trained min/max for this dimension
+                let reconstructed = trained.dequantize_value(code as u8, d, num_codes);
+
+                // Compute squared difference (partial L2 distance)
+                let diff = q_value - reconstructed;
+                dim_table.push(diff * diff);
+            }
+
+            table.push(dim_table);
+        }
+
+        Self {
+            table,
+            bits,
+            dimensions,
+        }
+    }
+
+    /// Build ADC lookup table for a query vector (DEPRECATED)
     ///
     /// For each dimension and each possible quantized code, precomputes the
     /// squared distance contribution: (query[i] - dequantize(code, scale))^2
+    ///
+    /// WARNING: This method uses a fixed scale which produces incorrect distances
+    /// when vectors were quantized with different scales. Use `new_trained()` instead.
     ///
     /// # Arguments
     ///
@@ -270,6 +443,7 @@ impl ADCTable {
     ///
     /// An `ADCTable` that can compute distances via `distance()` method
     #[must_use]
+    #[deprecated(note = "Use ADCTable::new_trained() with TrainedParams for correct ADC distances")]
     pub fn new(query: &[f32], scale: f32, params: &RaBitQParams) -> Self {
         let bits = params.bits_per_dim.to_u8();
         let num_codes = params.bits_per_dim.levels();
@@ -679,10 +853,24 @@ impl ADCTable {
 }
 
 impl RaBitQ {
-    /// Create a new `RaBitQ` quantizer
+    /// Create a new `RaBitQ` quantizer (untrained)
+    ///
+    /// Call `train()` before use to enable correct ADC distances.
     #[must_use]
     pub fn new(params: RaBitQParams) -> Self {
-        Self { params }
+        Self {
+            params,
+            trained: None,
+        }
+    }
+
+    /// Create a trained `RaBitQ` quantizer
+    #[must_use]
+    pub fn new_trained(params: RaBitQParams, trained: TrainedParams) -> Self {
+        Self {
+            params,
+            trained: Some(trained),
+        }
     }
 
     /// Create with default 4-bit quantization
@@ -697,15 +885,47 @@ impl RaBitQ {
         &self.params
     }
 
-    /// Quantize a vector using `RaBitQ` algorithm
+    /// Check if quantizer has been trained
+    #[must_use]
+    pub fn is_trained(&self) -> bool {
+        self.trained.is_some()
+    }
+
+    /// Get trained parameters (if any)
+    #[must_use]
+    pub fn trained_params(&self) -> Option<&TrainedParams> {
+        self.trained.as_ref()
+    }
+
+    /// Train quantizer on sample vectors
     ///
-    /// Algorithm:
-    /// 1. Try multiple rescaling factors
-    /// 2. For each scale, quantize to grid and compute error
-    /// 3. Select scale with minimum error
-    /// 4. Return quantized vector with optimal scale
+    /// Computes per-dimension min/max ranges from the sample.
+    /// Must be called before quantization for correct ADC distances.
+    ///
+    /// # Arguments
+    /// * `vectors` - Representative sample of vectors to train from
+    pub fn train(&mut self, vectors: &[&[f32]]) {
+        self.trained = Some(TrainedParams::train(vectors));
+    }
+
+    /// Train with owned vectors (convenience method)
+    pub fn train_owned(&mut self, vectors: &[Vec<f32>]) {
+        let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        self.train(&refs);
+    }
+
+    /// Quantize a vector using trained parameters
+    ///
+    /// If trained: uses per-dimension min/max for consistent quantization
+    /// If untrained: falls back to legacy per-vector scaling (deprecated)
     #[must_use]
     pub fn quantize(&self, vector: &[f32]) -> QuantizedVector {
+        // Use trained quantization if available
+        if let Some(ref trained) = self.trained {
+            return self.quantize_trained(vector, trained);
+        }
+
+        // Legacy fallback: per-vector scale search (deprecated)
         let mut best_error = f32::MAX;
         let mut best_quantized = Vec::new();
         let mut best_scale = 1.0;
@@ -731,6 +951,27 @@ impl RaBitQ {
             self.params.bits_per_dim.to_u8(),
             vector.len(),
         )
+    }
+
+    /// Quantize using trained per-dimension min/max ranges
+    ///
+    /// This is the production path that enables correct ADC distances.
+    fn quantize_trained(&self, vector: &[f32], trained: &TrainedParams) -> QuantizedVector {
+        let bits = self.params.bits_per_dim.to_u8();
+        let levels = self.params.bits_per_dim.levels();
+
+        // Quantize each dimension using trained min/max
+        let quantized: Vec<u8> = vector
+            .iter()
+            .enumerate()
+            .map(|(d, &v)| trained.quantize_value(v, d, levels))
+            .collect();
+
+        // Pack into bytes
+        let packed = self.pack_quantized(&quantized, bits);
+
+        // Scale=1.0 for trained quantization (min/max handles the range)
+        QuantizedVector::new(packed, 1.0, bits, vector.len())
     }
 
     /// Generate rescaling factors to try
@@ -985,30 +1226,45 @@ impl RaBitQ {
 
     /// Build an ADC (Asymmetric Distance Computation) lookup table for a query
     ///
-    /// This precomputes partial distances for fast candidate scanning.
-    /// Use when searching many vectors against the same query.
+    /// If trained: uses per-dimension min/max for correct distances
+    /// If untrained: uses provided scale (deprecated, incorrect distances)
     ///
     /// # Example
     ///
     /// ```ignore
-    /// let adc_table = quantizer.build_adc_table(&query, 1.0);
+    /// // Preferred: train first, then build ADC table
+    /// quantizer.train(&sample_vectors);
+    /// let adc_table = quantizer.build_adc_table(&query);
     /// for candidate in candidates {
     ///     let dist = adc_table.distance(&candidate.data);
     /// }
     /// ```
     #[must_use]
-    pub fn build_adc_table(&self, query: &[f32], scale: f32) -> ADCTable {
+    pub fn build_adc_table(&self, query: &[f32]) -> Option<ADCTable> {
+        if let Some(ref trained) = self.trained {
+            Some(ADCTable::new_trained(query, trained, &self.params))
+        } else {
+            None
+        }
+    }
+
+    /// Build ADC table with explicit scale (DEPRECATED)
+    ///
+    /// Use `build_adc_table()` on a trained quantizer instead.
+    #[must_use]
+    #[deprecated(note = "Use build_adc_table() on a trained quantizer")]
+    #[allow(deprecated)]
+    pub fn build_adc_table_with_scale(&self, query: &[f32], scale: f32) -> ADCTable {
         ADCTable::new(query, scale, &self.params)
     }
 
     /// Compute distance using ADC table (convenience wrapper)
     ///
-    /// Equivalent to `build_adc_table(query, scale).distance(data)` but makes
-    /// the API more discoverable.
+    /// Returns None if quantizer is not trained.
     #[must_use]
-    pub fn distance_with_adc(&self, query: &[f32], quantized: &QuantizedVector) -> f32 {
-        let adc = self.build_adc_table(query, quantized.scale);
-        adc.distance(&quantized.data)
+    pub fn distance_with_adc(&self, query: &[f32], quantized: &QuantizedVector) -> Option<f32> {
+        let adc = self.build_adc_table(query)?;
+        Some(adc.distance(&quantized.data))
     }
 
     /// Low-level asymmetric distance computation on raw bytes

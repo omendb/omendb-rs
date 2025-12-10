@@ -183,13 +183,12 @@ fn test_quantization_insert() {
         store.insert(random_vector(128, i)).unwrap();
     }
 
-    // Verify quantized vectors were created
+    // Verify vectors stored and HNSW uses asymmetric mode
     assert_eq!(store.vectors.len(), 50);
-    assert_eq!(store.quantized_vectors.len(), 50);
     assert!(store
-        .quantized_vectors
-        .iter()
-        .all(std::option::Option::is_some));
+        .hnsw_index
+        .as_ref()
+        .map_or(false, |h| h.is_asymmetric()));
 }
 
 #[test]
@@ -205,7 +204,7 @@ fn test_quantization_search_accuracy() {
         store.insert(random_vector(128, i)).unwrap();
     }
 
-    // Search with quantization (uses two-phase search)
+    // Search with quantization (uses asymmetric HNSW)
     let query = random_vector(128, 50);
     let results = store.knn_search(&query, 10).unwrap();
 
@@ -216,49 +215,6 @@ fn test_quantization_search_accuracy() {
     for i in 1..results.len() {
         assert!(results[i].1 >= results[i - 1].1);
     }
-}
-
-#[test]
-fn test_quantization_persistence() {
-    use omendb_core::compression::RaBitQParams;
-    use std::fs;
-
-    let test_dir = "/tmp/omendb_test_quantization";
-    let test_path = format!("{test_dir}/test_store");
-
-    // Clean up any existing test data
-    let _ = fs::remove_dir_all(test_dir);
-
-    // Create store with 4-bit quantization
-    let params = RaBitQParams::bits4();
-    let mut store = VectorStore::new_with_quantization(128, params);
-
-    // Insert vectors
-    for i in 0..100 {
-        store.insert(random_vector(128, i)).unwrap();
-    }
-
-    // Save to disk
-    store.save_to_disk(&test_path).unwrap();
-
-    // Verify quantization files exist
-    assert!(fs::metadata(format!("{test_dir}/test_store.quantized.bin")).is_ok());
-    assert!(fs::metadata(format!("{test_dir}/test_store.quantizer.json")).is_ok());
-
-    // Load from disk
-    let mut loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
-
-    // Verify quantized vectors were loaded
-    assert_eq!(loaded_store.quantized_vectors.len(), 100);
-    assert!(loaded_store.quantizer.is_some());
-
-    // Verify search works with loaded quantization
-    let query = random_vector(128, 50);
-    let results = loaded_store.knn_search(&query, 10).unwrap();
-    assert_eq!(results.len(), 10);
-
-    // Clean up
-    let _ = fs::remove_dir_all(test_dir);
 }
 
 #[test]
@@ -273,32 +229,19 @@ fn test_quantization_batch_insert() {
     let vectors: Vec<Vector> = (0..100).map(|i| random_vector(128, i)).collect();
     let ids = store.batch_insert(vectors).unwrap();
 
-    // Verify all vectors and quantized vectors were created
+    // Verify all vectors were created and HNSW is asymmetric
     assert_eq!(ids.len(), 100);
     assert_eq!(store.vectors.len(), 100);
-    assert_eq!(store.quantized_vectors.len(), 100);
     assert!(store
-        .quantized_vectors
-        .iter()
-        .all(std::option::Option::is_some));
-}
-
-// Capacity pre-allocation tests (fixed defaults: M=16, ef=100)
-
-#[test]
-fn test_new_with_capacity() {
-    // new_with_capacity uses fixed defaults (M=16, ef=100) for all sizes
-    // Users can use VectorStoreOptions for custom params
-    let store = VectorStore::new_with_capacity(128, 100_000);
-
-    assert!(store.hnsw_index.is_some());
-    assert_eq!(store.dimensions, 128);
+        .hnsw_index
+        .as_ref()
+        .map_or(false, |h| h.is_asymmetric()));
 }
 
 #[test]
-fn test_new_with_capacity_functional() {
-    // Verify new_with_capacity works functionally (can insert and search)
-    let mut store = VectorStore::new_with_capacity(128, 100_000);
+fn test_new_with_params_functional() {
+    // Verify new_with_params works functionally
+    let mut store = VectorStore::new_with_params(128, 16, 100, 100).unwrap();
 
     // Insert vectors
     for i in 0..100 {

@@ -181,6 +181,15 @@ impl HNSWIndex {
         self.index.is_asymmetric()
     }
 
+    /// Train the quantizer from sample vectors
+    ///
+    /// Must be called before inserting vectors when using asymmetric search.
+    pub fn train_quantizer(&mut self, sample_vectors: &[Vec<f32>]) -> Result<()> {
+        self.index
+            .train_quantizer(sample_vectors)
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
     /// Insert vector into index and return its ID
     ///
     /// # Arguments
