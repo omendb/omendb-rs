@@ -84,6 +84,7 @@ PAPERS = [
 
 
 def main():
+    # 3D vectors for simple demonstration
     db = omendb.open(":memory:", dimensions=3)
     db.set(PAPERS)
 

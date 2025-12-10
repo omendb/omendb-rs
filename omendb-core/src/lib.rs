@@ -21,12 +21,12 @@
     clippy::needless_pass_by_value     // Public API takes owned values for clarity and storage
 )]
 
-//! Core algorithms for OmenDB: HNSW, RaBitQ compression, SIMD distance functions.
+//! Core algorithms for `OmenDB`: HNSW, `RaBitQ` compression, SIMD distance functions.
 //!
-//! This crate contains the pure algorithmic components of OmenDB, without any
+//! This crate contains the pure algorithmic components of `OmenDB`, without any
 //! storage or I/O dependencies. It can be used independently for:
 //!
-//! - Vector quantization (RaBitQ)
+//! - Vector quantization (`RaBitQ`)
 //! - SIMD-accelerated distance computation
 //! - HNSW graph construction and search
 //! - Sampling-based search optimization
