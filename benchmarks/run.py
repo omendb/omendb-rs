@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""
+OmenDB Benchmark Runner
+
+Runs benchmarks and records results to JSONL with full system/config context.
+
+Usage:
+    python benchmarks/run.py                    # Run all, append to history.jsonl
+    python benchmarks/run.py --quick            # Quick run, fewer iterations
+    python benchmarks/run.py --compare          # Compare last 2 runs
+    python benchmarks/run.py --history          # Show recent history
+    python benchmarks/run.py --notes "text"     # Add notes to run
+"""
+
+import argparse
+import json
+import os
+import platform
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+
+# Ensure we can import omendb
+sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
+import omendb
+
+HISTORY_FILE = Path(__file__).parent / "history.jsonl"
+
+
+@dataclass
+class BenchmarkConfig:
+    n_vectors: int
+    n_queries: int
+    dimensions: int
+    k: int
+    ef: Optional[int] = None
+    m: int = 16
+    ef_construction: int = 200
+
+
+@dataclass
+class BenchmarkResult:
+    name: str
+    config: dict
+    single_qps: float
+    batch_qps: float
+    single_latency_ms: float
+    batch_latency_ms: float
+    speedup: float
+
+
+def get_system_info() -> dict:
+    """Collect system information."""
+    cpu = "Unknown"
+    try:
+        if platform.system() == "Darwin":
+            cpu = subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True
+            ).strip()
+        elif platform.system() == "Linux":
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if "model name" in line:
+                        cpu = line.split(":")[1].strip()
+                        break
+    except Exception:
+        pass
+
+    ram_gb = 0.0
+    try:
+        if platform.system() == "Darwin":
+            ram_bytes = int(
+                subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True)
+            )
+            ram_gb = ram_bytes / (1024**3)
+        elif platform.system() == "Linux":
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if "MemTotal" in line:
+                        ram_kb = int(line.split()[1])
+                        ram_gb = ram_kb / (1024**2)
+                        break
+    except Exception:
+        pass
+
+    return {
+        "cpu": cpu,
+        "cores": os.cpu_count() or 0,
+        "ram_gb": round(ram_gb, 1),
+        "os": platform.system(),
+        "os_version": platform.release(),
+        "arch": platform.machine(),
+        "host": platform.node().split(".")[0],  # Short hostname
+    }
+
+
+def get_git_info() -> dict:
+    """Collect git repository information."""
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True
+        ).strip()
+        dirty = (
+            subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+            != ""
+        )
+        return {"commit": commit, "branch": branch, "dirty": dirty}
+    except Exception:
+        return {"commit": "unknown", "branch": "unknown", "dirty": True}
+
+
+def get_version_info() -> dict:
+    """Collect version information."""
+    rust_version = "unknown"
+    try:
+        out = subprocess.check_output(["rustc", "--version"], text=True).strip()
+        rust_version = out.split()[1] if out else "unknown"
+    except Exception:
+        pass
+
+    return {
+        "rust": rust_version,
+        "python": platform.python_version(),
+        "omendb": getattr(omendb, "__version__", "unknown"),
+    }
+
+
+def generate_vectors(n: int, dim: int) -> np.ndarray:
+    """Generate random vectors for benchmarking."""
+    return np.random.randn(n, dim).astype(np.float32)
+
+
+def run_benchmark(config: BenchmarkConfig, quick: bool = False) -> BenchmarkResult:
+    """Run a single benchmark configuration."""
+    np.random.seed(42)  # Reproducibility
+
+    vectors = generate_vectors(config.n_vectors, config.dimensions)
+    queries = generate_vectors(config.n_queries, config.dimensions)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = omendb.open(f"{tmpdir}/bench", dimensions=config.dimensions)
+
+        # Insert vectors
+        items = [{"id": f"d{i}", "vector": v.tolist()} for i, v in enumerate(vectors)]
+        db.set(items)
+
+        # Warmup
+        for q in queries[:5]:
+            db.search(q.tolist(), k=config.k)
+        db.search_batch([q.tolist() for q in queries[:5]], k=config.k)
+
+        # Single-query benchmark
+        iterations = 3 if quick else 10
+        single_times = []
+        for _ in range(iterations):
+            start = time.perf_counter()
+            for q in queries:
+                db.search(q.tolist(), k=config.k)
+            single_times.append(time.perf_counter() - start)
+
+        single_time = np.median(single_times)
+        single_qps = config.n_queries / single_time
+        single_latency_ms = (single_time / config.n_queries) * 1000
+
+        # Batch benchmark
+        batch_times = []
+        query_list = [q.tolist() for q in queries]
+        for _ in range(iterations):
+            start = time.perf_counter()
+            db.search_batch(query_list, k=config.k)
+            batch_times.append(time.perf_counter() - start)
+
+        batch_time = np.median(batch_times)
+        batch_qps = config.n_queries / batch_time
+        batch_latency_ms = (batch_time / config.n_queries) * 1000
+
+    return BenchmarkResult(
+        name=f"{config.dimensions}D",
+        config=asdict(config),
+        single_qps=round(single_qps),
+        batch_qps=round(batch_qps),
+        single_latency_ms=round(single_latency_ms, 3),
+        batch_latency_ms=round(batch_latency_ms, 3),
+        speedup=round(batch_qps / single_qps, 1),
+    )
+
+
+def run_all_benchmarks(quick: bool = False) -> list[BenchmarkResult]:
+    """Run the standard benchmark suite."""
+    configs = [
+        BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=128, k=10),
+        BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=768, k=10),
+        BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=1536, k=10),
+    ]
+
+    results = []
+    for config in configs:
+        print(f"Running {config.dimensions}D...", file=sys.stderr)
+        result = run_benchmark(config, quick=quick)
+        results.append(result)
+        print(f"  {result.single_qps:,} / {result.batch_qps:,} QPS", file=sys.stderr)
+
+    return results
+
+
+def save_run(results: list[BenchmarkResult], notes: str = "") -> dict:
+    """Save benchmark run to JSONL file."""
+    run = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "sys": get_system_info(),
+        "git": get_git_info(),
+        "ver": get_version_info(),
+        "results": {r.name: {"s": r.single_qps, "b": r.batch_qps} for r in results},
+    }
+    if notes:
+        run["notes"] = notes
+
+    with open(HISTORY_FILE, "a") as f:
+        f.write(json.dumps(run) + "\n")
+
+    return run
+
+
+def load_history(limit: int = None) -> list[dict]:
+    """Load benchmark history from JSONL file."""
+    if not HISTORY_FILE.exists():
+        return []
+
+    runs = []
+    with open(HISTORY_FILE) as f:
+        for line in f:
+            if line.strip():
+                runs.append(json.loads(line))
+
+    if limit:
+        runs = runs[-limit:]
+    return runs
+
+
+def print_summary(run: dict):
+    """Print a summary of a benchmark run."""
+    dirty = " [dirty]" if run["git"]["dirty"] else ""
+    print(f"\n{'=' * 55}")
+    print("OmenDB Benchmark Results")
+    print(f"{'=' * 55}")
+    print(f"Time:   {run['ts']}")
+    print(f"System: {run['sys']['cpu']} ({run['sys']['cores']} cores)")
+    print(f"Git:    {run['git']['commit']} ({run['git']['branch']}){dirty}")
+    print()
+    print("| Dim   | Single QPS | Batch QPS | Speedup |")
+    print("|-------|------------|-----------|---------|")
+    for name, r in run["results"].items():
+        speedup = r["b"] / r["s"]
+        print(f"| {name:5} | {r['s']:>10,} | {r['b']:>9,} | {speedup:>6.1f}x |")
+    print()
+
+
+def show_history(limit: int = 10):
+    """Show recent benchmark history."""
+    runs = load_history(limit)
+    if not runs:
+        print("No benchmark history found.")
+        return
+
+    print(f"\n{'=' * 75}")
+    print("Recent Benchmarks (Single / Batch QPS)")
+    print(f"{'=' * 75}")
+    print(
+        f"| {'Date':10} | {'Commit':7} | {'Host':8} | {'128D':>13} | {'768D':>13} | {'1536D':>13} |"
+    )
+    print(f"|{'-' * 12}|{'-' * 9}|{'-' * 10}|{'-' * 15}|{'-' * 15}|{'-' * 15}|")
+
+    for run in runs:
+        date = run["ts"][:10]
+        commit = run["git"]["commit"]
+        host = run["sys"]["host"][:8]
+
+        dims = []
+        for d in ["128D", "768D", "1536D"]:
+            if d in run["results"]:
+                r = run["results"][d]
+                dims.append(f"{r['s']:>5,}/{r['b']:>6,}")
+            else:
+                dims.append("-")
+
+        print(f"| {date} | {commit:7} | {host:8} | {dims[0]} | {dims[1]} | {dims[2]} |")
+    print()
+
+
+def compare_runs(run1: dict, run2: dict):
+    """Compare two benchmark runs."""
+    print(f"\nComparing: {run1['git']['commit']} → {run2['git']['commit']}")
+    print(f"  Before: {run1['ts']} ({run1['sys']['host']})")
+    print(f"  After:  {run2['ts']} ({run2['sys']['host']})")
+    print()
+    print("| Dim   | Metric | Before | After  | Change |")
+    print("|-------|--------|--------|--------|--------|")
+
+    for dim in ["128D", "768D", "1536D"]:
+        if dim in run1["results"] and dim in run2["results"]:
+            r1, r2 = run1["results"][dim], run2["results"][dim]
+            for metric, key in [("Single", "s"), ("Batch", "b")]:
+                v1, v2 = r1[key], r2[key]
+                change = ((v2 / v1) - 1) * 100
+                sign = "+" if change >= 0 else ""
+                print(
+                    f"| {dim:5} | {metric:6} | {v1:>6,} | {v2:>6,} | {sign}{change:>5.1f}% |"
+                )
+    print()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="OmenDB Benchmark Runner")
+    parser.add_argument("--quick", action="store_true", help="Fewer iterations")
+    parser.add_argument("--no-save", action="store_true", help="Don't save results")
+    parser.add_argument("--notes", type=str, default="", help="Notes to include")
+    parser.add_argument("--history", action="store_true", help="Show history")
+    parser.add_argument("--compare", action="store_true", help="Compare last 2 runs")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
+    args = parser.parse_args()
+
+    if args.history:
+        show_history()
+        return
+
+    if args.compare:
+        runs = load_history(2)
+        if len(runs) < 2:
+            print("Need at least 2 runs to compare")
+            return
+        compare_runs(runs[0], runs[1])
+        return
+
+    # Run benchmarks
+    results = run_all_benchmarks(quick=args.quick)
+
+    if args.no_save:
+        run = {
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "sys": get_system_info(),
+            "git": get_git_info(),
+            "ver": get_version_info(),
+            "results": {r.name: {"s": r.single_qps, "b": r.batch_qps} for r in results},
+        }
+    else:
+        run = save_run(results, notes=args.notes)
+        print(f"\nSaved to: {HISTORY_FILE}")
+
+    if args.json:
+        print(json.dumps(run, indent=2))
+    else:
+        print_summary(run)
+
+
+if __name__ == "__main__":
+    main()
