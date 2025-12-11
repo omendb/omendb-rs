@@ -3,6 +3,7 @@
 pub mod hnsw;
 pub mod hnsw_index;
 pub mod storage;
+pub mod storage_trait;
 pub mod store;
 pub mod types;
 

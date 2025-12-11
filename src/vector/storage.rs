@@ -9,9 +9,11 @@
 //! - `cfg:dimensions` → dimensions (u64)
 //! - `cfg:count` → vector count (u64)
 
+use super::storage_trait::Storage;
 use anyhow::Result;
 use rayon::prelude::*;
 use seerdb::{DBOptions, SyncPolicy, DB};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -378,6 +380,108 @@ impl SeerDBStorage {
         batch.commit()?;
 
         Ok(())
+    }
+}
+
+impl Storage for SeerDBStorage {
+    fn put_vector(&self, id: usize, vector: &[f32]) -> Result<()> {
+        SeerDBStorage::put_vector(self, id, vector)
+    }
+
+    fn get_vector(&self, id: usize) -> Result<Option<Vec<f32>>> {
+        SeerDBStorage::get_vector(self, id)
+    }
+
+    fn put_metadata(&self, id: usize, metadata: &JsonValue) -> Result<()> {
+        SeerDBStorage::put_metadata(self, id, metadata)
+    }
+
+    fn get_metadata(&self, id: usize) -> Result<Option<JsonValue>> {
+        SeerDBStorage::get_metadata(self, id)
+    }
+
+    fn put_id_mapping(&self, string_id: &str, index: usize) -> Result<()> {
+        SeerDBStorage::put_id_mapping(self, string_id, index)
+    }
+
+    fn get_id_mapping(&self, string_id: &str) -> Result<Option<usize>> {
+        SeerDBStorage::get_id_mapping(self, string_id)
+    }
+
+    fn get_string_id(&self, index: usize) -> Result<Option<String>> {
+        SeerDBStorage::get_string_id(self, index)
+    }
+
+    fn delete_id_mapping(&self, string_id: &str) -> Result<()> {
+        SeerDBStorage::delete_id_mapping(self, string_id)
+    }
+
+    fn put_config(&self, key: &str, value: u64) -> Result<()> {
+        SeerDBStorage::put_config(self, key, value)
+    }
+
+    fn get_config(&self, key: &str) -> Result<Option<u64>> {
+        SeerDBStorage::get_config(self, key)
+    }
+
+    fn load_all_vectors(&self) -> Result<Vec<(usize, Vec<f32>)>> {
+        SeerDBStorage::load_all_vectors(self)
+    }
+
+    fn increment_count(&self) -> Result<usize> {
+        SeerDBStorage::increment_count(self)
+    }
+
+    fn get_count(&self) -> Result<usize> {
+        SeerDBStorage::get_count(self)
+    }
+
+    fn put_quantization_mode(&self, mode: u64) -> Result<()> {
+        SeerDBStorage::put_quantization_mode(self, mode)
+    }
+
+    fn get_quantization_mode(&self) -> Result<Option<u64>> {
+        SeerDBStorage::get_quantization_mode(self)
+    }
+
+    fn is_quantized(&self) -> Result<bool> {
+        SeerDBStorage::is_quantized(self)
+    }
+
+    fn load_all_metadata(&self) -> Result<HashMap<usize, JsonValue>> {
+        SeerDBStorage::load_all_metadata(self)
+    }
+
+    fn load_all_id_mappings(&self) -> Result<HashMap<String, usize>> {
+        SeerDBStorage::load_all_id_mappings(self)
+    }
+
+    fn put_deleted(&self, id: usize) -> Result<()> {
+        SeerDBStorage::put_deleted(self, id)
+    }
+
+    fn is_deleted(&self, id: usize) -> Result<bool> {
+        SeerDBStorage::is_deleted(self, id)
+    }
+
+    fn remove_deleted(&self, id: usize) -> Result<()> {
+        SeerDBStorage::remove_deleted(self, id)
+    }
+
+    fn load_all_deleted(&self) -> Result<HashMap<usize, bool>> {
+        SeerDBStorage::load_all_deleted(self)
+    }
+
+    fn flush(&self) -> Result<()> {
+        SeerDBStorage::flush(self)
+    }
+
+    fn put_batch(&self, items: Vec<(usize, String, Vec<f32>, JsonValue)>) -> Result<()> {
+        SeerDBStorage::put_batch(self, items)
+    }
+
+    fn path(&self) -> &Path {
+        SeerDBStorage::path(self)
     }
 }
 
