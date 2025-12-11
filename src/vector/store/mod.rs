@@ -174,17 +174,6 @@ impl VectorStore {
     // Persistence: Open/Create
     // ============================================================================
 
-    /// Compute .omen path by appending extension (preserves full filename)
-    fn compute_omen_path(path: &Path) -> PathBuf {
-        if path.extension().is_some_and(|ext| ext == "omen") {
-            path.to_path_buf()
-        } else {
-            let mut omen = path.as_os_str().to_os_string();
-            omen.push(".omen");
-            PathBuf::from(omen)
-        }
-    }
-
     /// Open a persistent vector store at the given path
     ///
     /// Creates a new database if it doesn't exist, or loads existing data.
@@ -201,7 +190,7 @@ impl VectorStore {
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let omen_path = Self::compute_omen_path(path);
+        let omen_path = OmenFile::compute_omen_path(path);
         let storage = if omen_path.exists() {
             OmenFile::open(path)?
         } else {
@@ -332,7 +321,7 @@ impl VectorStore {
     /// This is the internal implementation used by `VectorStoreOptions::open()`.
     pub fn open_with_options(path: impl AsRef<Path>, options: &VectorStoreOptions) -> Result<Self> {
         let path = path.as_ref();
-        let omen_path = Self::compute_omen_path(path);
+        let omen_path = OmenFile::compute_omen_path(path);
 
         // If path or .omen file exists, load existing data
         if path.exists() || omen_path.exists() {
