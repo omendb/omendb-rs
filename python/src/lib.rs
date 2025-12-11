@@ -1156,13 +1156,12 @@ impl VectorDatabase {
 ///     m (int): HNSW neighbors per node (default: 16, range: 4-64)
 ///     ef_construction (int): Build quality (default: 100, higher = better graph)
 ///     ef_search (int): Search quality (default: 100, higher = better recall)
-///     quantization (bool|str|int): Enable quantization (default: None = full precision)
-///         - True or "sq8": SQ8 ~4x smaller, ~2x faster, ~99% recall (RECOMMENDED)
-///         - "rabitq": RaBitQ ~8x smaller, ~0.5x slower, ~96% recall
-///         - "rabitq-2": RaBitQ ~16x smaller, ~93% recall
-///         - 4, 8, 16: RaBitQ compression levels (backward compatible)
+///     quantization (bool|str): Enable quantization (default: None = full precision)
+///         - True or "sq8": SQ8 ~4x smaller, ~97% recall (RECOMMENDED)
+///         - "rabitq": RaBitQ 4-bit, ~8x smaller, ~96% recall + rescore
+///         - "rabitq-2": RaBitQ 2-bit, ~16x smaller, ~93% recall + rescore
+///         - "rabitq-8": RaBitQ 8-bit, ~4x smaller, ~99% recall + rescore
 ///         - False/None: Full precision (no quantization)
-///     compression (bool|int): Alias for quantization (backward compatible, prefer quantization)
 ///     rescore (bool): Rerank with full precision (default: True when quantized)
 ///     oversample (float): Candidate multiplier for rescoring (default: 3.0)
 ///     config (dict): Advanced config (deprecated, use top-level params instead)
@@ -1195,11 +1194,8 @@ impl VectorDatabase {
 ///
 ///     # Custom oversample factor (default 3.0)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, oversample=5.0)
-///
-///     # Backward compatible (compression=8 maps to RaBitQ 4-bit)
-///     >>> db = omendb.open("./vectors", dimensions=768, compression=8)
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, compression=None, rescore=None, oversample=None, config=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, rescore=None, oversample=None, config=None))]
 fn open(
     path: String,
     dimensions: usize,
@@ -1207,7 +1203,6 @@ fn open(
     ef_construction: Option<usize>,
     ef_search: Option<usize>,
     quantization: Option<&Bound<'_, PyAny>>,
-    compression: Option<&Bound<'_, PyAny>>,
     rescore: Option<bool>,
     oversample: Option<f32>,
     config: Option<&Bound<'_, PyDict>>,
@@ -1229,12 +1224,8 @@ fn open(
         }
     }
 
-    // Parse quantization (new parameter takes precedence over compression for backward compat)
-    let quant_mode = if quantization.is_some() {
-        parse_quantization(quantization)?
-    } else {
-        parse_quantization(compression)?
-    };
+    // Parse quantization mode
+    let quant_mode = parse_quantization(quantization)?;
 
     if let (Some(ef_val), Some(m_val)) = (ef_construction, m) {
         if ef_val < m_val {
@@ -1348,12 +1339,12 @@ fn open(
             }
         }
 
-        // Check if enabling compression on existing non-empty database
-        if db_path.exists() && compression.is_some() {
+        // Check if enabling quantization on existing non-empty database
+        if db_path.exists() && quant_mode.is_some() {
             let existing = VectorStore::open(&path).map_err(convert_error)?;
             if existing.len() > 0 {
                 return Err(PyValueError::new_err(
-                    "Cannot enable compression on existing database. Create a new database with compression.",
+                    "Cannot enable quantization on existing database. Create a new database with quantization.",
                 ));
             }
         }
@@ -1415,7 +1406,7 @@ fn open(
         if let Some(ef_s) = ef_search {
             options = options.ef_search(ef_s);
         }
-        if let Some(mode) = parse_quantization(compression)? {
+        if let Some(mode) = quant_mode.clone() {
             options = options.quantization(mode);
         }
 
