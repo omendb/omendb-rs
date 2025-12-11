@@ -670,7 +670,18 @@ impl VectorStorage {
             Self::FullPrecision { count, .. } => *count,
             Self::BinaryQuantized { quantized, .. } => quantized.len(),
             Self::RaBitQQuantized { original_count, .. } => *original_count,
-            Self::SQ8Quantized { count, .. } => *count,
+            Self::SQ8Quantized {
+                count,
+                training_buffer,
+                trained,
+                ..
+            } => {
+                if *trained {
+                    *count
+                } else {
+                    training_buffer.len()
+                }
+            }
         }
     }
 
@@ -788,7 +799,7 @@ impl VectorStorage {
 
                 // Train on first batch if not yet trained
                 if !*trained {
-                    training_buffer.push(vector.clone());
+                    training_buffer.push(vector);
 
                     if training_buffer.len() >= TRAINING_SIZE {
                         // Train quantizer on collected samples
@@ -798,7 +809,7 @@ impl VectorStorage {
                         *params = Some(trained_params);
                         *trained = true;
 
-                        // Quantize all buffered vectors and store originals
+                        // Quantize all buffered vectors
                         let p = params.as_ref().unwrap();
                         for buffered_vec in training_buffer.drain(..) {
                             let q = p.quantize(&buffered_vec);
@@ -810,16 +821,11 @@ impl VectorStorage {
                         return Ok((*count - 1) as u32);
                     }
 
-                    // Still collecting - use uninitialized params for now
-                    let p = params.get_or_insert_with(|| ScalarParams::uninitialized(*dimensions));
-                    let id = *count as u32;
-                    let q = p.quantize(&vector);
-                    quantized.extend(q);
-                    original.extend(vector);
-                    *count += 1;
-                    Ok(id)
+                    // Still collecting - just buffer, don't quantize yet
+                    // Return sequential ID based on buffer position
+                    Ok((training_buffer.len() - 1) as u32)
                 } else {
-                    // Already trained, just quantize and store
+                    // Already trained, quantize and store
                     let p = params.as_ref().unwrap();
                     let id = *count as u32;
                     let q = p.quantize(&vector);
@@ -874,15 +880,21 @@ impl VectorStorage {
                 original,
                 count,
                 dimensions,
+                training_buffer,
+                trained,
                 ..
             } => {
                 let idx = id as usize;
-                if idx >= *count {
-                    return None;
+                // During pre-training, vectors are in training_buffer
+                if !*trained {
+                    training_buffer.get(idx).map(|v| v.as_slice())
+                } else if idx >= *count {
+                    None
+                } else {
+                    let start = idx * *dimensions;
+                    let end = start + *dimensions;
+                    Some(&original[start..end])
                 }
-                let start = idx * *dimensions;
-                let end = start + *dimensions;
-                Some(&original[start..end])
             }
         }
     }
@@ -919,14 +931,28 @@ impl VectorStorage {
                 quantized,
                 count,
                 dimensions,
+                training_buffer,
+                trained,
                 ..
             } => {
                 let idx = id as usize;
+
+                // During pre-training, compute exact L2 from buffer
+                if !*trained {
+                    let vec = training_buffer.get(idx)?;
+                    let dist_sq: f32 = query
+                        .iter()
+                        .zip(vec.iter())
+                        .map(|(a, b)| (a - b) * (a - b))
+                        .sum();
+                    return Some(dist_sq.sqrt());
+                }
+
                 if idx >= *count {
                     return None;
                 }
 
-                // Get params (should always be Some after first insert)
+                // Get params (should always be Some after training)
                 let p = params.as_ref()?;
 
                 // Get quantized vector slice
@@ -1573,16 +1599,156 @@ mod tests {
     fn test_sq8_memory_compression() {
         let mut storage = VectorStorage::new_sq8_quantized(768);
 
-        // Insert vectors
-        for _ in 0..100 {
-            let vec: Vec<f32> = (0..768).map(|i| i as f32 / 768.0).collect();
+        // Insert >= 256 vectors to trigger training
+        for i in 0..300 {
+            let vec: Vec<f32> = (0..768).map(|j| (i + j) as f32 / 768.0).collect();
             storage.insert(vec).unwrap();
         }
 
         // SQ8 stores: quantized (768 bytes) + original (768*4 bytes) per vector
-        // Total: 100 * (768 + 768*4) = 100 * 3840 = 384000 bytes
+        // Total: 300 * (768 + 768*4) = 300 * 3840 = 1,152,000 bytes
         let mem = storage.memory_usage();
         assert!(mem > 0, "Memory usage should be positive");
-        // Should be roughly 4x compressed for quantized portion
+
+        // Verify compression: quantized should be 4x smaller than f32
+        // quantized: 300 * 768 = 230,400 bytes
+        // original: 300 * 768 * 4 = 921,600 bytes
+        // Total: ~1.15 MB (vs 1.84 MB for full f32 storage of 2 copies)
+        let quantized_size = 300 * 768;
+        let original_size = 300 * 768 * 4;
+        assert!(
+            mem >= quantized_size + original_size - 1000,
+            "Memory should include both quantized and original: {mem}"
+        );
+    }
+
+    #[test]
+    fn test_sq8_pretraining_access() {
+        let mut storage = VectorStorage::new_sq8_quantized(4);
+
+        // Insert < 256 vectors (pre-training phase)
+        for i in 0..100 {
+            let vec = vec![i as f32, i as f32, i as f32, i as f32];
+            let id = storage.insert(vec).unwrap();
+            assert_eq!(id, i as u32, "ID should be sequential");
+        }
+
+        // Should be able to get vectors during pre-training
+        let v0 = storage.get(0).unwrap();
+        assert_eq!(v0, &[0.0, 0.0, 0.0, 0.0]);
+
+        let v50 = storage.get(50).unwrap();
+        assert_eq!(v50, &[50.0, 50.0, 50.0, 50.0]);
+
+        // Distance should work (exact L2 during pre-training)
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let dist_to_0 = storage.distance_asymmetric_l2(&query, 0).unwrap();
+        let dist_to_50 = storage.distance_asymmetric_l2(&query, 50).unwrap();
+        assert!(dist_to_0 < 0.01, "Distance to same vector: {dist_to_0}");
+        assert!(dist_to_50 > dist_to_0, "Distance ordering");
+
+        // len() should report correct count
+        assert_eq!(storage.len(), 100);
+    }
+
+    #[test]
+    fn test_sq8_recall() {
+        let mut storage = VectorStorage::new_sq8_quantized(128);
+
+        // Insert training vectors
+        let mut vectors = Vec::new();
+        for i in 0..500 {
+            let vec: Vec<f32> = (0..128)
+                .map(|j| ((i * 7 + j) % 100) as f32 / 100.0)
+                .collect();
+            vectors.push(vec.clone());
+            storage.insert(vec).unwrap();
+        }
+
+        // Test recall: for each vector, distance to itself should be small
+        let mut recall_errors = 0;
+        for (id, orig) in vectors.iter().enumerate() {
+            let dist = storage.distance_asymmetric_l2(orig, id as u32).unwrap();
+            // Quantization error should be small for vectors within training distribution
+            if dist > 0.5 {
+                recall_errors += 1;
+            }
+        }
+
+        // Expect < 5% recall errors (quantization distortion)
+        let error_rate = recall_errors as f32 / vectors.len() as f32;
+        assert!(
+            error_rate < 0.05,
+            "Too many recall errors: {recall_errors}/{} ({:.1}%)",
+            vectors.len(),
+            error_rate * 100.0
+        );
+    }
+
+    #[test]
+    #[ignore] // Run with: cargo test --release -p omendb-core -- --ignored sq8_speed
+    fn test_sq8_speed_vs_f32() {
+        use std::time::Instant;
+
+        let dims = 768;
+        let n_vectors = 1000;
+        let n_queries = 100;
+
+        // Generate vectors (normalized [0,1] range)
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|i| {
+                (0..dims)
+                    .map(|j| ((i * 7 + j) % 1000) as f32 / 1000.0)
+                    .collect()
+            })
+            .collect();
+        let queries: Vec<Vec<f32>> = (0..n_queries)
+            .map(|i| {
+                (0..dims)
+                    .map(|j| ((i * 13 + j) % 1000) as f32 / 1000.0)
+                    .collect()
+            })
+            .collect();
+
+        // Benchmark f32 L2 distance
+        let start = Instant::now();
+        let mut sum = 0.0f32;
+        for q in &queries {
+            for v in &vectors {
+                let dist: f32 = q.iter().zip(v.iter()).map(|(a, b)| (a - b) * (a - b)).sum();
+                sum += dist.sqrt();
+            }
+        }
+        let f32_time = start.elapsed();
+        eprintln!("f32 L2: {:?} (checksum={:.2})", f32_time, sum);
+
+        // Setup SQ8 storage
+        let mut storage = VectorStorage::new_sq8_quantized(dims);
+        for v in &vectors {
+            storage.insert(v.clone()).unwrap();
+        }
+
+        // Benchmark SQ8 asymmetric distance
+        let start = Instant::now();
+        sum = 0.0;
+        for q in &queries {
+            for id in 0..n_vectors as u32 {
+                if let Some(dist) = storage.distance_asymmetric_l2(q, id) {
+                    sum += dist;
+                }
+            }
+        }
+        let sq8_time = start.elapsed();
+        eprintln!("SQ8 L2: {:?} (checksum={:.2})", sq8_time, sum);
+
+        let speedup = f32_time.as_secs_f64() / sq8_time.as_secs_f64();
+        eprintln!("\nSpeedup: {:.2}x", speedup);
+
+        // We expect SQ8 to be faster than f32 (target: 1.5-2x)
+        assert!(
+            speedup > 1.0,
+            "SQ8 should be faster than f32, got {:.2}x",
+            speedup
+        );
     }
 }
