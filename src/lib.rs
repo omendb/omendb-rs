@@ -83,6 +83,7 @@ pub use omendb_core::{compression, distance, sampling, types};
 
 // omendb-specific modules
 pub mod config;
+pub mod omen;
 pub mod storage;
 pub mod text;
 pub mod vector;
