@@ -62,13 +62,10 @@ multiversion = "0.7"
 # Core algorithms (extracted)
 omendb-core = { path = "omendb-core" }
 
-# Storage
-seerdb = "0.0.10"
-
 # Full-text search
 tantivy = { version = "0.25", default-features = false, features = ["mmap", "lz4-compression"] }
 
-# Async (for seerdb and tantivy)
+# Async (for tantivy)
 tokio = { version = "1.48.0", features = ["full"] }
 
 # Bit manipulation
@@ -76,8 +73,7 @@ fixedbitset = "0.5.7"
 smallvec = "1.13"
 roaring = "0.11"
 
-# Bytes (for storage)
-bytes = "1.0"
+# Concurrency
 arc-swap = "1.7.1"
 
 [dev-dependencies]

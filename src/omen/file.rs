@@ -1,4 +1,6 @@
 //! OmenFile - main API for .omen format
+//!
+//! Storage backend for VectorStore.
 
 use crate::omen::{
     align_to_page,
@@ -8,7 +10,9 @@ use crate::omen::{
     vectors::VectorSection,
     wal::{Wal, WalEntry, WalEntryType},
 };
+use anyhow::Result;
 use memmap2::MmapMut;
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -32,6 +36,7 @@ pub struct OmenFile {
     index_to_id: HashMap<u32, String>,
     metadata_mem: HashMap<u32, Vec<u8>>,
     deleted: HashMap<u32, bool>,
+    config: HashMap<String, u64>,
 
     // WAL for durability
     wal: Wal,
@@ -66,6 +71,9 @@ impl OmenFile {
 
         let wal = Wal::open(&wal_path)?;
 
+        let mut config = HashMap::new();
+        config.insert("dimensions".to_string(), u64::from(dimensions));
+
         Ok(Self {
             path: omen_path,
             file,
@@ -78,6 +86,7 @@ impl OmenFile {
             index_to_id: HashMap::new(),
             metadata_mem: HashMap::new(),
             deleted: HashMap::new(),
+            config,
             wal,
             entry_point: None,
         })
@@ -119,18 +128,112 @@ impl OmenFile {
             None
         };
 
+        // Initialize config from header
+        let mut config = HashMap::new();
+        config.insert("dimensions".to_string(), u64::from(header.dimensions));
+        config.insert("count".to_string(), header.count);
+
+        // Load vectors from checkpoint if present
+        let mut vectors_mem = Vec::new();
+        let mut graph_mem = Vec::new();
+        let mut levels_mem = Vec::new();
+        let mut id_to_index = HashMap::new();
+        let mut index_to_id = HashMap::new();
+        let mut metadata_mem = HashMap::new();
+        let mut deleted = HashMap::new();
+
+        if let Some(ref mmap) = mmap {
+            // Load vectors
+            if let Some(vec_section) = header.get_section(SectionType::Vectors) {
+                let vec_offset = vec_section.offset as usize;
+                let dim = header.dimensions as usize;
+                let count = header.count as usize;
+
+                if dim > 0 && count > 0 {
+                    for i in 0..count {
+                        let start = vec_offset + i * dim * 4;
+                        let end = start + dim * 4;
+                        if end <= mmap.len() {
+                            let bytes = &mmap[start..end];
+                            let vector: Vec<f32> = bytes
+                                .chunks(4)
+                                .map(|chunk| {
+                                    let arr: [u8; 4] = chunk.try_into().unwrap_or([0; 4]);
+                                    f32::from_le_bytes(arr)
+                                })
+                                .collect();
+                            vectors_mem.push(vector);
+                            graph_mem.push(Vec::new());
+                            levels_mem.push(0);
+                        }
+                    }
+                }
+            }
+
+            // Load metadata section (ID mappings, vector metadata, deleted, config)
+            if let Some(meta_section) = header.get_section(SectionType::MetadataRaw) {
+                let meta_offset = meta_section.offset as usize;
+                let meta_len = meta_section.length as usize;
+                if meta_offset + meta_len <= mmap.len() {
+                    let meta_bytes = &mmap[meta_offset..meta_offset + meta_len];
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(meta_bytes) {
+                        // Load ID mappings
+                        if let Some(obj) = json.get("id_to_index").and_then(|v| v.as_object()) {
+                            for (k, v) in obj {
+                                if let Some(idx) = v.as_u64() {
+                                    id_to_index.insert(k.clone(), idx as u32);
+                                }
+                            }
+                        }
+                        if let Some(obj) = json.get("index_to_id").and_then(|v| v.as_object()) {
+                            for (k, v) in obj {
+                                if let (Ok(idx), Some(id)) = (k.parse::<u32>(), v.as_str()) {
+                                    index_to_id.insert(idx, id.to_string());
+                                }
+                            }
+                        }
+                        // Load deleted
+                        if let Some(obj) = json.get("deleted").and_then(|v| v.as_object()) {
+                            for (k, v) in obj {
+                                if let (Ok(idx), Some(val)) = (k.parse::<u32>(), v.as_bool()) {
+                                    deleted.insert(idx, val);
+                                }
+                            }
+                        }
+                        // Load config
+                        if let Some(obj) = json.get("config").and_then(|v| v.as_object()) {
+                            for (k, v) in obj {
+                                if let Some(val) = v.as_u64() {
+                                    config.insert(k.clone(), val);
+                                }
+                            }
+                        }
+                        // Load vector metadata
+                        if let Some(obj) = json.get("metadata").and_then(|v| v.as_object()) {
+                            for (k, v) in obj {
+                                if let (Ok(idx), Some(s)) = (k.parse::<u32>(), v.as_str()) {
+                                    metadata_mem.insert(idx, s.as_bytes().to_vec());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let mut db = Self {
             path: omen_path,
             file,
             mmap,
             header,
-            vectors_mem: Vec::new(),
-            graph_mem: Vec::new(),
-            levels_mem: Vec::new(),
-            id_to_index: HashMap::new(),
-            index_to_id: HashMap::new(),
-            metadata_mem: HashMap::new(),
-            deleted: HashMap::new(),
+            vectors_mem,
+            graph_mem,
+            levels_mem,
+            id_to_index,
+            index_to_id,
+            metadata_mem,
+            deleted,
+            config,
             wal,
             entry_point,
         };
@@ -432,16 +535,31 @@ impl OmenFile {
             return Ok(());
         }
 
+        // Serialize metadata (ID mappings + vector metadata + deleted + config)
+        let metadata_json = serde_json::json!({
+            "id_to_index": self.id_to_index,
+            "index_to_id": self.index_to_id,
+            "deleted": self.deleted,
+            "config": self.config,
+            "metadata": self.metadata_mem.iter()
+                .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v).to_string()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        });
+        let metadata_bytes = serde_json::to_vec(&metadata_json)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
         // Calculate section sizes
         let vector_size =
             VectorSection::size_for_count(self.header.dimensions, self.vectors_mem.len() as u64)
                 as usize;
         let graph_size = GraphSection::size_for_graph(&self.levels_mem, &self.graph_mem);
+        let metadata_size = metadata_bytes.len();
 
         // Calculate offsets (page-aligned)
         let vector_offset = align_to_page(HEADER_SIZE);
         let graph_offset = align_to_page(vector_offset + vector_size);
-        let total_size = align_to_page(graph_offset + graph_size);
+        let metadata_offset = align_to_page(graph_offset + graph_size);
+        let total_size = align_to_page(metadata_offset + metadata_size);
 
         // Extend file
         self.file.set_len(total_size as u64)?;
@@ -458,6 +576,10 @@ impl OmenFile {
         self.file.seek(SeekFrom::Start(graph_offset as u64))?;
         GraphSection::write_graph(&mut self.file, &self.levels_mem, &self.graph_mem)?;
 
+        // Write metadata
+        self.file.seek(SeekFrom::Start(metadata_offset as u64))?;
+        self.file.write_all(&metadata_bytes)?;
+
         // Update header
         self.header.count = self.vectors_mem.len() as u64;
         self.header.entry_point = self.entry_point.unwrap_or(0);
@@ -470,6 +592,11 @@ impl OmenFile {
             SectionType::Graph,
             graph_offset as u64,
             graph_size as u64,
+        ));
+        self.header.set_section(SectionEntry::new(
+            SectionType::MetadataRaw,
+            metadata_offset as u64,
+            metadata_size as u64,
         ));
 
         // Write header
@@ -486,6 +613,219 @@ impl OmenFile {
 
         // Update mmap
         self.mmap = Some(unsafe { MmapMut::map_mut(&self.file)? });
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Storage API for VectorStore
+// ============================================================================
+
+impl OmenFile {
+    /// Store a vector by internal index
+    pub fn put_vector(&mut self, id: usize, vector: &[f32]) -> Result<()> {
+        // Ensure vectors_mem has enough capacity
+        while self.vectors_mem.len() <= id {
+            self.vectors_mem.push(Vec::new());
+            self.graph_mem.push(Vec::new());
+            self.levels_mem.push(0);
+        }
+        self.vectors_mem[id] = vector.to_vec();
+        Ok(())
+    }
+
+    /// Get a vector by internal index
+    pub fn get_vector(&self, id: usize) -> Result<Option<Vec<f32>>> {
+        if id < self.vectors_mem.len() && !self.vectors_mem[id].is_empty() {
+            Ok(Some(self.vectors_mem[id].clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Store metadata for a vector (as JSON)
+    pub fn put_metadata(&mut self, id: usize, metadata: &JsonValue) -> Result<()> {
+        let bytes = serde_json::to_vec(metadata)?;
+        self.metadata_mem.insert(id as u32, bytes);
+        Ok(())
+    }
+
+    /// Get metadata for a vector (as JSON)
+    pub fn get_metadata(&self, id: usize) -> Result<Option<JsonValue>> {
+        match self.metadata_mem.get(&(id as u32)) {
+            Some(bytes) => {
+                let metadata: JsonValue = serde_json::from_slice(bytes)?;
+                Ok(Some(metadata))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Store string ID to internal index mapping
+    pub fn put_id_mapping(&mut self, string_id: &str, index: usize) -> Result<()> {
+        self.id_to_index.insert(string_id.to_string(), index as u32);
+        self.index_to_id.insert(index as u32, string_id.to_string());
+        Ok(())
+    }
+
+    /// Get internal index for a string ID
+    pub fn get_id_mapping(&self, string_id: &str) -> Result<Option<usize>> {
+        Ok(self.id_to_index.get(string_id).map(|&idx| idx as usize))
+    }
+
+    /// Get string ID for an internal index (reverse lookup)
+    pub fn get_string_id(&self, index: usize) -> Result<Option<String>> {
+        Ok(self.index_to_id.get(&(index as u32)).cloned())
+    }
+
+    /// Delete string ID mapping
+    pub fn delete_id_mapping(&mut self, string_id: &str) -> Result<()> {
+        if let Some(&index) = self.id_to_index.get(string_id) {
+            self.index_to_id.remove(&index);
+        }
+        self.id_to_index.remove(string_id);
+        Ok(())
+    }
+
+    /// Store configuration value
+    pub fn put_config(&mut self, key: &str, value: u64) -> Result<()> {
+        self.config.insert(key.to_string(), value);
+        // Sync dimensions to header
+        if key == "dimensions" {
+            self.header.dimensions = value as u32;
+        }
+        Ok(())
+    }
+
+    /// Get configuration value
+    pub fn get_config(&self, key: &str) -> Result<Option<u64>> {
+        Ok(self.config.get(key).copied())
+    }
+
+    /// Load all vectors from storage
+    pub fn load_all_vectors(&self) -> Result<Vec<(usize, Vec<f32>)>> {
+        Ok(self
+            .vectors_mem
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(id, v)| (id, v.clone()))
+            .collect())
+    }
+
+    /// Increment vector count in storage
+    pub fn increment_count(&mut self) -> Result<usize> {
+        let count = self.config.get("count").copied().unwrap_or(0) as usize;
+        let new_count = count + 1;
+        self.config.insert("count".to_string(), new_count as u64);
+        self.header.count = new_count as u64;
+        Ok(new_count)
+    }
+
+    /// Get current vector count
+    pub fn get_count(&self) -> Result<usize> {
+        Ok(self.config.get("count").copied().unwrap_or(0) as usize)
+    }
+
+    /// Store quantization mode
+    ///
+    /// Mode values: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+    pub fn put_quantization_mode(&mut self, mode: u64) -> Result<()> {
+        self.put_config("quantization", mode)
+    }
+
+    /// Get quantization mode
+    ///
+    /// Returns: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+    pub fn get_quantization_mode(&self) -> Result<Option<u64>> {
+        self.get_config("quantization")
+    }
+
+    /// Check if store was created with quantization
+    pub fn is_quantized(&self) -> Result<bool> {
+        Ok(self.get_quantization_mode()?.unwrap_or(0) > 0)
+    }
+
+    /// Load all metadata from storage
+    pub fn load_all_metadata(&self) -> Result<HashMap<usize, JsonValue>> {
+        let mut result = HashMap::new();
+        for (&id, bytes) in &self.metadata_mem {
+            if let Ok(metadata) = serde_json::from_slice(bytes) {
+                result.insert(id as usize, metadata);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Load all ID mappings from storage
+    pub fn load_all_id_mappings(&self) -> Result<HashMap<String, usize>> {
+        Ok(self
+            .id_to_index
+            .iter()
+            .map(|(id, &idx)| (id.clone(), idx as usize))
+            .collect())
+    }
+
+    /// Mark a vector as deleted (tombstone)
+    pub fn put_deleted(&mut self, id: usize) -> Result<()> {
+        self.deleted.insert(id as u32, true);
+        Ok(())
+    }
+
+    /// Check if a vector is deleted
+    pub fn is_deleted(&self, id: usize) -> Result<bool> {
+        Ok(self.deleted.get(&(id as u32)).copied().unwrap_or(false))
+    }
+
+    /// Remove deleted marker (for re-insertion)
+    pub fn remove_deleted(&mut self, id: usize) -> Result<()> {
+        self.deleted.remove(&(id as u32));
+        Ok(())
+    }
+
+    /// Load all deleted IDs from storage
+    pub fn load_all_deleted(&self) -> Result<HashMap<usize, bool>> {
+        Ok(self
+            .deleted
+            .iter()
+            .map(|(&id, &v)| (id as usize, v))
+            .collect())
+    }
+
+    /// Get storage path
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Flush all pending writes to disk
+    pub fn flush(&mut self) -> Result<()> {
+        self.checkpoint()?;
+        Ok(())
+    }
+
+    /// Batch set vectors with metadata and ID mappings
+    pub fn put_batch(&mut self, items: Vec<(usize, String, Vec<f32>, JsonValue)>) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        for (idx, string_id, vector, metadata) in items {
+            self.put_vector(idx, &vector)?;
+            self.put_metadata(idx, &metadata)?;
+            self.put_id_mapping(&string_id, idx)?;
+        }
+
+        // Update count
+        let current_count = self.get_count()?;
+        let new_count = self
+            .vectors_mem
+            .iter()
+            .filter(|v| !v.is_empty())
+            .count()
+            .max(current_count);
+        self.config.insert("count".to_string(), new_count as u64);
+        self.header.count = new_count as u64;
 
         Ok(())
     }

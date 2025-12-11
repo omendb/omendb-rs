@@ -1249,7 +1249,7 @@ fn profile_seerdb_comprehensive() {
 
     // Write results
     let results = format!(
-        r"# Storage Profile Results
+        r"# Persistence Profile Results
 
 **Date**: {}
 **Dataset**: {} vectors, {} dimensions
@@ -1284,7 +1284,7 @@ fn profile_seerdb_comprehensive() {
     );
 
     let output_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("STORAGE_PROFILE_RESULTS.md");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("PERSISTENCE_PROFILE_RESULTS.md");
     let mut file = File::create(&output_path).expect("Failed to create results file");
     file.write_all(results.as_bytes())
         .expect("Failed to write results");
@@ -1294,15 +1294,13 @@ fn profile_seerdb_comprehensive() {
 fn profile_seerdb_impl(_n: usize) {
     use crate::vector::{Vector, VectorStore};
     use rand::Rng;
-    use std::fs::File;
-    use std::io::Write;
     use std::time::Instant;
 
-    let n = 100_000;
+    let n = 10_000;
     let dim = 128;
     let queries = 100;
 
-    println!("\n=== seerdb Profile ({n} vectors, {queries} queries) ===\n");
+    println!("\n=== Persistence Profile ({n} vectors, {queries} queries) ===\n");
 
     // Generate random vectors
     let mut rng = rand::thread_rng();
@@ -1313,9 +1311,9 @@ fn profile_seerdb_impl(_n: usize) {
         .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
         .collect();
 
-    // Create VectorStore with seerdb persistence
+    // Create VectorStore with persistence
     let tmpdir = tempfile::tempdir().unwrap();
-    let path = tmpdir.path().join("profile-oadb");
+    let path = tmpdir.path().join("profile-omen");
     let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
 
     // Insert vectors (batch)
@@ -1353,43 +1351,10 @@ fn profile_seerdb_impl(_n: usize) {
     let qps = queries as f64 / search_time.as_secs_f64();
     let ms_per_query = search_time.as_secs_f64() * 1000.0 / queries as f64;
 
-    // Print results
     println!("\n=== Search Latency ===");
     println!("Total search time: {search_time:?}");
     println!("Per-query: {ms_per_query:.2}ms");
     println!("QPS: {qps:.0}");
-
-    // Write results to file
-    let results = format!(
-        r"# Storage Profile Results
-
-**Date**: {}
-**Dataset**: {} vectors, {} dimensions
-**Hardware**: M3 Max (via cargo test)
-
-## Search Latency
-- Avg search time: {:.2} ms
-- QPS: {:.0}
-
-## Flush Timing
-- {} vector flush: {:?}
-",
-        chrono::Local::now().format("%Y-%m-%d"),
-        n,
-        dim,
-        ms_per_query,
-        qps,
-        n,
-        flush_time,
-    );
-
-    // Write to STORAGE_PROFILE_RESULTS.md
-    let output_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("STORAGE_PROFILE_RESULTS.md");
-    let mut file = File::create(&output_path).expect("Failed to create results file");
-    file.write_all(results.as_bytes())
-        .expect("Failed to write results");
-    println!("\n✓ Results written to: {}", output_path.display());
 }
 
 #[test]
