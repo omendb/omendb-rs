@@ -2118,7 +2118,7 @@ impl HNSWIndex {
 
         // Read neighbor lists (always Memory mode when loading from file)
         let neighbor_lists: NeighborLists = bincode::deserialize_from(&mut reader)?;
-        let neighbors = GraphStorage(neighbor_lists);
+        let neighbors = GraphStorage::from_neighbor_lists(neighbor_lists);
 
         // Read vectors
         let vectors: VectorStorage = bincode::deserialize_from(&mut reader)?;
