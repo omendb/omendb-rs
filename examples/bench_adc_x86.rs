@@ -35,7 +35,6 @@ fn main() {
             .map(|v| v.as_slice())
             .collect::<Vec<_>>()
             .as_slice(),
-        dimensions,
     );
 
     // Generate and quantize target vectors
