@@ -228,11 +228,7 @@ fn test_neighbor_count_limits() {
 
     // Check that no node has more than M*2 neighbors at level 0
     for node in &index.nodes {
-        let neighbor_count = index
-            .neighbors
-            .get_neighbors(node.id, 0)
-            .unwrap_or_default()
-            .len();
+        let neighbor_count = index.neighbors.get_neighbors(node.id, 0).len();
         assert!(neighbor_count <= params.m * 2);
     }
 }

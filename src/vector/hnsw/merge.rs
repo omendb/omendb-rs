@@ -191,7 +191,7 @@ impl GraphMerger {
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
 
             // Find neighbors of this node that are in the join set
-            let small_neighbors = small.get_neighbors_level0(node_id)?;
+            let small_neighbors = small.get_neighbors_level0(node_id);
             let entry_points: Vec<u32> = small_neighbors
                 .iter()
                 .filter(|&&n| join_set.contains(&n))
@@ -266,10 +266,9 @@ impl GraphMerger {
                 join_set.insert(best_id);
 
                 // Update coverage: all neighbors of best_id gain a neighbor in J
-                if let Ok(neighbors) = graph.get_neighbors_level0(best_id) {
-                    for &neighbor in &neighbors {
-                        *coverage.entry(neighbor).or_insert(0) += 1;
-                    }
+                let neighbors = graph.get_neighbors_level0(best_id);
+                for &neighbor in &neighbors {
+                    *coverage.entry(neighbor).or_insert(0) += 1;
                 }
 
                 // Also update coverage for best_id itself (it's now covered)
@@ -300,7 +299,7 @@ impl GraphMerger {
             return Ok(0);
         }
 
-        let neighbors = graph.get_neighbors_level0(vertex_id)?;
+        let neighbors = graph.get_neighbors_level0(vertex_id);
         let mut gain = 0;
 
         // Gain for self (if not yet covered)
@@ -403,10 +402,9 @@ mod tests {
         // All vertices should have sufficient coverage
         let mut coverage: HashMap<u32, usize> = HashMap::new();
         for &j_id in &join_set {
-            if let Ok(neighbors) = small.get_neighbors_level0(j_id) {
-                for &n in &neighbors {
-                    *coverage.entry(n).or_insert(0) += 1;
-                }
+            let neighbors = small.get_neighbors_level0(j_id);
+            for &n in &neighbors {
+                *coverage.entry(n).or_insert(0) += 1;
             }
             *coverage.entry(j_id).or_insert(0) += merger.config.min_coverage;
         }
