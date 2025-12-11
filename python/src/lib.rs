@@ -618,25 +618,16 @@ impl VectorDatabase {
         }
     }
 
-    /// Save database to disk (explicit sync).
+    /// Flush pending changes to disk.
     ///
-    /// Note: When using persistent storage (directory path), data is automatically
-    /// persisted after each operation. This method is for explicit sync.
+    /// For persistent databases, commits vector/metadata/HNSW changes to `.omen` storage.
+    /// For in-memory databases (`:memory:`), this is a no-op.
     ///
     /// Examples:
-    ///     >>> db.save()  # Saves to path specified in omendb.open()
-    ///
-    /// Performance:
-    ///     Loading from disk is 401x faster than rebuilding index from scratch.
+    ///     >>> db.save()  # Flush to disk
     fn save(&self) -> PyResult<()> {
         let mut inner = self.inner.write();
-        // Use flush() for .omen format (new persistent storage)
-        // Falls back to save_to_disk() for legacy format
-        if inner.store.is_persistent() {
-            inner.store.flush().map_err(convert_error)
-        } else {
-            inner.store.save_to_disk(&self.path).map_err(convert_error)
-        }
+        inner.store.flush().map_err(convert_error)
     }
 
     /// Get current ef_search value.
@@ -1378,67 +1369,36 @@ fn open(
         });
     }
 
-    // Legacy path handling for backward compatibility
-    let directory = db_path.parent().unwrap_or_else(|| Path::new("."));
-    let filename = db_path
-        .file_name()
-        .and_then(|f| f.to_str())
-        .ok_or_else(|| PyValueError::new_err("Invalid database path"))?;
-    let vectors_path = directory.join(format!("{}.vectors.bin", filename));
-    let hnsw_path = directory.join(format!("{}.hnsw", filename));
+    // Create new in-memory database with configuration
+    let mut options = VectorStoreOptions::default().dimensions(effective_dims);
 
-    // Try to load existing database
-    if vectors_path.exists() || hnsw_path.exists() {
-        let mut store =
-            VectorStore::load_from_disk(&path, effective_dims).map_err(convert_error)?;
-
-        // Apply ef_search if specified
-        if let Some(ef_s) = ef_search {
-            store.set_ef_search(ef_s);
-        }
-
-        Ok(VectorDatabase {
-            inner: RwLock::new(VectorDatabaseInner {
-                store,
-                index_to_id_cache: HashMap::new(),
-                cache_valid: false,
-            }),
-            path,
-            dimensions: effective_dims,
-            is_persistent: false,
-        })
-    } else {
-        // Create new in-memory database with configuration
-        let mut options = VectorStoreOptions::default().dimensions(effective_dims);
-
-        if let Some(m_val) = m {
-            options = options.m(m_val);
-        }
-        if let Some(ef_con) = ef_construction {
-            options = options.ef_construction(ef_con);
-        }
-        if let Some(ef_s) = ef_search {
-            options = options.ef_search(ef_s);
-        }
-        if let Some(mode) = quant_mode.clone() {
-            options = options.quantization(mode);
-        }
-
-        let store = options
-            .build()
-            .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
-
-        Ok(VectorDatabase {
-            inner: RwLock::new(VectorDatabaseInner {
-                store,
-                index_to_id_cache: HashMap::new(),
-                cache_valid: true,
-            }),
-            path,
-            dimensions: effective_dims,
-            is_persistent: false,
-        })
+    if let Some(m_val) = m {
+        options = options.m(m_val);
     }
+    if let Some(ef_con) = ef_construction {
+        options = options.ef_construction(ef_con);
+    }
+    if let Some(ef_s) = ef_search {
+        options = options.ef_search(ef_s);
+    }
+    if let Some(mode) = quant_mode.clone() {
+        options = options.quantization(mode);
+    }
+
+    let store = options
+        .build()
+        .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
+
+    Ok(VectorDatabase {
+        inner: RwLock::new(VectorDatabaseInner {
+            store,
+            index_to_id_cache: HashMap::new(),
+            cache_valid: true,
+        }),
+        path,
+        dimensions: effective_dims,
+        is_persistent: false,
+    })
 }
 
 /// Helper: Parse Python filter dict to Rust MetadataFilter
