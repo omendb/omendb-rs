@@ -555,13 +555,16 @@ pub enum VectorStorage {
         dimensions: usize,
     },
 
-    /// Scalar quantized vectors (SQ8) - 4x compression, ~98% recall
+    /// Scalar quantized vectors (SQ8) - 4x compression, ~97% recall
     ///
-    /// Memory after training: 5x (1x quantized + 4x original for rescore)
-    /// Memory before training: 4x (original only, no quantization yet)
+    /// Memory: 1x (quantized only, no originals stored)
+    /// Trade-off: 4x RAM savings for ~3% recall loss
     ///
     /// Uses per-dimension min/max scaling with SIMD distance computation.
     /// Lazy training: Buffers first 256 vectors, then trains and quantizes.
+    ///
+    /// Note: No rescore support - originals not stored to save memory.
+    /// Use RaBitQ if you need rescore with originals on disk.
     ScalarQuantized {
         /// Trained quantization parameters (min/scale per dimension)
         params: ScalarParams,
@@ -571,9 +574,9 @@ pub enum VectorStorage {
         /// Access: quantized[id * dimensions..(id + 1) * dimensions]
         quantized: Vec<u8>,
 
-        /// Original vectors for reranking (flat contiguous f32 array)
-        /// Access: original[id * dimensions..(id + 1) * dimensions]
-        original: Vec<f32>,
+        /// Buffer for training vectors (cleared after training)
+        /// During training phase, stores f32 vectors until we have enough to train
+        training_buffer: Vec<f32>,
 
         /// Number of vectors stored
         count: usize,
@@ -641,19 +644,20 @@ impl VectorStorage {
     /// * `dimensions` - Vector dimensionality
     ///
     /// # Performance
-    /// - Search: ~2x faster than full precision (SIMD u8 asymmetric distance)
-    /// - Memory: 5x during search (quantized + original for rescore)
-    /// - Recall: ~99% with rescore, ~97% without
+    /// - Search: ~1x vs f32 (SIMD asymmetric distance)
+    /// - Memory: 4x smaller (quantized only, no originals)
+    /// - Recall: ~97% (no rescore support)
     ///
     /// # Lazy Training
     /// Quantization parameters are trained automatically after 256 vectors.
-    /// Before training completes, search falls back to f32 distance.
+    /// Before training completes, search falls back to f32 distance on
+    /// the training buffer.
     #[must_use]
     pub fn new_sq8_quantized(dimensions: usize) -> Self {
         Self::ScalarQuantized {
             params: ScalarParams::uninitialized(dimensions),
             quantized: Vec::new(),
-            original: Vec::new(),
+            training_buffer: Vec::new(),
             count: 0,
             dimensions,
             trained: false,
@@ -782,7 +786,7 @@ impl VectorStorage {
             Self::ScalarQuantized {
                 params,
                 quantized,
-                original,
+                training_buffer,
                 count,
                 dimensions,
                 trained,
@@ -798,33 +802,39 @@ impl VectorStorage {
                 let id = *count as u32;
                 let dim = *dimensions;
 
-                // Always store original for reranking
-                original.extend(vector);
-                *count += 1;
-
                 if *trained {
-                    // Already trained - quantize normally
-                    let quant =
-                        params.quantize(&original[id as usize * dim..(id as usize + 1) * dim]);
+                    // Already trained - quantize directly, don't store original
+                    let quant = params.quantize(&vector);
                     quantized.extend(quant);
-                } else if *count >= 256 {
-                    // Time to train! Use first 256 vectors as training sample
-                    let training_refs: Vec<&[f32]> = (0..256)
-                        .map(|i| &original[i * dim..(i + 1) * dim])
-                        .collect();
-                    *params = ScalarParams::train(&training_refs);
-                    *trained = true;
+                    *count += 1;
+                } else {
+                    // Still in training phase - buffer the vector
+                    training_buffer.extend(vector);
+                    *count += 1;
 
-                    // Quantize all vectors accumulated so far
-                    quantized.reserve(*count * dim);
-                    for i in 0..*count {
-                        let vec_slice = &original[i * dim..(i + 1) * dim];
-                        let quant = params.quantize(vec_slice);
-                        quantized.extend(quant);
+                    if *count >= 256 {
+                        // Time to train! Use buffered vectors as training sample
+                        let training_refs: Vec<&[f32]> = (0..256)
+                            .map(|i| &training_buffer[i * dim..(i + 1) * dim])
+                            .collect();
+                        *params = ScalarParams::train(&training_refs);
+                        *trained = true;
+
+                        // Quantize all buffered vectors
+                        quantized.reserve(*count * dim);
+                        for i in 0..*count {
+                            let vec_slice = &training_buffer[i * dim..(i + 1) * dim];
+                            let quant = params.quantize(vec_slice);
+                            quantized.extend(quant);
+                        }
+
+                        // Clear training buffer to free memory
+                        training_buffer.clear();
+                        training_buffer.shrink_to_fit();
                     }
                 }
-                // If not trained and count < 256, don't quantize yet
-                // Search will fall back to f32 distance
+                // If not trained and count < 256, vectors stay in training_buffer
+                // Search will fall back to f32 distance on training_buffer
 
                 Ok(id)
             }
@@ -870,10 +880,40 @@ impl VectorStorage {
                 Some(&original[start..end])
             }
             Self::ScalarQuantized {
-                original,
+                training_buffer,
                 count,
                 dimensions,
+                trained,
                 ..
+            } => {
+                // SQ8 doesn't store originals after training - no rescore support
+                // During training phase, return from training buffer
+                if *trained {
+                    return None; // No originals stored
+                }
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                Some(&training_buffer[start..end])
+            }
+        }
+    }
+
+    /// Get a vector by ID, dequantizing if necessary (returns owned Vec)
+    ///
+    /// For full precision storage, clones the slice.
+    /// For quantized storage (SQ8), dequantizes the quantized bytes to f32.
+    /// Used for neighbor-to-neighbor distance calculations during graph construction.
+    #[must_use]
+    pub fn get_dequantized(&self, id: u32) -> Option<Vec<f32>> {
+        match self {
+            Self::FullPrecision {
+                vectors,
+                count,
+                dimensions,
             } => {
                 let idx = id as usize;
                 if idx >= *count {
@@ -881,7 +921,49 @@ impl VectorStorage {
                 }
                 let start = idx * *dimensions;
                 let end = start + *dimensions;
-                Some(&original[start..end])
+                Some(vectors[start..end].to_vec())
+            }
+            Self::BinaryQuantized { original, .. } => {
+                original.as_ref().and_then(|o| o.get(id as usize).cloned())
+            }
+            Self::RaBitQQuantized {
+                original,
+                original_count,
+                dimensions,
+                ..
+            } => {
+                let idx = id as usize;
+                if idx >= *original_count {
+                    return None;
+                }
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                Some(original[start..end].to_vec())
+            }
+            Self::ScalarQuantized {
+                params,
+                quantized,
+                training_buffer,
+                count,
+                dimensions,
+                trained,
+            } => {
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                let dim = *dimensions;
+                if *trained {
+                    // Dequantize from quantized storage
+                    let start = idx * dim;
+                    let end = start + dim;
+                    Some(params.dequantize(&quantized[start..end]))
+                } else {
+                    // Still in training phase, return from buffer
+                    let start = idx * dim;
+                    let end = start + dim;
+                    Some(training_buffer[start..end].to_vec())
+                }
             }
         }
     }
@@ -1052,7 +1134,7 @@ impl VectorStorage {
             }
             Self::ScalarQuantized {
                 quantized,
-                original,
+                training_buffer,
                 count,
                 dimensions,
                 trained,
@@ -1066,9 +1148,9 @@ impl VectorStorage {
                     let start = idx * *dimensions;
                     Some(quantized[start..].as_ptr())
                 } else {
-                    // Not trained yet - prefetch original f32 data
+                    // Not trained yet - prefetch training buffer f32 data
                     let start = idx * *dimensions;
-                    Some(original[start..].as_ptr().cast())
+                    Some(training_buffer[start..].as_ptr().cast())
                 }
             }
         };
@@ -1195,7 +1277,7 @@ impl VectorStorage {
             Self::ScalarQuantized {
                 params,
                 quantized,
-                original,
+                training_buffer,
                 count,
                 dimensions,
                 trained,
@@ -1209,15 +1291,18 @@ impl VectorStorage {
                 *params = ScalarParams::train(&refs);
                 *trained = true;
 
-                // If there are already vectors stored, quantize them now
-                if *count > 0 && quantized.is_empty() {
+                // If there are vectors in training buffer, quantize them now
+                if *count > 0 && quantized.is_empty() && !training_buffer.is_empty() {
                     let dim = *dimensions;
                     quantized.reserve(*count * dim);
                     for i in 0..*count {
-                        let vec_slice = &original[i * dim..(i + 1) * dim];
+                        let vec_slice = &training_buffer[i * dim..(i + 1) * dim];
                         let quant = params.quantize(vec_slice);
                         quantized.extend(quant);
                     }
+                    // Clear training buffer to free memory
+                    training_buffer.clear();
+                    training_buffer.shrink_to_fit();
                 }
 
                 Ok(())
@@ -1259,16 +1344,16 @@ impl VectorStorage {
             }
             Self::ScalarQuantized {
                 quantized,
-                original,
+                training_buffer,
                 params,
                 ..
             } => {
-                // Quantized u8 vectors + original f32 vectors + params (mins + scales)
+                // Quantized u8 vectors + training buffer (usually empty after training) + params
                 let quantized_size = quantized.len();
-                let original_size = original.len() * std::mem::size_of::<f32>();
+                let buffer_size = training_buffer.len() * std::mem::size_of::<f32>();
                 let params_size =
                     (params.mins.len() + params.scales.len()) * std::mem::size_of::<f32>();
-                quantized_size + original_size + params_size
+                quantized_size + buffer_size + params_size
             }
         }
     }
@@ -1358,7 +1443,6 @@ impl VectorStorage {
             }
             Self::ScalarQuantized {
                 quantized,
-                original,
                 count,
                 dimensions,
                 ..
@@ -1366,7 +1450,7 @@ impl VectorStorage {
                 let dim = *dimensions;
                 let n = *count;
 
-                // Reorder quantized vectors
+                // Reorder quantized vectors only (no originals stored)
                 let mut new_quantized = vec![0u8; quantized.len()];
                 for (old_id, &new_id) in old_to_new.iter().enumerate() {
                     if old_id < n {
@@ -1377,18 +1461,6 @@ impl VectorStorage {
                     }
                 }
                 *quantized = new_quantized;
-
-                // Reorder original vectors
-                let mut new_original = vec![0.0f32; original.len()];
-                for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                    if old_id < n {
-                        let old_start = old_id * dim;
-                        let new_start = new_id as usize * dim;
-                        new_original[new_start..new_start + dim]
-                            .copy_from_slice(&original[old_start..old_start + dim]);
-                    }
-                }
-                *original = new_original;
             }
         }
     }
