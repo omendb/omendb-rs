@@ -5,18 +5,7 @@
 use omendb_core::compression::scalar::ScalarParams;
 use std::time::Instant;
 
-fn main() {
-    let dimensions = 768;
-    let num_vectors = 10_000;
-    let num_queries = 1_000;
-
-    println!("ADC vs SIMD Benchmark (x86)");
-    println!("===========================");
-    println!("Dimensions: {dimensions}");
-    println!("Vectors: {num_vectors}");
-    println!("Queries: {num_queries}");
-    println!();
-
+fn benchmark_dimension(dimensions: usize, num_vectors: usize, num_queries: usize) -> (f64, f64) {
     // Generate random vectors
     let mut rng_seed = 42u64;
     let mut random = || -> f32 {
@@ -50,7 +39,6 @@ fn main() {
         .collect();
 
     // Benchmark ADC (Asymmetric Distance Computation with lookup tables)
-    println!("Benchmarking ADC (precomputed lookup tables)...");
     let start = Instant::now();
     let mut adc_sum = 0.0f32;
     for query in &queries {
@@ -60,17 +48,8 @@ fn main() {
         }
     }
     let adc_time = start.elapsed();
-    let adc_ops = (num_queries * num_vectors) as f64;
-    let adc_ops_per_sec = adc_ops / adc_time.as_secs_f64();
-    println!(
-        "  ADC: {:.2}ms total, {:.2}M ops/sec (checksum: {:.2})",
-        adc_time.as_secs_f64() * 1000.0,
-        adc_ops_per_sec / 1_000_000.0,
-        adc_sum
-    );
 
     // Benchmark asymmetric SIMD (on-the-fly dequantization)
-    println!("Benchmarking asymmetric SIMD (on-the-fly)...");
     let start = Instant::now();
     let mut simd_sum = 0.0f32;
     for query in &queries {
@@ -79,30 +58,52 @@ fn main() {
         }
     }
     let simd_time = start.elapsed();
-    let simd_ops_per_sec = adc_ops / simd_time.as_secs_f64();
-    println!(
-        "  SIMD: {:.2}ms total, {:.2}M ops/sec (checksum: {:.2})",
-        simd_time.as_secs_f64() * 1000.0,
-        simd_ops_per_sec / 1_000_000.0,
-        simd_sum
+
+    // Verify results match
+    assert!(
+        (adc_sum - simd_sum).abs() < 1.0,
+        "Results mismatch: ADC={adc_sum}, SIMD={simd_sum}"
     );
 
-    // Summary
+    let ops = (num_queries * num_vectors) as f64;
+    (
+        ops / adc_time.as_secs_f64() / 1_000_000.0,
+        ops / simd_time.as_secs_f64() / 1_000_000.0,
+    )
+}
+
+fn main() {
+    let num_vectors = 10_000;
+    let num_queries = 1_000;
+
+    println!("ADC vs SIMD Benchmark (x86)");
+    println!("===========================");
+    println!("Platform: {}", std::env::consts::ARCH);
+    println!("Vectors: {num_vectors}");
+    println!("Queries: {num_queries}");
     println!();
-    println!("Summary");
-    println!("-------");
-    let ratio = simd_time.as_secs_f64() / adc_time.as_secs_f64();
-    if ratio > 1.0 {
-        println!("ADC is {:.2}x faster than SIMD", ratio);
-    } else {
-        println!("SIMD is {:.2}x faster than ADC", 1.0 / ratio);
+
+    println!("| Dimension | ADC (M ops/s) | SIMD (M ops/s) | Winner | Speedup |");
+    println!("|-----------|---------------|----------------|--------|---------|");
+
+    for &dimensions in &[128, 384, 768, 1536] {
+        let adc_table_kb = dimensions * 256 * 4 / 1024;
+
+        let (adc_mops, simd_mops) = benchmark_dimension(dimensions, num_vectors, num_queries);
+
+        let (winner, speedup) = if adc_mops > simd_mops {
+            ("ADC", adc_mops / simd_mops)
+        } else {
+            ("SIMD", simd_mops / adc_mops)
+        };
+
+        println!(
+            "| {dimensions:4}D ({adc_table_kb:4}KB) | {adc_mops:13.2} | {simd_mops:14.2} | {winner:6} | {speedup:7.2}x |"
+        );
     }
 
-    // Cache info
     println!();
-    println!("Cache Analysis");
-    println!("--------------");
-    let adc_table_size = dimensions * 256 * 4; // 256 bins per dimension, 4 bytes each
-    println!("ADC table size: {}KB", adc_table_size / 1024);
-    println!("Expected: ADC faster when table fits in L2/L3 cache");
+    println!("Cache sizes:");
+    println!("  M3 Max: 128KB L2 per core");
+    println!("  i9-13900KF: 36MB L3 shared");
 }
