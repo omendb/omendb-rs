@@ -9,11 +9,9 @@
 
 use super::hnsw::{DistanceFunction, HNSWParams};
 use super::hnsw_index::HNSWIndex;
-use super::storage::SeerDBStorage;
-use super::storage_trait::Storage;
 use super::types::Vector;
 use super::QuantizationMode;
-use crate::omen::OmenStorage;
+use crate::omen::OmenFile;
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
 use omendb_core::compression::RaBitQParams;
@@ -348,8 +346,8 @@ pub struct VectorStore {
     /// Deleted vector IDs (tombstones for MVCC)
     deleted: HashMap<usize, bool>,
 
-    /// Persistent storage backend (OmenStorage default, SeerDBStorage legacy)
-    storage: Option<Box<dyn Storage>>,
+    /// Persistent storage backend (.omen format)
+    storage: Option<OmenFile>,
 
     /// Storage path (for `TextIndex` subdirectory)
     storage_path: Option<PathBuf>,
@@ -472,7 +470,17 @@ impl VectorStore {
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let storage: Box<dyn Storage> = Box::new(SeerDBStorage::open(path)?);
+        // OmenFile adds .omen extension, so check for that
+        let omen_path = if path.extension().is_some_and(|ext| ext == "omen") {
+            path.to_path_buf()
+        } else {
+            path.with_extension("omen")
+        };
+        let storage = if omen_path.exists() {
+            OmenFile::open(path)?
+        } else {
+            OmenFile::create(path, 0)?
+        };
 
         // Check if store was quantized - if so, skip loading vectors to RAM
         // (use seerdb for rescore instead)
@@ -587,7 +595,7 @@ impl VectorStore {
         let mut store = Self::open(path)?;
         if store.dimensions == 0 {
             store.dimensions = dimensions;
-            if let Some(ref storage) = store.storage {
+            if let Some(ref mut storage) = store.storage {
                 storage.put_config("dimensions", dimensions as u64)?;
             }
         }
@@ -607,7 +615,7 @@ impl VectorStore {
             // Apply dimension if specified and store has none
             if store.dimensions == 0 && options.dimensions > 0 {
                 store.dimensions = options.dimensions;
-                if let Some(ref storage) = store.storage {
+                if let Some(ref mut storage) = store.storage {
                     storage.put_config("dimensions", options.dimensions as u64)?;
                 }
             }
@@ -621,7 +629,7 @@ impl VectorStore {
         }
 
         // Create new persistent store with options
-        let storage: Box<dyn Storage> = Box::new(SeerDBStorage::open(path)?);
+        let mut storage = OmenFile::create(path, options.dimensions as u32)?;
         let dimensions = options.dimensions;
 
         // Determine HNSW parameters
@@ -791,7 +799,7 @@ impl VectorStore {
                         _ => 2u64, // default rabitq-4
                     },
                 };
-                if let Some(ref storage) = self.storage {
+                if let Some(ref mut storage) = self.storage {
                     storage.put_quantization_mode(quant_mode_id)?;
                 }
 
@@ -835,7 +843,7 @@ impl VectorStore {
         }
 
         // Persist to storage if available
-        if let Some(ref storage) = self.storage {
+        if let Some(ref mut storage) = self.storage {
             storage.put_vector(id, &vector.data)?;
             storage.increment_count()?;
             // Save dimensions on first insert
@@ -872,7 +880,7 @@ impl VectorStore {
         self.index_to_id.insert(index, id.clone());
 
         // Persist to storage if available
-        if let Some(ref storage) = self.storage {
+        if let Some(ref mut storage) = self.storage {
             storage.put_metadata(index, &metadata)?;
             storage.put_id_mapping(&id, index)?;
         }
@@ -973,7 +981,7 @@ impl VectorStore {
                             _ => 2u64, // default rabitq-4
                         },
                     };
-                    if let Some(ref storage) = self.storage {
+                    if let Some(ref mut storage) = self.storage {
                         storage.put_quantization_mode(quant_mode_id)?;
                     }
 
@@ -1030,7 +1038,7 @@ impl VectorStore {
             }
 
             // Batch persist to storage (atomic, high-performance)
-            if let Some(ref storage) = self.storage {
+            if let Some(ref mut storage) = self.storage {
                 // Save dimensions on first insert
                 if base_index == 0 {
                     storage.put_config("dimensions", self.dimensions as u64)?;
@@ -1414,7 +1422,7 @@ impl VectorStore {
             self.vectors[index] = new_vector.clone();
 
             // Persist to storage if available
-            if let Some(ref storage) = self.storage {
+            if let Some(ref mut storage) = self.storage {
                 storage.put_vector(index, &new_vector.data)?;
             }
         }
@@ -1424,7 +1432,7 @@ impl VectorStore {
             self.metadata.insert(index, new_metadata.clone());
 
             // Persist to storage if available
-            if let Some(ref storage) = self.storage {
+            if let Some(ref mut storage) = self.storage {
                 storage.put_metadata(index, new_metadata)?;
             }
         }
@@ -1460,7 +1468,7 @@ impl VectorStore {
         self.deleted.insert(index, true);
 
         // Persist tombstone to storage if available
-        if let Some(ref storage) = self.storage {
+        if let Some(ref mut storage) = self.storage {
             storage.put_deleted(index)?;
             storage.delete_id_mapping(id)?;
         }
@@ -2429,13 +2437,13 @@ impl VectorStore {
     /// Flush all pending changes to disk.
     ///
     /// This commits:
-    /// - Vector/metadata changes to seerdb storage
+    /// - Vector/metadata changes to .omen storage
     /// - Text index changes to tantivy (if enabled)
     ///
     /// Call after batch inserts for durability.
     pub fn flush(&mut self) -> Result<()> {
         // Flush vector storage
-        if let Some(ref storage) = self.storage {
+        if let Some(ref mut storage) = self.storage {
             storage.flush()?;
         }
 
@@ -2452,11 +2460,10 @@ impl VectorStore {
         self.storage.is_some()
     }
 
-    /// Get reference to the storage backend (if persistent)
+    /// Get reference to the .omen storage backend (if persistent)
     ///
     /// Returns None if storage is not persistent (in-memory mode).
-    /// Use for profiling/stats access only.
-    pub fn storage(&self) -> Option<&dyn Storage> {
-        self.storage.as_ref().map(|s| s.as_ref())
+    pub fn storage(&self) -> Option<&OmenFile> {
+        self.storage.as_ref()
     }
 }
