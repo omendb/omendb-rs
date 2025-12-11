@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Wraps `NeighborLists` for in-memory neighbor storage.
 /// Persistence is handled externally by `.omen` format serialization.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct GraphStorage(pub NeighborLists);
+pub struct GraphStorage(NeighborLists);
 
 impl GraphStorage {
     /// Create new storage with max levels
@@ -25,6 +25,12 @@ impl GraphStorage {
     #[must_use]
     pub fn with_capacity(num_nodes: usize, max_levels: usize, m: usize) -> Self {
         Self(NeighborLists::with_capacity(num_nodes, max_levels, m))
+    }
+
+    /// Create from existing neighbor lists (used when loading from persistence)
+    #[must_use]
+    pub fn from_neighbor_lists(lists: NeighborLists) -> Self {
+        Self(lists)
     }
 
     /// Get neighbors for a node at a specific level
