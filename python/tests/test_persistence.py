@@ -34,26 +34,22 @@ def test_save_and_load(temp_db_path):
 
 
 def test_save_creates_files(temp_db_path):
-    """Test that save creates expected files"""
+    """Test that save creates expected files (.omen format)"""
     db = omendb.open(temp_db_path, dimensions=128)
     vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
 
     db.save()
 
-    # Check that files were created
+    # Check that .omen file was created
     directory = os.path.dirname(temp_db_path)
     filename = os.path.basename(temp_db_path)
+    omen_file = f"{filename}.omen"
 
-    expected_files = [
-        f"{filename}.vectors.bin",
-        f"{filename}.hnsw",
-        f"{filename}.metadata.json",
-        f"{filename}.id_mapping.json",
-    ]
-
-    for file in expected_files:
-        assert os.path.exists(os.path.join(directory, file)), f"Missing {file}"
+    assert os.path.exists(os.path.join(directory, omen_file)), f"Missing {omen_file}"
+    # .omen file should contain all data (vectors, HNSW, metadata, mappings)
+    file_size = os.path.getsize(os.path.join(directory, omen_file))
+    assert file_size > 0, ".omen file should not be empty"
 
 
 def test_load_preserves_metadata(temp_db_path):

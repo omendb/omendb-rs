@@ -59,19 +59,33 @@ pub struct OmenFile {
 
     // Entry point for HNSW search
     entry_point: Option<u32>,
+
+    // Serialized HNSW index (persisted on checkpoint, loaded on open)
+    hnsw_index_bytes: Option<Vec<u8>>,
 }
 
 impl OmenFile {
+    /// Compute .omen path by appending extension (preserves full filename)
+    fn compute_omen_path(path: &Path) -> PathBuf {
+        if path.extension().is_some_and(|ext| ext == "omen") {
+            path.to_path_buf()
+        } else {
+            // Append .omen (don't use with_extension which replaces)
+            let mut omen = path.as_os_str().to_os_string();
+            omen.push(".omen");
+            PathBuf::from(omen)
+        }
+    }
+
     /// Create a new .omen database
     pub fn create(path: impl AsRef<Path>, dimensions: u32) -> io::Result<Self> {
         let path = path.as_ref();
-        let omen_path = if path.extension().is_some_and(|ext| ext == "omen") {
-            path.to_path_buf()
-        } else {
-            path.with_extension("omen")
+        let omen_path = Self::compute_omen_path(path);
+        let wal_path = {
+            let mut wal = path.as_os_str().to_os_string();
+            wal.push(".wal");
+            PathBuf::from(wal)
         };
-
-        let wal_path = omen_path.with_extension("wal");
 
         // Create empty file with header
         let mut file = OpenOptions::new()
@@ -105,19 +119,19 @@ impl OmenFile {
             config,
             wal,
             entry_point: None,
+            hnsw_index_bytes: None,
         })
     }
 
     /// Open an existing .omen database
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
-        let omen_path = if path.extension().is_some_and(|ext| ext == "omen") {
-            path.to_path_buf()
-        } else {
-            path.with_extension("omen")
+        let omen_path = Self::compute_omen_path(path);
+        let wal_path = {
+            let mut wal = path.as_os_str().to_os_string();
+            wal.push(".wal");
+            PathBuf::from(wal)
         };
-
-        let wal_path = omen_path.with_extension("wal");
 
         let mut file = OpenOptions::new().read(true).write(true).open(&omen_path)?;
 
@@ -203,6 +217,23 @@ impl OmenFile {
             }
         }
 
+        // Load HNSW index bytes (if present)
+        let hnsw_index_bytes = if let Some(ref mmap) = mmap {
+            if let Some(hnsw_section) = header.get_section(SectionType::HnswIndex) {
+                let hnsw_offset = hnsw_section.offset as usize;
+                let hnsw_len = hnsw_section.length as usize;
+                if hnsw_offset + hnsw_len <= mmap.len() {
+                    Some(mmap[hnsw_offset..hnsw_offset + hnsw_len].to_vec())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut db = Self {
             path: omen_path,
             file,
@@ -218,6 +249,7 @@ impl OmenFile {
             config,
             wal,
             entry_point,
+            hnsw_index_bytes,
         };
 
         // Replay WAL
@@ -513,7 +545,7 @@ impl OmenFile {
 
     /// Checkpoint - compact WAL into main file
     pub fn checkpoint(&mut self) -> io::Result<()> {
-        if self.vectors_mem.is_empty() {
+        if self.vectors_mem.is_empty() && self.hnsw_index_bytes.is_none() {
             return Ok(());
         }
 
@@ -534,12 +566,14 @@ impl OmenFile {
                 as usize;
         let graph_size = GraphSection::size_for_graph(&self.levels_mem, &self.graph_mem);
         let metadata_size = metadata_bytes.len();
+        let hnsw_size = self.hnsw_index_bytes.as_ref().map_or(0, Vec::len);
 
         // Calculate offsets (page-aligned)
         let vector_offset = align_to_page(HEADER_SIZE);
         let graph_offset = align_to_page(vector_offset + vector_size);
         let metadata_offset = align_to_page(graph_offset + graph_size);
-        let total_size = align_to_page(metadata_offset + metadata_size);
+        let hnsw_offset = align_to_page(metadata_offset + metadata_size);
+        let total_size = align_to_page(hnsw_offset + hnsw_size);
 
         // Extend file
         self.file.set_len(total_size as u64)?;
@@ -560,6 +594,12 @@ impl OmenFile {
         self.file.seek(SeekFrom::Start(metadata_offset as u64))?;
         self.file.write_all(&metadata_bytes)?;
 
+        // Write HNSW index (if present)
+        if let Some(ref hnsw_bytes) = self.hnsw_index_bytes {
+            self.file.seek(SeekFrom::Start(hnsw_offset as u64))?;
+            self.file.write_all(hnsw_bytes)?;
+        }
+
         // Update header
         self.header.count = self.vectors_mem.len() as u64;
         self.header.entry_point = self.entry_point.unwrap_or(0);
@@ -578,6 +618,13 @@ impl OmenFile {
             metadata_offset as u64,
             metadata_size as u64,
         ));
+        if hnsw_size > 0 {
+            self.header.set_section(SectionEntry::new(
+                SectionType::HnswIndex,
+                hnsw_offset as u64,
+                hnsw_size as u64,
+            ));
+        }
 
         // Write header
         self.file.seek(SeekFrom::Start(0))?;
@@ -771,6 +818,27 @@ impl OmenFile {
             .iter()
             .map(|(&id, &v)| (id as usize, v))
             .collect())
+    }
+
+    /// Store serialized HNSW index bytes
+    ///
+    /// The bytes are persisted on the next checkpoint/flush.
+    /// VectorStore serializes HNSWIndex and stores it here.
+    pub fn put_hnsw_index(&mut self, bytes: Vec<u8>) {
+        self.hnsw_index_bytes = Some(bytes);
+    }
+
+    /// Get serialized HNSW index bytes (if present)
+    ///
+    /// Returns the bytes previously stored by `put_hnsw_index()`,
+    /// or loaded from disk on open.
+    pub fn get_hnsw_index(&self) -> Option<&[u8]> {
+        self.hnsw_index_bytes.as_deref()
+    }
+
+    /// Check if HNSW index is stored
+    pub fn has_hnsw_index(&self) -> bool {
+        self.hnsw_index_bytes.is_some()
     }
 
     /// Get storage path

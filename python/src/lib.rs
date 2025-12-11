@@ -629,8 +629,14 @@ impl VectorDatabase {
     /// Performance:
     ///     Loading from disk is 401x faster than rebuilding index from scratch.
     fn save(&self) -> PyResult<()> {
-        let inner = self.inner.read();
-        inner.store.save_to_disk(&self.path).map_err(convert_error)
+        let mut inner = self.inner.write();
+        // Use flush() for .omen format (new persistent storage)
+        // Falls back to save_to_disk() for legacy format
+        if inner.store.is_persistent() {
+            inner.store.flush().map_err(convert_error)
+        } else {
+            inner.store.save_to_disk(&self.path).map_err(convert_error)
+        }
     }
 
     /// Get current ef_search value.
@@ -1207,7 +1213,7 @@ fn open(
     oversample: Option<f32>,
     config: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<VectorDatabase> {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     // Validate dimensions
     if dimensions == 0 {
@@ -1289,9 +1295,17 @@ fn open(
     }
 
     let db_path = Path::new(&path);
+    // Compute .omen path by appending extension (preserves full filename)
+    let omen_path = if db_path.extension().is_some_and(|ext| ext == "omen") {
+        db_path.to_path_buf()
+    } else {
+        let mut omen = db_path.as_os_str().to_os_string();
+        omen.push(".omen");
+        PathBuf::from(omen)
+    };
 
-    // Check if this is a directory (persistent storage) or needs to become one
-    if db_path.is_dir() || !db_path.exists() {
+    // Check if this is a directory (persistent storage) or .omen file exists
+    if db_path.is_dir() || omen_path.exists() || !db_path.exists() {
         // Build options from parameters
         let mut options = VectorStoreOptions::default().dimensions(effective_dims);
 
