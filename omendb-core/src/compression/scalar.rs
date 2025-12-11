@@ -406,6 +406,7 @@ impl SQ8ADCTable {
             if is_x86_feature_detected!("avx2") {
                 return unsafe { self.distance_squared_avx2(quantized) };
             }
+            return self.distance_squared_scalar(quantized);
         }
 
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
