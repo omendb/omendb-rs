@@ -236,9 +236,32 @@ impl VectorStore {
         }
 
         // Load or rebuild HNSW index
+        // Count non-deleted vectors
+        let active_vector_count = vectors
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !deleted.contains_key(i))
+            .count();
+
         let hnsw_index = if let Some(hnsw_bytes) = storage.get_hnsw_index() {
-            match bincode::deserialize(hnsw_bytes) {
-                Ok(index) => Some(index),
+            match bincode::deserialize::<HNSWIndex>(hnsw_bytes) {
+                Ok(index) => {
+                    // Check if HNSW index matches loaded vectors (WAL recovery may add more)
+                    if index.len() != active_vector_count && !vectors.is_empty() {
+                        tracing::info!(
+                            "HNSW index count ({}) differs from vector count ({}), rebuilding",
+                            index.len(),
+                            active_vector_count
+                        );
+                        let mut new_index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
+                        let vector_data: Vec<Vec<f32>> =
+                            vectors.iter().map(|v| v.data.clone()).collect();
+                        new_index.batch_insert(&vector_data)?;
+                        Some(new_index)
+                    } else {
+                        Some(index)
+                    }
+                }
                 Err(e) => {
                     tracing::warn!("Failed to deserialize HNSW index, rebuilding: {}", e);
                     None
@@ -1037,9 +1060,9 @@ impl VectorStore {
 
         self.deleted.insert(index, true);
 
+        // Use OmenFile::delete for WAL-backed persistence
         if let Some(ref mut storage) = self.storage {
-            storage.put_deleted(index)?;
-            storage.delete_id_mapping(id)?;
+            storage.delete(id)?;
         }
 
         if let Some(ref mut text_index) = self.text_index {
