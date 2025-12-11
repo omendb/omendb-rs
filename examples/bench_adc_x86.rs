@@ -59,10 +59,13 @@ fn benchmark_dimension(dimensions: usize, num_vectors: usize, num_queries: usize
     }
     let simd_time = start.elapsed();
 
-    // Verify results match
+    // Verify results approximately match (floating point tolerance)
+    let diff = (adc_sum - simd_sum).abs();
+    let max_val = adc_sum.abs().max(simd_sum.abs());
+    let relative_error = diff / max_val;
     assert!(
-        (adc_sum - simd_sum).abs() < 1.0,
-        "Results mismatch: ADC={adc_sum}, SIMD={simd_sum}"
+        relative_error < 0.0001,
+        "Results mismatch: ADC={adc_sum}, SIMD={simd_sum}, rel_err={relative_error}"
     );
 
     let ops = (num_queries * num_vectors) as f64;
