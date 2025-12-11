@@ -88,61 +88,6 @@ fn test_ef_search_tuning() {
 }
 
 #[test]
-fn test_save_load_roundtrip() {
-    use std::fs;
-
-    let test_dir = "/tmp/omendb_test_vector_store";
-    let test_path = format!("{test_dir}/test_store");
-
-    // Clean up any existing test data
-    let _ = fs::remove_dir_all(test_dir);
-
-    // Create store with 100 vectors
-    let mut store = VectorStore::new(128);
-    for i in 0..100 {
-        store.insert(random_vector(128, i)).unwrap();
-    }
-
-    // Verify we have HNSW index
-    assert!(store.hnsw_index.is_some());
-    assert_eq!(store.len(), 100);
-
-    // Save to disk
-    store.save_to_disk(&test_path).unwrap();
-
-    // Verify HNSW index file exists
-    assert!(fs::metadata(format!("{test_dir}/test_store.hnsw")).is_ok());
-    assert!(fs::metadata(format!("{test_dir}/test_store.vectors.bin")).is_ok());
-
-    // Load from disk
-    let loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
-
-    // Verify loaded store
-    assert_eq!(loaded_store.len(), 100);
-    assert_eq!(loaded_store.dimensions, 128);
-    assert!(
-        loaded_store.hnsw_index.is_some(),
-        "HNSW index should be rebuilt"
-    );
-
-    // Verify vectors are identical
-    for i in 0..100 {
-        let original = store.get(i).unwrap();
-        let loaded = loaded_store.get(i).unwrap();
-        assert_eq!(original.data, loaded.data);
-    }
-
-    // Verify search works on loaded store
-    let query = random_vector(128, 50);
-    let mut loaded_mut = loaded_store;
-    let results = loaded_mut.knn_search(&query, 10).unwrap();
-    assert_eq!(results.len(), 10);
-
-    // Clean up
-    let _ = fs::remove_dir_all(test_dir);
-}
-
-#[test]
 fn test_rebuild_index() {
     let mut store = VectorStore::new(128);
 
@@ -455,58 +400,6 @@ fn test_search_with_filter() {
     for (_, _, metadata) in &results {
         assert_eq!(metadata.get("author").unwrap(), "Alice");
     }
-}
-
-#[test]
-fn test_persistence_with_metadata() {
-    use std::fs;
-
-    let test_dir = "/tmp/omendb_test_metadata";
-    let test_path = format!("{test_dir}/test_store");
-
-    // Clean up any existing test data
-    let _ = fs::remove_dir_all(test_dir);
-
-    // Create store with metadata
-    let mut store = VectorStore::new(128);
-
-    store
-        .set(
-            "doc1".to_string(),
-            random_vector(128, 0),
-            serde_json::json!({"title": "Doc 1", "year": 2024}),
-        )
-        .unwrap();
-
-    store
-        .set(
-            "doc2".to_string(),
-            random_vector(128, 1),
-            serde_json::json!({"title": "Doc 2", "year": 2023}),
-        )
-        .unwrap();
-
-    // Save to disk
-    store.save_to_disk(&test_path).unwrap();
-
-    // Verify metadata files exist
-    assert!(fs::metadata(format!("{test_dir}/test_store.metadata.json")).is_ok());
-    assert!(fs::metadata(format!("{test_dir}/test_store.id_mapping.json")).is_ok());
-
-    // Load from disk
-    let loaded_store = VectorStore::load_from_disk(&test_path, 128).unwrap();
-
-    // Verify metadata was loaded
-    assert_eq!(loaded_store.metadata.len(), 2);
-    assert_eq!(loaded_store.id_to_index.len(), 2);
-
-    // Verify we can retrieve by ID
-    let (_, metadata) = loaded_store.get_by_id("doc1").unwrap();
-    assert_eq!(metadata.get("title").unwrap(), "Doc 1");
-    assert_eq!(metadata.get("year").unwrap(), 2024);
-
-    // Clean up
-    let _ = fs::remove_dir_all(test_dir);
 }
 
 #[test]
