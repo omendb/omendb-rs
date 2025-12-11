@@ -10,8 +10,10 @@
 use super::hnsw::{DistanceFunction, HNSWParams};
 use super::hnsw_index::HNSWIndex;
 use super::storage::SeerDBStorage;
+use super::storage_trait::Storage;
 use super::types::Vector;
 use super::QuantizationMode;
+use crate::omen::OmenStorage;
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
 use omendb_core::compression::RaBitQParams;
@@ -346,8 +348,8 @@ pub struct VectorStore {
     /// Deleted vector IDs (tombstones for MVCC)
     deleted: HashMap<usize, bool>,
 
-    /// Persistent storage backend (seerdb LSM)
-    storage: Option<SeerDBStorage>,
+    /// Persistent storage backend (OmenStorage default, SeerDBStorage legacy)
+    storage: Option<Box<dyn Storage>>,
 
     /// Storage path (for `TextIndex` subdirectory)
     storage_path: Option<PathBuf>,
@@ -470,7 +472,7 @@ impl VectorStore {
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let storage = SeerDBStorage::open(path)?;
+        let storage: Box<dyn Storage> = Box::new(SeerDBStorage::open(path)?);
 
         // Check if store was quantized - if so, skip loading vectors to RAM
         // (use seerdb for rescore instead)
@@ -619,7 +621,7 @@ impl VectorStore {
         }
 
         // Create new persistent store with options
-        let storage = SeerDBStorage::open(path)?;
+        let storage: Box<dyn Storage> = Box::new(SeerDBStorage::open(path)?);
         let dimensions = options.dimensions;
 
         // Determine HNSW parameters
@@ -2450,11 +2452,11 @@ impl VectorStore {
         self.storage.is_some()
     }
 
-    /// Get reference to the seerdb storage backend (if persistent)
+    /// Get reference to the storage backend (if persistent)
     ///
     /// Returns None if storage is not persistent (in-memory mode).
     /// Use for profiling/stats access only.
-    pub fn storage(&self) -> Option<&SeerDBStorage> {
-        self.storage.as_ref()
+    pub fn storage(&self) -> Option<&dyn Storage> {
+        self.storage.as_ref().map(|s| s.as_ref())
     }
 }

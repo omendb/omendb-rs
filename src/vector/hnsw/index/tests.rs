@@ -1203,9 +1203,6 @@ fn profile_seerdb_comprehensive() {
     let persist_search_qps = queries as f64 / persist_search.as_secs_f64();
     println!("search (metadata): {persist_search:?} ({persist_search_qps:.0} QPS)");
 
-    // Get seerdb stats for metadata lookups
-    let stats = persist_store.storage().unwrap().stats();
-
     drop(persist_store);
 
     // === TEST 3: Cold Start (reopen from disk) ===
@@ -1250,85 +1247,23 @@ fn profile_seerdb_comprehensive() {
     println!("| Cold start | N/A | {reload_time:?} | - |");
     println!("| Flush | N/A | {flush_time:?} | - |");
 
-    println!("\n=== seerdb Stats ===");
-    println!("Cache hit rate: {:.1}%", stats.cache_hit_rate * 100.0);
-    println!(
-        "Cache hits: {}, misses: {}",
-        stats.cache_hits, stats.cache_misses
-    );
-    println!("Total gets: {}", stats.total_gets);
-    println!("SSTables: {:?}", stats.sstables_per_level);
-
-    // Write comprehensive results
+    // Write results
     let results = format!(
-        r"# seerdb Profile Results (Comprehensive)
+        r"# Storage Profile Results
 
 **Date**: {}
 **Dataset**: {} vectors, {} dimensions
 **Queries**: {}
 
-## Should oadb Use seerdb?
-
-**YES** - seerdb provides:
-1. **Persistence** - Data survives process restart
-2. **Durability** - WAL protects against crashes
-3. **Minimal overhead** - See benchmarks below
-
 ## Performance Comparison
 
-| Operation | In-Memory | seerdb | Overhead |
-|-----------|-----------|--------|----------|
+| Operation | In-Memory | Persistent | Overhead |
+|-----------|-----------|------------|----------|
 | Insert ({} vec) | {:?} | {:?} | {:.1}x |
 | knn_search | {:.0} QPS | {:.0} QPS | {:.1}% |
 | search (metadata) | {:.0} QPS | {:.0} QPS | {:.1}% |
 | Cold start | N/A | {:?} | - |
 | Flush | N/A | {:?} | - |
-
-## Key Findings
-
-### 1. Search Performance: IDENTICAL
-- knn_search uses in-memory HNSW graph (no seerdb I/O)
-- seerdb overhead: {:.1}% (within noise)
-
-### 2. Insert Performance: {:.1}x Overhead
-- seerdb writes: vectors, metadata, ID mappings (4 KV pairs/vector)
-- Still achieves {:.0} vec/s with persistence
-
-### 3. Cold Start: {:?}
-- Loads {} vectors from seerdb on startup
-- Rebuilds HNSW index in memory
-
-### 4. Metadata Lookups
-- search() reads metadata from seerdb for results
-- Cache hit rate: {:.1}%
-- Total seerdb gets: {}
-
-## seerdb Stats
-
-```
-Cache hits: {}
-Cache misses: {}
-Hit rate: {:.1}%
-SSTables per level: {:?}
-Total gets: {}
-```
-
-## Recommendation
-
-**Keep seerdb for oadb** because:
-1. Search performance is NOT affected (in-memory HNSW)
-2. Insert overhead is acceptable ({:.1}x for durability)
-3. Cold start is fast enough ({:?} for {} vectors)
-4. Durability is critical for production use
-
-## Alternatives Considered
-
-| Alternative | Pros | Cons |
-|-------------|------|------|
-| No persistence | Fastest inserts | Data lost on restart |
-| Simple file | Simpler code | No durability, slow reload |
-| fjall | Simpler API | Less optimized for oadb use case |
-| **seerdb** | Optimized, durable | Slight insert overhead |
 ",
         chrono::Local::now().format("%Y-%m-%d"),
         n,
@@ -1346,25 +1281,10 @@ Total gets: {}
         (1.0 - persist_search_qps / inmem_search_qps) * 100.0,
         reload_time,
         flush_time,
-        (1.0 - persist_knn_qps / inmem_knn_qps) * 100.0,
-        persist_insert.as_secs_f64() / inmem_insert.as_secs_f64(),
-        n as f64 / persist_insert.as_secs_f64(),
-        reload_time,
-        n,
-        stats.cache_hit_rate * 100.0,
-        stats.total_gets,
-        stats.cache_hits,
-        stats.cache_misses,
-        stats.cache_hit_rate * 100.0,
-        stats.sstables_per_level,
-        stats.total_gets,
-        persist_insert.as_secs_f64() / inmem_insert.as_secs_f64(),
-        reload_time,
-        n,
     );
 
     let output_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("SEERDB_PROFILE_RESULTS.md");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("STORAGE_PROFILE_RESULTS.md");
     let mut file = File::create(&output_path).expect("Failed to create results file");
     file.write_all(results.as_bytes())
         .expect("Failed to write results");
@@ -1424,12 +1344,6 @@ fn profile_seerdb_impl(_n: usize) {
         let _ = store.knn_search(&Vector::new(query_vecs[0].clone()), 10);
     }
 
-    // Get stats after warmup (snapshot)
-    let stats_after_warmup = store
-        .storage()
-        .expect("Store should have persistent storage")
-        .stats();
-
     // Benchmark search
     let start = Instant::now();
     for q in &query_vecs {
@@ -1439,63 +1353,15 @@ fn profile_seerdb_impl(_n: usize) {
     let qps = queries as f64 / search_time.as_secs_f64();
     let ms_per_query = search_time.as_secs_f64() * 1000.0 / queries as f64;
 
-    // Get post-search stats
-    let stats_after = store
-        .storage()
-        .expect("Store should have persistent storage")
-        .stats();
-
-    // Calculate delta for this search batch
-    let search_gets = stats_after.total_gets - stats_after_warmup.total_gets;
-    let search_cache_hits = stats_after.cache_hits - stats_after_warmup.cache_hits;
-    let search_cache_misses = stats_after.cache_misses - stats_after_warmup.cache_misses;
-    let search_hit_rate = if search_cache_hits + search_cache_misses > 0 {
-        search_cache_hits as f64 / (search_cache_hits + search_cache_misses) as f64
-    } else {
-        0.0
-    };
-
     // Print results
     println!("\n=== Search Latency ===");
     println!("Total search time: {search_time:?}");
     println!("Per-query: {ms_per_query:.2}ms");
     println!("QPS: {qps:.0}");
-    println!(
-        "Edge lookups (seerdb gets): {} ({:.1} per query)",
-        search_gets,
-        search_gets as f64 / queries as f64
-    );
-
-    println!("\n=== Cache Stats (Search Batch) ===");
-    println!("Cache hits: {search_cache_hits}");
-    println!("Cache misses: {search_cache_misses}");
-    println!("Cache hit rate: {:.1}%", search_hit_rate * 100.0);
-
-    println!("\n=== Cache Stats (Cumulative) ===");
-    println!("Total cache hits: {}", stats_after.cache_hits);
-    println!("Total cache misses: {}", stats_after.cache_misses);
-    println!(
-        "Overall hit rate: {:.1}%",
-        stats_after.cache_hit_rate * 100.0
-    );
-
-    println!("\n=== LSM Tree Health ===");
-    println!("SSTables per level: {:?}", stats_after.sstables_per_level);
-    println!("Total SSTables: {}", stats_after.total_sstables);
-    println!(
-        "Total disk bytes: {} KB",
-        stats_after.total_disk_bytes / 1024
-    );
-
-    println!("\n=== Latency Percentiles ===");
-    println!("Get p50: {}us", stats_after.get_latency_p50_us);
-    println!("Get p95: {}us", stats_after.get_latency_p95_us);
-    println!("Get p99: {}us", stats_after.get_latency_p99_us);
-    println!("Get p999: {}us", stats_after.get_latency_p999_us);
 
     // Write results to file
     let results = format!(
-        r"# seerdb Profile Results
+        r"# Storage Profile Results
 
 **Date**: {}
 **Dataset**: {} vectors, {} dimensions
@@ -1504,65 +1370,22 @@ fn profile_seerdb_impl(_n: usize) {
 ## Search Latency
 - Avg search time: {:.2} ms
 - QPS: {:.0}
-- Edge lookups per search: {:.1}
-
-## Cache Stats (During Search)
-- Hit rate: {:.1}%
-- Hits: {}
-- Misses: {}
 
 ## Flush Timing
 - {} vector flush: {:?}
-
-## LSM Health
-- SSTables per level: {:?}
-- Total SSTables: {}
-- Total disk: {} KB
-
-## Get Latency Percentiles
-- p50: {}us
-- p95: {}us
-- p99: {}us
-- p999: {}us
-
-## Analysis
-- Cache hit rate {}: {}
-- LSM health: {}
 ",
         chrono::Local::now().format("%Y-%m-%d"),
         n,
         dim,
         ms_per_query,
         qps,
-        search_gets as f64 / queries as f64,
-        search_hit_rate * 100.0,
-        search_cache_hits,
-        search_cache_misses,
         n,
         flush_time,
-        stats_after.sstables_per_level,
-        stats_after.total_sstables,
-        stats_after.total_disk_bytes / 1024,
-        stats_after.get_latency_p50_us,
-        stats_after.get_latency_p95_us,
-        stats_after.get_latency_p99_us,
-        stats_after.get_latency_p999_us,
-        if search_hit_rate > 0.7 { ">" } else { "<" },
-        if search_hit_rate > 0.7 {
-            "GOOD (>70%)"
-        } else {
-            "NEEDS TUNING (<70%)"
-        },
-        if stats_after.sstables_per_level.first().copied().unwrap_or(0) < 20 {
-            "GOOD (L0 < 20)"
-        } else {
-            "COMPACTION FALLING BEHIND"
-        },
     );
 
-    // Write to SEERDB_PROFILE_RESULTS.md
+    // Write to STORAGE_PROFILE_RESULTS.md
     let output_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("SEERDB_PROFILE_RESULTS.md");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("STORAGE_PROFILE_RESULTS.md");
     let mut file = File::create(&output_path).expect("Failed to create results file");
     file.write_all(results.as_bytes())
         .expect("Failed to write results");
