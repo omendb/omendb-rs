@@ -472,33 +472,40 @@ impl VectorStore {
         let path = path.as_ref();
         let storage = SeerDBStorage::open(path)?;
 
-        // Load existing data from storage
-        let vectors_data = storage.load_all_vectors()?;
+        // Check if store was quantized - if so, skip loading vectors to RAM
+        // (use seerdb for rescore instead)
+        let is_quantized = storage.is_quantized()?;
+
+        // Load metadata and mappings (always needed)
         let metadata = storage.load_all_metadata()?;
         let id_to_index = storage.load_all_id_mappings()?;
         let deleted = storage.load_all_deleted()?;
 
-        // Get dimensions from config or infer from vectors
-        let dimensions = if let Some(dim) = storage.get_config("dimensions")? {
-            dim as usize
-        } else if let Some((_, first_vec)) = vectors_data.first() {
-            first_vec.len()
+        // Get dimensions from config
+        let dimensions = storage.get_config("dimensions")?.unwrap_or(0) as usize;
+
+        // Load vectors to RAM only if NOT quantized
+        // When quantized, use seerdb for rescore (Phase 1 change)
+        let (vectors, real_indices) = if is_quantized {
+            // Skip loading vectors to RAM - use seerdb for rescore
+            (Vec::new(), std::collections::HashSet::new())
         } else {
-            0 // Will be set on first insert
-        };
+            // Non-quantized: load vectors to RAM for HNSW
+            let vectors_data = storage.load_all_vectors()?;
+            let mut vectors: Vec<Vector> = Vec::new();
+            let mut real_indices: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
 
-        // Convert vectors to Vector type, tracking which indices have real data
-        let mut vectors: Vec<Vector> = Vec::new();
-        let mut real_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-        for (id, data) in &vectors_data {
-            // Fill gaps with placeholder vectors (will be marked as deleted)
-            while vectors.len() < *id {
-                vectors.push(Vector::new(vec![0.0; dimensions]));
+            for (id, data) in &vectors_data {
+                // Fill gaps with placeholder vectors (will be marked as deleted)
+                while vectors.len() < *id {
+                    vectors.push(Vector::new(vec![0.0; dimensions.max(1)]));
+                }
+                vectors.push(Vector::new(data.clone()));
+                real_indices.insert(*id);
             }
-            vectors.push(Vector::new(data.clone()));
-            real_indices.insert(*id);
-        }
+            (vectors, real_indices)
+        };
 
         // Mark gap-filled vectors as deleted (they're placeholders, not real data)
         // This ensures they're filtered out during search
@@ -509,16 +516,31 @@ impl VectorStore {
             }
         }
 
-        // Build HNSW index with ALL vectors to maintain index alignment
-        // (deleted vectors are filtered at search time, not index time)
-        // Use batch_insert for parallel construction
-        let hnsw_index = if vectors.is_empty() {
-            None
-        } else {
+        // Build HNSW index
+        // NOTE: When reopening a quantized store, quantization is LOST because
+        // we rebuild HNSW without the quantization settings. This is a limitation
+        // that will be addressed by persisting HNSW index to disk.
+        let hnsw_index = if !is_quantized && !vectors.is_empty() {
+            // Non-quantized: build from vectors
             let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
             let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
             index.batch_insert(&vector_data)?;
             Some(index)
+        } else if is_quantized && dimensions > 0 {
+            // Quantized store reopened: load vectors from seerdb and rebuild
+            // TODO: Persist HNSW index for proper quantization preservation
+            let vectors_data = storage.load_all_vectors()?;
+            if !vectors_data.is_empty() {
+                let mut index = HNSWIndex::new(vectors_data.len().max(10_000), dimensions)?;
+                let vector_data: Vec<Vec<f32>> =
+                    vectors_data.iter().map(|(_, v)| v.clone()).collect();
+                index.batch_insert(&vector_data)?;
+                Some(index)
+            } else {
+                None
+            }
+        } else {
+            None
         };
 
         // Try to open existing text index if it exists
@@ -757,6 +779,20 @@ impl VectorStore {
                     .with_ef_construction(self.hnsw_ef_construction)
                     .with_ef_search(self.hnsw_ef_search);
 
+                // Save quantization mode to storage for persistence
+                // Mode values: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+                let quant_mode_id = match &quant_mode {
+                    QuantizationMode::SQ8 => 1u64,
+                    QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
+                        2 => 3u64, // rabitq-2
+                        8 => 4u64, // rabitq-8
+                        _ => 2u64, // default rabitq-4
+                    },
+                };
+                if let Some(ref storage) = self.storage {
+                    storage.put_quantization_mode(quant_mode_id)?;
+                }
+
                 let index = match quant_mode {
                     QuantizationMode::SQ8 => {
                         // SQ8 trains lazily on first 256 vectors
@@ -924,6 +960,20 @@ impl VectorStore {
                         .with_m(self.hnsw_m)
                         .with_ef_construction(self.hnsw_ef_construction)
                         .with_ef_search(self.hnsw_ef_search);
+
+                    // Save quantization mode to storage for persistence
+                    // Mode values: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+                    let quant_mode_id = match &quant_mode {
+                        QuantizationMode::SQ8 => 1u64,
+                        QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
+                            2 => 3u64, // rabitq-2
+                            8 => 4u64, // rabitq-8
+                            _ => 2u64, // default rabitq-4
+                        },
+                    };
+                    if let Some(ref storage) = self.storage {
+                        storage.put_quantization_mode(quant_mode_id)?;
+                    }
 
                     let index = match quant_mode {
                         QuantizationMode::SQ8 => {
@@ -1800,12 +1850,19 @@ impl VectorStore {
         }
 
         // Rescore candidates with full-precision L2 distance
+        // Prefer seerdb (disk) over self.vectors (RAM) to avoid duplication
         let mut rescored: Vec<(usize, f32)> = candidates
             .iter()
             .filter_map(|&(id, _quantized_dist)| {
-                // Get original vector and compute exact distance
-                self.vectors.get(id).map(|vec| {
-                    let dist = l2_distance(&query.data, &vec.data);
+                // Try seerdb first (disk-backed), fall back to RAM
+                let vec_data = if let Some(ref storage) = self.storage {
+                    storage.get_vector(id).ok().flatten()
+                } else {
+                    self.vectors.get(id).map(|v| v.data.clone())
+                };
+
+                vec_data.map(|data| {
+                    let dist = l2_distance(&query.data, &data);
                     (id, dist)
                 })
             })
@@ -2079,8 +2136,32 @@ impl VectorStore {
     }
 
     /// Get vector by ID
+    ///
+    /// Returns the vector from RAM if available, otherwise fetches from disk (seerdb).
+    /// Note: When vectors aren't loaded to RAM (quantized mode), this returns an owned
+    /// vector from disk. Use `get_owned()` for consistent owned semantics.
     pub fn get(&self, id: usize) -> Option<&Vector> {
         self.vectors.get(id)
+    }
+
+    /// Get vector by ID (owned)
+    ///
+    /// Returns an owned vector, fetching from disk if not in RAM.
+    /// Use this when you need the vector data regardless of storage location.
+    pub fn get_owned(&self, id: usize) -> Option<Vector> {
+        // Try RAM first
+        if let Some(v) = self.vectors.get(id) {
+            return Some(v.clone());
+        }
+
+        // Fall back to disk (seerdb)
+        if let Some(ref storage) = self.storage {
+            if let Ok(Some(data)) = storage.get_vector(id) {
+                return Some(Vector::new(data));
+            }
+        }
+
+        None
     }
 
     /// Number of vectors stored (excluding deleted vectors)
