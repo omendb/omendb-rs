@@ -508,10 +508,12 @@ impl ADCTable {
     }
 
     /// Compute distance and return square root (actual L2 distance)
+    ///
+    /// Uses SIMD-accelerated distance computation (AVX2 on x86_64, NEON on aarch64).
     #[inline]
     #[must_use]
     pub fn distance(&self, data: &[u8]) -> f32 {
-        self.distance_squared(data).sqrt()
+        self.distance_squared_simd(data).sqrt()
     }
 
     /// Fast path for 4-bit quantization (most common case)
