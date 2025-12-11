@@ -1,6 +1,6 @@
 //! OmenFile - main API for .omen format
 //!
-//! Storage backend for VectorStore.
+//! Storage backend for VectorStore. Uses bincode for efficient binary serialization.
 
 use crate::omen::{
     align_to_page,
@@ -12,11 +12,27 @@ use crate::omen::{
 };
 use anyhow::Result;
 use memmap2::MmapMut;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+
+/// Serializable metadata for checkpoint persistence
+#[derive(Serialize, Deserialize, Default)]
+struct CheckpointMetadata {
+    /// String ID → internal index
+    id_to_index: HashMap<String, u32>,
+    /// Internal index → string ID
+    index_to_id: HashMap<u32, String>,
+    /// Deleted vector indices
+    deleted: HashMap<u32, bool>,
+    /// Configuration values
+    config: HashMap<String, u64>,
+    /// Per-vector metadata (JSON bytes)
+    metadata: HashMap<u32, Vec<u8>>,
+}
 
 /// Checkpoint threshold (number of WAL entries before compaction)
 const CHECKPOINT_THRESHOLD: u64 = 1000;
@@ -170,52 +186,18 @@ impl OmenFile {
                 }
             }
 
-            // Load metadata section (ID mappings, vector metadata, deleted, config)
+            // Load metadata section (bincode-encoded CheckpointMetadata)
             if let Some(meta_section) = header.get_section(SectionType::MetadataRaw) {
                 let meta_offset = meta_section.offset as usize;
                 let meta_len = meta_section.length as usize;
                 if meta_offset + meta_len <= mmap.len() {
                     let meta_bytes = &mmap[meta_offset..meta_offset + meta_len];
-                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(meta_bytes) {
-                        // Load ID mappings
-                        if let Some(obj) = json.get("id_to_index").and_then(|v| v.as_object()) {
-                            for (k, v) in obj {
-                                if let Some(idx) = v.as_u64() {
-                                    id_to_index.insert(k.clone(), idx as u32);
-                                }
-                            }
-                        }
-                        if let Some(obj) = json.get("index_to_id").and_then(|v| v.as_object()) {
-                            for (k, v) in obj {
-                                if let (Ok(idx), Some(id)) = (k.parse::<u32>(), v.as_str()) {
-                                    index_to_id.insert(idx, id.to_string());
-                                }
-                            }
-                        }
-                        // Load deleted
-                        if let Some(obj) = json.get("deleted").and_then(|v| v.as_object()) {
-                            for (k, v) in obj {
-                                if let (Ok(idx), Some(val)) = (k.parse::<u32>(), v.as_bool()) {
-                                    deleted.insert(idx, val);
-                                }
-                            }
-                        }
-                        // Load config
-                        if let Some(obj) = json.get("config").and_then(|v| v.as_object()) {
-                            for (k, v) in obj {
-                                if let Some(val) = v.as_u64() {
-                                    config.insert(k.clone(), val);
-                                }
-                            }
-                        }
-                        // Load vector metadata
-                        if let Some(obj) = json.get("metadata").and_then(|v| v.as_object()) {
-                            for (k, v) in obj {
-                                if let (Ok(idx), Some(s)) = (k.parse::<u32>(), v.as_str()) {
-                                    metadata_mem.insert(idx, s.as_bytes().to_vec());
-                                }
-                            }
-                        }
+                    if let Ok(meta) = bincode::deserialize::<CheckpointMetadata>(meta_bytes) {
+                        id_to_index = meta.id_to_index;
+                        index_to_id = meta.index_to_id;
+                        deleted = meta.deleted;
+                        config.extend(meta.config);
+                        metadata_mem = meta.metadata;
                     }
                 }
             }
@@ -265,7 +247,7 @@ impl OmenFile {
                     self.replay_neighbors(&entry.data)?;
                 }
                 WalEntryType::UpdateMetadata => {
-                    // TODO: implement metadata replay
+                    // Tracked: cloud-4uv
                 }
                 WalEntryType::Checkpoint => {
                     // Checkpoint - nothing to replay
@@ -535,17 +517,15 @@ impl OmenFile {
             return Ok(());
         }
 
-        // Serialize metadata (ID mappings + vector metadata + deleted + config)
-        let metadata_json = serde_json::json!({
-            "id_to_index": self.id_to_index,
-            "index_to_id": self.index_to_id,
-            "deleted": self.deleted,
-            "config": self.config,
-            "metadata": self.metadata_mem.iter()
-                .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v).to_string()))
-                .collect::<std::collections::HashMap<_, _>>(),
-        });
-        let metadata_bytes = serde_json::to_vec(&metadata_json)
+        // Serialize metadata with bincode (much faster than JSON)
+        let checkpoint_meta = CheckpointMetadata {
+            id_to_index: self.id_to_index.clone(),
+            index_to_id: self.index_to_id.clone(),
+            deleted: self.deleted.clone(),
+            config: self.config.clone(),
+            metadata: self.metadata_mem.clone(),
+        };
+        let metadata_bytes = bincode::serialize(&checkpoint_meta)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         // Calculate section sizes
@@ -625,11 +605,11 @@ impl OmenFile {
 impl OmenFile {
     /// Store a vector by internal index
     pub fn put_vector(&mut self, id: usize, vector: &[f32]) -> Result<()> {
-        // Ensure vectors_mem has enough capacity
-        while self.vectors_mem.len() <= id {
-            self.vectors_mem.push(Vec::new());
-            self.graph_mem.push(Vec::new());
-            self.levels_mem.push(0);
+        let new_len = id + 1;
+        if self.vectors_mem.len() < new_len {
+            self.vectors_mem.resize_with(new_len, Vec::new);
+            self.graph_mem.resize_with(new_len, Vec::new);
+            self.levels_mem.resize(new_len, 0);
         }
         self.vectors_mem[id] = vector.to_vec();
         Ok(())

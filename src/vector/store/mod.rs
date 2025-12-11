@@ -483,7 +483,7 @@ impl VectorStore {
         };
 
         // Check if store was quantized - if so, skip loading vectors to RAM
-        // (use seerdb for rescore instead)
+        // (use disk storage for rescore instead)
         let is_quantized = storage.is_quantized()?;
 
         // Load metadata and mappings (always needed)
@@ -495,9 +495,9 @@ impl VectorStore {
         let dimensions = storage.get_config("dimensions")?.unwrap_or(0) as usize;
 
         // Load vectors to RAM only if NOT quantized
-        // When quantized, use seerdb for rescore (Phase 1 change)
+        // When quantized, use disk storage for rescore
         let (vectors, real_indices) = if is_quantized {
-            // Skip loading vectors to RAM - use seerdb for rescore
+            // Skip loading vectors to RAM - use disk for rescore
             (Vec::new(), std::collections::HashSet::new())
         } else {
             // Non-quantized: load vectors to RAM for HNSW
@@ -537,8 +537,8 @@ impl VectorStore {
             index.batch_insert(&vector_data)?;
             Some(index)
         } else if is_quantized && dimensions > 0 {
-            // Quantized store reopened: load vectors from seerdb and rebuild
-            // TODO: Persist HNSW index for proper quantization preservation
+            // Quantized store reopened: load vectors from disk and rebuild
+            // Tracked: cloud-xa7 - Persist HNSW index to disk
             let vectors_data = storage.load_all_vectors()?;
             if !vectors_data.is_empty() {
                 let mut index = HNSWIndex::new(vectors_data.len().max(10_000), dimensions)?;
@@ -1860,11 +1860,11 @@ impl VectorStore {
         }
 
         // Rescore candidates with full-precision L2 distance
-        // Prefer seerdb (disk) over self.vectors (RAM) to avoid duplication
+        // Prefer disk storage over self.vectors (RAM) to avoid duplication
         let mut rescored: Vec<(usize, f32)> = candidates
             .iter()
             .filter_map(|&(id, _quantized_dist)| {
-                // Try seerdb first (disk-backed), fall back to RAM
+                // Try disk first, fall back to RAM
                 let vec_data = if let Some(ref storage) = self.storage {
                     storage.get_vector(id).ok().flatten()
                 } else {
@@ -2147,9 +2147,9 @@ impl VectorStore {
 
     /// Get vector by ID
     ///
-    /// Returns the vector from RAM if available, otherwise fetches from disk (seerdb).
-    /// Note: When vectors aren't loaded to RAM (quantized mode), this returns an owned
-    /// vector from disk. Use `get_owned()` for consistent owned semantics.
+    /// Returns the vector from RAM if available.
+    /// Note: When vectors aren't loaded to RAM (quantized mode), this returns None.
+    /// Use `get_owned()` if you need disk fallback.
     pub fn get(&self, id: usize) -> Option<&Vector> {
         self.vectors.get(id)
     }
@@ -2164,7 +2164,7 @@ impl VectorStore {
             return Some(v.clone());
         }
 
-        // Fall back to disk (seerdb)
+        // Fall back to disk
         if let Some(ref storage) = self.storage {
             if let Ok(Some(data)) = storage.get_vector(id) {
                 return Some(Vector::new(data));

@@ -1071,23 +1071,22 @@ fn bench_vectorstore_qps() {
     );
 }
 
-/// Profile seerdb storage to identify optimization targets.
-/// Results written to `SEERDB_PROFILE_RESULTS.md` for seerdb development.
+/// Profile persistent storage to identify optimization targets.
 ///
-/// Run with: cargo test --release `profile_seerdb` -- --ignored --nocapture
+/// Run with: cargo test --release `profile_persistence` -- --ignored --nocapture
 #[test]
 #[ignore = "profiling - run manually with --ignored"]
-fn profile_seerdb() {
-    profile_seerdb_impl(100_000);
+fn profile_persistence() {
+    profile_persistence_impl(100_000);
 }
 
-/// Comprehensive seerdb profile comparing persistent vs in-memory.
-/// Tests actual seerdb impact: startup, insert, metadata lookups.
+/// Comprehensive persistence profile comparing persistent vs in-memory.
+/// Tests actual disk I/O impact: startup, insert, metadata lookups.
 ///
-/// Run with: cargo test --release `profile_seerdb_comprehensive` -- --ignored --nocapture
+/// Run with: cargo test --release `profile_persistence_comprehensive` -- --ignored --nocapture
 #[test]
 #[ignore = "profiling - run manually with --ignored"]
-fn profile_seerdb_comprehensive() {
+fn profile_persistence_comprehensive() {
     use crate::vector::{Vector, VectorStore};
     use rand::Rng;
     use std::fs::File;
@@ -1098,7 +1097,7 @@ fn profile_seerdb_comprehensive() {
     let dim = 128;
     let queries = 1000;
 
-    println!("\n=== Comprehensive seerdb Profile ({n} vectors) ===\n");
+    println!("\n=== Comprehensive Persistence Profile ({n} vectors) ===\n");
 
     // Generate random vectors
     let mut rng = rand::thread_rng();
@@ -1109,8 +1108,8 @@ fn profile_seerdb_comprehensive() {
         .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
         .collect();
 
-    // === TEST 1: In-memory (no seerdb) ===
-    println!("=== 1. In-Memory Mode (no seerdb) ===");
+    // === TEST 1: In-memory (no persistence) ===
+    println!("=== 1. In-Memory Mode (no persistence) ===");
     let mut inmem_store = VectorStore::new(dim);
 
     // Insert
@@ -1152,8 +1151,8 @@ fn profile_seerdb_comprehensive() {
     let inmem_search_qps = queries as f64 / inmem_search.as_secs_f64();
     println!("search (metadata): {inmem_search:?} ({inmem_search_qps:.0} QPS)");
 
-    // === TEST 2: Persistent (seerdb) ===
-    println!("\n=== 2. Persistent Mode (seerdb) ===");
+    // === TEST 2: Persistent (disk) ===
+    println!("\n=== 2. Persistent Mode (disk) ===");
     let tmpdir = tempfile::tempdir().unwrap();
     let path = tmpdir.path().join("profile-oadb");
     let mut persist_store = VectorStore::open_with_dimensions(&path, dim).unwrap();
@@ -1194,7 +1193,7 @@ fn profile_seerdb_comprehensive() {
     let persist_knn_qps = queries as f64 / persist_knn.as_secs_f64();
     println!("knn_search: {persist_knn:?} ({persist_knn_qps:.0} QPS)");
 
-    // Search (with metadata lookup from seerdb)
+    // Search (with metadata lookup from disk)
     let start = Instant::now();
     for q in &query_vecs {
         let _ = persist_store.search(&Vector::new(q.clone()), 10, None);
@@ -1206,7 +1205,7 @@ fn profile_seerdb_comprehensive() {
     drop(persist_store);
 
     // === TEST 3: Cold Start (reopen from disk) ===
-    println!("\n=== 3. Cold Start (reload from seerdb) ===");
+    println!("\n=== 3. Cold Start (reload from disk) ===");
     let start = Instant::now();
     let mut reloaded_store = VectorStore::open(&path).unwrap();
     let reload_time = start.elapsed();
@@ -1222,8 +1221,8 @@ fn profile_seerdb_comprehensive() {
     println!("knn_search (post-reload): {reload_knn:?} ({reload_knn_qps:.0} QPS)");
 
     // === SUMMARY ===
-    println!("\n=== Summary: seerdb Impact ===");
-    println!("| Operation | In-Memory | seerdb | Overhead |");
+    println!("\n=== Summary: Persistence Impact ===");
+    println!("| Operation | In-Memory | Persistent | Overhead |");
     println!("|-----------|-----------|--------|----------|");
     println!(
         "| Insert ({} vec) | {:?} | {:?} | {:.1}x |",
@@ -1291,7 +1290,7 @@ fn profile_seerdb_comprehensive() {
     println!("\n✓ Results written to: {}", output_path.display());
 }
 
-fn profile_seerdb_impl(_n: usize) {
+fn profile_persistence_impl(_n: usize) {
     use crate::vector::{Vector, VectorStore};
     use rand::Rng;
     use std::time::Instant;
