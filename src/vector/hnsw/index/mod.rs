@@ -6,9 +6,8 @@
 // - Cache-optimized layout (64-byte aligned hot data)
 
 use super::error::{HNSWError, Result};
-use super::graph_storage::{DiskConfig, GraphStorage};
+use super::graph_storage::GraphStorage;
 use super::storage::{NeighborLists, UnifiedADC, VectorStorage};
-use super::storage_tiering::StorageMode;
 use super::types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
 use omendb_core::compression::RaBitQParams;
 use ordered_float::OrderedFloat;
@@ -88,51 +87,18 @@ pub struct HNSWIndex {
 }
 
 impl HNSWIndex {
-    /// Create a new empty HNSW index with Memory storage mode
-    ///
-    /// This is the default constructor and maintains backward compatibility.
-    /// For explicit storage mode selection, use `new_with_storage()`.
-    pub fn new(
-        dimensions: usize,
-        params: HNSWParams,
-        distance_fn: DistanceFunction,
-        use_quantization: bool,
-    ) -> Result<Self> {
-        Self::new_with_storage(
-            dimensions,
-            params,
-            distance_fn,
-            use_quantization,
-            StorageMode::Memory,
-        )
-    }
-
-    /// Create a new empty HNSW index with explicit storage mode
+    /// Create a new empty HNSW index
     ///
     /// # Arguments
     /// * `dimensions` - Vector dimensionality
     /// * `params` - HNSW construction parameters
     /// * `distance_fn` - Distance function (L2, Cosine, Dot)
     /// * `use_quantization` - Whether to use binary quantization
-    /// * `storage_mode` - Storage mode (Memory, Hybrid, `DiskHeavy`)
-    ///
-    /// # Storage Modes
-    /// * `Memory` (<10M vectors): Pure in-memory storage, fully serializable
-    /// * `Hybrid` (10M-100M vectors): Layer 0 on disk with 30% cache, layers 1-N in memory
-    /// * `DiskHeavy` (100M+ vectors): Layer 0 on disk with 10% cache, layers 1-N in memory
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Automatic mode selection
-    /// let mode = StorageMode::auto_select(num_vectors);
-    /// let index = HNSWIndex::new_with_storage(128, params, DistanceFunction::L2, false, mode)?;
-    /// ```
-    pub fn new_with_storage(
+    pub fn new(
         dimensions: usize,
         params: HNSWParams,
         distance_fn: DistanceFunction,
         use_quantization: bool,
-        storage_mode: StorageMode,
     ) -> Result<Self> {
         params.validate().map_err(HNSWError::InvalidParams)?;
 
@@ -142,7 +108,7 @@ impl HNSWIndex {
             VectorStorage::new_full_precision(dimensions)
         };
 
-        let neighbors = GraphStorage::from_mode(storage_mode, params.max_level as usize);
+        let neighbors = GraphStorage::new(params.max_level as usize);
 
         Ok(Self {
             nodes: Vec::new(),
@@ -195,7 +161,7 @@ impl HNSWIndex {
         }
 
         let vectors = VectorStorage::new_rabitq_quantized(dimensions, rabitq_params);
-        let neighbors = GraphStorage::from_mode(StorageMode::Memory, params.max_level as usize);
+        let neighbors = GraphStorage::new(params.max_level as usize);
 
         Ok(Self {
             nodes: Vec::new(),
@@ -238,7 +204,7 @@ impl HNSWIndex {
         }
 
         let vectors = VectorStorage::new_sq8_quantized(dimensions);
-        let neighbors = GraphStorage::from_mode(StorageMode::Memory, params.max_level as usize);
+        let neighbors = GraphStorage::new(params.max_level as usize);
 
         Ok(Self {
             nodes: Vec::new(),
@@ -651,15 +617,6 @@ impl HNSWIndex {
             return Ok(Vec::new());
         }
 
-        // batch_insert uses parallel graph operations that require Memory mode
-        if !self.neighbors.is_memory_mode() {
-            return Err(HNSWError::Storage(
-                "batch_insert() requires GraphStorage::Memory mode. \
-                 Use insert() for single-threaded insertion with Layered/Disk modes."
-                    .to_string(),
-            ));
-        }
-
         let batch_size = vectors.len();
         info!(batch_size, "Starting parallel batch insertion");
 
@@ -735,12 +692,10 @@ impl HNSWIndex {
         );
 
         // Pre-allocate neighbor storage for all new nodes (required for parallel access)
-        if let GraphStorage::Memory(ref mut lists) = self.neighbors {
-            for &node_id in &node_ids {
-                // Pre-allocate empty neighbor lists for all levels
-                for level in 0..self.params.max_level {
-                    lists.set_neighbors(node_id, level, Vec::new());
-                }
+        for &node_id in &node_ids {
+            // Pre-allocate empty neighbor lists for all levels
+            for level in 0..self.params.max_level {
+                self.neighbors.set_neighbors(node_id, level, Vec::new());
             }
         }
 
@@ -2163,7 +2118,7 @@ impl HNSWIndex {
 
         // Read neighbor lists (always Memory mode when loading from file)
         let neighbor_lists: NeighborLists = bincode::deserialize_from(&mut reader)?;
-        let neighbors = GraphStorage::Memory(neighbor_lists);
+        let neighbors = GraphStorage(neighbor_lists);
 
         // Read vectors
         let vectors: VectorStorage = bincode::deserialize_from(&mut reader)?;
@@ -2198,184 +2153,6 @@ impl HNSWIndex {
             dimensions = index.dimensions(),
             memory_bytes = index.memory_usage(),
             "Index load completed successfully"
-        );
-
-        Ok(index)
-    }
-
-    /// Save graph to disk for disk-backed queries
-    ///
-    /// Uses `WritableDiskStorage` for incremental writes with offset index.
-    ///
-    /// # Workflow
-    /// 1. Build index with Memory mode
-    /// 2. `save()` - Save full index to file
-    /// 3. `save_graph_to_disk()` - Also save graph to disk directory
-    /// 4. `load_with_disk_graph()` - Load for queries with disk-backed graph
-    ///
-    /// # Arguments
-    /// * `disk_path` - Path to disk storage directory (will be created)
-    ///
-    /// # Errors
-    /// - Returns error if `GraphStorage` is not Memory mode
-    /// - Returns error if directory creation or file writing fails
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Build index
-    /// let mut index = HNSWIndex::new(...)?;
-    /// for vec in vectors {
-    ///     index.insert(vec)?;
-    /// }
-    ///
-    /// // Save for persistence
-    /// index.save("index.bin")?;
-    ///
-    /// // Also save graph to disk (uses WritableDiskStorage)
-    /// index.save_graph_to_disk("index_graph")?;
-    ///
-    /// // Later: Load with disk-backed graph for memory-efficient queries
-    /// let config = DiskConfig::new(PathBuf::from("index_graph"), index.len());
-    /// let index = HNSWIndex::load_with_disk_graph("index.bin", config)?;
-    /// ```
-    #[instrument(skip(self, disk_path))]
-    pub fn save_graph_to_disk<P: AsRef<Path>>(&self, disk_path: P) -> Result<()> {
-        info!("Starting graph save to disk with WritableDiskStorage");
-        let start = std::time::Instant::now();
-
-        // Only Memory mode can be saved to disk
-        // (Layered mode is already using disk, no need to save again)
-        if !self.neighbors.is_memory_mode() {
-            return Err(HNSWError::Storage(
-                "save_graph_to_disk() requires GraphStorage::Memory mode. \
-                 Layered mode is already using disk storage."
-                    .to_string(),
-            ));
-        }
-
-        // Create WritableDiskStorage
-        use super::disk_storage::WritableDiskStorage;
-        let mut writable = WritableDiskStorage::create(
-            disk_path.as_ref(),
-            self.params.max_level as u32,
-            self.params.m as u32,
-        )?;
-
-        // Write nodes incrementally
-        for node_id in 0..self.nodes.len() {
-            let node = &self.nodes[node_id];
-
-            // Collect neighbors for all levels
-            let mut neighbors_per_level = Vec::new();
-            for level in 0..=node.level as usize {
-                let neighbors = self
-                    .neighbors
-                    .get_neighbors(node_id as u32, level as u8)
-                    .unwrap_or_else(|_| Vec::new());
-                neighbors_per_level.push(neighbors);
-            }
-
-            // Write node with all levels at once
-            writable.write_node(node_id as u32, &neighbors_per_level)?;
-        }
-
-        // Finalize (flush + save offset index)
-        let _disk_storage = writable.finalize()?;
-
-        let elapsed = start.elapsed();
-        info!(
-            duration_ms = elapsed.as_millis(),
-            num_nodes = self.nodes.len(),
-            disk_path = ?disk_path.as_ref(),
-            "Graph save to disk completed successfully (WritableDiskStorage)"
-        );
-
-        Ok(())
-    }
-
-    /// Load index with disk-backed graph storage for memory-efficient queries
-    ///
-    /// Loads index from save file, but replaces `GraphStorage` with disk-backed
-    /// version using `DiskStorage` + `CachedStorage`.
-    ///
-    /// # Memory Savings
-    /// - Memory mode: ~1.2 GB graph for 1M vectors
-    /// - Disk mode (30% cache): ~400 MB graph (67% savings!)
-    ///
-    /// # Arguments
-    /// * `index_path` - Path to saved index file (from `save()`)
-    /// * `disk_config` - Disk storage configuration (path + cache size)
-    ///
-    /// # Errors
-    /// - Returns error if index file doesn't exist
-    /// - Returns error if disk storage directory doesn't exist
-    /// - Returns error if file format is invalid
-    ///
-    /// # Example
-    /// ```ignore
-    /// // After save() and save_graph_to_disk()
-    /// let config = DiskConfig::new(
-    ///     PathBuf::from("index_graph"),
-    ///     1_000_000, // 1M nodes
-    /// );
-    ///
-    /// let index = HNSWIndex::load_with_disk_graph("index.bin", config)?;
-    ///
-    /// // Query as normal (graph loaded from disk on-demand)
-    /// let results = index.search(&query, 10, 50)?;
-    /// ```
-    #[instrument(skip(index_path, disk_config))]
-    pub fn load_with_disk_graph<P: AsRef<Path>>(
-        index_path: P,
-        disk_config: DiskConfig,
-    ) -> Result<Self> {
-        info!("Starting index load with disk-backed graph");
-        let start = std::time::Instant::now();
-
-        // Load index normally (will load GraphStorage::Memory from file)
-        let mut index = Self::load(index_path)?;
-
-        // Extract upper layer neighbors from loaded index (Memory mode)
-        // We need this because LayeredStorage routes upper layers to MemoryStorage
-        use super::cached_storage::CachedStorage;
-        use super::disk_storage::DiskStorage;
-        use super::layered_storage::LayeredStorage;
-        use super::node_storage::{MemoryStorage, NodeStorage};
-
-        let mut upper_layers_storage = MemoryStorage::new(index.params.max_level as usize);
-
-        // Copy upper layer neighbors (level 1+) from loaded index
-        for node in &index.nodes {
-            for level in 1..=node.level as usize {
-                if let Ok(neighbors) = index.neighbors.get_neighbors(node.id, level as u8) {
-                    upper_layers_storage.write_neighbors(node.id, level as u8, &neighbors)?;
-                }
-            }
-        }
-
-        // Load layer 0 from disk
-        let disk_storage = DiskStorage::open_with_offsets(&disk_config.path, disk_config.populate)?;
-        let cached = CachedStorage::new(Box::new(disk_storage), disk_config.cache_capacity);
-
-        // Create LayeredStorage with:
-        // - Layer 0: DiskStorage (from disk)
-        // - Upper layers: MemoryStorage (populated from loaded index)
-        let layered = LayeredStorage::new_with_upper_layers(
-            Box::new(cached),
-            upper_layers_storage,
-            super::storage_tiering::StorageMode::Hybrid,
-            index.params.max_level as usize,
-        );
-
-        index.neighbors = GraphStorage::Layered(Box::new(layered));
-
-        let elapsed = start.elapsed();
-        info!(
-            duration_ms = elapsed.as_millis(),
-            index_size = index.len(),
-            dimensions = index.dimensions(),
-            storage_mode = ?index.neighbors.mode(),
-            "Index load with disk graph completed successfully"
         );
 
         Ok(index)
