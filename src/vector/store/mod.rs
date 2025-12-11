@@ -7,6 +7,12 @@
 //!
 //! Optional tantivy-based full-text search for hybrid (vector + BM25) retrieval.
 
+mod filter;
+mod options;
+
+pub use filter::MetadataFilter;
+pub use options::VectorStoreOptions;
+
 use super::hnsw::{DistanceFunction, HNSWParams};
 use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
@@ -14,7 +20,6 @@ use super::QuantizationMode;
 use crate::omen::OmenFile;
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
-use omendb_core::compression::RaBitQParams;
 use omendb_core::distance::l2_distance;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
@@ -23,299 +28,6 @@ use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod tests;
-
-// ============================================================================
-// VectorStoreOptions - Builder pattern for VectorStore configuration
-// ============================================================================
-
-/// Configuration options for opening or creating a vector store.
-///
-/// Follows the `std::fs::OpenOptions` pattern for familiar, ergonomic API.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use omendb::vector::store::VectorStoreOptions;
-///
-/// // Simple persistent store
-/// let store = VectorStoreOptions::default()
-///     .dimensions(384)
-///     .open("./vectors")?;
-///
-/// // With custom HNSW parameters
-/// let store = VectorStoreOptions::default()
-///     .dimensions(384)
-///     .m(32)
-///     .ef_construction(400)
-///     .ef_search(100)
-///     .open("./vectors")?;
-///
-/// // In-memory store
-/// let store = VectorStoreOptions::default()
-///     .dimensions(384)
-///     .build()?;
-/// # Ok::<(), anyhow::Error>(())
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct VectorStoreOptions {
-    /// Vector dimensionality (0 = infer from first insert or existing data)
-    dimensions: usize,
-
-    /// HNSW M parameter: neighbors per node (default: 16)
-    m: Option<usize>,
-
-    /// HNSW `ef_construction`: build quality (default: 100)
-    ef_construction: Option<usize>,
-
-    /// HNSW `ef_search`: search quality/speed tradeoff (default: 100)
-    ef_search: Option<usize>,
-
-    /// Quantization mode (SQ8 or RaBitQ for asymmetric HNSW search)
-    quantization: Option<QuantizationMode>,
-
-    /// Rescore candidates with original vectors (default: true when quantization enabled)
-    /// When true, search fetches `k * oversample` candidates using quantized distance,
-    /// then reranks with full precision distance for final k results.
-    rescore: Option<bool>,
-
-    /// Oversampling factor for rescore (default: 3.0)
-    /// Fetches `k * oversample` candidates during quantized search.
-    oversample: Option<f32>,
-
-    /// Text search configuration (None = disabled)
-    text_search_config: Option<TextSearchConfig>,
-}
-
-impl VectorStoreOptions {
-    /// Create new options with defaults.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set vector dimensionality.
-    ///
-    /// If not set, dimensions will be inferred from:
-    /// 1. Existing data when opening a persistent store
-    /// 2. First inserted vector
-    #[must_use]
-    pub fn dimensions(mut self, dim: usize) -> Self {
-        self.dimensions = dim;
-        self
-    }
-
-    /// Set HNSW M parameter (neighbors per node).
-    ///
-    /// Higher M = better recall, more memory. Range: 4-64, default: 16.
-    #[must_use]
-    pub fn m(mut self, m: usize) -> Self {
-        self.m = Some(m);
-        self
-    }
-
-    /// Set HNSW `ef_construction` (build quality).
-    ///
-    /// Higher = better graph quality, slower build. Default: 100.
-    #[must_use]
-    pub fn ef_construction(mut self, ef: usize) -> Self {
-        self.ef_construction = Some(ef);
-        self
-    }
-
-    /// Set HNSW `ef_search` (search quality/speed tradeoff).
-    ///
-    /// Higher = better recall, slower search. Default: 100.
-    #[must_use]
-    pub fn ef_search(mut self, ef: usize) -> Self {
-        self.ef_search = Some(ef);
-        self
-    }
-
-    /// Enable quantization for memory-efficient storage.
-    ///
-    /// # Modes
-    /// - `QuantizationMode::SQ8`: 4x compression, ~2x faster search, ~99% recall (default)
-    /// - `QuantizationMode::RaBitQ(params)`: 4-16x compression, ~0.5x slower, 93-99% recall
-    ///
-    /// # Example
-    /// ```ignore
-    /// // SQ8 (recommended for most cases)
-    /// let store = VectorStoreOptions::default()
-    ///     .dimensions(768)
-    ///     .quantization(QuantizationMode::sq8())
-    ///     .open("./vectors")?;
-    ///
-    /// // RaBitQ for higher compression
-    /// let store = VectorStoreOptions::default()
-    ///     .dimensions(768)
-    ///     .quantization(QuantizationMode::rabitq())
-    ///     .open("./vectors")?;
-    /// ```
-    #[must_use]
-    pub fn quantization(mut self, mode: QuantizationMode) -> Self {
-        self.quantization = Some(mode);
-        self
-    }
-
-    /// Enable SQ8 quantization (4x compression, ~2x faster)
-    ///
-    /// Convenience method for the most common quantization mode.
-    #[must_use]
-    pub fn quantization_sq8(self) -> Self {
-        self.quantization(QuantizationMode::SQ8)
-    }
-
-    /// Enable RaBitQ quantization with default 4-bit parameters (8x compression)
-    #[must_use]
-    pub fn quantization_rabitq(self) -> Self {
-        self.quantization(QuantizationMode::rabitq())
-    }
-
-    /// Enable RaBitQ quantization with custom parameters
-    #[must_use]
-    pub fn quantization_rabitq_params(self, params: RaBitQParams) -> Self {
-        self.quantization(QuantizationMode::RaBitQ(params))
-    }
-
-    /// Enable/disable rescoring with original vectors (default: true when quantization enabled).
-    ///
-    /// When rescoring is enabled, search uses quantized vectors for fast candidate selection,
-    /// then reranks candidates using full-precision vectors for accuracy.
-    ///
-    /// # Arguments
-    /// * `enable` - Whether to rescore candidates
-    #[must_use]
-    pub fn rescore(mut self, enable: bool) -> Self {
-        self.rescore = Some(enable);
-        self
-    }
-
-    /// Set oversampling factor for rescoring (default: 3.0).
-    ///
-    /// When rescoring, fetches `k * oversample` candidates during quantized search,
-    /// then returns top k after reranking with full precision.
-    ///
-    /// Higher values improve recall but increase latency.
-    ///
-    /// # Arguments
-    /// * `factor` - Oversampling multiplier (must be >= 1.0)
-    #[must_use]
-    pub fn oversample(mut self, factor: f32) -> Self {
-        self.oversample = Some(factor.max(1.0));
-        self
-    }
-
-    /// Enable tantivy-based full-text search with default configuration.
-    ///
-    /// When enabled, you can use `set_with_text()` to index text alongside vectors,
-    /// and `hybrid_search()` to search both with RRF fusion.
-    ///
-    /// Uses 50MB writer buffer by default. For custom memory settings,
-    /// use `text_search_config()` instead.
-    #[must_use]
-    pub fn text_search(mut self, enabled: bool) -> Self {
-        self.text_search_config = if enabled {
-            Some(TextSearchConfig::default())
-        } else {
-            None
-        };
-        self
-    }
-
-    /// Enable text search with custom configuration.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Mobile: lower memory
-    /// let store = VectorStoreOptions::default()
-    ///     .text_search_config(TextSearchConfig { writer_buffer_mb: 15 })
-    ///     .open("./db")?;
-    ///
-    /// // Cloud: higher throughput
-    /// let store = VectorStoreOptions::default()
-    ///     .text_search_config(TextSearchConfig { writer_buffer_mb: 200 })
-    ///     .open("./db")?;
-    /// ```
-    #[must_use]
-    pub fn text_search_config(mut self, config: TextSearchConfig) -> Self {
-        self.text_search_config = Some(config);
-        self
-    }
-
-    /// Open or create a persistent vector store at the given path.
-    ///
-    /// Creates the directory if it doesn't exist.
-    /// Loads existing data if the store already exists.
-    pub fn open(&self, path: impl AsRef<Path>) -> Result<VectorStore> {
-        VectorStore::open_with_options(path, self)
-    }
-
-    /// Build an in-memory vector store (no persistence).
-    pub fn build(&self) -> Result<VectorStore> {
-        VectorStore::build_with_options(self)
-    }
-}
-
-/// Metadata filter for vector search (MongoDB-style operators)
-#[derive(Debug, Clone)]
-pub enum MetadataFilter {
-    /// Equality: field == value
-    Eq(String, JsonValue),
-    /// Not equal: field != value
-    Ne(String, JsonValue),
-    /// Greater than or equal: field >= value
-    Gte(String, f64),
-    /// Less than: field < value
-    Lt(String, f64),
-    /// Greater than: field > value
-    Gt(String, f64),
-    /// Less than or equal: field <= value
-    Lte(String, f64),
-    /// In list: field in [values]
-    In(String, Vec<JsonValue>),
-    /// Contains substring: field.contains(value)
-    Contains(String, String),
-    /// Logical AND: all filters must match
-    And(Vec<MetadataFilter>),
-    /// Logical OR: at least one filter must match
-    Or(Vec<MetadataFilter>),
-}
-
-impl MetadataFilter {
-    /// Evaluate filter against metadata
-    #[must_use]
-    pub fn matches(&self, metadata: &JsonValue) -> bool {
-        match self {
-            MetadataFilter::Eq(field, value) => metadata.get(field) == Some(value),
-            MetadataFilter::Ne(field, value) => metadata.get(field) != Some(value),
-            MetadataFilter::Gte(field, threshold) => metadata
-                .get(field)
-                .and_then(serde_json::Value::as_f64)
-                .is_some_and(|v| v >= *threshold),
-            MetadataFilter::Lt(field, threshold) => metadata
-                .get(field)
-                .and_then(serde_json::Value::as_f64)
-                .is_some_and(|v| v < *threshold),
-            MetadataFilter::Gt(field, threshold) => metadata
-                .get(field)
-                .and_then(serde_json::Value::as_f64)
-                .is_some_and(|v| v > *threshold),
-            MetadataFilter::Lte(field, threshold) => metadata
-                .get(field)
-                .and_then(serde_json::Value::as_f64)
-                .is_some_and(|v| v <= *threshold),
-            MetadataFilter::In(field, values) => {
-                metadata.get(field).is_some_and(|v| values.contains(v))
-            }
-            MetadataFilter::Contains(field, substring) => metadata
-                .get(field)
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| s.contains(substring)),
-            MetadataFilter::And(filters) => filters.iter().all(|f| f.matches(metadata)),
-            MetadataFilter::Or(filters) => filters.iter().any(|f| f.matches(metadata)),
-        }
-    }
-}
 
 /// Vector store with HNSW indexing
 pub struct VectorStore {
@@ -368,6 +80,10 @@ pub struct VectorStore {
 }
 
 impl VectorStore {
+    // ============================================================================
+    // Constructors
+    // ============================================================================
+
     /// Create new vector store
     #[must_use]
     pub fn new(dimensions: usize) -> Self {
@@ -454,6 +170,21 @@ impl VectorStore {
         })
     }
 
+    // ============================================================================
+    // Persistence: Open/Create
+    // ============================================================================
+
+    /// Compute .omen path by appending extension (preserves full filename)
+    fn compute_omen_path(path: &Path) -> PathBuf {
+        if path.extension().is_some_and(|ext| ext == "omen") {
+            path.to_path_buf()
+        } else {
+            let mut omen = path.as_os_str().to_os_string();
+            omen.push(".omen");
+            PathBuf::from(omen)
+        }
+    }
+
     /// Open a persistent vector store at the given path
     ///
     /// Creates a new database if it doesn't exist, or loads existing data.
@@ -470,14 +201,7 @@ impl VectorStore {
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        // Compute .omen path by appending extension (preserves full filename)
-        let omen_path = if path.extension().is_some_and(|ext| ext == "omen") {
-            path.to_path_buf()
-        } else {
-            let mut omen = path.as_os_str().to_os_string();
-            omen.push(".omen");
-            PathBuf::from(omen)
-        };
+        let omen_path = Self::compute_omen_path(path);
         let storage = if omen_path.exists() {
             OmenFile::open(path)?
         } else {
@@ -485,7 +209,6 @@ impl VectorStore {
         };
 
         // Check if store was quantized - if so, skip loading vectors to RAM
-        // (use disk storage for rescore instead)
         let is_quantized = storage.is_quantized()?;
 
         // Load metadata and mappings (always needed)
@@ -497,19 +220,15 @@ impl VectorStore {
         let dimensions = storage.get_config("dimensions")?.unwrap_or(0) as usize;
 
         // Load vectors to RAM only if NOT quantized
-        // When quantized, use disk storage for rescore
         let (vectors, real_indices) = if is_quantized {
-            // Skip loading vectors to RAM - use disk for rescore
             (Vec::new(), std::collections::HashSet::new())
         } else {
-            // Non-quantized: load vectors to RAM for HNSW
             let vectors_data = storage.load_all_vectors()?;
             let mut vectors: Vec<Vector> = Vec::new();
             let mut real_indices: std::collections::HashSet<usize> =
                 std::collections::HashSet::new();
 
             for (id, data) in &vectors_data {
-                // Fill gaps with placeholder vectors (will be marked as deleted)
                 while vectors.len() < *id {
                     vectors.push(Vector::new(vec![0.0; dimensions.max(1)]));
                 }
@@ -519,9 +238,8 @@ impl VectorStore {
             (vectors, real_indices)
         };
 
-        // Mark gap-filled vectors as deleted (they're placeholders, not real data)
-        // This ensures they're filtered out during search
-        let mut deleted = deleted; // Make mutable
+        // Mark gap-filled vectors as deleted
+        let mut deleted = deleted;
         for idx in 0..vectors.len() {
             if !real_indices.contains(&idx) && !deleted.contains_key(&idx) {
                 deleted.insert(idx, true);
@@ -530,7 +248,6 @@ impl VectorStore {
 
         // Load or rebuild HNSW index
         let hnsw_index = if let Some(hnsw_bytes) = storage.get_hnsw_index() {
-            // Persisted HNSW index found - deserialize (preserves quantization)
             match bincode::deserialize(hnsw_bytes) {
                 Ok(index) => Some(index),
                 Err(e) => {
@@ -539,13 +256,11 @@ impl VectorStore {
                 }
             }
         } else if !vectors.is_empty() {
-            // No persisted index - build from vectors
             let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
             let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
             index.batch_insert(&vector_data)?;
             Some(index)
         } else if is_quantized && dimensions > 0 {
-            // Quantized store without persisted index - rebuild from disk vectors
             let vectors_data = storage.load_all_vectors()?;
             if !vectors_data.is_empty() {
                 let mut index = HNSWIndex::new(vectors_data.len().max(10_000), dimensions)?;
@@ -560,7 +275,7 @@ impl VectorStore {
             None
         };
 
-        // Try to open existing text index if it exists
+        // Try to open existing text index
         let text_index_path = path.join("text_index");
         let text_index = if text_index_path.exists() {
             Some(TextIndex::open(&text_index_path)?)
@@ -574,7 +289,7 @@ impl VectorStore {
             .map(|(id, &idx)| (idx, id.clone()))
             .collect();
 
-        // Enable rescore if the loaded index is quantized (asymmetric distance)
+        // Enable rescore if the loaded index is quantized
         let rescore_enabled = hnsw_index.as_ref().is_some_and(|idx| idx.is_asymmetric());
 
         Ok(Self {
@@ -617,14 +332,7 @@ impl VectorStore {
     /// This is the internal implementation used by `VectorStoreOptions::open()`.
     pub fn open_with_options(path: impl AsRef<Path>, options: &VectorStoreOptions) -> Result<Self> {
         let path = path.as_ref();
-        // Compute .omen path by appending extension (preserves full filename)
-        let omen_path = if path.extension().is_some_and(|ext| ext == "omen") {
-            path.to_path_buf()
-        } else {
-            let mut omen = path.as_os_str().to_os_string();
-            omen.push(".omen");
-            PathBuf::from(omen)
-        };
+        let omen_path = Self::compute_omen_path(path);
 
         // If path or .omen file exists, load existing data
         if path.exists() || omen_path.exists() {
@@ -655,11 +363,8 @@ impl VectorStore {
         let ef_construction = options.ef_construction.unwrap_or(100);
         let ef_search = options.ef_search.unwrap_or(100);
 
-        // Initialize HNSW - defer when quantization enabled (need vectors to train)
-        // When quantization is enabled, we defer HNSW creation to set_batch()
-        // so we can train the quantizer from actual vectors first
+        // Initialize HNSW - defer when quantization enabled
         let (hnsw_index, pending_quantization) = if options.quantization.is_some() {
-            // Defer HNSW creation - will be created on first insert with trained quantizer
             (None, options.quantization.clone())
         } else if dimensions > 0 {
             if options.m.is_some() || options.ef_construction.is_some() {
@@ -674,7 +379,7 @@ impl VectorStore {
                     None,
                 )
             } else {
-                (None, None) // Will be lazily initialized
+                (None, None)
             }
         } else {
             (None, None)
@@ -727,7 +432,7 @@ impl VectorStore {
         let ef_construction = options.ef_construction.unwrap_or(100);
         let ef_search = options.ef_search.unwrap_or(100);
 
-        // Initialize HNSW - defer when quantization enabled (need vectors to train)
+        // Initialize HNSW - defer when quantization enabled
         let (hnsw_index, pending_quantization) = if options.quantization.is_some() {
             (None, options.quantization.clone())
         } else if dimensions > 0 {
@@ -781,6 +486,10 @@ impl VectorStore {
         })
     }
 
+    // ============================================================================
+    // Insert/Set Methods
+    // ============================================================================
+
     /// Insert vector and return its ID
     pub fn insert(&mut self, vector: Vector) -> Result<usize> {
         let id = self.vectors.len();
@@ -808,13 +517,12 @@ impl VectorStore {
                     .with_ef_search(self.hnsw_ef_search);
 
                 // Save quantization mode to storage for persistence
-                // Mode values: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
                 let quant_mode_id = match &quant_mode {
                     QuantizationMode::SQ8 => 1u64,
                     QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
-                        2 => 3u64, // rabitq-2
-                        8 => 4u64, // rabitq-8
-                        _ => 2u64, // default rabitq-4
+                        2 => 3u64,
+                        8 => 4u64,
+                        _ => 2u64,
                     },
                 };
                 if let Some(ref mut storage) = self.storage {
@@ -823,11 +531,9 @@ impl VectorStore {
 
                 let index = match quant_mode {
                     QuantizationMode::SQ8 => {
-                        // SQ8 trains lazily on first 256 vectors
                         HNSWIndex::new_with_sq8(dimensions, hnsw_params, DistanceFunction::L2)?
                     }
                     QuantizationMode::RaBitQ(params) => {
-                        // RaBitQ needs explicit training
                         let mut idx = HNSWIndex::new_with_asymmetric(
                             dimensions,
                             hnsw_params,
@@ -844,8 +550,6 @@ impl VectorStore {
             }
             self.dimensions = dimensions;
         } else {
-            // Validate dimension matches existing HNSW index
-            // NOTE: HNSW requires all vectors to have same dimension
             if vector.dim() != self.dimensions {
                 anyhow::bail!(
                     "Vector dimension mismatch: store expects {}, got {}. All vectors in same store must have same dimension.",
@@ -864,7 +568,6 @@ impl VectorStore {
         if let Some(ref mut storage) = self.storage {
             storage.put_vector(id, &vector.data)?;
             storage.increment_count()?;
-            // Save dimensions on first insert
             if id == 0 {
                 storage.put_config("dimensions", self.dimensions as u64)?;
             }
@@ -884,20 +587,16 @@ impl VectorStore {
         vector: Vector,
         metadata: JsonValue,
     ) -> Result<usize> {
-        // Check if ID already exists
         if self.id_to_index.contains_key(&id) {
             anyhow::bail!("Vector with ID '{id}' already exists. Use set() to update.");
         }
 
-        // Insert vector using existing insert method
         let index = self.insert(vector)?;
 
-        // Store metadata and ID mapping
         self.metadata.insert(index, metadata.clone());
         self.id_to_index.insert(id.clone(), index);
         self.index_to_id.insert(index, id.clone());
 
-        // Persist to storage if available
         if let Some(ref mut storage) = self.storage {
             storage.put_metadata(index, &metadata)?;
             storage.put_id_mapping(&id, index)?;
@@ -909,42 +608,18 @@ impl VectorStore {
     /// Upsert vector (insert or update) with string ID and metadata
     ///
     /// This is the recommended method for most use cases.
-    /// If the ID exists, updates the vector and metadata.
-    /// If the ID doesn't exist, inserts a new vector.
     pub fn set(&mut self, id: String, vector: Vector, metadata: JsonValue) -> Result<usize> {
-        // Check if ID already exists
         if let Some(&index) = self.id_to_index.get(&id) {
-            // Update existing vector
             self.update_by_index(index, Some(vector), Some(metadata))?;
             Ok(index)
         } else {
-            // Insert new vector
             self.insert_with_metadata(id, vector, metadata)
         }
     }
 
     /// Batch set vectors (insert or update multiple vectors at once)
     ///
-    /// This is the recommended method for bulk operations. It provides significant
-    /// performance improvements over calling `set()` repeatedly by:
-    /// - Reducing function call overhead
-    /// - Batching HNSW insertions
-    /// - Amortizing metadata operations
-    ///
-    /// # Arguments
-    /// * `batch` - Vector of (id, vector, metadata) tuples
-    ///
-    /// # Returns
-    /// Vector of indices for all set vectors
-    ///
-    /// # Example
-    /// ```ignore
-    /// let batch = vec![
-    ///     ("vec1".to_string(), Vector::new(vec![0.1, 0.2]), json!({"key": "value"})),
-    ///     ("vec2".to_string(), Vector::new(vec![0.3, 0.4]), json!({"key": "value2"})),
-    /// ];
-    /// let indices = store.set_batch(batch)?;
-    /// ```
+    /// This is the recommended method for bulk operations.
     pub fn set_batch(&mut self, batch: Vec<(String, Vector, JsonValue)>) -> Result<Vec<usize>> {
         if batch.is_empty() {
             return Ok(Vec::new());
@@ -956,17 +631,15 @@ impl VectorStore {
 
         for (id, vector, metadata) in batch {
             if let Some(&index) = self.id_to_index.get(&id) {
-                // Existing vector - queue for update
                 updates.push((index, vector, metadata));
             } else {
-                // New vector - queue for insert
                 inserts.push((id, vector, metadata));
             }
         }
 
         let mut result_indices = Vec::new();
 
-        // Process updates first (modify in-place)
+        // Process updates first
         for (index, vector, metadata) in updates {
             self.update_by_index(index, Some(vector), Some(metadata))?;
             result_indices.push(index);
@@ -982,21 +655,18 @@ impl VectorStore {
                     self.dimensions
                 };
 
-                // Check if we have pending quantization to train
                 if let Some(quant_mode) = self.pending_quantization.take() {
                     let hnsw_params = HNSWParams::default()
                         .with_m(self.hnsw_m)
                         .with_ef_construction(self.hnsw_ef_construction)
                         .with_ef_search(self.hnsw_ef_search);
 
-                    // Save quantization mode to storage for persistence
-                    // Mode values: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
                     let quant_mode_id = match &quant_mode {
                         QuantizationMode::SQ8 => 1u64,
                         QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
-                            2 => 3u64, // rabitq-2
-                            8 => 4u64, // rabitq-8
-                            _ => 2u64, // default rabitq-4
+                            2 => 3u64,
+                            8 => 4u64,
+                            _ => 2u64,
                         },
                     };
                     if let Some(ref mut storage) = self.storage {
@@ -1005,11 +675,9 @@ impl VectorStore {
 
                     let index = match quant_mode {
                         QuantizationMode::SQ8 => {
-                            // SQ8 trains lazily on first 256 vectors
                             HNSWIndex::new_with_sq8(dimensions, hnsw_params, DistanceFunction::L2)?
                         }
                         QuantizationMode::RaBitQ(params) => {
-                            // RaBitQ needs explicit training from first batch
                             let mut idx = HNSWIndex::new_with_asymmetric(
                                 dimensions,
                                 hnsw_params,
@@ -1025,7 +693,6 @@ impl VectorStore {
 
                     self.hnsw_index = Some(index);
                 } else {
-                    // Standard HNSW without quantization
                     self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
                 }
                 self.dimensions = dimensions;
@@ -1047,7 +714,7 @@ impl VectorStore {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
-            // Sequential insert: parallel batch_insert searches incomplete graphs during construction
+            // Sequential insert
             let base_index = self.vectors.len();
             if let Some(ref mut index) = self.hnsw_index {
                 for vector in &vectors_data {
@@ -1055,14 +722,12 @@ impl VectorStore {
                 }
             }
 
-            // Batch persist to storage (atomic, high-performance)
+            // Batch persist to storage
             if let Some(ref mut storage) = self.storage {
-                // Save dimensions on first insert
                 if base_index == 0 {
                     storage.put_config("dimensions", self.dimensions as u64)?;
                 }
 
-                // Prepare batch items: (index, string_id, vector, metadata)
                 let batch_items: Vec<(usize, String, Vec<f32>, serde_json::Value)> = inserts
                     .iter()
                     .enumerate()
@@ -1076,7 +741,6 @@ impl VectorStore {
                     })
                     .collect();
 
-                // Single atomic batch commit (replaces N individual puts)
                 storage.put_batch(batch_items)?;
             }
 
@@ -1098,24 +762,18 @@ impl VectorStore {
     // Text Search Methods (Hybrid Search)
     // ============================================================================
 
-    /// Enable text search on this store (creates in-memory text index).
-    ///
-    /// For persistent stores, the text index is stored at `{path}/text_index`.
-    /// For in-memory stores, the text index is also in-memory.
+    /// Enable text search on this store
     pub fn enable_text_search(&mut self) -> Result<()> {
         self.enable_text_search_with_config(None)
     }
 
-    /// Enable text search with custom configuration.
-    ///
-    /// # Arguments
-    /// * `config` - Text search configuration (None = use store's default or system default)
+    /// Enable text search with custom configuration
     pub fn enable_text_search_with_config(
         &mut self,
         config: Option<TextSearchConfig>,
     ) -> Result<()> {
         if self.text_index.is_some() {
-            return Ok(()); // Already enabled
+            return Ok(());
         }
 
         let config = config
@@ -1132,34 +790,13 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Check if text search is enabled.
+    /// Check if text search is enabled
     #[must_use]
     pub fn has_text_search(&self) -> bool {
         self.text_index.is_some()
     }
 
-    /// Upsert vector with text content for hybrid search.
-    ///
-    /// Like `set()`, but also indexes text content for BM25 search.
-    /// Requires text search to be enabled.
-    ///
-    /// # Arguments
-    /// * `id` - Unique string identifier
-    /// * `vector` - Vector embedding
-    /// * `text` - Text content for full-text search
-    /// * `metadata` - Optional JSON metadata
-    ///
-    /// # Example
-    /// ```ignore
-    /// store.enable_text_search()?;
-    /// store.set_with_text(
-    ///     "doc1".to_string(),
-    ///     embed("machine learning"),
-    ///     "Machine learning is a branch of AI",
-    ///     json!({"type": "article"})
-    /// )?;
-    /// store.flush()?; // Commit text index changes
-    /// ```
+    /// Upsert vector with text content for hybrid search
     pub fn set_with_text(
         &mut self,
         id: String,
@@ -1171,17 +808,11 @@ impl VectorStore {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
 
-        // Index text content (commit deferred to flush() for batch efficiency)
         text_index.index_document(&id, text)?;
-
-        // Store vector and metadata
         self.set(id, vector, metadata)
     }
 
-    /// Batch upsert vectors with text content for hybrid search.
-    ///
-    /// Like `set_batch()`, but also indexes text content for BM25 search.
-    /// More efficient than repeated `set_with_text()` calls.
+    /// Batch upsert vectors with text content for hybrid search
     pub fn set_batch_with_text(
         &mut self,
         batch: Vec<(String, Vector, String, JsonValue)>,
@@ -1190,12 +821,10 @@ impl VectorStore {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
 
-        // Index all text content
         for (id, _, text, _) in &batch {
             text_index.index_document(id, text)?;
         }
 
-        // Convert to set_batch format (without text)
         let vector_batch: Vec<(String, Vector, JsonValue)> = batch
             .into_iter()
             .map(|(id, vector, _, metadata)| (id, vector, metadata))
@@ -1204,9 +833,7 @@ impl VectorStore {
         self.set_batch(vector_batch)
     }
 
-    /// Search text index only (BM25 scoring).
-    ///
-    /// Returns Vec of (id, score) tuples, sorted by score descending.
+    /// Search text index only (BM25 scoring)
     pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<(String, f32)>> {
         let Some(ref text_index) = self.text_index else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
@@ -1215,29 +842,7 @@ impl VectorStore {
         text_index.search(query, k)
     }
 
-    /// Hybrid search combining vector similarity and BM25 text relevance.
-    ///
-    /// Uses Reciprocal Rank Fusion (RRF) to combine results from:
-    /// - HNSW vector search (by embedding similarity)
-    /// - Tantivy text search (by BM25 relevance)
-    ///
-    /// # Arguments
-    /// * `query_vector` - Query embedding for vector search
-    /// * `query_text` - Query text for BM25 search
-    /// * `k` - Number of results to return
-    /// * `alpha` - Weight for vector vs text (0.0 = text only, 1.0 = vector only, None = 0.5)
-    ///
-    /// # Returns
-    /// Vec of (id, score) tuples, sorted by combined score descending.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Balanced hybrid search
-    /// let results = store.hybrid_search(&query_embedding, "machine learning", 10, None)?;
-    ///
-    /// // Favor vector similarity (70% vector, 30% text)
-    /// let results = store.hybrid_search(&query_embedding, "machine learning", 10, Some(0.7))?;
-    /// ```
+    /// Hybrid search combining vector similarity and BM25 text relevance
     pub fn hybrid_search(
         &mut self,
         query_vector: &Vector,
@@ -1248,14 +853,7 @@ impl VectorStore {
         self.hybrid_search_with_rrf_k(query_vector, query_text, k, alpha, None)
     }
 
-    /// Hybrid search with configurable RRF k constant.
-    ///
-    /// # Arguments
-    /// * `query_vector` - Query embedding for vector search
-    /// * `query_text` - Query text for BM25 search
-    /// * `k` - Number of results to return
-    /// * `alpha` - Weight for vector vs text (0.0 = text only, 1.0 = vector only, None = 0.5)
-    /// * `rrf_k` - RRF constant (None = 60, higher values reduce rank influence)
+    /// Hybrid search with configurable RRF k constant
     pub fn hybrid_search_with_rrf_k(
         &mut self,
         query_vector: &Vector,
@@ -1264,7 +862,6 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(String, f32, JsonValue)>> {
-        // Validate inputs
         if query_vector.data.len() != self.dimensions {
             anyhow::bail!(
                 "Query vector dimension {} does not match store dimension {}",
@@ -1276,13 +873,9 @@ impl VectorStore {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         }
 
-        // Over-fetch from both sources for better fusion
         let fetch_k = k * 2;
 
-        // Vector search
         let vector_results = self.knn_search(query_vector, fetch_k)?;
-
-        // Convert vector results to (id, distance) format - O(1) lookup via reverse map
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|(idx, distance)| {
@@ -1290,10 +883,8 @@ impl VectorStore {
             })
             .collect();
 
-        // Text search - propagate errors (hybrid requires text search enabled)
         let text_results = self.text_search(query_text, fetch_k)?;
 
-        // Fuse results with weighted RRF
         let fused = weighted_reciprocal_rank_fusion(
             vector_results,
             text_results,
@@ -1302,20 +893,10 @@ impl VectorStore {
             alpha.unwrap_or(0.5),
         );
 
-        // Attach metadata to results
         Ok(self.attach_metadata(fused))
     }
 
-    /// Hybrid search with filter (combining vector + text + metadata filter).
-    ///
-    /// Like `hybrid_search()`, but also applies a metadata filter.
-    ///
-    /// # Arguments
-    /// * `query_vector` - Query embedding for vector search
-    /// * `query_text` - Query text for BM25 search
-    /// * `k` - Number of results to return
-    /// * `filter` - Metadata filter to apply
-    /// * `alpha` - Weight for vector vs text (0.0 = text only, 1.0 = vector only, None = 0.5)
+    /// Hybrid search with filter
     pub fn hybrid_search_with_filter(
         &mut self,
         query_vector: &Vector,
@@ -1327,7 +908,7 @@ impl VectorStore {
         self.hybrid_search_with_filter_rrf_k(query_vector, query_text, k, filter, alpha, None)
     }
 
-    /// Hybrid search with filter and configurable RRF k constant.
+    /// Hybrid search with filter and configurable RRF k constant
     pub fn hybrid_search_with_filter_rrf_k(
         &mut self,
         query_vector: &Vector,
@@ -1337,7 +918,6 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(String, f32, JsonValue)>> {
-        // Validate inputs
         if query_vector.data.len() != self.dimensions {
             anyhow::bail!(
                 "Query vector dimension {} does not match store dimension {}",
@@ -1349,14 +929,9 @@ impl VectorStore {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         }
 
-        // Over-fetch 4x to account for filter eliminating candidates
-        // Both sources use same multiplier for symmetric RRF ranking
         let fetch_k = k * 4;
 
-        // Filtered vector search (filter applied during search)
         let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
-
-        // Convert to (id, distance) format - O(1) lookup via reverse map
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|(idx, distance, _)| {
@@ -1364,10 +939,7 @@ impl VectorStore {
             })
             .collect();
 
-        // Text search (filter applied post-search since tantivy can't filter metadata)
         let text_results = self.text_search(query_text, fetch_k)?;
-
-        // Filter text results by metadata
         let text_results: Vec<(String, f32)> = text_results
             .into_iter()
             .filter(|(id, _)| {
@@ -1386,11 +958,10 @@ impl VectorStore {
             alpha.unwrap_or(0.5),
         );
 
-        // Attach metadata to results
         Ok(self.attach_metadata(fused))
     }
 
-    /// Attach metadata to fused results.
+    /// Attach metadata to fused results
     fn attach_metadata(&self, results: Vec<(String, f32)>) -> Vec<(String, f32, JsonValue)> {
         results
             .into_iter()
@@ -1417,7 +988,6 @@ impl VectorStore {
         vector: Option<Vector>,
         metadata: Option<JsonValue>,
     ) -> Result<()> {
-        // Check if vector exists and is not deleted
         if index >= self.vectors.len() {
             anyhow::bail!("Vector index {index} does not exist");
         }
@@ -1425,9 +995,7 @@ impl VectorStore {
             anyhow::bail!("Vector index {index} has been deleted");
         }
 
-        // Update vector if provided
         if let Some(new_vector) = vector {
-            // Validate dimensions
             if new_vector.dim() != self.dimensions {
                 anyhow::bail!(
                     "Vector dimension mismatch: expected {}, got {}",
@@ -1436,20 +1004,16 @@ impl VectorStore {
                 );
             }
 
-            // Update in memory
             self.vectors[index] = new_vector.clone();
 
-            // Persist to storage if available
             if let Some(ref mut storage) = self.storage {
                 storage.put_vector(index, &new_vector.data)?;
             }
         }
 
-        // Update metadata if provided
         if let Some(ref new_metadata) = metadata {
             self.metadata.insert(index, new_metadata.clone());
 
-            // Persist to storage if available
             if let Some(ref mut storage) = self.storage {
                 storage.put_metadata(index, new_metadata)?;
             }
@@ -1474,7 +1038,7 @@ impl VectorStore {
         self.update_by_index(index, vector, metadata)
     }
 
-    /// Delete vector by string ID (marks as deleted, uses tombstone)
+    /// Delete vector by string ID
     pub fn delete(&mut self, id: &str) -> Result<()> {
         let index = self
             .id_to_index
@@ -1482,21 +1046,17 @@ impl VectorStore {
             .copied()
             .ok_or_else(|| anyhow::anyhow!("Vector with ID '{id}' not found"))?;
 
-        // Mark as deleted
         self.deleted.insert(index, true);
 
-        // Persist tombstone to storage if available
         if let Some(ref mut storage) = self.storage {
             storage.put_deleted(index)?;
             storage.delete_id_mapping(id)?;
         }
 
-        // Remove from text index if enabled
         if let Some(ref mut text_index) = self.text_index {
             text_index.delete_document(id)?;
         }
 
-        // Remove from ID mappings
         self.id_to_index.remove(id);
         self.index_to_id.remove(&index);
 
@@ -1517,20 +1077,16 @@ impl VectorStore {
     /// Get vector by string ID
     pub fn get_by_id(&self, id: &str) -> Option<(&Vector, &JsonValue)> {
         self.id_to_index.get(id).and_then(|&index| {
-            // Check if deleted
             if self.deleted.contains_key(&index) {
                 return None;
             }
-            // Return vector and metadata
             self.vectors
                 .get(index)
                 .and_then(|vec| self.metadata.get(&index).map(|meta| (vec, meta)))
         })
     }
 
-    /// Get metadata by string ID (without loading vector data).
-    ///
-    /// More efficient than `get_by_id` when only metadata is needed.
+    /// Get metadata by string ID (without loading vector data)
     pub fn get_metadata_by_id(&self, id: &str) -> Option<&JsonValue> {
         self.id_to_index.get(id).and_then(|&index| {
             if self.deleted.contains_key(&index) {
@@ -1540,27 +1096,18 @@ impl VectorStore {
         })
     }
 
+    // ============================================================================
+    // Batch Insert / Index Rebuild
+    // ============================================================================
+
     /// Insert batch of vectors in parallel
-    ///
-    /// Automatically chunks vectors into optimal batch sizes for parallel insertion.
-    /// Uses `hnsw_rs`'s `parallel_insert` with Rayon for multi-threaded building.
-    ///
-    /// Chunk size of 10,000 balances:
-    /// - Parallelization overhead (want batches large enough)
-    /// - Memory usage (smaller batches more memory-friendly)
-    /// - Progress reporting (can log after each chunk)
-    ///
-    /// Returns Vec of IDs for inserted vectors
     pub fn batch_insert(&mut self, vectors: Vec<Vector>) -> Result<Vec<usize>> {
-        // Chunk size for parallel insertion (recommended: 1000 × num_threads)
-        // Using 10,000 as a good default (works well for 4-16 core machines)
         const CHUNK_SIZE: usize = 10_000;
 
         if vectors.is_empty() {
             return Ok(Vec::new());
         }
 
-        // Validate dimensions
         for (i, vector) in vectors.iter().enumerate() {
             if vector.dim() != self.dimensions {
                 anyhow::bail!(
@@ -1572,7 +1119,6 @@ impl VectorStore {
             }
         }
 
-        // Lazy initialize HNSW on first insert
         if self.hnsw_index.is_none() {
             if let Some(quant_mode) = self.pending_quantization.take() {
                 let hnsw_params = HNSWParams::default()
@@ -1582,11 +1128,9 @@ impl VectorStore {
 
                 let index = match quant_mode {
                     QuantizationMode::SQ8 => {
-                        // SQ8 trains lazily on first 256 vectors
                         HNSWIndex::new_with_sq8(self.dimensions, hnsw_params, DistanceFunction::L2)?
                     }
                     QuantizationMode::RaBitQ(params) => {
-                        // RaBitQ needs explicit training from batch
                         let mut idx = HNSWIndex::new_with_asymmetric(
                             self.dimensions,
                             hnsw_params,
@@ -1610,12 +1154,9 @@ impl VectorStore {
         let _start_id = self.vectors.len();
         let mut all_ids = Vec::with_capacity(vectors.len());
 
-        // Process in chunks for better memory management and progress tracking
         for chunk in vectors.chunks(CHUNK_SIZE) {
-            // Extract vector data for HNSW
             let vector_data: Vec<Vec<f32>> = chunk.iter().map(|v| v.data.clone()).collect();
 
-            // Parallel insert this chunk
             if let Some(ref mut index) = self.hnsw_index {
                 let chunk_ids = index.batch_insert(&vector_data)?;
                 all_ids.extend(chunk_ids);
@@ -1623,26 +1164,17 @@ impl VectorStore {
         }
 
         self.vectors.extend(vectors);
-
-        // Return IDs from HNSW
         Ok(all_ids)
     }
 
     /// Rebuild HNSW index from existing vectors
-    ///
-    /// This is needed when:
-    /// - Vectors are loaded from disk but index wasn't persisted
-    /// - Index needs to be rebuilt after batch inserts
-    /// - Quantization is enabled/disabled after loading
     pub fn rebuild_index(&mut self) -> Result<()> {
         if self.vectors.is_empty() {
             return Ok(());
         }
 
-        // Create new HNSW index
         let mut index = HNSWIndex::new(self.vectors.len().max(1_000_000), self.dimensions)?;
 
-        // Insert all vectors
         for vector in &self.vectors {
             index.insert(&vector.data)?;
         }
@@ -1652,19 +1184,6 @@ impl VectorStore {
     }
 
     /// Merge another `VectorStore` into this one using IGTM algorithm
-    ///
-    /// Uses Iterative Greedy Tree Merging for 1.3-1.7x faster batch inserts
-    /// compared to naive insertion.
-    ///
-    /// # Arguments
-    /// * `other` - `VectorStore` to merge from (vectors and metadata will be copied)
-    ///
-    /// # Returns
-    /// Number of vectors merged
-    ///
-    /// # Note
-    /// String IDs from `other` are preserved. If there are conflicts,
-    /// the existing ID in `self` takes precedence (other's vector is skipped).
     pub fn merge_from(&mut self, other: &VectorStore) -> Result<usize> {
         if other.dimensions != self.dimensions {
             anyhow::bail!(
@@ -1678,19 +1197,15 @@ impl VectorStore {
             return Ok(0);
         }
 
-        // Initialize HNSW if needed
         if self.hnsw_index.is_none() {
             let capacity = (self.vectors.len() + other.vectors.len()).max(1_000_000);
             self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions)?);
         }
 
-        // Track how many vectors we actually merge (skip ID conflicts)
         let mut merged_count = 0;
         let base_index = self.vectors.len();
 
-        // Copy vectors and metadata, handling ID conflicts
         for (other_idx, vector) in other.vectors.iter().enumerate() {
-            // Check for string ID conflict
             let has_conflict = other
                 .id_to_index
                 .iter()
@@ -1698,19 +1213,16 @@ impl VectorStore {
                 .is_some_and(|(string_id, _)| self.id_to_index.contains_key(string_id));
 
             if has_conflict {
-                continue; // Skip vectors with conflicting string IDs
+                continue;
             }
 
-            // Copy vector
             self.vectors.push(vector.clone());
 
-            // Copy metadata if present
             if let Some(meta) = other.metadata.get(&other_idx) {
                 self.metadata
                     .insert(base_index + merged_count, meta.clone());
             }
 
-            // Copy string ID mapping
             if let Some((string_id, _)) =
                 other.id_to_index.iter().find(|(_, &idx)| idx == other_idx)
             {
@@ -1721,32 +1233,24 @@ impl VectorStore {
             merged_count += 1;
         }
 
-        // Merge HNSW indexes using IGTM
         if let (Some(ref mut self_index), Some(ref other_index)) =
             (&mut self.hnsw_index, &other.hnsw_index)
         {
             self_index.merge_from(other_index)?;
         } else {
-            // Fallback: rebuild index if other didn't have one
             self.rebuild_index()?;
         }
 
         Ok(merged_count)
     }
 
-    /// Check if index needs to be rebuilt (read-only check)
-    ///
-    /// Returns true if index is missing and we have significant data.
-    /// Use this to avoid write lock when index is already ready.
+    /// Check if index needs to be rebuilt
     #[inline]
     pub fn needs_index_rebuild(&self) -> bool {
         self.hnsw_index.is_none() && self.vectors.len() > 100
     }
 
     /// Ensure HNSW index is ready for search
-    ///
-    /// Rebuilds the index if it's missing but vectors exist (crash recovery case).
-    /// Call this once after loading from disk before performing searches.
     pub fn ensure_index_ready(&mut self) -> Result<()> {
         if self.needs_index_rebuild() {
             self.rebuild_index()?;
@@ -1754,20 +1258,16 @@ impl VectorStore {
         Ok(())
     }
 
+    // ============================================================================
+    // Search Methods
+    // ============================================================================
+
     /// K-nearest neighbors search using HNSW
-    ///
-    /// Quantization (if enabled) is for storage/memory savings only.
-    /// Search always uses HNSW with original vectors for accuracy and speed.
-    ///
-    /// Note: May trigger index rebuild if index is missing. For parallel search,
-    /// call `ensure_index_ready()` first, then use `knn_search_readonly()`.
     pub fn knn_search(&mut self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
         self.knn_search_with_ef(query, k, None)
     }
 
     /// K-nearest neighbors search with optional ef override
-    ///
-    /// Note: May trigger index rebuild. For parallel search, use readonly version.
     pub fn knn_search_with_ef(
         &mut self,
         query: &Vector,
@@ -1779,14 +1279,6 @@ impl VectorStore {
     }
 
     /// Read-only K-nearest neighbors search (for parallel execution)
-    ///
-    /// This version takes `&self` instead of `&mut self`, enabling parallel search.
-    /// Caller must ensure index is ready by calling `ensure_index_ready()` first.
-    ///
-    /// # Arguments
-    /// * `query` - Query vector
-    /// * `k` - Number of neighbors to return
-    /// * `ef` - Search width override (None = auto-tune to max(k*4, 64))
     #[inline]
     pub fn knn_search_readonly(
         &self,
@@ -1794,29 +1286,14 @@ impl VectorStore {
         k: usize,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
-        // Compute ef early to avoid closure overhead in hot path
-        // This is done before any checks to ensure the value is available
         let effective_ef = match ef {
             Some(e) => e,
-            None => (k * 4).max(64).max(100), // Default ef_search is 100
+            None => (k * 4).max(64).max(100),
         };
         self.knn_search_ef(query, k, effective_ef)
     }
 
     /// Fast K-nearest neighbors search with concrete ef value
-    ///
-    /// This is the optimized hot path - ~40% faster than using Option<usize>.
-    /// Use this in tight loops where performance is critical.
-    ///
-    /// When rescore is enabled (with quantization), this:
-    /// 1. Searches for k * oversample candidates using quantized distance
-    /// 2. Rescores candidates with full-precision vectors
-    /// 3. Returns top k results
-    ///
-    /// # Arguments
-    /// * `query` - Query vector
-    /// * `k` - Number of neighbors to return
-    /// * `ef` - Search width (higher = better recall, slower)
     #[inline]
     pub fn knn_search_ef(&self, query: &Vector, k: usize, ef: usize) -> Result<Vec<(usize, f32)>> {
         if query.dim() != self.dimensions {
@@ -1827,7 +1304,6 @@ impl VectorStore {
             );
         }
 
-        // Check if we have any data (either in vectors or in HNSW)
         let has_data =
             !self.vectors.is_empty() || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
 
@@ -1835,29 +1311,20 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // Use HNSW index if available
         if let Some(ref index) = self.hnsw_index {
-            // Asymmetric mode with quantization
             if index.is_asymmetric() {
                 if self.rescore_enabled && !self.vectors.is_empty() {
-                    // Rescore: get candidates with ADC, rerank with exact L2
                     return self.knn_search_with_rescore(query, k, ef);
                 }
-                // No rescore: use ADC distances directly (fastest)
                 return index.search_asymmetric_ef(&query.data, k, ef);
             }
-            // Regular HNSW (no quantization)
             return index.search_ef(&query.data, k, ef);
         }
 
-        // Fallback to brute-force if no index (small datasets only)
         self.knn_search_brute_force(query, k)
     }
 
     /// K-nearest neighbors search with rescore using original vectors
-    ///
-    /// Used when asymmetric HNSW is enabled with rescore=true.
-    /// Fetches k * oversample candidates with ADC, then reranks with full precision L2.
     fn knn_search_with_rescore(
         &self,
         query: &Vector,
@@ -1869,7 +1336,6 @@ impl VectorStore {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("HNSW index required for rescore"))?;
 
-        // Fetch k * oversample candidates using quantized (ADC) distances
         let oversample_k = ((k as f32) * self.oversample_factor).ceil() as usize;
         let candidates = index.search_asymmetric_ef(&query.data, oversample_k, ef)?;
 
@@ -1877,12 +1343,9 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // Rescore candidates with full-precision L2 distance
-        // Prefer disk storage over self.vectors (RAM) to avoid duplication
         let mut rescored: Vec<(usize, f32)> = candidates
             .iter()
             .filter_map(|&(id, _quantized_dist)| {
-                // Try disk first, fall back to RAM
                 let vec_data = if let Some(ref storage) = self.storage {
                     storage.get_vector(id).ok().flatten()
                 } else {
@@ -1896,7 +1359,6 @@ impl VectorStore {
             })
             .collect();
 
-        // Sort by distance and return top k
         rescored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         rescored.truncate(k);
 
@@ -1904,11 +1366,6 @@ impl VectorStore {
     }
 
     /// K-nearest neighbors search with metadata filtering
-    ///
-    /// Performs HNSW search and filters results by metadata.
-    /// Uses ACORN-1 algorithm for efficient filtered search.
-    ///
-    /// Returns Vec of (id, distance, metadata) tuples
     pub fn knn_search_with_filter(
         &mut self,
         query: &Vector,
@@ -1920,11 +1377,6 @@ impl VectorStore {
     }
 
     /// K-nearest neighbors search with metadata filtering and optional ef override
-    ///
-    /// Performs HNSW search and filters results by metadata.
-    /// Uses ACORN-1 algorithm for efficient filtered search.
-    ///
-    /// Returns Vec of (id, distance, metadata) tuples
     pub fn knn_search_with_filter_ef(
         &mut self,
         query: &Vector,
@@ -1937,9 +1389,6 @@ impl VectorStore {
     }
 
     /// Read-only filtered search (for parallel execution)
-    ///
-    /// This version takes `&self` instead of `&mut self`, enabling parallel search.
-    /// Caller must ensure index is ready by calling `ensure_index_ready()` first.
     pub fn knn_search_with_filter_ef_readonly(
         &self,
         query: &Vector,
@@ -1947,33 +1396,26 @@ impl VectorStore {
         filter: &MetadataFilter,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        // Use ACORN-1 filtered search if HNSW index is available
         if let Some(ref hnsw) = self.hnsw_index {
-            // Create filter closure that checks metadata
             let metadata_map = &self.metadata;
             let deleted_map = &self.deleted;
             let filter_fn = |node_id: u32| -> bool {
                 let index = node_id as usize;
 
-                // Skip deleted vectors
                 if deleted_map.contains_key(&index) {
                     return false;
                 }
 
-                // Get metadata (default to empty object if none)
                 let metadata = metadata_map
                     .get(&index)
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
 
-                // Apply filter
                 filter.matches(&metadata)
             };
 
-            // Use ACORN-1 filtered search with optional ef override
             let search_results = hnsw.search_with_filter_ef(&query.data, k, ef, filter_fn)?;
 
-            // Convert to (index, distance, metadata) format
             let filtered_results: Vec<(usize, f32, JsonValue)> = search_results
                 .into_iter()
                 .map(|(index, distance)| {
@@ -1989,18 +1431,16 @@ impl VectorStore {
             return Ok(filtered_results);
         }
 
-        // Fallback: Brute-force search with filtering (no HNSW index)
+        // Fallback: brute-force search with filtering
         let mut all_results: Vec<(usize, f32, JsonValue)> = self
             .vectors
             .iter()
             .enumerate()
             .filter_map(|(index, vec)| {
-                // Skip deleted vectors
                 if self.deleted.contains_key(&index) {
                     return None;
                 }
 
-                // Get metadata and check filter
                 let metadata = self
                     .metadata
                     .get(&index)
@@ -2011,13 +1451,11 @@ impl VectorStore {
                     return None;
                 }
 
-                // Calculate distance
                 let distance = query.l2_distance(vec).unwrap_or(f32::MAX);
                 Some((index, distance, metadata))
             })
             .collect();
 
-        // Sort by distance and take top k
         all_results.sort_by(|a, b| a.1.total_cmp(&b.1));
         all_results.truncate(k);
 
@@ -2035,12 +1473,6 @@ impl VectorStore {
     }
 
     /// Search with optional filter and ef override
-    ///
-    /// # Arguments
-    /// * `query` - Query vector
-    /// * `k` - Number of neighbors to return
-    /// * `filter` - Optional metadata filter
-    /// * `ef` - Search width override (None = auto-tune to max(k*4, 64))
     pub fn search_with_ef(
         &mut self,
         query: &Vector,
@@ -2053,9 +1485,6 @@ impl VectorStore {
     }
 
     /// Read-only search with optional filter (for parallel execution)
-    ///
-    /// This version takes `&self` instead of `&mut self`, enabling parallel search.
-    /// Caller must ensure index is ready by calling `ensure_index_ready()` first.
     pub fn search_with_ef_readonly(
         &self,
         query: &Vector,
@@ -2066,16 +1495,13 @@ impl VectorStore {
         if let Some(f) = filter {
             self.knn_search_with_filter_ef_readonly(query, k, f, ef)
         } else {
-            // No filter - get all results with metadata
             let results = self.knn_search_readonly(query, k, ef)?;
             Ok(results
                 .into_iter()
                 .filter_map(|(index, distance)| {
-                    // Skip deleted vectors
                     if self.deleted.contains_key(&index) {
                         return None;
                     }
-                    // Get metadata (default to empty object)
                     let metadata = self
                         .metadata
                         .get(&index)
@@ -2087,26 +1513,13 @@ impl VectorStore {
         }
     }
 
-    /// Parallel batch search for multiple queries (ChromaDB-style optimization)
-    ///
-    /// Executes all queries in parallel using rayon, achieving significant
-    /// speedup on multi-core systems. Caller must call `ensure_index_ready()`
-    /// before this method.
-    ///
-    /// # Arguments
-    /// * `queries` - Slice of query vectors
-    /// * `k` - Number of neighbors to return per query
-    /// * `ef` - Search width override (None = auto-tune)
-    ///
-    /// # Returns
-    /// Vec of results, one per query. Each result contains (index, distance) pairs.
+    /// Parallel batch search for multiple queries
     pub fn batch_search_parallel(
         &self,
         queries: &[Vector],
         k: usize,
         ef: Option<usize>,
     ) -> Vec<Result<Vec<(usize, f32)>>> {
-        // Pre-compute ef once to avoid per-query Option overhead
         let effective_ef = match ef {
             Some(e) => e,
             None => (k * 4).max(64).max(100),
@@ -2117,10 +1530,7 @@ impl VectorStore {
             .collect()
     }
 
-    /// Parallel batch search with metadata (ChromaDB-style optimization)
-    ///
-    /// Executes all queries in parallel using rayon, returning metadata with results.
-    /// Caller must call `ensure_index_ready()` before this method.
+    /// Parallel batch search with metadata
     pub fn batch_search_parallel_with_metadata(
         &self,
         queries: &[Vector],
@@ -2133,7 +1543,7 @@ impl VectorStore {
             .collect()
     }
 
-    /// Brute-force K-NN search (fallback, mainly for testing)
+    /// Brute-force K-NN search (fallback)
     pub fn knn_search_brute_force(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
         if query.dim() != self.dimensions {
             anyhow::bail!(
@@ -2147,7 +1557,6 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // Compute distances to all vectors
         let mut distances: Vec<(usize, f32)> = self
             .vectors
             .iter()
@@ -2158,31 +1567,25 @@ impl VectorStore {
             })
             .collect();
 
-        // Sort by distance and take top K
         distances.sort_by(|a, b| a.1.total_cmp(&b.1));
         Ok(distances.into_iter().take(k).collect())
     }
 
+    // ============================================================================
+    // Accessors
+    // ============================================================================
+
     /// Get vector by ID
-    ///
-    /// Returns the vector from RAM if available.
-    /// Note: When vectors aren't loaded to RAM (quantized mode), this returns None.
-    /// Use `get_owned()` if you need disk fallback.
     pub fn get(&self, id: usize) -> Option<&Vector> {
         self.vectors.get(id)
     }
 
     /// Get vector by ID (owned)
-    ///
-    /// Returns an owned vector, fetching from disk if not in RAM.
-    /// Use this when you need the vector data regardless of storage location.
     pub fn get_owned(&self, id: usize) -> Option<Vector> {
-        // Try RAM first
         if let Some(v) = self.vectors.get(id) {
             return Some(v.clone());
         }
 
-        // Fall back to disk
         if let Some(ref storage) = self.storage {
             if let Ok(Some(data)) = storage.get_vector(id) {
                 return Some(Vector::new(data));
@@ -2194,25 +1597,22 @@ impl VectorStore {
 
     /// Number of vectors stored (excluding deleted vectors)
     pub fn len(&self) -> usize {
-        // Prefer HNSW index length (authoritative when loaded from persistence)
         if let Some(ref index) = self.hnsw_index {
             let hnsw_len = index.len();
             if hnsw_len > 0 {
                 return hnsw_len.saturating_sub(self.deleted.len());
             }
         }
-        // Fallback to vectors array (for newly created stores)
         self.vectors.len().saturating_sub(self.deleted.len())
     }
 
-    /// Check if store is empty (no active vectors)
+    /// Check if store is empty
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Memory usage estimate (bytes)
     pub fn memory_usage(&self) -> usize {
-        // Vector data: num_vectors * dim * 4 bytes (f32)
         self.vectors.iter().map(|v| v.dim() * 4).sum::<usize>()
     }
 
@@ -2238,16 +1638,14 @@ impl VectorStore {
             .map(super::hnsw_index::HNSWIndex::get_ef_search)
     }
 
+    // ============================================================================
+    // Legacy Persistence (save_to_disk/load_from_disk)
+    // ============================================================================
+
     /// Save vector store to disk with HNSW graph serialization
     ///
-    /// Uses `hnsw_rs` `file_dump()` to persist both vectors and graph structure.
-    /// This enables fast loading (<1s) without rebuilding the index.
-    ///
-    /// File format:
-    /// - `<basename>.hnsw`: HNSW index
-    /// - `<basename>.vectors.bin`: Vector data
-    /// - `<basename>.quantized.bin`: Quantized vectors (if quantization enabled)
-    /// - `<basename>.quantizer.json`: Quantizer parameters (if quantization enabled)
+    /// **Legacy method**: Prefer using `VectorStoreOptions::open()` with `flush()`
+    /// for new code, which uses the unified `.omen` format.
     pub fn save_to_disk(&self, base_path: &str) -> Result<()> {
         use std::fs;
         use std::path::Path;
@@ -2259,7 +1657,6 @@ impl VectorStore {
             .and_then(|f| f.to_str())
             .ok_or_else(|| anyhow::anyhow!("Invalid path: no filename in '{base_path}'"))?;
 
-        // Create directory if needed
         fs::create_dir_all(directory)?;
 
         // Save vectors array
@@ -2300,12 +1697,8 @@ impl VectorStore {
 
     /// Load vector store from disk with fast HNSW index loading
     ///
-    /// Tries to load HNSW index first (fast: <1s).
-    /// Falls back to loading vectors and rebuilding if index not found.
-    ///
-    /// Performance:
-    /// - With HNSW index: <1 second load time (4175x faster than rebuild)
-    /// - Fallback (rebuild): Several minutes for 100K+ vectors
+    /// **Legacy method**: Prefer using `VectorStore::open()` for new code,
+    /// which uses the unified `.omen` format.
     pub fn load_from_disk(base_path: &str, dimensions: usize) -> Result<Self> {
         use std::fs;
         use std::path::Path;
@@ -2317,14 +1710,11 @@ impl VectorStore {
             .and_then(|f| f.to_str())
             .ok_or_else(|| anyhow::anyhow!("Invalid path: no filename in '{base_path}'"))?;
 
-        // Check if HNSW index file exists
         let hnsw_path = directory.join(format!("{filename}.hnsw"));
 
         if hnsw_path.exists() {
-            // Fast path: Load HNSW index directly
             let hnsw_index = HNSWIndex::load(&hnsw_path)?;
 
-            // Load vectors array (needed for get/len/verification)
             let vectors_path = directory.join(format!("{filename}.vectors.bin"));
             let vectors = if vectors_path.exists() {
                 let vectors_data = fs::read(&vectors_path)?;
@@ -2334,7 +1724,6 @@ impl VectorStore {
                 Vec::new()
             };
 
-            // Try to load metadata
             let metadata_path = directory.join(format!("{filename}.metadata.json"));
             let metadata = if metadata_path.exists() {
                 let metadata_json = fs::read_to_string(&metadata_path)?;
@@ -2343,7 +1732,6 @@ impl VectorStore {
                 HashMap::new()
             };
 
-            // Try to load ID to index mapping
             let id_mapping_path = directory.join(format!("{filename}.id_mapping.json"));
             let id_to_index: HashMap<String, usize> = if id_mapping_path.exists() {
                 let id_mapping_json = fs::read_to_string(&id_mapping_path)?;
@@ -2352,7 +1740,6 @@ impl VectorStore {
                 HashMap::new()
             };
 
-            // Try to load deleted tombstones
             let deleted_path = directory.join(format!("{filename}.deleted.json"));
             let deleted: HashMap<usize, bool> = if deleted_path.exists() {
                 let deleted_json = fs::read_to_string(&deleted_path)?;
@@ -2361,7 +1748,6 @@ impl VectorStore {
                 HashMap::new()
             };
 
-            // Build reverse map for O(1) lookup
             let index_to_id: HashMap<usize, String> = id_to_index
                 .iter()
                 .map(|(id, &idx)| (idx, id.clone()))
@@ -2387,7 +1773,6 @@ impl VectorStore {
                 hnsw_ef_search: 100,
             })
         } else {
-            // Fallback: Load vectors and rebuild HNSW
             let vectors_path = directory.join(format!("{filename}.vectors.bin"));
             if !vectors_path.exists() {
                 anyhow::bail!("Vector file not found: {}", vectors_path.display());
@@ -2397,7 +1782,6 @@ impl VectorStore {
             let vectors_raw: Vec<Vec<f32>> = bincode::deserialize(&vectors_data)?;
             let vectors: Vec<Vector> = vectors_raw.into_iter().map(Vector::new).collect();
 
-            // Try to load metadata
             let metadata_path = directory.join(format!("{filename}.metadata.json"));
             let metadata = if metadata_path.exists() {
                 let metadata_json = fs::read_to_string(&metadata_path)?;
@@ -2406,7 +1790,6 @@ impl VectorStore {
                 HashMap::new()
             };
 
-            // Try to load ID to index mapping
             let id_mapping_path = directory.join(format!("{filename}.id_mapping.json"));
             let id_to_index: HashMap<String, usize> = if id_mapping_path.exists() {
                 let id_mapping_json = fs::read_to_string(&id_mapping_path)?;
@@ -2415,7 +1798,6 @@ impl VectorStore {
                 HashMap::new()
             };
 
-            // Try to load deleted tombstones
             let deleted_path = directory.join(format!("{filename}.deleted.json"));
             let deleted: HashMap<usize, bool> = if deleted_path.exists() {
                 let deleted_json = fs::read_to_string(&deleted_path)?;
@@ -2424,13 +1806,11 @@ impl VectorStore {
                 HashMap::new()
             };
 
-            // Build reverse map for O(1) lookup
             let index_to_id: HashMap<usize, String> = id_to_index
                 .iter()
                 .map(|(id, &idx)| (idx, id.clone()))
                 .collect();
 
-            // Create VectorStore and rebuild HNSW index
             let mut store = Self {
                 vectors,
                 hnsw_index: None,
@@ -2459,23 +1839,20 @@ impl VectorStore {
         }
     }
 
-    /// Flush all pending changes to disk.
+    // ============================================================================
+    // Current Persistence (flush)
+    // ============================================================================
+
+    /// Flush all pending changes to disk
     ///
-    /// This commits:
-    /// - Vector/metadata changes to .omen storage
-    /// - HNSW index to .omen storage (preserves quantization)
-    /// - Text index changes to tantivy (if enabled)
-    ///
-    /// Call after batch inserts for durability.
+    /// Commits vector/metadata changes and HNSW index to `.omen` storage.
     pub fn flush(&mut self) -> Result<()> {
-        // Serialize HNSW index to bytes (before borrowing storage mutably)
         let hnsw_bytes = self
             .hnsw_index
             .as_ref()
             .map(|index| bincode::serialize(index))
             .transpose()?;
 
-        // Store HNSW index and flush vector storage
         if let Some(ref mut storage) = self.storage {
             if let Some(bytes) = hnsw_bytes {
                 storage.put_hnsw_index(bytes);
@@ -2483,7 +1860,6 @@ impl VectorStore {
             storage.flush()?;
         }
 
-        // Commit text index if enabled
         if let Some(ref mut text_index) = self.text_index {
             text_index.commit()?;
         }
@@ -2497,8 +1873,6 @@ impl VectorStore {
     }
 
     /// Get reference to the .omen storage backend (if persistent)
-    ///
-    /// Returns None if storage is not persistent (in-memory mode).
     pub fn storage(&self) -> Option<&OmenFile> {
         self.storage.as_ref()
     }
