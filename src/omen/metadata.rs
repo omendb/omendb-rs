@@ -224,10 +224,9 @@ impl NumericIndex {
 
     /// Get documents where value is in range [min, max]
     pub fn get_range(&self, min: f64, max: f64) -> RoaringBitmap {
-        let start = self
-            .entries
-            .binary_search_by(|(v, _)| v.partial_cmp(&min).unwrap())
-            .unwrap_or_else(|p| p);
+        // Use partition_point to find FIRST position where value >= min
+        // This handles duplicates correctly (binary_search may find any duplicate)
+        let start = self.entries.partition_point(|(v, _)| *v < min);
 
         let mut result = RoaringBitmap::new();
         for (val, doc_id) in &self.entries[start..] {
