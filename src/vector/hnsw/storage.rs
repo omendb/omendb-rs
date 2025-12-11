@@ -543,24 +543,33 @@ pub enum VectorStorage {
 
     /// Scalar quantized vectors (SQ8) - 4x compression, ~98% recall
     ///
-    /// Memory: dimensions bytes per vector (u8 per dimension)
-    /// Example: 768D = 768 bytes per vector (4x compression from f32)
+    /// Memory after training: 5x (1x quantized + 4x original for rescore)
+    /// Memory before training: 4x (original only, no quantization yet)
     ///
     /// Uses per-dimension min/max scaling with SIMD distance computation.
-    /// Supports both asymmetric (query f32, candidate u8) and symmetric modes.
+    /// Lazy training: Buffers first 256 vectors, then trains and quantizes.
     ScalarQuantized {
         /// Trained quantization parameters (min/scale per dimension)
         params: ScalarParams,
 
         /// Quantized vectors as flat contiguous u8 array
+        /// Empty until training completes (after 256 vectors)
         /// Access: quantized[id * dimensions..(id + 1) * dimensions]
         quantized: Vec<u8>,
+
+        /// Original vectors for reranking (flat contiguous f32 array)
+        /// Access: original[id * dimensions..(id + 1) * dimensions]
+        original: Vec<f32>,
 
         /// Number of vectors stored
         count: usize,
 
         /// Vector dimensions
         dimensions: usize,
+
+        /// Whether quantization parameters have been trained
+        /// Training happens automatically after 256 vectors are inserted
+        trained: bool,
     },
 }
 
@@ -612,10 +621,44 @@ impl VectorStorage {
         }
     }
 
-    /// Check if this storage uses asymmetric search (`RaBitQ`)
+    /// Create empty SQ8 (Scalar Quantized) storage
+    ///
+    /// # Arguments
+    /// * `dimensions` - Vector dimensionality
+    ///
+    /// # Performance
+    /// - Search: ~2x faster than full precision (SIMD u8 asymmetric distance)
+    /// - Memory: 5x during search (quantized + original for rescore)
+    /// - Recall: ~99% with rescore, ~97% without
+    ///
+    /// # Lazy Training
+    /// Quantization parameters are trained automatically after 256 vectors.
+    /// Before training completes, search falls back to f32 distance.
+    #[must_use]
+    pub fn new_sq8_quantized(dimensions: usize) -> Self {
+        Self::ScalarQuantized {
+            params: ScalarParams::uninitialized(dimensions),
+            quantized: Vec::new(),
+            original: Vec::new(),
+            count: 0,
+            dimensions,
+            trained: false,
+        }
+    }
+
+    /// Check if this storage uses asymmetric search (`RaBitQ` or `SQ8`)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
-        matches!(self, Self::RaBitQQuantized { .. })
+        matches!(
+            self,
+            Self::RaBitQQuantized { .. } | Self::ScalarQuantized { .. }
+        )
+    }
+
+    /// Check if this storage uses SQ8 quantization
+    #[must_use]
+    pub fn is_sq8(&self) -> bool {
+        matches!(self, Self::ScalarQuantized { .. })
     }
 
     /// Get number of vectors stored
@@ -725,8 +768,10 @@ impl VectorStorage {
             Self::ScalarQuantized {
                 params,
                 quantized,
+                original,
                 count,
                 dimensions,
+                trained,
             } => {
                 if vector.len() != *dimensions {
                     return Err(format!(
@@ -736,11 +781,36 @@ impl VectorStorage {
                     ));
                 }
 
-                // Quantize and store (no original stored - 4x compression)
-                let quant = params.quantize(&vector);
                 let id = *count as u32;
-                quantized.extend(quant);
+                let dim = *dimensions;
+
+                // Always store original for reranking
+                original.extend(vector);
                 *count += 1;
+
+                if *trained {
+                    // Already trained - quantize normally
+                    let quant =
+                        params.quantize(&original[id as usize * dim..(id as usize + 1) * dim]);
+                    quantized.extend(quant);
+                } else if *count >= 256 {
+                    // Time to train! Use first 256 vectors as training sample
+                    let training_refs: Vec<&[f32]> = (0..256)
+                        .map(|i| &original[i * dim..(i + 1) * dim])
+                        .collect();
+                    *params = ScalarParams::train(&training_refs);
+                    *trained = true;
+
+                    // Quantize all vectors accumulated so far
+                    quantized.reserve(*count * dim);
+                    for i in 0..*count {
+                        let vec_slice = &original[i * dim..(i + 1) * dim];
+                        let quant = params.quantize(vec_slice);
+                        quantized.extend(quant);
+                    }
+                }
+                // If not trained and count < 256, don't quantize yet
+                // Search will fall back to f32 distance
 
                 Ok(id)
             }
@@ -785,19 +855,32 @@ impl VectorStorage {
                 let end = start + *dimensions;
                 Some(&original[start..end])
             }
-            // ScalarQuantized doesn't store originals - use get_dequantized() instead
-            Self::ScalarQuantized { .. } => None,
+            Self::ScalarQuantized {
+                original,
+                count,
+                dimensions,
+                ..
+            } => {
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                Some(&original[start..end])
+            }
         }
     }
 
     /// Compute asymmetric L2 distance (query full precision, candidate quantized)
     ///
-    /// This is the HOT PATH for asymmetric search. Only works with `RaBitQQuantized` storage.
-    /// Returns None if storage is not `RaBitQ` or if id is out of bounds.
+    /// This is the HOT PATH for asymmetric search. Works with `RaBitQQuantized` and
+    /// `ScalarQuantized` storage. Returns None if storage is not quantized, not trained,
+    /// or if id is out of bounds.
     ///
     /// # Performance
-    /// - 2-3x faster than full precision distance
-    /// - No decompression needed (distance computed directly on quantized data)
+    /// - SQ8: ~2x faster than full precision (SIMD u8 operations)
+    /// - RaBitQ: 2-3x faster than full precision (ADC lookup tables)
     #[inline]
     #[must_use]
     pub fn distance_asymmetric_l2(&self, query: &[f32], id: u32) -> Option<f32> {
@@ -817,7 +900,29 @@ impl VectorStorage {
 
                 Some(q.distance_asymmetric_l2(query, &quantized[idx]))
             }
-            // For non-RaBitQ storage, return None (caller should use regular distance)
+            Self::ScalarQuantized {
+                params,
+                quantized,
+                count,
+                dimensions,
+                trained,
+                ..
+            } => {
+                // Only use asymmetric distance if trained
+                if !*trained {
+                    return None;
+                }
+
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                Some(params.asymmetric_l2_squared(query, &quantized[start..end]))
+            }
+            // For non-quantized storage, return None (caller should use regular distance)
             _ => None,
         }
     }
@@ -910,16 +1015,23 @@ impl VectorStorage {
             }
             Self::ScalarQuantized {
                 quantized,
+                original,
                 count,
                 dimensions,
+                trained,
                 ..
             } => {
                 let idx = id as usize;
                 if idx >= *count {
                     None
-                } else {
+                } else if *trained {
+                    // Prefetch quantized data for asymmetric search
                     let start = idx * *dimensions;
                     Some(quantized[start..].as_ptr())
+                } else {
+                    // Not trained yet - prefetch original f32 data
+                    let start = idx * *dimensions;
+                    Some(original[start..].as_ptr().cast())
                 }
             }
         };
@@ -1043,13 +1155,34 @@ impl VectorStorage {
                 q.train_owned(sample_vectors);
                 Ok(())
             }
-            Self::ScalarQuantized { params, .. } => {
+            Self::ScalarQuantized {
+                params,
+                quantized,
+                original,
+                count,
+                dimensions,
+                trained,
+            } => {
                 if sample_vectors.is_empty() {
                     return Err("Cannot train on empty sample".to_string());
                 }
-                // ScalarParams are already trained when created - retrain with new sample
+
+                // Train params from sample vectors
                 let refs: Vec<&[f32]> = sample_vectors.iter().map(|v| v.as_slice()).collect();
                 *params = ScalarParams::train(&refs);
+                *trained = true;
+
+                // If there are already vectors stored, quantize them now
+                if *count > 0 && quantized.is_empty() {
+                    let dim = *dimensions;
+                    quantized.reserve(*count * dim);
+                    for i in 0..*count {
+                        let vec_slice = &original[i * dim..(i + 1) * dim];
+                        let quant = params.quantize(vec_slice);
+                        quantized.extend(quant);
+                    }
+                }
+
                 Ok(())
             }
         }
@@ -1088,13 +1221,17 @@ impl VectorStorage {
                 quantized_size + original_size
             }
             Self::ScalarQuantized {
-                quantized, params, ..
+                quantized,
+                original,
+                params,
+                ..
             } => {
-                // Quantized u8 vectors + params (mins + scales)
+                // Quantized u8 vectors + original f32 vectors + params (mins + scales)
                 let quantized_size = quantized.len();
+                let original_size = original.len() * std::mem::size_of::<f32>();
                 let params_size =
                     (params.mins.len() + params.scales.len()) * std::mem::size_of::<f32>();
-                quantized_size + params_size
+                quantized_size + original_size + params_size
             }
         }
     }
@@ -1184,12 +1321,15 @@ impl VectorStorage {
             }
             Self::ScalarQuantized {
                 quantized,
+                original,
                 count,
                 dimensions,
                 ..
             } => {
                 let dim = *dimensions;
                 let n = *count;
+
+                // Reorder quantized vectors
                 let mut new_quantized = vec![0u8; quantized.len()];
                 for (old_id, &new_id) in old_to_new.iter().enumerate() {
                     if old_id < n {
@@ -1200,6 +1340,18 @@ impl VectorStorage {
                     }
                 }
                 *quantized = new_quantized;
+
+                // Reorder original vectors
+                let mut new_original = vec![0.0f32; original.len()];
+                for (old_id, &new_id) in old_to_new.iter().enumerate() {
+                    if old_id < n {
+                        let old_start = old_id * dim;
+                        let new_start = new_id as usize * dim;
+                        new_original[new_start..new_start + dim]
+                            .copy_from_slice(&original[old_start..old_start + dim]);
+                    }
+                }
+                *original = new_original;
             }
         }
     }

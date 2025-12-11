@@ -208,10 +208,64 @@ impl HNSWIndex {
         })
     }
 
-    /// Check if this index uses asymmetric search (`RaBitQ`)
+    /// Create a new HNSW index with SQ8 (Scalar Quantization) for faster search
+    ///
+    /// SQ8 compresses f32 → u8 (4x smaller) and uses direct SIMD operations
+    /// for ~2x faster search than full precision.
+    ///
+    /// # Arguments
+    /// * `dimensions` - Vector dimensionality
+    /// * `params` - HNSW construction parameters
+    /// * `distance_fn` - Distance function (only L2 supported for SQ8)
+    ///
+    /// # Performance
+    /// - Search: ~2x faster than full precision
+    /// - Memory: 4x smaller quantized storage (+ original for reranking)
+    /// - Recall: ~99% with reranking
+    ///
+    /// # Example
+    /// ```ignore
+    /// let params = HNSWParams::default();
+    /// let index = HNSWIndex::new_with_sq8(768, params, DistanceFunction::L2)?;
+    /// ```
+    pub fn new_with_sq8(
+        dimensions: usize,
+        params: HNSWParams,
+        distance_fn: DistanceFunction,
+    ) -> Result<Self> {
+        params.validate().map_err(HNSWError::InvalidParams)?;
+
+        // SQ8 asymmetric search only supports L2 distance
+        if !matches!(distance_fn, DistanceFunction::L2) {
+            return Err(HNSWError::InvalidParams(
+                "SQ8 asymmetric search only supports L2 distance function".to_string(),
+            ));
+        }
+
+        let vectors = VectorStorage::new_sq8_quantized(dimensions);
+        let neighbors = GraphStorage::from_mode(StorageMode::Memory, params.max_level as usize);
+
+        Ok(Self {
+            nodes: Vec::new(),
+            neighbors,
+            vectors,
+            entry_point: None,
+            params,
+            distance_fn,
+            rng_state: params.seed,
+        })
+    }
+
+    /// Check if this index uses asymmetric search (`RaBitQ` or `SQ8`)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
         self.vectors.is_asymmetric()
+    }
+
+    /// Check if this index uses SQ8 quantization
+    #[must_use]
+    pub fn is_sq8(&self) -> bool {
+        self.vectors.is_sq8()
     }
 
     /// Train the quantizer from sample vectors

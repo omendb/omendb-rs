@@ -248,42 +248,63 @@ impl ScalarParams {
 
     #[cfg(target_arch = "aarch64")]
     unsafe fn asymmetric_l2_squared_neon(&self, query: &[f32], quantized: &[u8]) -> f32 {
-        let mut sum = vdupq_n_f32(0.0);
+        let mut sum0 = vdupq_n_f32(0.0);
+        let mut sum1 = vdupq_n_f32(0.0);
         let mut i = 0;
 
-        // Process 4 elements at a time
-        while i + 4 <= self.dimensions {
-            // Load 4 u8 values and convert to f32
-            let q_f32 = vld1q_f32(
-                [
-                    f32::from(quantized[i]),
-                    f32::from(quantized[i + 1]),
-                    f32::from(quantized[i + 2]),
-                    f32::from(quantized[i + 3]),
-                ]
-                .as_ptr(),
-            );
+        // Process 8 elements at a time using proper SIMD widening
+        while i + 8 <= self.dimensions {
+            // Load 8 u8 values and convert to f32 via SIMD widening
+            let u8x8 = vld1_u8(quantized.as_ptr().add(i));
+            let u16x8 = vmovl_u8(u8x8);
+            let u32x4_lo = vmovl_u16(vget_low_u16(u16x8));
+            let u32x4_hi = vmovl_u16(vget_high_u16(u16x8));
+            let f32x4_lo = vcvtq_f32_u32(u32x4_lo);
+            let f32x4_hi = vcvtq_f32_u32(u32x4_hi);
 
             // Load scales and mins
-            let scales = vld1q_f32(self.scales.as_ptr().add(i));
-            let mins = vld1q_f32(self.mins.as_ptr().add(i));
+            let scales_lo = vld1q_f32(self.scales.as_ptr().add(i));
+            let scales_hi = vld1q_f32(self.scales.as_ptr().add(i + 4));
+            let mins_lo = vld1q_f32(self.mins.as_ptr().add(i));
+            let mins_hi = vld1q_f32(self.mins.as_ptr().add(i + 4));
 
             // Dequantize: q * scale + min
-            let dequant = vfmaq_f32(mins, q_f32, scales);
+            let dequant_lo = vfmaq_f32(mins_lo, f32x4_lo, scales_lo);
+            let dequant_hi = vfmaq_f32(mins_hi, f32x4_hi, scales_hi);
 
             // Load query
-            let query_vec = vld1q_f32(query.as_ptr().add(i));
+            let query_lo = vld1q_f32(query.as_ptr().add(i));
+            let query_hi = vld1q_f32(query.as_ptr().add(i + 4));
 
             // Compute diff
-            let diff = vsubq_f32(query_vec, dequant);
+            let diff_lo = vsubq_f32(query_lo, dequant_lo);
+            let diff_hi = vsubq_f32(query_hi, dequant_hi);
 
             // Accumulate diff^2
-            sum = vfmaq_f32(sum, diff, diff);
+            sum0 = vfmaq_f32(sum0, diff_lo, diff_lo);
+            sum1 = vfmaq_f32(sum1, diff_hi, diff_hi);
 
+            i += 8;
+        }
+
+        // Process remaining 4 elements
+        if i + 4 <= self.dimensions {
+            let u8x8 = vld1_u8(quantized.as_ptr().add(i));
+            let u16x8 = vmovl_u8(u8x8);
+            let u32x4 = vmovl_u16(vget_low_u16(u16x8));
+            let f32x4 = vcvtq_f32_u32(u32x4);
+
+            let scales = vld1q_f32(self.scales.as_ptr().add(i));
+            let mins = vld1q_f32(self.mins.as_ptr().add(i));
+            let dequant = vfmaq_f32(mins, f32x4, scales);
+            let query_vec = vld1q_f32(query.as_ptr().add(i));
+            let diff = vsubq_f32(query_vec, dequant);
+            sum0 = vfmaq_f32(sum0, diff, diff);
             i += 4;
         }
 
         // Horizontal sum
+        let sum = vaddq_f32(sum0, sum1);
         let mut result = vaddvq_f32(sum);
 
         // Handle remaining elements
@@ -297,26 +318,16 @@ impl ScalarParams {
     }
 }
 
-/// Compute L2 distance between two quantized u8 vectors
+/// Compute L2² distance between two quantized u8 vectors
 ///
 /// Note: This is approximate and less accurate than asymmetric distance.
-/// Prefer asymmetric_l2_squared when query is available in f32.
+/// Prefer `asymmetric_l2_squared` when query is available in f32.
+///
+/// Not SIMD-optimized - use asymmetric distance for hot paths.
 #[must_use]
 pub fn symmetric_l2_squared_u8(a: &[u8], b: &[u8]) -> u32 {
     assert_eq!(a.len(), b.len());
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx2") {
-            return unsafe { symmetric_l2_squared_u8_avx2(a, b) };
-        }
-    }
-
-    // Scalar fallback
-    symmetric_l2_squared_u8_scalar(a, b)
-}
-
-fn symmetric_l2_squared_u8_scalar(a: &[u8], b: &[u8]) -> u32 {
     a.iter()
         .zip(b.iter())
         .map(|(&x, &y)| {
@@ -324,37 +335,6 @@ fn symmetric_l2_squared_u8_scalar(a: &[u8], b: &[u8]) -> u32 {
             (diff * diff) as u32
         })
         .sum()
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn symmetric_l2_squared_u8_avx2(a: &[u8], b: &[u8]) -> u32 {
-    let mut sum = _mm256_setzero_si256();
-    let mut i = 0;
-
-    // Process 32 bytes at a time
-    while i + 32 <= a.len() {
-        let va = _mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i);
-        let vb = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
-
-        // Compute absolute difference
-        let sad = _mm256_sad_epu8(va, vb);
-        sum = _mm256_add_epi64(sum, sad);
-
-        i += 32;
-    }
-
-    // Extract and sum the 4 64-bit integers
-    let sum_array: [i64; 4] = std::mem::transmute(sum);
-    let mut result = (sum_array[0] + sum_array[1] + sum_array[2] + sum_array[3]) as u32;
-
-    // Handle remaining elements
-    for j in i..a.len() {
-        let diff = i32::from(a[j]) - i32::from(b[j]);
-        result += (diff * diff) as u32;
-    }
-
-    result
 }
 
 #[cfg(test)]
