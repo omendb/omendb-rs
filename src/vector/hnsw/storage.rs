@@ -13,7 +13,9 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use omendb_core::compression::{ADCTable, QuantizedVector, RaBitQ, RaBitQParams, ScalarParams};
+use omendb_core::compression::{
+    ADCTable, QuantizedVector, RaBitQ, RaBitQParams, SQ8ADCTable, ScalarParams,
+};
 
 /// Empty neighbor list constant (avoid allocation for empty results)
 static EMPTY_NEIGHBORS: &[u32] = &[];
@@ -467,6 +469,18 @@ impl<'de> Deserialize<'de> for NeighborLists {
             m_max: data.m_max,
         })
     }
+}
+
+/// Unified ADC (Asymmetric Distance Computation) table
+///
+/// Supports both RaBitQ and SQ8 quantization methods.
+/// Built once per query, used for all distance computations.
+#[derive(Clone, Debug)]
+pub enum UnifiedADC {
+    /// RaBitQ ADC table (variable bit width)
+    RaBitQ(ADCTable),
+    /// SQ8 ADC table (8-bit scalar quantization)
+    SQ8(SQ8ADCTable),
 }
 
 /// Vector storage (quantized or full precision)
@@ -946,19 +960,21 @@ impl VectorStorage {
         }
     }
 
-    /// Build ADC lookup table for a query (5-10x faster than per-candidate decompression)
+    /// Build ADC lookup table for a query
     ///
-    /// Returns None if:
-    /// - Storage is not RaBitQ quantized, or
-    /// - Quantizer has not been trained
+    /// Only used for RaBitQ storage where sub-tables fit in cache.
+    /// SQ8 uses asymmetric SIMD which is faster on modern CPUs.
+    ///
+    /// Returns None if storage is not RaBitQ quantized or not yet trained.
     #[must_use]
-    pub fn build_adc_table(&self, query: &[f32]) -> Option<ADCTable> {
+    pub fn build_adc_table(&self, query: &[f32]) -> Option<UnifiedADC> {
         match self {
             Self::RaBitQQuantized { quantizer, .. } => {
                 let q = quantizer.as_ref()?;
-                // Uses trained per-dimension min/max for correct distances
-                q.build_adc_table(query)
+                Some(UnifiedADC::RaBitQ(q.build_adc_table(query)?))
             }
+            // SQ8 uses asymmetric SIMD (3x faster than ADC on Apple Silicon)
+            // because the 768KB ADC table has poor cache locality
             _ => None,
         }
     }
@@ -966,13 +982,34 @@ impl VectorStorage {
     /// Compute distance using precomputed ADC table
     #[inline]
     #[must_use]
-    pub fn distance_adc(&self, adc: &ADCTable, id: u32) -> Option<f32> {
-        match self {
-            Self::RaBitQQuantized { quantized, .. } => {
+    pub fn distance_adc(&self, adc: &UnifiedADC, id: u32) -> Option<f32> {
+        match (self, adc) {
+            (Self::RaBitQQuantized { quantized, .. }, UnifiedADC::RaBitQ(table)) => {
                 let qv = quantized.get(id as usize)?;
-                Some(adc.distance(&qv.data))
+                Some(table.distance(&qv.data))
             }
-            _ => None,
+            (
+                Self::ScalarQuantized {
+                    quantized,
+                    count,
+                    dimensions,
+                    trained,
+                    ..
+                },
+                UnifiedADC::SQ8(table),
+            ) => {
+                if !*trained {
+                    return None;
+                }
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                Some(table.distance_squared(&quantized[start..end]))
+            }
+            _ => None, // Mismatched storage/ADC types
         }
     }
 

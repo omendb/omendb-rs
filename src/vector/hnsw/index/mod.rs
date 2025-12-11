@@ -7,7 +7,7 @@
 
 use super::error::{HNSWError, Result};
 use super::graph_storage::{DiskConfig, GraphStorage};
-use super::storage::{NeighborLists, VectorStorage};
+use super::storage::{NeighborLists, UnifiedADC, VectorStorage};
 use super::storage_tiering::StorageMode;
 use super::types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
 use omendb_core::compression::RaBitQParams;
@@ -1155,7 +1155,7 @@ impl HNSWIndex {
         entry_points: &[u32],
         ef: usize,
         level: u8,
-        adc_table: Option<&crate::compression::ADCTable>,
+        adc_table: Option<&UnifiedADC>,
     ) -> Result<Vec<(u32, f32)>> {
         use super::query_buffers;
 
@@ -1663,7 +1663,7 @@ impl HNSWIndex {
         &self,
         query: &[f32],
         id: u32,
-        adc_table: Option<&crate::compression::ADCTable>,
+        adc_table: Option<&UnifiedADC>,
     ) -> Result<f32> {
         if let Some(adc) = adc_table {
             if let Some(dist) = self.vectors.distance_adc(adc, id) {
@@ -1684,10 +1684,10 @@ impl HNSWIndex {
         }
     }
 
-    /// Asymmetric search layer for `RaBitQ` quantized storage
+    /// Asymmetric search layer for quantized storage (RaBitQ or SQ8)
     ///
     /// Uses ADC (Asymmetric Distance Computation) lookup tables for fast distance.
-    /// Falls back to regular distance for non-RaBitQ storage.
+    /// Falls back to asymmetric distance if ADC fails.
     fn search_layer_asymmetric(
         &self,
         query: &[f32],

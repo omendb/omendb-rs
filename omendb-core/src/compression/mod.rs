@@ -11,4 +11,4 @@ pub mod scalar;
 pub use rabitq::{
     ADCTable, QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams, TrainedParams,
 };
-pub use scalar::ScalarParams;
+pub use scalar::{SQ8ADCTable, ScalarParams};
