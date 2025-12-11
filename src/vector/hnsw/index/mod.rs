@@ -344,8 +344,17 @@ impl HNSWIndex {
     }
 
     /// Distance between nodes for ordering comparisons
+    ///
+    /// Uses dequantized vectors if storage is quantized (SQ8).
     #[inline]
     fn distance_between_cmp(&self, id_a: u32, id_b: u32) -> Result<f32> {
+        // Try asymmetric distance first (for SQ8/RaBitQ - use id_b as quantized candidate)
+        if let Some(vec_a) = self.vectors.get_dequantized(id_a) {
+            if let Some(dist) = self.vectors.distance_asymmetric_l2(&vec_a, id_b) {
+                return Ok(dist);
+            }
+        }
+        // Fallback to full precision
         let vec_a = self
             .vectors
             .get(id_a)
@@ -358,8 +367,15 @@ impl HNSWIndex {
     }
 
     /// Distance from query to node for ordering comparisons
+    ///
+    /// Tries asymmetric distance first (for SQ8/RaBitQ), falls back to full precision.
     #[inline]
     fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
+        // Try asymmetric distance first (for SQ8/RaBitQ storage)
+        if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
+            return Ok(dist);
+        }
+        // Fallback to full precision
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance_for_comparison(query, vec))
     }
@@ -367,6 +383,10 @@ impl HNSWIndex {
     /// Actual distance (with sqrt for L2)
     #[inline]
     fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
+        // Try asymmetric distance first (for SQ8/RaBitQ storage)
+        if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
+            return Ok(dist.sqrt());
+        }
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance(query, vec))
     }
@@ -579,14 +599,14 @@ impl HNSWIndex {
                 if neighbor_neighbors.len() > m {
                     let neighbor_vec = self
                         .vectors
-                        .get(neighbor_id)
+                        .get_dequantized(neighbor_id)
                         .ok_or(HNSWError::VectorNotFound(neighbor_id))?;
                     let pruned = self.select_neighbors_heuristic(
                         neighbor_id,
                         &neighbor_neighbors,
                         m,
                         lc,
-                        neighbor_vec,
+                        &neighbor_vec,
                     )?;
                     self.neighbors
                         .set_neighbors(neighbor_id, lc, pruned.clone())?;
@@ -895,14 +915,14 @@ impl HNSWIndex {
                 if neighbor_neighbors.len() > m {
                     let neighbor_vec = self
                         .vectors
-                        .get(neighbor_id)
+                        .get_dequantized(neighbor_id)
                         .ok_or(HNSWError::VectorNotFound(neighbor_id))?;
                     let pruned = self.select_neighbors_heuristic(
                         neighbor_id,
                         &neighbor_neighbors,
                         m,
                         lc,
-                        neighbor_vec,
+                        &neighbor_vec,
                     )?;
 
                     // Clear and reset neighbors
