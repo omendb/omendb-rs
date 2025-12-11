@@ -202,6 +202,25 @@ impl SeerDBStorage {
         Ok(self.get_config("count")?.unwrap_or(0) as usize)
     }
 
+    /// Store quantization mode
+    ///
+    /// Mode values: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+    pub fn put_quantization_mode(&self, mode: u64) -> Result<()> {
+        self.put_config("quantization", mode)
+    }
+
+    /// Get quantization mode
+    ///
+    /// Returns: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+    pub fn get_quantization_mode(&self) -> Result<Option<u64>> {
+        self.get_config("quantization")
+    }
+
+    /// Check if store was created with quantization
+    pub fn is_quantized(&self) -> Result<bool> {
+        Ok(self.get_quantization_mode()?.unwrap_or(0) > 0)
+    }
+
     /// Load all metadata from storage (parallel)
     pub fn load_all_metadata(&self) -> Result<HashMap<usize, serde_json::Value>> {
         // Get the count of vectors from config
