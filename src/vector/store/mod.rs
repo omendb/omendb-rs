@@ -470,11 +470,13 @@ impl VectorStore {
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        // OmenFile adds .omen extension, so check for that
+        // Compute .omen path by appending extension (preserves full filename)
         let omen_path = if path.extension().is_some_and(|ext| ext == "omen") {
             path.to_path_buf()
         } else {
-            path.with_extension("omen")
+            let mut omen = path.as_os_str().to_os_string();
+            omen.push(".omen");
+            PathBuf::from(omen)
         };
         let storage = if omen_path.exists() {
             OmenFile::open(path)?
@@ -526,19 +528,24 @@ impl VectorStore {
             }
         }
 
-        // Build HNSW index
-        // NOTE: When reopening a quantized store, quantization is LOST because
-        // we rebuild HNSW without the quantization settings. This is a limitation
-        // that will be addressed by persisting HNSW index to disk.
-        let hnsw_index = if !is_quantized && !vectors.is_empty() {
-            // Non-quantized: build from vectors
+        // Load or rebuild HNSW index
+        let hnsw_index = if let Some(hnsw_bytes) = storage.get_hnsw_index() {
+            // Persisted HNSW index found - deserialize (preserves quantization)
+            match bincode::deserialize(hnsw_bytes) {
+                Ok(index) => Some(index),
+                Err(e) => {
+                    tracing::warn!("Failed to deserialize HNSW index, rebuilding: {}", e);
+                    None
+                }
+            }
+        } else if !vectors.is_empty() {
+            // No persisted index - build from vectors
             let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
             let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
             index.batch_insert(&vector_data)?;
             Some(index)
         } else if is_quantized && dimensions > 0 {
-            // Quantized store reopened: load vectors from disk and rebuild
-            // Tracked: cloud-xa7 - Persist HNSW index to disk
+            // Quantized store without persisted index - rebuild from disk vectors
             let vectors_data = storage.load_all_vectors()?;
             if !vectors_data.is_empty() {
                 let mut index = HNSWIndex::new(vectors_data.len().max(10_000), dimensions)?;
@@ -567,11 +574,14 @@ impl VectorStore {
             .map(|(id, &idx)| (idx, id.clone()))
             .collect();
 
+        // Enable rescore if the loaded index is quantized (asymmetric distance)
+        let rescore_enabled = hnsw_index.as_ref().is_some_and(|idx| idx.is_asymmetric());
+
         Ok(Self {
             vectors,
             hnsw_index,
             dimensions,
-            rescore_enabled: false,
+            rescore_enabled,
             oversample_factor: 3.0,
             metadata,
             id_to_index,
@@ -607,9 +617,17 @@ impl VectorStore {
     /// This is the internal implementation used by `VectorStoreOptions::open()`.
     pub fn open_with_options(path: impl AsRef<Path>, options: &VectorStoreOptions) -> Result<Self> {
         let path = path.as_ref();
+        // Compute .omen path by appending extension (preserves full filename)
+        let omen_path = if path.extension().is_some_and(|ext| ext == "omen") {
+            path.to_path_buf()
+        } else {
+            let mut omen = path.as_os_str().to_os_string();
+            omen.push(".omen");
+            PathBuf::from(omen)
+        };
 
-        // If path exists, load existing data
-        if path.exists() {
+        // If path or .omen file exists, load existing data
+        if path.exists() || omen_path.exists() {
             let mut store = Self::open(path)?;
 
             // Apply dimension if specified and store has none
@@ -2176,7 +2194,14 @@ impl VectorStore {
 
     /// Number of vectors stored (excluding deleted vectors)
     pub fn len(&self) -> usize {
-        // Return active vector count (excluding tombstones)
+        // Prefer HNSW index length (authoritative when loaded from persistence)
+        if let Some(ref index) = self.hnsw_index {
+            let hnsw_len = index.len();
+            if hnsw_len > 0 {
+                return hnsw_len.saturating_sub(self.deleted.len());
+            }
+        }
+        // Fallback to vectors array (for newly created stores)
         self.vectors.len().saturating_sub(self.deleted.len())
     }
 
@@ -2438,12 +2463,23 @@ impl VectorStore {
     ///
     /// This commits:
     /// - Vector/metadata changes to .omen storage
+    /// - HNSW index to .omen storage (preserves quantization)
     /// - Text index changes to tantivy (if enabled)
     ///
     /// Call after batch inserts for durability.
     pub fn flush(&mut self) -> Result<()> {
-        // Flush vector storage
+        // Serialize HNSW index to bytes (before borrowing storage mutably)
+        let hnsw_bytes = self
+            .hnsw_index
+            .as_ref()
+            .map(|index| bincode::serialize(index))
+            .transpose()?;
+
+        // Store HNSW index and flush vector storage
         if let Some(ref mut storage) = self.storage {
+            if let Some(bytes) = hnsw_bytes {
+                storage.put_hnsw_index(bytes);
+            }
             storage.flush()?;
         }
 

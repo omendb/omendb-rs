@@ -12,10 +12,11 @@
 use super::hnsw::{DistanceFunction, HNSWIndex as CoreHNSW, HNSWParams as CoreParams};
 use anyhow::Result;
 use omendb_core::compression::RaBitQParams;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// HNSW index for approximate nearest neighbor search
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HNSWIndex {
     /// Core HNSW implementation
     index: CoreHNSW,

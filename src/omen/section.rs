@@ -12,6 +12,7 @@ pub enum SectionType {
     MetadataRaw = 4,
     TextIndex = 5,
     Wal = 6,
+    HnswIndex = 7,
 }
 
 impl From<u16> for SectionType {
@@ -23,6 +24,7 @@ impl From<u16> for SectionType {
             4 => Self::MetadataRaw,
             5 => Self::TextIndex,
             6 => Self::Wal,
+            7 => Self::HnswIndex,
             _ => Self::None,
         }
     }
