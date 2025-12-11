@@ -66,7 +66,11 @@ pub struct OmenFile {
 
 impl OmenFile {
     /// Compute .omen path by appending extension (preserves full filename)
-    fn compute_omen_path(path: &Path) -> PathBuf {
+    ///
+    /// Handles filenames with multiple dots (e.g., `test.db_64` → `test.db_64.omen`)
+    /// by appending `.omen` rather than replacing the extension.
+    #[must_use]
+    pub fn compute_omen_path(path: &Path) -> PathBuf {
         if path.extension().is_some_and(|ext| ext == "omen") {
             path.to_path_buf()
         } else {
