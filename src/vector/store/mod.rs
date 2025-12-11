@@ -17,7 +17,7 @@ use super::hnsw::{DistanceFunction, HNSWParams};
 use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
 use super::QuantizationMode;
-use crate::omen::OmenFile;
+use crate::omen::{MetadataIndex, OmenFile};
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
 use omendb_core::distance::l2_distance;
@@ -58,6 +58,9 @@ pub struct VectorStore {
     /// Deleted vector IDs (tombstones for MVCC)
     deleted: HashMap<usize, bool>,
 
+    /// Roaring bitmap index for fast filtered search
+    metadata_index: MetadataIndex,
+
     /// Persistent storage backend (.omen format)
     storage: Option<OmenFile>,
 
@@ -97,6 +100,7 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
             deleted: HashMap::new(),
+            metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
             text_index: None,
@@ -123,6 +127,7 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
             deleted: HashMap::new(),
+            metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
             text_index: None,
@@ -159,6 +164,7 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
             deleted: HashMap::new(),
+            metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
             text_index: None,
@@ -301,6 +307,14 @@ impl VectorStore {
             .map(|(id, &idx)| (idx, id.clone()))
             .collect();
 
+        // Build metadata index from loaded metadata (for fast filtered search)
+        let mut metadata_index = MetadataIndex::new();
+        for (&idx, meta) in &metadata {
+            if !deleted.contains_key(&idx) {
+                metadata_index.index_json(idx as u32, meta);
+            }
+        }
+
         // Enable rescore if the loaded index is quantized
         let rescore_enabled = hnsw_index.as_ref().is_some_and(|idx| idx.is_asymmetric());
 
@@ -314,6 +328,7 @@ impl VectorStore {
             id_to_index,
             index_to_id,
             deleted,
+            metadata_index,
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
             text_index,
@@ -424,6 +439,7 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
             deleted: HashMap::new(),
+            metadata_index: MetadataIndex::new(),
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
             text_index,
@@ -487,6 +503,7 @@ impl VectorStore {
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
             deleted: HashMap::new(),
+            metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
             text_index,
@@ -606,6 +623,7 @@ impl VectorStore {
         let index = self.insert(vector)?;
 
         self.metadata.insert(index, metadata.clone());
+        self.metadata_index.index_json(index as u32, &metadata);
         self.id_to_index.insert(id.clone(), index);
         self.index_to_id.insert(index, id.clone());
 
@@ -760,7 +778,8 @@ impl VectorStore {
             for (i, (id, vector, metadata)) in inserts.into_iter().enumerate() {
                 let idx = base_index + i;
                 self.vectors.push(vector);
-                self.metadata.insert(idx, metadata);
+                self.metadata.insert(idx, metadata.clone());
+                self.metadata_index.index_json(idx as u32, &metadata);
                 self.index_to_id.insert(idx, id.clone());
                 self.id_to_index.insert(id, idx);
                 result_indices.push(idx);
@@ -1024,6 +1043,9 @@ impl VectorStore {
         }
 
         if let Some(ref new_metadata) = metadata {
+            // Re-index metadata: remove old values, add new ones
+            self.metadata_index.remove(index as u32);
+            self.metadata_index.index_json(index as u32, new_metadata);
             self.metadata.insert(index, new_metadata.clone());
 
             if let Some(ref mut storage) = self.storage {
@@ -1059,6 +1081,7 @@ impl VectorStore {
             .ok_or_else(|| anyhow::anyhow!("Vector with ID '{id}' not found"))?;
 
         self.deleted.insert(index, true);
+        self.metadata_index.remove(index as u32);
 
         // Use OmenFile::delete for WAL-backed persistence
         if let Some(ref mut storage) = self.storage {
@@ -1401,6 +1424,9 @@ impl VectorStore {
     }
 
     /// Read-only filtered search (for parallel execution)
+    ///
+    /// Uses Roaring bitmap index for O(1) filter evaluation when possible,
+    /// falls back to JSON-based filtering for complex filters.
     pub fn knn_search_with_filter_ef_readonly(
         &self,
         query: &Vector,
@@ -1408,25 +1434,35 @@ impl VectorStore {
         filter: &MetadataFilter,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
+        // Try bitmap-based filtering (O(1) per candidate)
+        let filter_bitmap = filter.evaluate_bitmap(&self.metadata_index);
+
         if let Some(ref hnsw) = self.hnsw_index {
             let metadata_map = &self.metadata;
             let deleted_map = &self.deleted;
-            let filter_fn = |node_id: u32| -> bool {
-                let index = node_id as usize;
 
-                if deleted_map.contains_key(&index) {
-                    return false;
-                }
-
-                let metadata = metadata_map
-                    .get(&index)
-                    .cloned()
-                    .unwrap_or(serde_json::json!({}));
-
-                filter.matches(&metadata)
+            let search_results = if let Some(ref bitmap) = filter_bitmap {
+                // Fast path: bitmap-based filtering
+                let filter_fn = |node_id: u32| -> bool {
+                    let index = node_id as usize;
+                    !deleted_map.contains_key(&index) && bitmap.contains(node_id)
+                };
+                hnsw.search_with_filter_ef(&query.data, k, ef, filter_fn)?
+            } else {
+                // Slow path: JSON-based filtering
+                let filter_fn = |node_id: u32| -> bool {
+                    let index = node_id as usize;
+                    if deleted_map.contains_key(&index) {
+                        return false;
+                    }
+                    let metadata = metadata_map
+                        .get(&index)
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
+                    filter.matches(&metadata)
+                };
+                hnsw.search_with_filter_ef(&query.data, k, ef, filter_fn)?
             };
-
-            let search_results = hnsw.search_with_filter_ef(&query.data, k, ef, filter_fn)?;
 
             let filtered_results: Vec<(usize, f32, JsonValue)> = search_results
                 .into_iter()
@@ -1453,16 +1489,27 @@ impl VectorStore {
                     return None;
                 }
 
+                // Use bitmap if available, otherwise JSON
+                let passes_filter = if let Some(ref bitmap) = filter_bitmap {
+                    bitmap.contains(index as u32)
+                } else {
+                    let metadata = self
+                        .metadata
+                        .get(&index)
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
+                    filter.matches(&metadata)
+                };
+
+                if !passes_filter {
+                    return None;
+                }
+
                 let metadata = self
                     .metadata
                     .get(&index)
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
-
-                if !filter.matches(&metadata) {
-                    return None;
-                }
-
                 let distance = query.l2_distance(vec).unwrap_or(f32::MAX);
                 Some((index, distance, metadata))
             })

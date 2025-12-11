@@ -26,7 +26,7 @@ mod wal;
 pub use file::OmenFile;
 pub use graph::GraphSection;
 pub use header::{OmenHeader, HEADER_SIZE, MAGIC, VERSION_MAJOR, VERSION_MINOR};
-pub use metadata::{Filter, FilterValue, MetadataIndex};
+pub use metadata::{FieldIndex, Filter, FilterValue, MetadataIndex};
 pub use section::{SectionEntry, SectionType};
 pub use vectors::VectorSection;
 pub use wal::{Wal, WalEntry, WalEntryType};
