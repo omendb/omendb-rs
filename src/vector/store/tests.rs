@@ -530,7 +530,7 @@ fn test_get_by_id() {
     assert!(store.get_by_id("nonexistent").is_none());
 }
 
-// Tests for seerdb persistent storage
+// Tests for persistent storage
 
 #[test]
 fn test_open_new_database() {
