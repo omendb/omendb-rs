@@ -275,8 +275,9 @@ impl HNSWIndex {
     }
 
     /// Get neighbor count for a node at a level
-    pub fn neighbor_count(&self, node_id: u32, level: u8) -> Result<usize> {
-        Ok(self.neighbors.get_neighbors(node_id, level)?.len())
+    #[must_use]
+    pub fn neighbor_count(&self, node_id: u32, level: u8) -> usize {
+        self.neighbors.get_neighbors(node_id, level).len()
     }
 
     /// Get HNSW parameters
@@ -288,7 +289,8 @@ impl HNSWIndex {
     /// Get neighbors at level 0 for a node
     ///
     /// Level 0 has the most connections (M*2) and is used for graph merging.
-    pub fn get_neighbors_level0(&self, node_id: u32) -> Result<Vec<u32>> {
+    #[must_use]
+    pub fn get_neighbors_level0(&self, node_id: u32) -> Vec<u32> {
         self.neighbors.get_neighbors(node_id, 0)
     }
 
@@ -553,7 +555,7 @@ impl HNSWIndex {
             // Add bidirectional links
             for &neighbor_id in &neighbors {
                 self.neighbors
-                    .add_bidirectional_link(node_id, neighbor_id, lc)?;
+                    .add_bidirectional_link(node_id, neighbor_id, lc);
             }
 
             // Update neighbor counts
@@ -561,7 +563,7 @@ impl HNSWIndex {
 
             // Prune overloaded neighbors
             for &neighbor_id in &neighbors {
-                let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, lc)?;
+                let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, lc);
                 if neighbor_neighbors.len() > m {
                     let neighbor_vec = self
                         .vectors
@@ -575,7 +577,7 @@ impl HNSWIndex {
                         &neighbor_vec,
                     )?;
                     self.neighbors
-                        .set_neighbors(neighbor_id, lc, pruned.clone())?;
+                        .set_neighbors(neighbor_id, lc, pruned.clone());
                     self.nodes[neighbor_id as usize].set_neighbor_count(lc, pruned.len());
                 }
             }
@@ -858,7 +860,7 @@ impl HNSWIndex {
             // Add bidirectional links
             for &neighbor_id in &neighbors {
                 self.neighbors
-                    .add_bidirectional_link(node_id, neighbor_id, lc)?;
+                    .add_bidirectional_link(node_id, neighbor_id, lc);
             }
 
             // Update neighbor counts
@@ -866,7 +868,7 @@ impl HNSWIndex {
 
             // Prune neighbors' connections if they exceed M
             for &neighbor_id in &neighbors {
-                let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, lc)?;
+                let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, lc);
                 if neighbor_neighbors.len() > m {
                     let neighbor_vec = self
                         .vectors
@@ -882,7 +884,7 @@ impl HNSWIndex {
 
                     // Clear and reset neighbors
                     self.neighbors
-                        .set_neighbors(neighbor_id, lc, pruned.clone())?;
+                        .set_neighbors(neighbor_id, lc, pruned.clone());
                     self.nodes[neighbor_id as usize].set_neighbor_count(lc, pruned.len());
                 }
             }
@@ -1164,7 +1166,7 @@ impl HNSWIndex {
                                 unvisited.push(id);
                             }
                         }
-                    })?;
+                    });
 
                 let unvisited_slice = unvisited.as_slice();
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
@@ -1474,7 +1476,7 @@ impl HNSWIndex {
 
                 // Collect neighbors into pre-allocated buffer (no allocation!)
                 neighbors_to_explore.clear();
-                let neighbors = self.neighbors.get_neighbors(current.node_id, level)?;
+                let neighbors = self.neighbors.get_neighbors(current.node_id, level);
 
                 for &neighbor_id in &neighbors {
                     if visited.contains(neighbor_id) {
@@ -1485,11 +1487,10 @@ impl HNSWIndex {
 
                     // 2-hop exploration: if neighbor doesn't match filter, explore its neighbors
                     if use_two_hop && !filter_fn(neighbor_id) {
-                        if let Ok(second_hop) = self.neighbors.get_neighbors(neighbor_id, level) {
-                            for &second_hop_id in &second_hop {
-                                if !visited.contains(second_hop_id) {
-                                    neighbors_to_explore.push(second_hop_id);
-                                }
+                        let second_hop = self.neighbors.get_neighbors(neighbor_id, level);
+                        for &second_hop_id in &second_hop {
+                            if !visited.contains(second_hop_id) {
+                                neighbors_to_explore.push(second_hop_id);
                             }
                         }
                     }
@@ -1591,7 +1592,7 @@ impl HNSWIndex {
                                 unvisited.push(id);
                             }
                         }
-                    })?;
+                    });
 
                 // Process unvisited neighbors with prefetching
                 // Prefetch next neighbor's vector data while computing distance to current
@@ -1707,7 +1708,7 @@ impl HNSWIndex {
                                 unvisited.push(id);
                             }
                         }
-                    })?;
+                    });
 
                 // Process unvisited neighbors with prefetching
                 let unvisited_slice = unvisited.as_slice();
@@ -1774,11 +1775,7 @@ impl HNSWIndex {
         let mut total_neighbors = 0;
         let mut max_neighbors = 0;
         for node in &self.nodes {
-            let neighbor_count = self
-                .neighbors
-                .get_neighbors(node.id, 0)
-                .unwrap_or_default()
-                .len();
+            let neighbor_count = self.neighbors.get_neighbors(node.id, 0).len();
             total_neighbors += neighbor_count;
             max_neighbors = max_neighbors.max(neighbor_count);
         }
@@ -1851,10 +1848,9 @@ impl HNSWIndex {
 
             // Get neighbors at each level for this node
             for level in 0..=max_level {
-                if let Ok(neighbors) = self.neighbors.get_neighbors(node_id, level) {
-                    if !neighbors.is_empty() {
-                        edges.push((node_id, level, neighbors));
-                    }
+                let neighbors = self.neighbors.get_neighbors(node_id, level);
+                if !neighbors.is_empty() {
+                    edges.push((node_id, level, neighbors));
                 }
             }
         }

@@ -3,7 +3,6 @@
 //! Provides a unified API for the in-memory neighbor list storage.
 //! Persistence is handled by serializing the entire HNSWIndex to .omen format.
 
-use super::error::Result;
 use super::storage::NeighborLists;
 use serde::{Deserialize, Serialize};
 
@@ -35,31 +34,30 @@ impl GraphStorage {
 
     /// Get neighbors for a node at a specific level
     #[inline]
-    pub fn get_neighbors(&self, node_id: u32, level: u8) -> Result<Vec<u32>> {
-        Ok(self.0.get_neighbors(node_id, level))
+    #[must_use]
+    pub fn get_neighbors(&self, node_id: u32, level: u8) -> Vec<u32> {
+        self.0.get_neighbors(node_id, level)
     }
 
     /// Execute closure with read access to neighbors (zero-copy)
     #[inline]
-    pub fn with_neighbors<F, R>(&self, node_id: u32, level: u8, f: F) -> Result<R>
+    pub fn with_neighbors<F, R>(&self, node_id: u32, level: u8, f: F) -> R
     where
         F: FnOnce(&[u32]) -> R,
     {
-        Ok(self.0.with_neighbors(node_id, level, f))
+        self.0.with_neighbors(node_id, level, f)
     }
 
     /// Set neighbors for a node at a specific level
     #[inline]
-    pub fn set_neighbors(&mut self, node_id: u32, level: u8, neighbors: Vec<u32>) -> Result<()> {
+    pub fn set_neighbors(&mut self, node_id: u32, level: u8, neighbors: Vec<u32>) {
         self.0.set_neighbors(node_id, level, neighbors);
-        Ok(())
     }
 
     /// Add bidirectional link between two nodes
     #[inline]
-    pub fn add_bidirectional_link(&mut self, node_a: u32, node_b: u32, level: u8) -> Result<()> {
+    pub fn add_bidirectional_link(&mut self, node_a: u32, node_b: u32, level: u8) {
         self.0.add_bidirectional_link(node_a, node_b, level);
-        Ok(())
     }
 
     /// Add bidirectional link (parallel version)
@@ -116,9 +114,9 @@ mod tests {
         storage.set_neighbors(0, 0, vec![1, 2, 3]);
         storage.set_neighbors(0, 1, vec![4, 5]);
 
-        assert_eq!(storage.get_neighbors(0, 0).unwrap(), vec![1, 2, 3]);
-        assert_eq!(storage.get_neighbors(0, 1).unwrap(), vec![4, 5]);
-        assert_eq!(storage.get_neighbors(99, 0).unwrap(), Vec::<u32>::new());
+        assert_eq!(storage.get_neighbors(0, 0), vec![1, 2, 3]);
+        assert_eq!(storage.get_neighbors(0, 1), vec![4, 5]);
+        assert_eq!(storage.get_neighbors(99, 0), Vec::<u32>::new());
     }
 
     #[test]
@@ -127,8 +125,8 @@ mod tests {
 
         storage.add_bidirectional_link(0, 1, 0);
 
-        let neighbors_0 = storage.get_neighbors(0, 0).unwrap();
-        let neighbors_1 = storage.get_neighbors(1, 0).unwrap();
+        let neighbors_0 = storage.get_neighbors(0, 0);
+        let neighbors_1 = storage.get_neighbors(1, 0);
 
         assert!(neighbors_0.contains(&1));
         assert!(neighbors_1.contains(&0));
@@ -142,6 +140,6 @@ mod tests {
         let serialized = bincode::serialize(&storage).unwrap();
         let deserialized: GraphStorage = bincode::deserialize(&serialized).unwrap();
 
-        assert_eq!(deserialized.get_neighbors(0, 0).unwrap(), vec![1, 2, 3]);
+        assert_eq!(deserialized.get_neighbors(0, 0), vec![1, 2, 3]);
     }
 }
