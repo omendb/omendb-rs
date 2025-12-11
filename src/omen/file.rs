@@ -4,7 +4,6 @@
 
 use crate::omen::{
     align_to_page,
-    graph::GraphSection,
     header::{OmenHeader, HEADER_SIZE},
     section::{SectionEntry, SectionType},
     vectors::VectorSection,
@@ -38,6 +37,9 @@ struct CheckpointMetadata {
 const CHECKPOINT_THRESHOLD: u64 = 1000;
 
 /// OmenFile - single-file vector database
+///
+/// Storage layer for vectors, metadata, and serialized HNSW index.
+/// Graph traversal is handled by HNSWIndex in the vector layer.
 pub struct OmenFile {
     path: PathBuf,
     file: File,
@@ -46,8 +48,6 @@ pub struct OmenFile {
 
     // In-memory state (for writes before checkpoint)
     vectors_mem: Vec<Vec<f32>>,
-    graph_mem: Vec<Vec<u32>>,
-    levels_mem: Vec<u8>,
     id_to_index: HashMap<String, u32>,
     index_to_id: HashMap<u32, String>,
     metadata_mem: HashMap<u32, Vec<u8>>,
@@ -56,9 +56,6 @@ pub struct OmenFile {
 
     // WAL for durability
     wal: Wal,
-
-    // Entry point for HNSW search
-    entry_point: Option<u32>,
 
     // Serialized HNSW index (persisted on checkpoint, loaded on open)
     hnsw_index_bytes: Option<Vec<u8>>,
@@ -114,15 +111,12 @@ impl OmenFile {
             mmap: None,
             header,
             vectors_mem: Vec::new(),
-            graph_mem: Vec::new(),
-            levels_mem: Vec::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
             metadata_mem: HashMap::new(),
             deleted: HashMap::new(),
             config,
             wal,
-            entry_point: None,
             hnsw_index_bytes: None,
         })
     }
@@ -155,13 +149,6 @@ impl OmenFile {
         // Open WAL
         let wal = Wal::open(&wal_path)?;
 
-        // Save entry point before moving header
-        let entry_point = if header.entry_point > 0 {
-            Some(header.entry_point)
-        } else {
-            None
-        };
-
         // Initialize config from header
         let mut config = HashMap::new();
         config.insert("dimensions".to_string(), u64::from(header.dimensions));
@@ -169,8 +156,6 @@ impl OmenFile {
 
         // Load vectors from checkpoint if present
         let mut vectors_mem = Vec::new();
-        let mut graph_mem = Vec::new();
-        let mut levels_mem = Vec::new();
         let mut id_to_index = HashMap::new();
         let mut index_to_id = HashMap::new();
         let mut metadata_mem = HashMap::new();
@@ -197,8 +182,6 @@ impl OmenFile {
                                 })
                                 .collect();
                             vectors_mem.push(vector);
-                            graph_mem.push(Vec::new());
-                            levels_mem.push(0);
                         }
                     }
                 }
@@ -244,15 +227,12 @@ impl OmenFile {
             mmap,
             header,
             vectors_mem,
-            graph_mem,
-            levels_mem,
             id_to_index,
             index_to_id,
             metadata_mem,
             deleted,
             config,
             wal,
-            entry_point,
             hnsw_index_bytes,
         };
 
@@ -327,19 +307,14 @@ impl OmenFile {
         let mut metadata = vec![0u8; meta_len];
         cursor.read_exact(&mut metadata)?;
 
-        // Apply insert
+        // Apply insert (level is ignored - HNSW graph managed by HNSWIndex)
+        let _ = level; // Consumed from WAL but not stored (HNSWIndex manages graph)
         let index = self.vectors_mem.len() as u32;
         self.vectors_mem.push(vector);
-        self.levels_mem.push(level);
-        self.graph_mem.push(Vec::new());
         self.id_to_index.insert(string_id.clone(), index);
         self.index_to_id.insert(index, string_id);
         if !metadata.is_empty() {
             self.metadata_mem.insert(index, metadata);
-        }
-
-        if self.entry_point.is_none() {
-            self.entry_point = Some(index);
         }
 
         Ok(())
@@ -364,36 +339,17 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Replay neighbors update from WAL
-    fn replay_neighbors(&mut self, data: &[u8]) -> io::Result<()> {
-        let mut cursor = std::io::Cursor::new(data);
-
-        // Read node ID
-        let mut u32_buf = [0u8; 4];
-        cursor.read_exact(&mut u32_buf)?;
-        let node_id = u32::from_le_bytes(u32_buf);
-
-        // Read level (unused for now - we only store level 0)
-        let mut level_buf = [0u8; 1];
-        cursor.read_exact(&mut level_buf)?;
-
-        // Read neighbors
-        cursor.read_exact(&mut u32_buf)?;
-        let neighbor_count = u32::from_le_bytes(u32_buf) as usize;
-        let mut neighbors = Vec::with_capacity(neighbor_count);
-        for _ in 0..neighbor_count {
-            cursor.read_exact(&mut u32_buf)?;
-            neighbors.push(u32::from_le_bytes(u32_buf));
-        }
-
-        if (node_id as usize) < self.graph_mem.len() {
-            self.graph_mem[node_id as usize] = neighbors;
-        }
-
+    /// Replay neighbors update from WAL (no-op: graph managed by HNSWIndex)
+    fn replay_neighbors(&mut self, _data: &[u8]) -> io::Result<()> {
+        // Neighbor updates are consumed from WAL but not stored.
+        // HNSWIndex rebuilds graph from vectors on recovery.
         Ok(())
     }
 
     /// Insert a vector
+    ///
+    /// Note: Graph management (HNSW) is handled by HNSWIndex in the vector layer.
+    /// This method only handles storage: WAL, vectors, metadata.
     pub fn insert(&mut self, id: &str, vector: &[f32], metadata: Option<&[u8]>) -> io::Result<()> {
         if vector.len() != self.header.dimensions as usize {
             return Err(io::Error::new(
@@ -407,58 +363,25 @@ impl OmenFile {
         }
 
         let metadata_bytes = metadata.unwrap_or(b"{}");
-        let level = self.random_level();
 
         // 1. Append to WAL (durable)
-        let entry = WalEntry::insert_node(0, id, level, vector, metadata_bytes);
+        // Level 0 is placeholder - actual HNSW levels managed by HNSWIndex
+        let entry = WalEntry::insert_node(0, id, 0, vector, metadata_bytes);
         self.wal.append(entry)?;
         self.wal.sync()?;
 
-        // 2. Update in-memory index
+        // 2. Update in-memory state
         let index = self.vectors_mem.len() as u32;
         self.vectors_mem.push(vector.to_vec());
-        self.levels_mem.push(level);
-        self.graph_mem.push(Vec::new());
         self.id_to_index.insert(id.to_string(), index);
         self.index_to_id.insert(index, id.to_string());
         if metadata_bytes != b"{}" {
             self.metadata_mem.insert(index, metadata_bytes.to_vec());
         }
 
-        // 3. Connect to graph (simplified - full HNSW would be more complex)
-        if self.entry_point.is_none() {
-            self.entry_point = Some(index);
-        } else {
-            // Simple greedy insert - find nearest neighbors
-            let neighbors = self.find_nearest(vector, self.header.m as usize);
-
-            // Update this node's neighbors
-            self.graph_mem[index as usize] = neighbors.clone();
-
-            // Log neighbor update
-            let neighbor_entry = WalEntry::update_neighbors(0, index, 0, &neighbors);
-            self.wal.append(neighbor_entry)?;
-
-            // Update bidirectional connections
-            for &neighbor in &neighbors {
-                if (neighbor as usize) < self.graph_mem.len() {
-                    let neighbor_list = &mut self.graph_mem[neighbor as usize];
-                    if !neighbor_list.contains(&index)
-                        && neighbor_list.len() < self.header.m as usize * 2
-                    {
-                        neighbor_list.push(index);
-
-                        // Log neighbor update
-                        let update = WalEntry::update_neighbors(0, neighbor, 0, neighbor_list);
-                        self.wal.append(update)?;
-                    }
-                }
-            }
-        }
-
         self.header.count += 1;
 
-        // 4. Periodic checkpoint
+        // 3. Periodic checkpoint
         if self.wal.len() > CHECKPOINT_THRESHOLD {
             self.checkpoint()?;
         }
@@ -535,18 +458,6 @@ impl OmenFile {
         self.header.dimensions
     }
 
-    /// Generate random level for HNSW (simplified)
-    fn random_level(&self) -> u8 {
-        let ml = 1.0 / (self.header.m as f64).ln();
-        let mut level = 0u8;
-        let mut r = rand::random::<f64>();
-        while r < ml && level < 16 {
-            level += 1;
-            r = rand::random::<f64>();
-        }
-        level
-    }
-
     /// Checkpoint - compact WAL into main file
     pub fn checkpoint(&mut self) -> io::Result<()> {
         if self.vectors_mem.is_empty() && self.hnsw_index_bytes.is_none() {
@@ -568,7 +479,7 @@ impl OmenFile {
         let vector_size =
             VectorSection::size_for_count(self.header.dimensions, self.vectors_mem.len() as u64)
                 as usize;
-        let graph_size = GraphSection::size_for_graph(&self.levels_mem, &self.graph_mem);
+        let graph_size = 0; // Graph managed by HNSWIndex, not stored in OmenFile
         let metadata_size = metadata_bytes.len();
         let hnsw_size = self.hnsw_index_bytes.as_ref().map_or(0, Vec::len);
 
@@ -590,9 +501,7 @@ impl OmenFile {
             }
         }
 
-        // Write graph
-        self.file.seek(SeekFrom::Start(graph_offset as u64))?;
-        GraphSection::write_graph(&mut self.file, &self.levels_mem, &self.graph_mem)?;
+        // Graph section is empty - HNSWIndex stores graph in hnsw_index_bytes
 
         // Write metadata
         self.file.seek(SeekFrom::Start(metadata_offset as u64))?;
@@ -606,7 +515,7 @@ impl OmenFile {
 
         // Update header
         self.header.count = self.vectors_mem.len() as u64;
-        self.header.entry_point = self.entry_point.unwrap_or(0);
+        self.header.entry_point = 0; // Entry point managed by HNSWIndex
         self.header.set_section(SectionEntry::new(
             SectionType::Vectors,
             vector_offset as u64,
@@ -659,8 +568,6 @@ impl OmenFile {
         let new_len = id + 1;
         if self.vectors_mem.len() < new_len {
             self.vectors_mem.resize_with(new_len, Vec::new);
-            self.graph_mem.resize_with(new_len, Vec::new);
-            self.levels_mem.resize(new_len, 0);
         }
         self.vectors_mem[id] = vector.to_vec();
         Ok(())
