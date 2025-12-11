@@ -35,6 +35,18 @@ pub struct ScalarParams {
 }
 
 impl ScalarParams {
+    /// Create uninitialized params (for lazy training)
+    ///
+    /// Uses identity mapping (min=0, scale=1/255) until trained.
+    #[must_use]
+    pub fn uninitialized(dimensions: usize) -> Self {
+        Self {
+            mins: vec![0.0; dimensions],
+            scales: vec![1.0 / 255.0; dimensions],
+            dimensions,
+        }
+    }
+
     /// Train scalar quantization from sample vectors
     ///
     /// Uses 1st and 99th percentiles to handle outliers.

@@ -2361,7 +2361,7 @@ mod tests {
         let query = vec![0.1, 0.2, 0.3, 0.4];
         let scale = 1.0;
 
-        let adc = quantizer.build_adc_table(&query, scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, scale);
 
         // Check structure
         assert_eq!(adc.dimensions, 4);
@@ -2380,7 +2380,7 @@ mod tests {
         let query = vec![0.1, 0.2, 0.3, 0.4];
         let scale = 1.0;
 
-        let adc = quantizer.build_adc_table(&query, scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, scale);
 
         // Each dimension should have 4 codes (2-bit)
         for dim_table in &adc.table {
@@ -2402,8 +2402,9 @@ mod tests {
         // Compute distance with asymmetric method
         let dist_asymmetric = quantizer.distance_asymmetric_l2(&query, &quantized);
 
-        // Compute distance with ADC
-        let dist_adc = quantizer.distance_with_adc(&query, &quantized);
+        // Compute distance with ADC (using build_adc_table_with_scale for untrained quantizer)
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
+        let dist_adc = adc.distance(&quantized.data);
 
         // ADC should give similar results to asymmetric distance
         // They use different computation paths but should be close
@@ -2428,7 +2429,7 @@ mod tests {
         let quantized = quantizer.quantize(&vector);
 
         // Build ADC table
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
 
         // Distance should be near zero (same vector)
         let dist = adc.distance(&quantized.data);
@@ -2448,10 +2449,14 @@ mod tests {
         let qv2 = quantizer.quantize(&v2);
         let qv3 = quantizer.quantize(&v3);
 
-        // Use convenience method that picks correct scale
-        let dist1 = quantizer.distance_with_adc(&query, &qv1);
-        let dist2 = quantizer.distance_with_adc(&query, &qv2);
-        let dist3 = quantizer.distance_with_adc(&query, &qv3);
+        // Build ADC tables with respective scales
+        let adc1 = quantizer.build_adc_table_with_scale(&query, qv1.scale);
+        let adc2 = quantizer.build_adc_table_with_scale(&query, qv2.scale);
+        let adc3 = quantizer.build_adc_table_with_scale(&query, qv3.scale);
+
+        let dist1 = adc1.distance(&qv1.data);
+        let dist2 = adc2.distance(&qv2.data);
+        let dist3 = adc3.distance(&qv3.data);
 
         // Order should be preserved
         assert!(
@@ -2475,7 +2480,7 @@ mod tests {
         let quantized = quantizer.quantize(&vector);
 
         // Build ADC table
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
 
         // Should handle high dimensions without panic
         let dist = adc.distance(&quantized.data);
@@ -2498,11 +2503,14 @@ mod tests {
         let quantized: Vec<QuantizedVector> =
             candidates.iter().map(|v| quantizer.quantize(v)).collect();
 
-        // Scan all candidates using convenience method
+        // Scan all candidates using ADC tables
         let mut results: Vec<(usize, f32)> = quantized
             .iter()
             .enumerate()
-            .map(|(i, qv)| (i, quantizer.distance_with_adc(&query, qv)))
+            .map(|(i, qv)| {
+                let adc = quantizer.build_adc_table_with_scale(&query, qv.scale);
+                (i, adc.distance(&qv.data))
+            })
             .collect();
 
         // Sort by distance
@@ -2520,7 +2528,7 @@ mod tests {
         let vector = vec![1.0, 0.0, 0.0];
 
         let quantized = quantizer.quantize(&vector);
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
 
         let dist_squared = adc.distance_squared(&quantized.data);
         let dist = adc.distance(&quantized.data);
@@ -2543,7 +2551,7 @@ mod tests {
         let vector = vec![0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85];
 
         let quantized = quantizer.quantize(&vector);
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
 
         let dist_scalar = adc.distance_squared(&quantized.data);
         let dist_simd = adc.distance_squared_simd(&quantized.data);
@@ -2562,7 +2570,7 @@ mod tests {
         let vector: Vec<f32> = (0..1536).map(|i| ((i + 10) as f32) / 1536.0).collect();
 
         let quantized = quantizer.quantize(&vector);
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
 
         // Should handle large dimensions efficiently
         let dist_simd = adc.distance_squared_simd(&quantized.data);
@@ -2574,7 +2582,7 @@ mod tests {
         let quantizer = RaBitQ::default_4bit();
 
         let query: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
-        let adc = quantizer.build_adc_table(&query, 1.0);
+        let adc = quantizer.build_adc_table_with_scale(&query, 1.0);
 
         let memory = adc.memory_bytes();
 
@@ -2596,9 +2604,9 @@ mod tests {
         let quantized = quantizer.quantize(&vector);
 
         // Build ADC tables with different scales
-        let adc1 = quantizer.build_adc_table(&query, 0.5);
-        let adc2 = quantizer.build_adc_table(&query, 1.0);
-        let adc3 = quantizer.build_adc_table(&query, 2.0);
+        let adc1 = quantizer.build_adc_table_with_scale(&query, 0.5);
+        let adc2 = quantizer.build_adc_table_with_scale(&query, 1.0);
+        let adc3 = quantizer.build_adc_table_with_scale(&query, 2.0);
 
         // Distances should differ based on scale
         let dist1 = adc1.distance(&quantized.data);
@@ -2619,7 +2627,7 @@ mod tests {
         let query = vec![0.5];
         let vector = vec![0.6];
         let quantized = quantizer.quantize(&vector);
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
         let dist = adc.distance(&quantized.data);
         assert!(dist.is_finite());
 
@@ -2627,7 +2635,7 @@ mod tests {
         let query = vec![0.0, 0.0, 0.0, 0.0];
         let vector = vec![0.0, 0.0, 0.0, 0.0];
         let quantized = quantizer.quantize(&vector);
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
         let dist = adc.distance(&quantized.data);
         assert!(dist.is_finite());
     }
@@ -2642,7 +2650,7 @@ mod tests {
         let quantized = quantizer.quantize(&vector);
 
         // Test ADC for 2-bit quantization
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
         let dist_adc = adc.distance(&quantized.data);
         let dist_asymmetric = quantizer.distance_asymmetric_l2(&query, &quantized);
 
@@ -2661,7 +2669,7 @@ mod tests {
         let quantized = quantizer.quantize(&vector);
 
         // Test ADC for 8-bit quantization (highest precision)
-        let adc = quantizer.build_adc_table(&query, quantized.scale);
+        let adc = quantizer.build_adc_table_with_scale(&query, quantized.scale);
         let dist_adc = adc.distance(&quantized.data);
         let dist_asymmetric = quantizer.distance_asymmetric_l2(&query, &quantized);
 
