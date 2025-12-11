@@ -11,6 +11,7 @@ use super::hnsw::{DistanceFunction, HNSWParams};
 use super::hnsw_index::HNSWIndex;
 use super::storage::SeerDBStorage;
 use super::types::Vector;
+use super::QuantizationMode;
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
 use omendb_core::compression::RaBitQParams;
@@ -69,8 +70,8 @@ pub struct VectorStoreOptions {
     /// HNSW `ef_search`: search quality/speed tradeoff (default: 100)
     ef_search: Option<usize>,
 
-    /// `RaBitQ` quantization parameters (enables asymmetric HNSW search)
-    quantization: Option<RaBitQParams>,
+    /// Quantization mode (SQ8 or RaBitQ for asymmetric HNSW search)
+    quantization: Option<QuantizationMode>,
 
     /// Rescore candidates with original vectors (default: true when quantization enabled)
     /// When true, search fetches `k * oversample` candidates using quantized distance,
@@ -130,13 +131,50 @@ impl VectorStoreOptions {
         self
     }
 
-    /// Enable `RaBitQ` quantization for memory-efficient storage.
+    /// Enable quantization for memory-efficient storage.
     ///
-    /// Provides 4-16x compression with ~1-2% recall loss.
+    /// # Modes
+    /// - `QuantizationMode::SQ8`: 4x compression, ~2x faster search, ~99% recall (default)
+    /// - `QuantizationMode::RaBitQ(params)`: 4-16x compression, ~0.5x slower, 93-99% recall
+    ///
+    /// # Example
+    /// ```ignore
+    /// // SQ8 (recommended for most cases)
+    /// let store = VectorStoreOptions::default()
+    ///     .dimensions(768)
+    ///     .quantization(QuantizationMode::sq8())
+    ///     .open("./vectors")?;
+    ///
+    /// // RaBitQ for higher compression
+    /// let store = VectorStoreOptions::default()
+    ///     .dimensions(768)
+    ///     .quantization(QuantizationMode::rabitq())
+    ///     .open("./vectors")?;
+    /// ```
     #[must_use]
-    pub fn quantization(mut self, params: RaBitQParams) -> Self {
-        self.quantization = Some(params);
+    pub fn quantization(mut self, mode: QuantizationMode) -> Self {
+        self.quantization = Some(mode);
         self
+    }
+
+    /// Enable SQ8 quantization (4x compression, ~2x faster)
+    ///
+    /// Convenience method for the most common quantization mode.
+    #[must_use]
+    pub fn quantization_sq8(self) -> Self {
+        self.quantization(QuantizationMode::SQ8)
+    }
+
+    /// Enable RaBitQ quantization with default 4-bit parameters (8x compression)
+    #[must_use]
+    pub fn quantization_rabitq(self) -> Self {
+        self.quantization(QuantizationMode::rabitq())
+    }
+
+    /// Enable RaBitQ quantization with custom parameters
+    #[must_use]
+    pub fn quantization_rabitq_params(self, params: RaBitQParams) -> Self {
+        self.quantization(QuantizationMode::RaBitQ(params))
     }
 
     /// Enable/disable rescoring with original vectors (default: true when quantization enabled).
@@ -320,8 +358,8 @@ pub struct VectorStore {
     /// Text search configuration (used by `enable_text_search`)
     text_search_config: Option<TextSearchConfig>,
 
-    /// Pending quantization params (deferred until first insert for training)
-    pending_quantization: Option<RaBitQParams>,
+    /// Pending quantization mode (deferred until first insert for training)
+    pending_quantization: Option<QuantizationMode>,
 
     /// HNSW parameters for lazy initialization
     hnsw_m: usize,
@@ -358,7 +396,7 @@ impl VectorStore {
     ///
     /// Quantization is trained on the first batch of vectors inserted.
     #[must_use]
-    pub fn new_with_quantization(dimensions: usize, params: RaBitQParams) -> Self {
+    pub fn new_with_quantization(dimensions: usize, mode: QuantizationMode) -> Self {
         Self {
             vectors: Vec::new(),
             hnsw_index: None,
@@ -373,7 +411,7 @@ impl VectorStore {
             storage_path: None,
             text_index: None,
             text_search_config: None,
-            pending_quantization: Some(params),
+            pending_quantization: Some(mode),
             hnsw_m: 16,
             hnsw_ef_construction: 100,
             hnsw_ef_search: 100,
@@ -713,18 +751,29 @@ impl VectorStore {
             };
 
             // Check if we have pending quantization
-            if let Some(quant_params) = self.pending_quantization.take() {
-                let mut index = HNSWIndex::new_with_asymmetric(
-                    dimensions,
-                    HNSWParams::default()
-                        .with_m(self.hnsw_m)
-                        .with_ef_construction(self.hnsw_ef_construction)
-                        .with_ef_search(self.hnsw_ef_search),
-                    DistanceFunction::L2,
-                    quant_params,
-                )?;
-                // Train from first vector
-                index.train_quantizer(&[vector.data.clone()])?;
+            if let Some(quant_mode) = self.pending_quantization.take() {
+                let hnsw_params = HNSWParams::default()
+                    .with_m(self.hnsw_m)
+                    .with_ef_construction(self.hnsw_ef_construction)
+                    .with_ef_search(self.hnsw_ef_search);
+
+                let index = match quant_mode {
+                    QuantizationMode::SQ8 => {
+                        // SQ8 trains lazily on first 256 vectors
+                        HNSWIndex::new_with_sq8(dimensions, hnsw_params, DistanceFunction::L2)?
+                    }
+                    QuantizationMode::RaBitQ(params) => {
+                        // RaBitQ needs explicit training
+                        let mut idx = HNSWIndex::new_with_asymmetric(
+                            dimensions,
+                            hnsw_params,
+                            DistanceFunction::L2,
+                            params,
+                        )?;
+                        idx.train_quantizer(&[vector.data.clone()])?;
+                        idx
+                    }
+                };
                 self.hnsw_index = Some(index);
             } else {
                 self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
@@ -870,22 +919,31 @@ impl VectorStore {
                 };
 
                 // Check if we have pending quantization to train
-                if let Some(quant_params) = self.pending_quantization.take() {
-                    // Create asymmetric HNSW with quantization
-                    let mut index = HNSWIndex::new_with_asymmetric(
-                        dimensions,
-                        HNSWParams::default()
-                            .with_m(self.hnsw_m)
-                            .with_ef_construction(self.hnsw_ef_construction)
-                            .with_ef_search(self.hnsw_ef_search),
-                        DistanceFunction::L2,
-                        quant_params,
-                    )?;
+                if let Some(quant_mode) = self.pending_quantization.take() {
+                    let hnsw_params = HNSWParams::default()
+                        .with_m(self.hnsw_m)
+                        .with_ef_construction(self.hnsw_ef_construction)
+                        .with_ef_search(self.hnsw_ef_search);
 
-                    // Train quantizer from first batch of vectors
-                    let training_vectors: Vec<Vec<f32>> =
-                        inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
-                    index.train_quantizer(&training_vectors)?;
+                    let index = match quant_mode {
+                        QuantizationMode::SQ8 => {
+                            // SQ8 trains lazily on first 256 vectors
+                            HNSWIndex::new_with_sq8(dimensions, hnsw_params, DistanceFunction::L2)?
+                        }
+                        QuantizationMode::RaBitQ(params) => {
+                            // RaBitQ needs explicit training from first batch
+                            let mut idx = HNSWIndex::new_with_asymmetric(
+                                dimensions,
+                                hnsw_params,
+                                DistanceFunction::L2,
+                                params,
+                            )?;
+                            let training_vectors: Vec<Vec<f32>> =
+                                inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
+                            idx.train_quantizer(&training_vectors)?;
+                            idx
+                        }
+                    };
 
                     self.hnsw_index = Some(index);
                 } else {
@@ -1438,20 +1496,32 @@ impl VectorStore {
 
         // Lazy initialize HNSW on first insert
         if self.hnsw_index.is_none() {
-            if let Some(quant_params) = self.pending_quantization.take() {
-                let mut index = HNSWIndex::new_with_asymmetric(
-                    self.dimensions,
-                    HNSWParams::default()
-                        .with_m(self.hnsw_m)
-                        .with_ef_construction(self.hnsw_ef_construction)
-                        .with_ef_search(self.hnsw_ef_search),
-                    DistanceFunction::L2,
-                    quant_params,
-                )?;
-                // Train from batch
-                let training_vectors: Vec<Vec<f32>> =
-                    vectors.iter().map(|v| v.data.clone()).collect();
-                index.train_quantizer(&training_vectors)?;
+            if let Some(quant_mode) = self.pending_quantization.take() {
+                let hnsw_params = HNSWParams::default()
+                    .with_m(self.hnsw_m)
+                    .with_ef_construction(self.hnsw_ef_construction)
+                    .with_ef_search(self.hnsw_ef_search);
+
+                let index = match quant_mode {
+                    QuantizationMode::SQ8 => {
+                        // SQ8 trains lazily on first 256 vectors
+                        HNSWIndex::new_with_sq8(self.dimensions, hnsw_params, DistanceFunction::L2)?
+                    }
+                    QuantizationMode::RaBitQ(params) => {
+                        // RaBitQ needs explicit training from batch
+                        let mut idx = HNSWIndex::new_with_asymmetric(
+                            self.dimensions,
+                            hnsw_params,
+                            DistanceFunction::L2,
+                            params,
+                        )?;
+                        let training_vectors: Vec<Vec<f32>> =
+                            vectors.iter().map(|v| v.data.clone()).collect();
+                        idx.train_quantizer(&training_vectors)?;
+                        idx
+                    }
+                };
+
                 self.hnsw_index = Some(index);
             } else {
                 let capacity = vectors.len().max(1_000_000);

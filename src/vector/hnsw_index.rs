@@ -175,10 +175,58 @@ impl HNSWIndex {
         })
     }
 
-    /// Check if this index uses asymmetric search (`RaBitQ`)
+    /// Create new HNSW index with SQ8 (Scalar Quantization)
+    ///
+    /// SQ8 compresses f32 → u8 (4x smaller) and uses direct SIMD operations
+    /// for ~2x faster search than full precision.
+    ///
+    /// # Arguments
+    /// * `dimensions` - Vector dimensionality
+    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
+    /// * `distance_fn` - Distance function (only L2 supported for SQ8)
+    ///
+    /// # Performance
+    /// - Search: ~2x faster than full precision
+    /// - Memory: 4x smaller quantized storage (+ original for reranking)
+    /// - Recall: ~99% with reranking
+    ///
+    /// # Example
+    /// ```ignore
+    /// let index = HNSWIndex::new_with_sq8(
+    ///     768,
+    ///     CoreParams::default().with_m(16).with_ef_construction(100),
+    ///     DistanceFunction::L2,
+    /// )?;
+    /// ```
+    pub fn new_with_sq8(
+        dimensions: usize,
+        params: CoreParams,
+        distance_fn: DistanceFunction,
+    ) -> Result<Self> {
+        let index = CoreHNSW::new_with_sq8(dimensions, params, distance_fn)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(Self {
+            index,
+            max_elements: 1_000_000, // Default for SQ8
+            max_nb_connection: params.m,
+            ef_construction: params.ef_construction,
+            ef_search: params.ef_construction, // Match ef_construction initially
+            dimensions,
+            num_vectors: 0,
+        })
+    }
+
+    /// Check if this index uses asymmetric search (`RaBitQ` or `SQ8`)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
         self.index.is_asymmetric()
+    }
+
+    /// Check if this index uses SQ8 quantization
+    #[must_use]
+    pub fn is_sq8(&self) -> bool {
+        self.index.is_sq8()
     }
 
     /// Train the quantizer from sample vectors

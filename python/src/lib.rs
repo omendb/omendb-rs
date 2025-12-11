@@ -2,7 +2,9 @@ extern crate omendb as omendb_core;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use omendb_core::text::TextSearchConfig;
-use omendb_core::vector::{MetadataFilter, RaBitQParams, Vector, VectorStore, VectorStoreOptions};
+use omendb_core::vector::{
+    MetadataFilter, QuantizationMode, RaBitQParams, Vector, VectorStore, VectorStoreOptions,
+};
 use parking_lot::RwLock;
 use pyo3::conversion::IntoPyObject;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -12,52 +14,63 @@ use pyo3::Py;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-/// Parse compression parameter and return RaBitQParams if enabled
+/// Parse quantization parameter and return QuantizationMode if enabled
 ///
 /// Accepts:
-/// - True → 8x compression (recommended default)
-/// - 4 → 8-bit quantization (4x compression, ~99% recall)
-/// - 8 → 4-bit quantization (8x compression, ~96% recall)
-/// - 16 → 2-bit quantization (16x compression, ~93% recall)
-/// - None/False → no compression (full precision)
+/// - True → SQ8 (4x compression, ~2x faster, ~99% recall) - RECOMMENDED DEFAULT
+/// - "sq8" → SQ8 (explicit)
+/// - "rabitq" → RaBitQ 4-bit (8x compression, ~0.5x slower, ~96% recall)
+/// - "rabitq-2" → RaBitQ 2-bit (16x compression, ~93% recall)
+/// - "rabitq-8" → RaBitQ 8-bit (4x compression, ~99% recall)
+/// - None/False → no quantization (full precision)
 ///
-/// Returns Ok(Some(params)) if compression enabled, Ok(None) if disabled
-fn parse_compression(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<RaBitQParams>> {
+/// Returns Ok(Some(mode)) if quantization enabled, Ok(None) if disabled
+fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<QuantizationMode>> {
     let Some(value) = ob else {
         return Ok(None);
     };
 
-    // Handle boolean: True enables default (8x), False disables
+    // Handle boolean: True enables SQ8 (default), False disables
     if let Ok(b) = value.extract::<bool>() {
         return if b {
-            Ok(Some(RaBitQParams::bits4())) // 8x compression default
+            Ok(Some(QuantizationMode::SQ8)) // SQ8 is the new default
         } else {
             Ok(None)
         };
     }
 
-    // Handle integer compression levels
-    if let Ok(level) = value.extract::<u32>() {
-        return match level {
-            4 => Ok(Some(RaBitQParams::bits8())),  // 8-bit: 4x compression
-            8 => Ok(Some(RaBitQParams::bits4())),  // 4-bit: 8x compression
-            16 => Ok(Some(RaBitQParams::bits2())), // 2-bit: 16x compression
+    // Handle string quantization modes
+    if let Ok(mode) = value.extract::<String>() {
+        return match mode.to_lowercase().as_str() {
+            "sq8" => Ok(Some(QuantizationMode::SQ8)),
+            "rabitq" => Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4()))), // 8x
+            "rabitq-2" | "rabitq_2" => {
+                Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits2()))) // 16x
+            }
+            "rabitq-4" | "rabitq_4" => {
+                Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4()))) // 8x (alias)
+            }
+            "rabitq-8" | "rabitq_8" => {
+                Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits8()))) // 4x
+            }
             _ => Err(PyValueError::new_err(format!(
-                "compression must be 4, 8, or 16 (got {})\n\
-                  - compression=4:  ~4x smaller, ~99% recall\n\
-                  - compression=8:  ~8x smaller, ~96% recall (recommended)\n\
-                  - compression=16: ~16x smaller, ~93% recall",
-                level
+                "Unknown quantization mode: '{}'\n\
+                  Valid modes:\n\
+                  - True or 'sq8':  4x smaller, ~2x faster, ~99% recall (RECOMMENDED)\n\
+                  - 'rabitq':       8x smaller, ~0.5x slower, ~96% recall\n\
+                  - 'rabitq-2':     16x smaller, ~93% recall\n\
+                  - 'rabitq-8':     4x smaller, ~99% recall",
+                mode
             ))),
         };
     }
 
     Err(PyValueError::new_err(
-        "compression must be True, False, or an integer (4, 8, 16)\n\
-          - compression=True: ~8x smaller (recommended default)\n\
-          - compression=4:  ~4x smaller, ~99% recall\n\
-          - compression=8:  ~8x smaller, ~96% recall\n\
-          - compression=16: ~16x smaller, ~93% recall",
+        "quantization must be True, False, or a string\n\
+          - True or 'sq8':  4x smaller, ~2x faster, ~99% recall (RECOMMENDED)\n\
+          - 'rabitq':       8x smaller, ~0.5x slower, ~96% recall\n\
+          - 'rabitq-2':     16x smaller, ~93% recall\n\
+          - 'rabitq-8':     4x smaller, ~99% recall",
     ))
 }
 
@@ -1143,13 +1156,14 @@ impl VectorDatabase {
 ///     m (int): HNSW neighbors per node (default: 16, range: 4-64)
 ///     ef_construction (int): Build quality (default: 100, higher = better graph)
 ///     ef_search (int): Search quality (default: 100, higher = better recall)
-///     compression (bool|int): Enable compression (default: None = full precision)
-///         - True: ~8x smaller (recommended default)
-///         - 4: ~4x smaller, ~99% recall
-///         - 8: ~8x smaller, ~96% recall (recommended)
-///         - 16: ~16x smaller, ~93% recall
-///         - False/None: Full precision (no compression)
-///     rescore (bool): Rerank with full precision (default: True when compressed)
+///     quantization (bool|str|int): Enable quantization (default: None = full precision)
+///         - True or "sq8": SQ8 ~4x smaller, ~2x faster, ~99% recall (RECOMMENDED)
+///         - "rabitq": RaBitQ ~8x smaller, ~0.5x slower, ~96% recall
+///         - "rabitq-2": RaBitQ ~16x smaller, ~93% recall
+///         - 4, 8, 16: RaBitQ compression levels (backward compatible)
+///         - False/None: Full precision (no quantization)
+///     compression (bool|int): Alias for quantization (backward compatible, prefer quantization)
+///     rescore (bool): Rerank with full precision (default: True when quantized)
 ///     oversample (float): Candidate multiplier for rescoring (default: 3.0)
 ///     config (dict): Advanced config (deprecated, use top-level params instead)
 ///
@@ -1166,28 +1180,33 @@ impl VectorDatabase {
 ///     # Simple usage with defaults
 ///     >>> db = omendb.open("./my_vectors", dimensions=768)
 ///
-///     # With compression enabled (8x, recommended)
-///     >>> db = omendb.open("./vectors", dimensions=768, compression=True)
+///     # With SQ8 quantization (4x smaller, 2x faster, ~99% recall) - RECOMMENDED
+///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True)
+///     >>> db = omendb.open("./vectors", dimensions=768, quantization="sq8")
 ///
-///     # Explicit compression level
-///     >>> db = omendb.open("./vectors", dimensions=768, compression=8)
+///     # With RaBitQ for higher compression (8x smaller, 0.5x slower)
+///     >>> db = omendb.open("./vectors", dimensions=768, quantization="rabitq")
 ///
-///     # Maximum compression (32x, lower recall)
-///     >>> db = omendb.open("./vectors", dimensions=768, compression=32)
+///     # Maximum compression (16x smaller, ~93% recall)
+///     >>> db = omendb.open("./vectors", dimensions=768, quantization="rabitq-2")
 ///
-///     # Disable rescore for max speed (~3-4% recall loss)
-///     >>> db = omendb.open("./vectors", dimensions=768, compression=8, rescore=False)
+///     # Disable rescore for max speed (~1-3% recall loss)
+///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, rescore=False)
 ///
 ///     # Custom oversample factor (default 3.0)
-///     >>> db = omendb.open("./vectors", dimensions=768, compression=8, oversample=5.0)
+///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, oversample=5.0)
+///
+///     # Backward compatible (compression=8 maps to RaBitQ 4-bit)
+///     >>> db = omendb.open("./vectors", dimensions=768, compression=8)
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, compression=None, rescore=None, oversample=None, config=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, compression=None, rescore=None, oversample=None, config=None))]
 fn open(
     path: String,
     dimensions: usize,
     m: Option<usize>,
     ef_construction: Option<usize>,
     ef_search: Option<usize>,
+    quantization: Option<&Bound<'_, PyAny>>,
     compression: Option<&Bound<'_, PyAny>>,
     rescore: Option<bool>,
     oversample: Option<f32>,
@@ -1210,8 +1229,12 @@ fn open(
         }
     }
 
-    // Parse compression early to validate
-    let quant_params = parse_compression(compression)?;
+    // Parse quantization (new parameter takes precedence over compression for backward compat)
+    let quant_mode = if quantization.is_some() {
+        parse_quantization(quantization)?
+    } else {
+        parse_quantization(compression)?
+    };
 
     if let (Some(ef_val), Some(m_val)) = (ef_construction, m) {
         if ef_val < m_val {
@@ -1248,8 +1271,8 @@ fn open(
         if let Some(ef_s) = ef_search {
             options = options.ef_search(ef_s);
         }
-        if let Some(params) = quant_params.clone() {
-            options = options.quantization(params);
+        if let Some(mode) = quant_mode.clone() {
+            options = options.quantization(mode);
         }
         if let Some(rescore_val) = rescore {
             options = options.rescore(rescore_val);
@@ -1290,8 +1313,8 @@ fn open(
         if let Some(ef_s) = ef_search {
             options = options.ef_search(ef_s);
         }
-        if let Some(params) = quant_params {
-            options = options.quantization(params);
+        if let Some(mode) = quant_mode.clone() {
+            options = options.quantization(mode);
         }
         if let Some(rescore_val) = rescore {
             options = options.rescore(rescore_val);
@@ -1392,8 +1415,8 @@ fn open(
         if let Some(ef_s) = ef_search {
             options = options.ef_search(ef_s);
         }
-        if let Some(params) = parse_compression(compression)? {
-            options = options.quantization(params);
+        if let Some(mode) = parse_quantization(compression)? {
+            options = options.quantization(mode);
         }
 
         let store = options
