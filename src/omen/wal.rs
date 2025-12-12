@@ -1,6 +1,6 @@
 //! Write-Ahead Log for crash-consistent operations
 //!
-//! Based on P-HNSW research: NLog (node ops) + NlistLog (neighbor ops)
+//! Based on P-HNSW research: `NLog` (node ops) + `NlistLog` (neighbor ops)
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -14,7 +14,7 @@ pub enum WalEntryType {
     InsertNode = 1,
     /// Delete a node: {id}
     DeleteNode = 2,
-    /// Update neighbors: {id, level, [neighbor_ids]}
+    /// Update neighbors: {id, level, [`neighbor_ids`]}
     UpdateNeighbors = 3,
     /// Update metadata: {id, metadata}
     UpdateMetadata = 4,
@@ -29,14 +29,13 @@ impl From<u8> for WalEntryType {
             2 => Self::DeleteNode,
             3 => Self::UpdateNeighbors,
             4 => Self::UpdateMetadata,
-            100 => Self::Checkpoint,
             _ => Self::Checkpoint, // Unknown entries treated as checkpoint
         }
     }
 }
 
 /// WAL entry header (20 bytes)
-/// Layout: entry_type(1) + reserved(3) + timestamp(8) + data_len(4) + checksum(4)
+/// Layout: `entry_type(1)` + reserved(3) + timestamp(8) + `data_len(4)` + checksum(4)
 #[derive(Debug, Clone)]
 pub struct WalEntryHeader {
     pub entry_type: WalEntryType,
@@ -77,6 +76,7 @@ pub struct WalEntry {
 
 impl WalEntry {
     /// Create insert node entry
+    #[must_use]
     pub fn insert_node(
         timestamp: u64,
         string_id: &str,
@@ -117,6 +117,7 @@ impl WalEntry {
     }
 
     /// Create delete node entry
+    #[must_use]
     pub fn delete_node(timestamp: u64, string_id: &str) -> Self {
         let mut data = Vec::new();
         data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());
@@ -136,6 +137,7 @@ impl WalEntry {
     }
 
     /// Create update neighbors entry
+    #[must_use]
     pub fn update_neighbors(timestamp: u64, node_id: u32, level: u8, neighbors: &[u32]) -> Self {
         let mut data = Vec::new();
 
@@ -165,6 +167,7 @@ impl WalEntry {
     }
 
     /// Create checkpoint entry
+    #[must_use]
     pub fn checkpoint(timestamp: u64) -> Self {
         Self {
             header: WalEntryHeader {
@@ -178,6 +181,7 @@ impl WalEntry {
     }
 
     /// Verify entry checksum
+    #[must_use]
     pub fn verify(&self) -> bool {
         if self.data.is_empty() {
             return self.header.checksum == 0;
@@ -189,6 +193,7 @@ impl WalEntry {
 /// Write-Ahead Log
 pub struct Wal {
     file: BufWriter<File>,
+    #[allow(dead_code)]
     path: std::path::PathBuf,
     next_timestamp: u64,
     entry_count: u64,
@@ -200,8 +205,8 @@ impl Wal {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new()
             .read(true)
-            .write(true)
             .create(true)
+            .append(true)
             .open(&path)?;
 
         let metadata = file.metadata()?;
@@ -314,11 +319,13 @@ impl Wal {
     }
 
     /// Get entry count
+    #[must_use]
     pub fn len(&self) -> u64 {
         self.entry_count
     }
 
     /// Check if WAL is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entry_count == 0
     }

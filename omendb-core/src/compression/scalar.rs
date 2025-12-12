@@ -1,4 +1,4 @@
-//! Scalar Quantization (SQ8) for OmenDB
+//! Scalar Quantization (SQ8) for `OmenDB`
 //!
 //! Compresses f32 vectors to u8 (4x compression, ~98% recall).
 //!
@@ -26,7 +26,10 @@
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
+use std::arch::aarch64::{
+    vaddq_f32, vaddvq_f32, vcvtq_f32_u32, vdupq_n_f32, vfmaq_f32, vget_high_u16, vget_low_u16,
+    vld1_u8, vld1q_f32, vmovl_u16, vmovl_u8, vsubq_f32,
+};
 #[cfg(target_arch = "x86_64")]
 #[allow(clippy::wildcard_imports)]
 use std::arch::x86_64::*;
@@ -180,7 +183,7 @@ impl ScalarParams {
 
         #[cfg(target_arch = "aarch64")]
         {
-            return unsafe { self.asymmetric_l2_squared_neon(query, quantized) };
+            unsafe { self.asymmetric_l2_squared_neon(query, quantized) }
         }
 
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -364,6 +367,7 @@ impl SQ8ADCTable {
     ///
     /// Cost: dimensions × 256 FMA operations (one-time per query)
     #[must_use]
+    #[allow(clippy::needless_range_loop)]
     pub fn build(params: &ScalarParams, query: &[f32]) -> Self {
         assert_eq!(query.len(), params.dimensions);
 
@@ -398,7 +402,7 @@ impl SQ8ADCTable {
 
         #[cfg(target_arch = "aarch64")]
         {
-            return unsafe { self.distance_squared_neon(quantized) };
+            unsafe { self.distance_squared_neon(quantized) }
         }
 
         #[cfg(target_arch = "x86_64")]
@@ -425,6 +429,7 @@ impl SQ8ADCTable {
 
     #[cfg(target_arch = "aarch64")]
     #[inline]
+    #[allow(clippy::needless_range_loop)]
     unsafe fn distance_squared_neon(&self, quantized: &[u8]) -> f32 {
         let mut sum0 = vdupq_n_f32(0.0);
         let mut sum1 = vdupq_n_f32(0.0);

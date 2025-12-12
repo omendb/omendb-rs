@@ -280,14 +280,14 @@ impl VectorStore {
             Some(index)
         } else if is_quantized && dimensions > 0 {
             let vectors_data = storage.load_all_vectors()?;
-            if !vectors_data.is_empty() {
+            if vectors_data.is_empty() {
+                None
+            } else {
                 let mut index = HNSWIndex::new(vectors_data.len().max(10_000), dimensions)?;
                 let vector_data: Vec<Vec<f32>> =
                     vectors_data.iter().map(|(_, v)| v.clone()).collect();
                 index.batch_insert(&vector_data)?;
                 Some(index)
-            } else {
-                None
             }
         } else {
             None
@@ -316,7 +316,9 @@ impl VectorStore {
         }
 
         // Enable rescore if the loaded index is quantized
-        let rescore_enabled = hnsw_index.as_ref().is_some_and(|idx| idx.is_asymmetric());
+        let rescore_enabled = hnsw_index
+            .as_ref()
+            .is_some_and(super::hnsw_index::HNSWIndex::is_asymmetric);
 
         Ok(Self {
             vectors,
@@ -569,7 +571,7 @@ impl VectorStore {
                             DistanceFunction::L2,
                             params,
                         )?;
-                        idx.train_quantizer(&[vector.data.clone()])?;
+                        idx.train_quantizer(std::slice::from_ref(&vector.data))?;
                         idx
                     }
                 };
@@ -578,14 +580,12 @@ impl VectorStore {
                 self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
             }
             self.dimensions = dimensions;
-        } else {
-            if vector.dim() != self.dimensions {
-                anyhow::bail!(
-                    "Vector dimension mismatch: store expects {}, got {}. All vectors in same store must have same dimension.",
-                    self.dimensions,
-                    vector.dim()
-                );
-            }
+        } else if vector.dim() != self.dimensions {
+            anyhow::bail!(
+                "Vector dimension mismatch: store expects {}, got {}. All vectors in same store must have same dimension.",
+                self.dimensions,
+                vector.dim()
+            );
         }
 
         // Insert into HNSW index
@@ -1110,6 +1110,7 @@ impl VectorStore {
     }
 
     /// Get vector by string ID
+    #[must_use]
     pub fn get_by_id(&self, id: &str) -> Option<(&Vector, &JsonValue)> {
         self.id_to_index.get(id).and_then(|&index| {
             if self.deleted.contains_key(&index) {
@@ -1122,6 +1123,7 @@ impl VectorStore {
     }
 
     /// Get metadata by string ID (without loading vector data)
+    #[must_use]
     pub fn get_metadata_by_id(&self, id: &str) -> Option<&JsonValue> {
         self.id_to_index.get(id).and_then(|&index| {
             if self.deleted.contains_key(&index) {
@@ -1281,6 +1283,7 @@ impl VectorStore {
 
     /// Check if index needs to be rebuilt
     #[inline]
+    #[must_use]
     pub fn needs_index_rebuild(&self) -> bool {
         self.hnsw_index.is_none() && self.vectors.len() > 100
     }
@@ -1573,6 +1576,7 @@ impl VectorStore {
     }
 
     /// Parallel batch search for multiple queries
+    #[must_use]
     pub fn batch_search_parallel(
         &self,
         queries: &[Vector],
@@ -1590,6 +1594,7 @@ impl VectorStore {
     }
 
     /// Parallel batch search with metadata
+    #[must_use]
     pub fn batch_search_parallel_with_metadata(
         &self,
         queries: &[Vector],
@@ -1635,11 +1640,13 @@ impl VectorStore {
     // ============================================================================
 
     /// Get vector by ID
+    #[must_use]
     pub fn get(&self, id: usize) -> Option<&Vector> {
         self.vectors.get(id)
     }
 
     /// Get vector by ID (owned)
+    #[must_use]
     pub fn get_owned(&self, id: usize) -> Option<Vector> {
         if let Some(v) = self.vectors.get(id) {
             return Some(v.clone());
@@ -1655,6 +1662,7 @@ impl VectorStore {
     }
 
     /// Number of vectors stored (excluding deleted vectors)
+    #[must_use]
     pub fn len(&self) -> usize {
         if let Some(ref index) = self.hnsw_index {
             let hnsw_len = index.len();
@@ -1666,16 +1674,19 @@ impl VectorStore {
     }
 
     /// Check if store is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Memory usage estimate (bytes)
+    #[must_use]
     pub fn memory_usage(&self) -> usize {
         self.vectors.iter().map(|v| v.dim() * 4).sum::<usize>()
     }
 
     /// Bytes per vector (average)
+    #[must_use]
     pub fn bytes_per_vector(&self) -> f32 {
         if self.vectors.is_empty() {
             return 0.0;
@@ -1708,7 +1719,7 @@ impl VectorStore {
         let hnsw_bytes = self
             .hnsw_index
             .as_ref()
-            .map(|index| bincode::serialize(index))
+            .map(bincode::serialize)
             .transpose()?;
 
         if let Some(ref mut storage) = self.storage {
@@ -1726,11 +1737,13 @@ impl VectorStore {
     }
 
     /// Check if this store has persistent storage enabled
+    #[must_use]
     pub fn is_persistent(&self) -> bool {
         self.storage.is_some()
     }
 
     /// Get reference to the .omen storage backend (if persistent)
+    #[must_use]
     pub fn storage(&self) -> Option<&OmenFile> {
         self.storage.as_ref()
     }

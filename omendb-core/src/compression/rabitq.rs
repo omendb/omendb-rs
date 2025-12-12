@@ -509,7 +509,7 @@ impl ADCTable {
 
     /// Compute distance and return square root (actual L2 distance)
     ///
-    /// Uses SIMD-accelerated distance computation (AVX2 on x86_64, NEON on aarch64).
+    /// Uses SIMD-accelerated distance computation (AVX2 on `x86_64`, NEON on aarch64).
     #[inline]
     #[must_use]
     pub fn distance(&self, data: &[u8]) -> f32 {
@@ -1243,11 +1243,7 @@ impl RaBitQ {
     /// ```
     #[must_use]
     pub fn build_adc_table(&self, query: &[f32]) -> Option<ADCTable> {
-        if let Some(ref trained) = self.trained {
-            Some(ADCTable::new_trained(query, trained, &self.params))
-        } else {
-            None
-        }
+        self.trained.as_ref().map(|trained| ADCTable::new_trained(query, trained, &self.params))
     }
 
     /// Build ADC table with explicit scale (DEPRECATED)

@@ -1435,6 +1435,7 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<u32>> {
         use super::query_buffers;
+        const PREFETCH_DISTANCE: usize = 4;
 
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
@@ -1475,11 +1476,10 @@ impl HNSWIndex {
                 // Process unvisited neighbors with stride prefetching
                 // VSAG-style: prefetch multiple vectors ahead to hide memory latency
                 let unvisited_slice = unvisited.as_slice();
-                const PREFETCH_DISTANCE: usize = 4; // Prefetch 4 vectors ahead
 
                 // Initial prefetch burst for first PREFETCH_DISTANCE vectors
-                for i in 0..PREFETCH_DISTANCE.min(unvisited_slice.len()) {
-                    self.vectors.prefetch(unvisited_slice[i]);
+                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                    self.vectors.prefetch(id);
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
@@ -1558,6 +1558,7 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<u32>> {
         use super::query_buffers;
+        const PREFETCH_DISTANCE: usize = 4;
 
         let adc_table = self.vectors.build_adc_table(query);
 
@@ -1599,11 +1600,10 @@ impl HNSWIndex {
                 // Process unvisited neighbors with stride prefetching
                 // VSAG-style: prefetch multiple vectors ahead to hide memory latency
                 let unvisited_slice = unvisited.as_slice();
-                const PREFETCH_DISTANCE: usize = 4;
 
                 // Initial prefetch burst
-                for i in 0..PREFETCH_DISTANCE.min(unvisited_slice.len()) {
-                    self.vectors.prefetch_quantized(unvisited_slice[i]);
+                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                    self.vectors.prefetch_quantized(id);
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {

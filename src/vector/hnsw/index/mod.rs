@@ -181,7 +181,7 @@ impl HNSWIndex {
     ///
     /// # Arguments
     /// * `dimensions` - Vector dimensionality
-    /// * `params` - HNSW parameters (m, ef_construction, ef_search)
+    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
     /// * `distance_fn` - Distance function (only L2 supported for SQ8)
     ///
     /// # Example
@@ -1660,7 +1660,7 @@ impl HNSWIndex {
         }
     }
 
-    /// Asymmetric search layer for quantized storage (RaBitQ or SQ8)
+    /// Asymmetric search layer for quantized storage (`RaBitQ` or SQ8)
     ///
     /// Uses ADC (Asymmetric Distance Computation) lookup tables for fast distance.
     /// Falls back to asymmetric distance if ADC fails.

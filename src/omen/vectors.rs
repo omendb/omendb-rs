@@ -1,4 +1,5 @@
 //! Vector section - contiguous f32 array with O(1) access
+#![allow(clippy::cast_ptr_alignment)] // alignment verified before cast
 
 use memmap2::MmapMut;
 use std::io;
@@ -49,7 +50,7 @@ impl VectorSection {
 
         // Check alignment
         let ptr = mmap.as_ptr().add(offset);
-        if (ptr as usize) % std::mem::align_of::<f32>() != 0 {
+        if !(ptr as usize).is_multiple_of(std::mem::align_of::<f32>()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Vector data not properly aligned",
@@ -59,12 +60,13 @@ impl VectorSection {
         Ok(Self {
             dimensions,
             count: count as u64,
-            data: ptr as *const f32,
+            data: ptr.cast::<f32>(),
             data_len: length / std::mem::size_of::<f32>(),
         })
     }
 
     /// Create empty section for building
+    #[must_use]
     pub fn new(dimensions: u32) -> Self {
         Self {
             dimensions,
@@ -76,6 +78,7 @@ impl VectorSection {
 
     /// Get vector by index - O(1)
     #[inline]
+    #[must_use]
     pub fn get(&self, index: u32) -> Option<&[f32]> {
         if index as u64 >= self.count || self.data.is_null() {
             return None;
@@ -124,16 +127,19 @@ impl VectorSection {
     }
 
     /// Get dimensions
+    #[must_use]
     pub fn dimensions(&self) -> u32 {
         self.dimensions
     }
 
     /// Get vector count
+    #[must_use]
     pub fn count(&self) -> u64 {
         self.count
     }
 
     /// Calculate size in bytes for given count
+    #[must_use]
     pub fn size_for_count(dimensions: u32, count: u64) -> u64 {
         count * dimensions as u64 * std::mem::size_of::<f32>() as u64
     }

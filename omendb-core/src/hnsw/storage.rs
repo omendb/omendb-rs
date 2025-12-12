@@ -703,6 +703,7 @@ impl VectorStorage {
     }
 
     /// Insert a full precision vector
+    #[allow(clippy::items_after_statements)]
     pub fn insert(&mut self, vector: Vec<f32>) -> Result<u32, String> {
         match self {
             Self::FullPrecision {
@@ -798,13 +799,24 @@ impl VectorStorage {
                 const TRAINING_SIZE: usize = 256;
 
                 // Train on first batch if not yet trained
-                if !*trained {
+                if *trained {
+                    // Already trained, quantize and store
+                    let p = params.as_ref().unwrap();
+                    let id = *count as u32;
+                    let q = p.quantize(&vector);
+                    quantized.extend(q);
+                    original.extend(vector);
+                    *count += 1;
+                    Ok(id)
+                } else {
                     training_buffer.push(vector);
 
                     if training_buffer.len() >= TRAINING_SIZE {
                         // Train quantizer on collected samples
-                        let refs: Vec<&[f32]> =
-                            training_buffer.iter().map(|v| v.as_slice()).collect();
+                        let refs: Vec<&[f32]> = training_buffer
+                            .iter()
+                            .map(std::vec::Vec::as_slice)
+                            .collect();
                         let trained_params = ScalarParams::train(&refs);
                         *params = Some(trained_params);
                         *trained = true;
@@ -824,15 +836,6 @@ impl VectorStorage {
                     // Still collecting - just buffer, don't quantize yet
                     // Return sequential ID based on buffer position
                     Ok((training_buffer.len() - 1) as u32)
-                } else {
-                    // Already trained, quantize and store
-                    let p = params.as_ref().unwrap();
-                    let id = *count as u32;
-                    let q = p.quantize(&vector);
-                    quantized.extend(q);
-                    original.extend(vector);
-                    *count += 1;
-                    Ok(id)
                 }
             }
         }
@@ -887,7 +890,7 @@ impl VectorStorage {
                 let idx = id as usize;
                 // During pre-training, vectors are in training_buffer
                 if !*trained {
-                    training_buffer.get(idx).map(|v| v.as_slice())
+                    training_buffer.get(idx).map(std::vec::Vec::as_slice)
                 } else if idx >= *count {
                     None
                 } else {
@@ -906,7 +909,7 @@ impl VectorStorage {
     ///
     /// # Performance
     /// - SQ8: 2x faster than full precision (direct SIMD int8)
-    /// - RaBitQ: Uses ADC lookup tables
+    /// - `RaBitQ`: Uses ADC lookup tables
     #[inline]
     #[must_use]
     pub fn distance_asymmetric_l2(&self, query: &[f32], id: u32) -> Option<f32> {
@@ -990,7 +993,7 @@ impl VectorStorage {
     /// Build ADC lookup table for a query (5-10x faster than per-candidate decompression)
     ///
     /// Returns None if:
-    /// - Storage is not RaBitQ quantized, or
+    /// - Storage is not `RaBitQ` quantized, or
     /// - Quantizer has not been trained
     #[must_use]
     pub fn build_adc_table(&self, query: &[f32]) -> Option<ADCTable> {
@@ -1063,7 +1066,7 @@ impl VectorStorage {
             Self::RaBitQQuantized { quantized, .. } => {
                 let entry = quantized.get(id as usize);
                 let ptr = entry.map(|q| q.data.as_ptr());
-                let bytes = entry.map(|q| q.data.len()).unwrap_or(0);
+                let bytes = entry.map_or(0, |q| q.data.len());
                 (ptr, bytes)
             }
             Self::SQ8Quantized {
@@ -1085,7 +1088,7 @@ impl VectorStorage {
         if let Some(ptr) = ptr {
             // Calculate cache lines to prefetch (64 bytes each)
             // Limit to 8 cache lines (512 bytes) to avoid cache pollution
-            let cache_lines = ((bytes + 63) / 64).min(8);
+            let cache_lines = bytes.div_ceil(64).min(8);
 
             #[cfg(target_arch = "x86_64")]
             unsafe {
@@ -1119,7 +1122,7 @@ impl VectorStorage {
             Self::RaBitQQuantized { quantized, .. } => {
                 let entry = quantized.get(id as usize);
                 let ptr = entry.map(|q| q.data.as_ptr());
-                let bytes = entry.map(|q| q.data.len()).unwrap_or(0);
+                let bytes = entry.map_or(0, |q| q.data.len());
                 (ptr, bytes)
             }
             Self::SQ8Quantized {
@@ -1141,7 +1144,7 @@ impl VectorStorage {
 
         if let Some(ptr) = ptr {
             // Quantized vectors are smaller - prefetch up to 4 cache lines
-            let cache_lines = ((bytes + 63) / 64).min(4);
+            let cache_lines = bytes.div_ceil(64).min(4);
 
             #[cfg(target_arch = "x86_64")]
             unsafe {
@@ -1254,7 +1257,8 @@ impl VectorStorage {
                     }
                 }
                 // Train scalar quantizer from sample vectors
-                let refs: Vec<&[f32]> = sample_vectors.iter().map(|v| v.as_slice()).collect();
+                let refs: Vec<&[f32]> =
+                    sample_vectors.iter().map(std::vec::Vec::as_slice).collect();
                 let trained_params = ScalarParams::train(&refs);
                 *params = Some(trained_params);
                 *trained = true;

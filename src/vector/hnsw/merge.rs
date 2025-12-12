@@ -287,6 +287,7 @@ impl GraphMerger {
     /// Calculate gain for adding vertex to join set
     ///
     /// Gain = number of vertices that would increase their coverage
+    #[allow(clippy::unnecessary_wraps)]
     fn calculate_gain(
         &self,
         vertex_id: u32,

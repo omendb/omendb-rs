@@ -22,7 +22,7 @@ pub enum QuantizationMode {
     /// - ~99% recall with rescore
     SQ8,
 
-    /// Extended RaBitQ: f32 → 2-8 bits
+    /// Extended `RaBitQ`: f32 → 2-8 bits
     /// - 4-16x compression
     /// - ~0.5x slower than f32 (ADC lookup tables)
     /// - 93-99% recall depending on bits
@@ -36,19 +36,19 @@ impl QuantizationMode {
         Self::SQ8
     }
 
-    /// Create RaBitQ with 4-bit quantization (8x compression)
+    /// Create `RaBitQ` with 4-bit quantization (8x compression)
     #[must_use]
     pub fn rabitq() -> Self {
         Self::RaBitQ(RaBitQParams::bits4())
     }
 
-    /// Create RaBitQ with 2-bit quantization (16x compression)
+    /// Create `RaBitQ` with 2-bit quantization (16x compression)
     #[must_use]
     pub fn rabitq_2bit() -> Self {
         Self::RaBitQ(RaBitQParams::bits2())
     }
 
-    /// Create RaBitQ with 8-bit quantization (4x compression)
+    /// Create `RaBitQ` with 8-bit quantization (4x compression)
     #[must_use]
     pub fn rabitq_8bit() -> Self {
         Self::RaBitQ(RaBitQParams::bits8())
@@ -60,7 +60,7 @@ impl QuantizationMode {
         matches!(self, Self::SQ8)
     }
 
-    /// Check if this is RaBitQ mode
+    /// Check if this is `RaBitQ` mode
     #[must_use]
     pub fn is_rabitq(&self) -> bool {
         matches!(self, Self::RaBitQ(_))

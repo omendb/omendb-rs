@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
 /// Field types for metadata indexing
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FieldType {
@@ -24,11 +25,10 @@ pub enum FieldType {
 impl From<u8> for FieldType {
     fn from(v: u8) -> Self {
         match v {
-            1 => Self::Keyword,
             2 => Self::Integer,
             3 => Self::Float,
             4 => Self::Boolean,
-            _ => Self::Keyword,
+            _ => Self::Keyword, // 1 or unknown -> Keyword
         }
     }
 }
@@ -70,12 +70,12 @@ impl KeywordIndex {
     pub fn contains(&self, doc_id: u32, term: &str) -> bool {
         self.terms
             .get(term)
-            .map_or(false, |bitmap| bitmap.contains(doc_id))
+            .is_some_and(|bitmap| bitmap.contains(doc_id))
     }
 
     /// Get all terms
     pub fn terms(&self) -> impl Iterator<Item = &str> {
-        self.terms.keys().map(|s| s.as_str())
+        self.terms.keys().map(std::string::String::as_str)
     }
 
     /// Serialize to bytes
@@ -177,7 +177,7 @@ impl BooleanIndex {
 /// Numeric index for integer/float range queries
 #[derive(Debug, Clone, Default)]
 pub struct NumericIndex {
-    /// Sorted (value, doc_id) pairs for range queries
+    /// Sorted (value, `doc_id`) pairs for range queries
     entries: Vec<(f64, u32)>,
     /// Optional: bitmap for common values (equality fast path)
     common_values: HashMap<i64, RoaringBitmap>,
@@ -269,14 +269,17 @@ pub enum FieldIndex {
 }
 
 impl FieldIndex {
+    #[must_use]
     pub fn keyword() -> Self {
         Self::Keyword(KeywordIndex::new())
     }
 
+    #[must_use]
     pub fn boolean() -> Self {
         Self::Boolean(BooleanIndex::new())
     }
 
+    #[must_use]
     pub fn numeric() -> Self {
         Self::Numeric(NumericIndex::new())
     }
@@ -289,6 +292,7 @@ pub struct MetadataIndex {
 }
 
 impl MetadataIndex {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -330,6 +334,7 @@ impl MetadataIndex {
     }
 
     /// Get a field index
+    #[must_use]
     pub fn get(&self, field: &str) -> Option<&FieldIndex> {
         self.fields.get(field)
     }
@@ -369,6 +374,7 @@ impl MetadataIndex {
 
     /// Evaluate a filter expression (returns true if matches)
     #[inline]
+    #[must_use]
     pub fn matches(&self, doc_id: u32, filter: &Filter) -> bool {
         match filter {
             Filter::Eq(field, value) => self.matches_eq(doc_id, field, value),
