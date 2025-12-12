@@ -128,6 +128,47 @@ impl NeighborLists {
         f(&guard)
     }
 
+    /// Prefetch neighbor list into CPU cache
+    ///
+    /// Hints to CPU that we'll need the neighbor data soon. This hides memory
+    /// latency by overlapping data fetch with computation. Only beneficial on
+    /// x86/ARM servers - Apple Silicon's DMP handles this automatically.
+    #[inline]
+    pub fn prefetch(&self, node_id: u32, level: u8) {
+        use super::prefetch::PrefetchConfig;
+        if !PrefetchConfig::enabled() {
+            return;
+        }
+
+        let node_idx = node_id as usize;
+        let level_idx = level as usize;
+
+        if node_idx >= self.neighbors.len() {
+            return;
+        }
+        if level_idx >= self.neighbors[node_idx].len() {
+            return;
+        }
+
+        // Prefetch the ArcSwap pointer (brings neighbor array address into cache)
+        // This is a lightweight hint - the actual neighbor data follows
+        let ptr = &self.neighbors[node_idx][level_idx] as *const _ as *const u8;
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::x86_64::_mm_prefetch;
+            use std::arch::x86_64::_MM_HINT_T0;
+            _mm_prefetch(ptr.cast(), _MM_HINT_T0);
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            std::arch::asm!(
+                "prfm pldl1keep, [{ptr}]",
+                ptr = in(reg) ptr,
+                options(nostack, preserves_flags)
+            );
+        }
+    }
+
     /// Allocate storage for a new node (internal helper)
     fn ensure_node_exists(&mut self, node_idx: usize) {
         while self.neighbors.len() <= node_idx {
