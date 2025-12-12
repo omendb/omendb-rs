@@ -379,6 +379,7 @@ class TestFileHandleLeaks:
                 for i in range(100)
             ]
             db.set(vectors)
+            db.flush()  # Required for persistence
             del db
             gc.collect()
 
@@ -426,6 +427,7 @@ class TestFileHandleLeaks:
                     # Verify count
                     assert len(db) == expected_count, f"Expected {expected_count}, got {len(db)}"
 
+                    db.flush()  # Required for persistence
                     del db
                     gc.collect()
                 except Exception as e:
@@ -465,8 +467,9 @@ class TestFileHandleLeaks:
                 assert result is not None
                 assert result["metadata"]["db"] == i
 
-            # Clean up
+            # Flush and clean up
             for db in dbs:
+                db.flush()  # Required for persistence
                 del db
             gc.collect()
 

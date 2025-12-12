@@ -330,3 +330,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
             return {"$or": filter_list}
         else:
             return {"$and": filter_list}
+
+    def flush(self) -> None:
+        """Flush data to disk for persistence."""
+        self._db.flush()

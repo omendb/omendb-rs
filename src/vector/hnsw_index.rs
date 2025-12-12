@@ -15,6 +15,11 @@ use omendb_core::compression::RaBitQParams;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Default ef_search value for deserialization
+fn default_ef_search() -> usize {
+    100
+}
+
 /// HNSW index for approximate nearest neighbor search
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HNSWIndex {
@@ -27,7 +32,8 @@ pub struct HNSWIndex {
     ef_construction: usize,
     dimensions: usize,
 
-    /// Runtime search parameter (tunable)
+    /// Runtime search parameter (tunable, not persisted)
+    #[serde(skip, default = "default_ef_search")]
     ef_search: usize,
 
     /// Number of vectors inserted

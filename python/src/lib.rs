@@ -813,9 +813,12 @@ impl VectorDatabase {
         for entry in entries {
             let entry = entry
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to read entry: {}", e)))?;
-            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            // Collections are stored as .omen files
+            if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                 if let Some(name) = entry.file_name().to_str() {
-                    names.push(name.to_string());
+                    if let Some(collection_name) = name.strip_suffix(".omen") {
+                        names.push(collection_name.to_string());
+                    }
                 }
             }
         }
@@ -1127,17 +1130,23 @@ impl VectorDatabase {
         }
 
         let base_path = std::path::Path::new(&self.path);
-        let collection_path = base_path.join("collections").join(&name);
+        let collections_dir = base_path.join("collections");
+        let omen_path = collections_dir.join(format!("{}.omen", name));
+        let wal_path = collections_dir.join(format!("{}.wal", name));
 
-        if !collection_path.exists() {
+        if !omen_path.exists() {
             return Err(PyValueError::new_err(format!(
                 "Collection '{}' not found",
                 name
             )));
         }
 
-        std::fs::remove_dir_all(&collection_path)
+        // Remove .omen file
+        std::fs::remove_file(&omen_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete collection: {}", e)))?;
+
+        // Remove .wal file if it exists
+        let _ = std::fs::remove_file(&wal_path);
 
         Ok(())
     }
