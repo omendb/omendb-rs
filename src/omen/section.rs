@@ -41,6 +41,7 @@ pub struct SectionEntry {
 
 impl SectionEntry {
     /// Create a new section entry
+    #[must_use] 
     pub fn new(section_type: SectionType, offset: u64, length: u64) -> Self {
         Self {
             section_type,
@@ -51,6 +52,7 @@ impl SectionEntry {
     }
 
     /// Serialize to bytes (24 bytes)
+    #[must_use] 
     pub fn to_bytes(&self) -> [u8; 24] {
         let mut buf = [0u8; 24];
         buf[0..2].copy_from_slice(&(self.section_type as u16).to_le_bytes());
@@ -62,6 +64,7 @@ impl SectionEntry {
     }
 
     /// Parse from bytes
+    #[must_use] 
     pub fn from_bytes(buf: &[u8; 24]) -> Self {
         Self {
             section_type: SectionType::from(u16::from_le_bytes(buf[0..2].try_into().unwrap())),
@@ -72,6 +75,7 @@ impl SectionEntry {
     }
 
     /// Check if section is valid (has data)
+    #[must_use] 
     pub fn is_valid(&self) -> bool {
         self.section_type != SectionType::None && self.length > 0
     }

@@ -1,6 +1,6 @@
-//! OmenFile - main API for .omen format
+//! `OmenFile` - main API for .omen format
 //!
-//! Storage backend for VectorStore. Uses bincode for efficient binary serialization.
+//! Storage backend for `VectorStore`. Uses bincode for efficient binary serialization.
 
 use crate::omen::{
     align_to_page,
@@ -36,10 +36,10 @@ struct CheckpointMetadata {
 /// Checkpoint threshold (number of WAL entries before compaction)
 const CHECKPOINT_THRESHOLD: u64 = 1000;
 
-/// OmenFile - single-file vector database
+/// `OmenFile` - single-file vector database
 ///
 /// Storage layer for vectors, metadata, and serialized HNSW index.
-/// Graph traversal is handled by HNSWIndex in the vector layer.
+/// Graph traversal is handled by `HNSWIndex` in the vector layer.
 pub struct OmenFile {
     path: PathBuf,
     file: File,
@@ -262,11 +262,8 @@ impl OmenFile {
                 WalEntryType::UpdateNeighbors => {
                     self.replay_neighbors(&entry.data)?;
                 }
-                WalEntryType::UpdateMetadata => {
-                    // Tracked: cloud-4uv
-                }
-                WalEntryType::Checkpoint => {
-                    // Checkpoint - nothing to replay
+                WalEntryType::UpdateMetadata | WalEntryType::Checkpoint => {
+                    // No-op: metadata updates tracked in cloud-4uv, checkpoint is marker only
                 }
             }
         }
@@ -339,7 +336,8 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Replay neighbors update from WAL (no-op: graph managed by HNSWIndex)
+    /// Replay neighbors update from WAL (no-op: graph managed by `HNSWIndex`)
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn replay_neighbors(&mut self, _data: &[u8]) -> io::Result<()> {
         // Neighbor updates are consumed from WAL but not stored.
         // HNSWIndex rebuilds graph from vectors on recovery.
@@ -348,7 +346,7 @@ impl OmenFile {
 
     /// Insert a vector
     ///
-    /// Note: Graph management (HNSW) is handled by HNSWIndex in the vector layer.
+    /// Note: Graph management (HNSW) is handled by `HNSWIndex` in the vector layer.
     /// This method only handles storage: WAL, vectors, metadata.
     pub fn insert(&mut self, id: &str, vector: &[f32], metadata: Option<&[u8]>) -> io::Result<()> {
         if vector.len() != self.header.dimensions as usize {
@@ -410,6 +408,7 @@ impl OmenFile {
     }
 
     /// Search for k nearest neighbors
+    #[must_use]
     pub fn search(&self, query: &[f32], k: usize) -> Vec<(String, f32)> {
         if query.len() != self.header.dimensions as usize {
             return Vec::new();
@@ -444,16 +443,19 @@ impl OmenFile {
     }
 
     /// Get vector count
+    #[must_use]
     pub fn len(&self) -> u64 {
         self.header.count
     }
 
     /// Check if empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.header.count == 0
     }
 
     /// Get dimensions
+    #[must_use]
     pub fn dimensions(&self) -> u32 {
         self.header.dimensions
     }
@@ -734,7 +736,7 @@ impl OmenFile {
     /// Store serialized HNSW index bytes
     ///
     /// The bytes are persisted on the next checkpoint/flush.
-    /// VectorStore serializes HNSWIndex and stores it here.
+    /// `VectorStore` serializes `HNSWIndex` and stores it here.
     pub fn put_hnsw_index(&mut self, bytes: Vec<u8>) {
         self.hnsw_index_bytes = Some(bytes);
     }
@@ -743,16 +745,19 @@ impl OmenFile {
     ///
     /// Returns the bytes previously stored by `put_hnsw_index()`,
     /// or loaded from disk on open.
+    #[must_use]
     pub fn get_hnsw_index(&self) -> Option<&[u8]> {
         self.hnsw_index_bytes.as_deref()
     }
 
     /// Check if HNSW index is stored
+    #[must_use]
     pub fn has_hnsw_index(&self) -> bool {
         self.hnsw_index_bytes.is_some()
     }
 
     /// Get storage path
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

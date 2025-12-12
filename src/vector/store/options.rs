@@ -1,4 +1,4 @@
-//! VectorStore builder pattern configuration
+//! `VectorStore` builder pattern configuration
 //!
 //! Follows `std::fs::OpenOptions` pattern for familiar, ergonomic API.
 
@@ -51,7 +51,7 @@ pub struct VectorStoreOptions {
     /// HNSW `ef_search`: search quality/speed tradeoff (default: 100)
     pub(super) ef_search: Option<usize>,
 
-    /// Quantization mode (SQ8 or RaBitQ for asymmetric HNSW search)
+    /// Quantization mode (SQ8 or `RaBitQ` for asymmetric HNSW search)
     pub(super) quantization: Option<QuantizationMode>,
 
     /// Rescore candidates with original vectors (default: true when quantization enabled)
@@ -146,13 +146,13 @@ impl VectorStoreOptions {
         self.quantization(QuantizationMode::SQ8)
     }
 
-    /// Enable RaBitQ quantization with default 4-bit parameters (8x compression)
+    /// Enable `RaBitQ` quantization with default 4-bit parameters (8x compression)
     #[must_use]
     pub fn quantization_rabitq(self) -> Self {
         self.quantization(QuantizationMode::rabitq())
     }
 
-    /// Enable RaBitQ quantization with custom parameters
+    /// Enable `RaBitQ` quantization with custom parameters
     #[must_use]
     pub fn quantization_rabitq_params(self, params: RaBitQParams) -> Self {
         self.quantization(QuantizationMode::RaBitQ(params))

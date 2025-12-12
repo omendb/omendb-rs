@@ -1,4 +1,5 @@
 //! Graph section - HNSW neighbor lists
+#![allow(clippy::cast_ptr_alignment)] // mmap data is aligned by our serialization
 
 use memmap2::MmapMut;
 use std::io::{self, Write};
@@ -7,7 +8,7 @@ use std::io::{self, Write};
 ///
 /// Layout:
 /// - Node levels: [u8; count] - max level for each node
-/// - Level 0 offsets: [u32; count] - offset into level0_neighbors
+/// - Level 0 offsets: [u32; count] - offset into `level0_neighbors`
 /// - Level 0 neighbors: [u32; ...] - neighbor IDs (varint would be better but simpler for now)
 /// - Upper offsets: [u32; ...] - for nodes with level > 0
 /// - Upper neighbors: [u32; ...] - upper level neighbor IDs
@@ -67,6 +68,7 @@ impl GraphSection {
     }
 
     /// Create empty section for building
+    #[must_use]
     pub fn new(m: u16) -> Self {
         Self {
             count: 0,
@@ -80,6 +82,7 @@ impl GraphSection {
 
     /// Get node level
     #[inline]
+    #[must_use]
     pub fn get_level(&self, node_id: u32) -> Option<u8> {
         if node_id as u64 >= self.count || self.data.is_null() {
             return None;
@@ -90,6 +93,7 @@ impl GraphSection {
 
     /// Get level 0 neighbors for a node
     #[inline]
+    #[must_use]
     pub fn get_neighbors_level0(&self, node_id: u32) -> Option<&[u32]> {
         if node_id as u64 >= self.count || self.data.is_null() {
             return None;
@@ -102,8 +106,8 @@ impl GraphSection {
         }
 
         let offset = unsafe {
-            let ptr = self.data.add(offset_pos) as *const u32;
-            u32::from_le(*ptr) as usize
+            let ptr = self.data.add(offset_pos).cast::<u32>();
+            ptr.read_unaligned().to_le() as usize
         };
 
         // Read neighbor count (first u32 at offset)
@@ -113,8 +117,8 @@ impl GraphSection {
         }
 
         let neighbor_count = unsafe {
-            let ptr = self.data.add(neighbor_start) as *const u32;
-            u32::from_le(*ptr) as usize
+            let ptr = self.data.add(neighbor_start).cast::<u32>();
+            ptr.read_unaligned().to_le() as usize
         };
 
         if neighbor_count == 0 {
@@ -128,17 +132,19 @@ impl GraphSection {
         }
 
         unsafe {
-            let ptr = self.data.add(neighbors_ptr) as *const u32;
+            let ptr = self.data.add(neighbors_ptr).cast::<u32>();
             Some(std::slice::from_raw_parts(ptr, neighbor_count))
         }
     }
 
     /// Get max neighbors per layer
+    #[must_use]
     pub fn m(&self) -> u16 {
         self.m
     }
 
     /// Get node count
+    #[must_use]
     pub fn count(&self) -> u64 {
         self.count
     }
@@ -148,7 +154,7 @@ impl GraphSection {
     /// Format:
     /// - levels: [u8; count]
     /// - offsets: [u32; count]
-    /// - neighbors: for each node: [count: u32, neighbor_ids: [u32; count]]
+    /// - neighbors: for each node: [count: u32, `neighbor_ids`: [u32; count]]
     pub fn write_graph<W: Write>(
         writer: &mut W,
         levels: &[u8],
@@ -180,6 +186,7 @@ impl GraphSection {
     }
 
     /// Calculate size in bytes for graph
+    #[must_use]
     pub fn size_for_graph(levels: &[u8], neighbors: &[Vec<u32>]) -> usize {
         let count = levels.len();
         let levels_size = count;

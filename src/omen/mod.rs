@@ -1,4 +1,4 @@
-//! .omen single-file storage format for OmenDB
+//! .omen single-file storage format for `OmenDB`
 //!
 //! Layout:
 //! ```text
@@ -31,11 +31,12 @@ pub use section::{SectionEntry, SectionType};
 pub use vectors::VectorSection;
 pub use wal::{Wal, WalEntry, WalEntryType};
 
-/// Page size for alignment (8KB optimal for NVMe)
+/// Page size for alignment (8KB optimal for `NVMe`)
 pub const PAGE_SIZE: usize = 8192;
 
 /// Align a value to page boundary
 #[inline]
+#[must_use] 
 pub const fn align_to_page(value: usize) -> usize {
     (value + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
 }

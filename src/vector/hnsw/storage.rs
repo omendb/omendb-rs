@@ -473,11 +473,11 @@ impl<'de> Deserialize<'de> for NeighborLists {
 
 /// Unified ADC (Asymmetric Distance Computation) table
 ///
-/// Supports both RaBitQ and SQ8 quantization methods.
+/// Supports both `RaBitQ` and SQ8 quantization methods.
 /// Built once per query, used for all distance computations.
 #[derive(Clone, Debug)]
 pub enum UnifiedADC {
-    /// RaBitQ ADC table (variable bit width)
+    /// `RaBitQ` ADC table (variable bit width)
     RaBitQ(ADCTable),
     /// SQ8 ADC table (8-bit scalar quantization)
     SQ8(SQ8ADCTable),
@@ -564,7 +564,7 @@ pub enum VectorStorage {
     /// Lazy training: Buffers first 256 vectors, then trains and quantizes.
     ///
     /// Note: No rescore support - originals not stored to save memory.
-    /// Use RaBitQ if you need rescore with originals on disk.
+    /// Use `RaBitQ` if you need rescore with originals on disk.
     ScalarQuantized {
         /// Trained quantization parameters (min/scale per dimension)
         params: ScalarParams,
@@ -683,10 +683,9 @@ impl VectorStorage {
     #[must_use]
     pub fn len(&self) -> usize {
         match self {
-            Self::FullPrecision { count, .. } => *count,
+            Self::FullPrecision { count, .. } | Self::ScalarQuantized { count, .. } => *count,
             Self::BinaryQuantized { quantized, .. } => quantized.len(),
             Self::RaBitQQuantized { original_count, .. } => *original_count,
-            Self::ScalarQuantized { count, .. } => *count,
         }
     }
 
@@ -976,7 +975,7 @@ impl VectorStorage {
     ///
     /// # Performance
     /// - SQ8: ~2x faster than full precision (SIMD u8 operations)
-    /// - RaBitQ: 2-3x faster than full precision (ADC lookup tables)
+    /// - `RaBitQ`: 2-3x faster than full precision (ADC lookup tables)
     #[inline]
     #[must_use]
     pub fn distance_asymmetric_l2(&self, query: &[f32], id: u32) -> Option<f32> {
@@ -1044,10 +1043,10 @@ impl VectorStorage {
 
     /// Build ADC lookup table for a query
     ///
-    /// Only used for RaBitQ storage where sub-tables fit in cache.
+    /// Only used for `RaBitQ` storage where sub-tables fit in cache.
     /// SQ8 uses asymmetric SIMD which is faster on modern CPUs.
     ///
-    /// Returns None if storage is not RaBitQ quantized or not yet trained.
+    /// Returns None if storage is not `RaBitQ` quantized or not yet trained.
     #[must_use]
     pub fn build_adc_table(&self, query: &[f32]) -> Option<UnifiedADC> {
         match self {
@@ -1287,7 +1286,8 @@ impl VectorStorage {
                 }
 
                 // Train params from sample vectors
-                let refs: Vec<&[f32]> = sample_vectors.iter().map(|v| v.as_slice()).collect();
+                let refs: Vec<&[f32]> =
+                    sample_vectors.iter().map(std::vec::Vec::as_slice).collect();
                 *params = ScalarParams::train(&refs);
                 *trained = true;
 

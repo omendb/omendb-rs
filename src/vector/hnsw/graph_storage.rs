@@ -1,7 +1,7 @@
 //! Graph storage abstraction for HNSW index
 //!
 //! Provides a unified API for the in-memory neighbor list storage.
-//! Persistence is handled by serializing the entire HNSWIndex to .omen format.
+//! Persistence is handled by serializing the entire `HNSWIndex` to .omen format.
 
 use super::storage::NeighborLists;
 use serde::{Deserialize, Serialize};
@@ -79,7 +79,7 @@ impl GraphStorage {
         self.0.set_neighbors_parallel(node_id, level, neighbors);
     }
 
-    /// Get M_max (max neighbors per node)
+    /// Get `M_max` (max neighbors per node)
     #[must_use]
     pub fn m_max(&self) -> usize {
         self.0.m_max()
