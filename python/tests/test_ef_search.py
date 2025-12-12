@@ -74,20 +74,20 @@ class TestEfSearchBasic:
             db_path = os.path.join(tmpdir, "test_db")
             db = omendb.open(db_path, dimensions=64)
 
-            # Setting ef_search on empty db has no effect (HNSW not yet created)
+            # Setting ef_search on empty db now works
             db.set_ef_search(150)
-            assert db.get_ef_search() is None  # No HNSW index yet
+            assert db.get_ef_search() == 150  # Value is stored
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
 
-            # After insert, HNSW has default ef_search (150 was not applied)
+            # After insert, ef_search is still 150
             ef = db.get_ef_search()
-            assert ef == 100  # Fixed default (M=16, ef=100)
+            assert ef == 150
 
-            # Now set_ef_search works
-            db.set_ef_search(150)
-            assert db.get_ef_search() == 150
+            # Changing ef_search still works
+            db.set_ef_search(200)
+            assert db.get_ef_search() == 200
 
 
 class TestEfSearchConstraints:
