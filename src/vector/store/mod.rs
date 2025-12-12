@@ -744,11 +744,18 @@ impl VectorStore {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
-            // Sequential insert
+            // Insert vectors into HNSW
+            // Use batch_insert for full precision, sequential for quantized (SQ8 has training buffer issues)
             let base_index = self.vectors.len();
             if let Some(ref mut index) = self.hnsw_index {
-                for vector in &vectors_data {
-                    index.insert(vector)?;
+                if index.is_asymmetric() {
+                    // Sequential insert for quantized modes (SQ8/RaBitQ)
+                    for vector in &vectors_data {
+                        index.insert(vector)?;
+                    }
+                } else {
+                    // Batch insert for full precision (optimal graph construction)
+                    index.batch_insert(&vectors_data)?;
                 }
             }
 
