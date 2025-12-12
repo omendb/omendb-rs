@@ -91,6 +91,15 @@ impl GraphStorage {
         self.0.memory_usage()
     }
 
+    /// Prefetch neighbor list into CPU cache
+    ///
+    /// Hints to CPU that we'll need neighbor data soon. Only beneficial on
+    /// x86/ARM servers - disabled on Apple Silicon where DMP handles this.
+    #[inline]
+    pub fn prefetch(&self, node_id: u32, level: u8) {
+        self.0.prefetch(node_id, level);
+    }
+
     /// Reorder graph using BFS for cache locality
     pub fn reorder_bfs(&mut self, entry_point: u32, start_level: u8) -> Vec<u32> {
         self.0.reorder_bfs(entry_point, start_level)

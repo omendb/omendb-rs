@@ -1675,11 +1675,27 @@ impl HNSWIndex {
                 }
 
                 // Process all neighbors (1-hop and 2-hop) with prefetching
+                // Platform-aware prefetching: disabled on Apple Silicon
+                use crate::vector::hnsw::prefetch::PrefetchConfig;
+                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
                 let neighbors_slice = neighbors_to_explore.as_slice();
+
+                // Initial burst prefetch (skip on Apple Silicon)
+                if PREFETCH_ENABLED {
+                    for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
+                        self.vectors.prefetch(id);
+                        self.neighbors.prefetch(id, level); // Graph-aware prefetch
+                    }
+                }
+
                 for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
-                    // Prefetch next neighbor's vector
-                    if i + 1 < neighbors_slice.len() {
-                        self.vectors.prefetch(neighbors_slice[i + 1]);
+                    // Stride prefetch: vectors and neighbor lists
+                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < neighbors_slice.len() {
+                        let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
+                        self.vectors.prefetch(prefetch_id);
+                        self.neighbors.prefetch(prefetch_id, level); // Graph-aware prefetch
                     }
 
                     if visited.contains(neighbor_id) {
@@ -1827,16 +1843,20 @@ impl HNSWIndex {
                 let unvisited_slice = unvisited.as_slice();
 
                 // Initial burst prefetch (skip on Apple Silicon)
+                // Prefetch both vectors AND neighbor lists for upcoming nodes
                 if PREFETCH_ENABLED {
                     for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
                         self.vectors.prefetch(id);
+                        self.neighbors.prefetch(id, level); // Graph-aware prefetch
                     }
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
+                    // Stride prefetch: vectors and neighbor lists
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
-                        self.vectors
-                            .prefetch(unvisited_slice[i + PREFETCH_DISTANCE]);
+                        let prefetch_id = unvisited_slice[i + PREFETCH_DISTANCE];
+                        self.vectors.prefetch(prefetch_id);
+                        self.neighbors.prefetch(prefetch_id, level); // Graph-aware prefetch
                     }
 
                     visited.insert(neighbor_id);
