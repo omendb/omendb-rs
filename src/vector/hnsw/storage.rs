@@ -1364,7 +1364,7 @@ impl VectorStorage {
                 // Compute median for each dimension
                 for dim in 0..*dimensions {
                     let mut values: Vec<f32> = sample_vectors.iter().map(|v| v[dim]).collect();
-                    values.sort_by_key(|&x| OrderedFloat(x));
+                    values.sort_unstable_by_key(|&x| OrderedFloat(x));
 
                     let median = if values.len().is_multiple_of(2) {
                         let mid = values.len() / 2;

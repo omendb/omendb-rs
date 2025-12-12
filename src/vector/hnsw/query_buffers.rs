@@ -123,6 +123,9 @@ pub struct QueryBuffers {
 
     /// Pre-allocated buffer for unvisited neighbors
     pub unvisited: Vec<u32>,
+
+    /// Pre-allocated buffer for search results (avoids allocation in return path)
+    pub results: Vec<Candidate>,
 }
 
 impl Default for QueryBuffers {
@@ -140,6 +143,7 @@ impl QueryBuffers {
             working: BinaryHeap::new(),
             entry_points: Vec::new(),
             unvisited: Vec::new(),
+            results: Vec::new(),
         }
     }
 
@@ -150,6 +154,7 @@ impl QueryBuffers {
         self.working.clear();
         self.entry_points.clear();
         self.unvisited.clear();
+        self.results.clear();
     }
 
     /// Pre-allocate buffers for expected capacity (standard Rust pattern)
@@ -161,6 +166,7 @@ impl QueryBuffers {
             working: BinaryHeap::with_capacity(ef),
             entry_points: Vec::with_capacity(num_levels),
             unvisited: Vec::with_capacity(64), // Typical neighbor count
+            results: Vec::with_capacity(ef),
         }
     }
 }
