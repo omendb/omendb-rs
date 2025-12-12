@@ -348,6 +348,20 @@ impl HNSWIndex {
         Ok(self.distance_fn.distance_for_comparison(query, vec))
     }
 
+    /// Distance from query to node using full precision (f32-to-f32)
+    ///
+    /// Used during graph construction where quantization noise hurts graph quality.
+    /// For RaBitQ, uses stored originals. For SQ8, dequantizes.
+    #[inline]
+    fn distance_cmp_full_precision(&self, query: &[f32], id: u32) -> Result<f32> {
+        // Always use dequantized/original vectors for full precision comparison
+        let vec = self
+            .vectors
+            .get_dequantized(id)
+            .ok_or(HNSWError::VectorNotFound(id))?;
+        Ok(self.distance_fn.distance_for_comparison(query, &vec))
+    }
+
     /// Actual distance (with sqrt for L2)
     #[inline]
     fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
@@ -539,9 +553,10 @@ impl HNSWIndex {
         let mut nearest = entry_hints.to_vec();
 
         // Insert at levels 0..=level (iterate from top to bottom)
+        // Use full precision distances during graph construction for better quality
         for lc in (0..=level).rev() {
             // Find ef nearest neighbors at this level using reduced ef
-            let candidates = self.search_layer(vector, &nearest, ef, lc)?;
+            let candidates = self.search_layer_full_precision(vector, &nearest, ef, lc)?;
 
             // Select M best neighbors using heuristic
             let m = if lc == 0 {
@@ -732,9 +747,10 @@ impl HNSWIndex {
         // Parallel insertion into graph
         let result: Result<()> = nodes_to_insert.par_iter().try_for_each(|(node_id, level)| {
             // Get vector for this node
+            // Use get_dequantized for SQ8 support (get() returns None for trained SQ8)
             let vector = self
                 .vectors
-                .get(*node_id)
+                .get_dequantized(*node_id)
                 .ok_or(HNSWError::VectorNotFound(*node_id))?;
 
             // Build graph connections for all nodes (including node_id=0)
@@ -744,16 +760,21 @@ impl HNSWIndex {
             let entry_level = self.nodes[entry_point as usize].level;
 
             // Search for nearest neighbors at each level above target level
+            // Use full precision distances during graph construction for better quality
             let mut nearest = vec![entry_point];
             for lc in ((*level + 1)..=entry_level).rev() {
-                nearest = self.search_layer(vector, &nearest, 1, lc)?;
+                nearest = self.search_layer_full_precision(&vector, &nearest, 1, lc)?;
             }
 
             // Insert at levels 0..=level
             for lc in (0..=*level).rev() {
                 // Find ef_construction nearest neighbors at this level
-                let candidates =
-                    self.search_layer(vector, &nearest, self.params.ef_construction, lc)?;
+                let candidates = self.search_layer_full_precision(
+                    &vector,
+                    &nearest,
+                    self.params.ef_construction,
+                    lc,
+                )?;
 
                 // Select M best neighbors using heuristic
                 let m = if lc == 0 {
@@ -763,7 +784,7 @@ impl HNSWIndex {
                 };
 
                 let neighbors =
-                    self.select_neighbors_heuristic(*node_id, &candidates, m, lc, vector)?;
+                    self.select_neighbors_heuristic(*node_id, &candidates, m, lc, &vector)?;
 
                 // Add bidirectional links (thread-safe via RwLock parallel methods)
                 for &neighbor_id in &neighbors {
@@ -837,16 +858,21 @@ impl HNSWIndex {
         let entry_level = self.nodes[entry_point as usize].level;
 
         // Search for nearest neighbors at each level above target level
+        // Use full precision distances during graph construction for better quality
         let mut nearest = vec![entry_point];
         for lc in ((level + 1)..=entry_level).rev() {
-            nearest = self.search_layer(vector, &nearest, 1, lc)?;
+            nearest = self.search_layer_full_precision(vector, &nearest, 1, lc)?;
         }
 
         // Insert at levels 0..=level (iterate from top to bottom)
         for lc in (0..=level).rev() {
             // Find ef_construction nearest neighbors at this level
-            let candidates =
-                self.search_layer(vector, &nearest, self.params.ef_construction, lc)?;
+            let candidates = self.search_layer_full_precision(
+                vector,
+                &nearest,
+                self.params.ef_construction,
+                lc,
+            )?;
 
             // Select M best neighbors using heuristic
             let m = if lc == 0 {
@@ -1627,6 +1653,86 @@ impl HNSWIndex {
             }
 
             // Return node IDs sorted by distance (closest first)
+            let mut results: Vec<_> = working.drain().collect();
+            results.sort_by_key(|c| c.distance);
+            Ok(results.into_iter().map(|c| c.node_id).collect())
+        })
+    }
+
+    /// Search layer using full precision (f32) distances
+    ///
+    /// Used during graph construction where quantization noise hurts graph quality.
+    /// Same algorithm as search_layer but uses distance_cmp_full_precision.
+    fn search_layer_full_precision(
+        &self,
+        query: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+    ) -> Result<Vec<u32>> {
+        use super::query_buffers;
+
+        query_buffers::with_buffers(|buffers| {
+            let visited = &mut buffers.visited;
+            let candidates = &mut buffers.candidates;
+            let working = &mut buffers.working;
+            let unvisited = &mut buffers.unvisited;
+
+            // Initialize with entry points
+            for &ep in entry_points {
+                let dist = self.distance_cmp_full_precision(query, ep)?;
+                let candidate = Candidate::new(ep, dist);
+
+                candidates.push(Reverse(candidate));
+                working.push(candidate);
+                visited.insert(ep);
+            }
+
+            // Greedy search
+            while let Some(Reverse(current)) = candidates.pop() {
+                if let Some(&farthest) = working.peek() {
+                    if current.distance > farthest.distance {
+                        break;
+                    }
+                }
+
+                unvisited.clear();
+                self.neighbors
+                    .with_neighbors(current.node_id, level, |neighbors| {
+                        for &id in neighbors {
+                            if !visited.contains(id) {
+                                unvisited.push(id);
+                            }
+                        }
+                    });
+
+                let unvisited_slice = unvisited.as_slice();
+                for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
+                    if i + 1 < unvisited_slice.len() {
+                        self.vectors.prefetch(unvisited_slice[i + 1]);
+                    }
+
+                    visited.insert(neighbor_id);
+
+                    let dist = self.distance_cmp_full_precision(query, neighbor_id)?;
+                    let neighbor = Candidate::new(neighbor_id, dist);
+
+                    if let Some(&farthest) = working.peek() {
+                        if dist < farthest.distance.0 || working.len() < ef {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+
+                            if working.len() > ef {
+                                working.pop();
+                            }
+                        }
+                    } else {
+                        candidates.push(Reverse(neighbor));
+                        working.push(neighbor);
+                    }
+                }
+            }
+
             let mut results: Vec<_> = working.drain().collect();
             results.sort_by_key(|c| c.distance);
             Ok(results.into_iter().map(|c| c.node_id).collect())
