@@ -108,14 +108,14 @@ impl VectorSection {
         // Safety: We checked bounds
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            let ptr = self.data.add(offset) as *const u8;
+            let ptr = self.data.add(offset).cast::<u8>();
             // Prefetch multiple cache lines (64 bytes each)
             let bytes_to_prefetch = self.dimensions as usize * std::mem::size_of::<f32>();
-            let cache_lines = (bytes_to_prefetch + 63) / 64;
+            let cache_lines = bytes_to_prefetch.div_ceil(64);
 
             for i in 0..cache_lines.min(8) {
                 use std::arch::x86_64::_mm_prefetch;
-                _mm_prefetch(ptr.add(i * 64) as *const i8, 3); // _MM_HINT_T0
+                _mm_prefetch(ptr.add(i * 64).cast::<i8>(), 3); // _MM_HINT_T0
             }
         }
 
