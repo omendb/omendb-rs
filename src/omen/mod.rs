@@ -36,7 +36,7 @@ pub const PAGE_SIZE: usize = 8192;
 
 /// Align a value to page boundary
 #[inline]
-#[must_use] 
+#[must_use]
 pub const fn align_to_page(value: usize) -> usize {
     (value + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
 }
