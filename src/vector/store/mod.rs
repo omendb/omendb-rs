@@ -1270,13 +1270,9 @@ impl VectorStore {
             merged_count += 1;
         }
 
-        if let (Some(ref mut self_index), Some(ref other_index)) =
-            (&mut self.hnsw_index, &other.hnsw_index)
-        {
-            self_index.merge_from(other_index)?;
-        } else {
-            self.rebuild_index()?;
-        }
+        // Always rebuild index after merge to ensure consistency
+        // (HNSW merge would include conflicting vectors that were skipped above)
+        self.rebuild_index()?;
 
         Ok(merged_count)
     }

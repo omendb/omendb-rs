@@ -328,6 +328,7 @@ class TestOmenDBVectorStore:
             ),
         ]
         store1.add(nodes)
+        store1.flush()  # Required for persistence
 
         # Close by going out of scope
         del store1

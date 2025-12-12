@@ -340,6 +340,7 @@ class TestOmenDBVectorStore:
             path=temp_db_path,
         )
         assert len(store1) == 1
+        store1.flush()  # Required for persistence
 
         # Open in new session
         store2 = OmenDBVectorStore(

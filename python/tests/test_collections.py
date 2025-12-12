@@ -127,7 +127,9 @@ class TestCollections:
         products1 = db1.collection("products")
         products1.set([{"id": "prod1", "vector": [0.2] * 128, "metadata": {"price": 99.99}}])
 
-        # Close by going out of scope
+        # Explicitly flush before closing (required for persistence)
+        users1.flush()
+        products1.flush()
         del db1, users1, products1
 
         # Reopen

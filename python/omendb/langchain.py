@@ -380,3 +380,7 @@ class OmenDBVectorStore(VectorStore):
     def __len__(self) -> int:
         """Return the number of vectors in the store."""
         return len(self._db)
+
+    def flush(self) -> None:
+        """Flush data to disk for persistence."""
+        self._db.flush()
