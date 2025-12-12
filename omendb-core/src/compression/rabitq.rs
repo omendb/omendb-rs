@@ -1220,10 +1220,114 @@ impl RaBitQ {
     /// This is the hot path for search! It unpacks quantized values on the fly and
     /// computes distance against the uncompressed query vector.
     ///
-    /// Avoids `Vec<f32>` allocation for the reconstructed vector.
+    /// When trained: Uses per-dimension min/max for correct distance computation.
+    /// When untrained: Falls back to per-vector scale (deprecated, lower accuracy).
     #[must_use]
     pub fn distance_asymmetric_l2(&self, query: &[f32], quantized: &QuantizedVector) -> f32 {
+        // Use trained parameters when available for correct distance computation
+        if let Some(trained) = &self.trained {
+            return self.distance_asymmetric_l2_trained(query, &quantized.data, trained);
+        }
+        // Fallback to per-vector scale (deprecated, only for untrained quantizers)
         self.distance_asymmetric_l2_raw(query, &quantized.data, quantized.scale, quantized.bits)
+    }
+
+    /// Asymmetric L2 distance using trained per-dimension parameters
+    ///
+    /// This is the correct distance computation for trained quantizers.
+    /// Each dimension uses its own min/max range for accurate dequantization.
+    #[must_use]
+    fn distance_asymmetric_l2_trained(
+        &self,
+        query: &[f32],
+        data: &[u8],
+        trained: &TrainedParams,
+    ) -> f32 {
+        let levels = self.params.bits_per_dim.levels() as f32;
+        let bits = self.params.bits_per_dim.to_u8();
+
+        // Use SmallVec for stack allocation when possible
+        let mut buffer: SmallVec<[f32; 256]> = SmallVec::with_capacity(query.len());
+
+        match bits {
+            4 => {
+                let num_pairs = query.len() / 2;
+                if data.len() < query.len().div_ceil(2) {
+                    return f32::MAX;
+                }
+
+                for i in 0..num_pairs {
+                    let byte = unsafe { *data.get_unchecked(i) };
+                    let d0 = i * 2;
+                    let d1 = i * 2 + 1;
+
+                    // Dequantize using per-dimension min/max
+                    let code0 = (byte >> 4) as f32;
+                    let code1 = (byte & 0x0F) as f32;
+
+                    let range0 = trained.maxs[d0] - trained.mins[d0];
+                    let range1 = trained.maxs[d1] - trained.mins[d1];
+
+                    buffer.push((code0 / (levels - 1.0)) * range0 + trained.mins[d0]);
+                    buffer.push((code1 / (levels - 1.0)) * range1 + trained.mins[d1]);
+                }
+
+                if !query.len().is_multiple_of(2) {
+                    let byte = unsafe { *data.get_unchecked(num_pairs) };
+                    let d = num_pairs * 2;
+                    let code = (byte >> 4) as f32;
+                    let range = trained.maxs[d] - trained.mins[d];
+                    buffer.push((code / (levels - 1.0)) * range + trained.mins[d]);
+                }
+            }
+            2 => {
+                let num_quads = query.len() / 4;
+                if data.len() < query.len().div_ceil(4) {
+                    return f32::MAX;
+                }
+
+                for i in 0..num_quads {
+                    let byte = unsafe { *data.get_unchecked(i) };
+                    for j in 0..4 {
+                        let d = i * 4 + j;
+                        let code = ((byte >> (j * 2)) & 0b11) as f32;
+                        let range = trained.maxs[d] - trained.mins[d];
+                        buffer.push((code / (levels - 1.0)) * range + trained.mins[d]);
+                    }
+                }
+
+                let remaining = query.len() % 4;
+                if remaining > 0 {
+                    let byte = unsafe { *data.get_unchecked(num_quads) };
+                    for j in 0..remaining {
+                        let d = num_quads * 4 + j;
+                        let code = ((byte >> (j * 2)) & 0b11) as f32;
+                        let range = trained.maxs[d] - trained.mins[d];
+                        buffer.push((code / (levels - 1.0)) * range + trained.mins[d]);
+                    }
+                }
+            }
+            8 => {
+                if data.len() < query.len() {
+                    return f32::MAX;
+                }
+                for (d, &byte) in data.iter().enumerate().take(query.len()) {
+                    let code = byte as f32;
+                    let range = trained.maxs[d] - trained.mins[d];
+                    buffer.push((code / (levels - 1.0)) * range + trained.mins[d]);
+                }
+            }
+            _ => {
+                // Generic fallback for other bit widths
+                let unpacked = self.unpack_quantized(data, bits, query.len());
+                for (d, &code) in unpacked.iter().enumerate().take(query.len()) {
+                    let range = trained.maxs[d] - trained.mins[d];
+                    buffer.push((code as f32 / (levels - 1.0)) * range + trained.mins[d]);
+                }
+            }
+        }
+
+        simd_l2_distance(query, &buffer)
     }
 
     /// Build an ADC (Asymmetric Distance Computation) lookup table for a query
