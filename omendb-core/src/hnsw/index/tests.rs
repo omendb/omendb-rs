@@ -1042,3 +1042,52 @@ fn test_asymmetric_only_supports_l2() {
         HNSWIndex::new_with_asymmetric(32, params, DistanceFunction::NegativeDotProduct, rabitq);
     assert!(result.is_err());
 }
+
+/// Test that batch_insert properly bounds neighbor counts after pruning
+/// This verifies the fix for the QPS regression (nodes accumulating unbounded neighbors)
+#[test]
+fn test_batch_insert_neighbor_bounds() {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+
+    let m = 16;
+    let params = HNSWParams::default(); // Default uses M=16
+    let mut index = HNSWIndex::new(128, params, DistanceFunction::L2, false).unwrap();
+
+    // Generate random vectors
+    let vectors: Vec<Vec<f32>> = (0..500)
+        .map(|_| (0..128).map(|_| rng.gen::<f32>()).collect())
+        .collect();
+
+    // Batch insert (takes ownership)
+    let ids = index.batch_insert(vectors).unwrap();
+    assert_eq!(ids.len(), 500);
+
+    // Verify neighbor counts are bounded
+    // Level 0: max = M * 2 = 32
+    // Higher levels: max = M = 16
+    let m_max_l0 = m * 2;
+    let mut max_neighbors_l0 = 0;
+    let mut over_bound_count = 0;
+
+    for node_id in 0..500u32 {
+        let count = index.neighbor_count(node_id, 0).unwrap_or(0);
+        if count > max_neighbors_l0 {
+            max_neighbors_l0 = count;
+        }
+        if count > m_max_l0 {
+            over_bound_count += 1;
+            eprintln!(
+                "Node {} has {} neighbors at L0 (max should be {})",
+                node_id, count, m_max_l0
+            );
+        }
+    }
+
+    // After pruning, no node should exceed M_max
+    assert_eq!(
+        over_bound_count, 0,
+        "Found {} nodes exceeding M_max={} at L0. Max found: {}",
+        over_bound_count, m_max_l0, max_neighbors_l0
+    );
+}
