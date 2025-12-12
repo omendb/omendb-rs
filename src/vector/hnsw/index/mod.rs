@@ -830,18 +830,60 @@ impl HNSWIndex {
             }
         }
 
+        // Phase 3: Prune over-connected nodes to restore search performance
+        // During parallel insertion, nodes accumulate many neighbors (unbounded).
+        // Without pruning, search degrades from O(M) to O(N) distance calcs per hop.
+        // See: HNSW paper (Malkov 2018) SELECT-NEIGHBORS-HEURISTIC, Qdrant PR #2869
+        let prune_start = std::time::Instant::now();
+        let mut pruned_count = 0u32;
+
+        // Prune all nodes in the graph (not just newly inserted ones)
+        // because bidirectional links may have over-connected existing nodes
+        let max_node_id = self.nodes.len() as u32;
+        for node_id in 0..max_node_id {
+            let level = self.nodes[node_id as usize].level;
+            for lc in 0..=level {
+                let m = if lc == 0 {
+                    self.params.m * 2
+                } else {
+                    self.params.m
+                };
+
+                let neighbors = self.neighbors.get_neighbors(node_id, lc);
+
+                if neighbors.len() > m {
+                    let vector = match self.vectors.get(node_id) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+
+                    let pruned = match self
+                        .select_neighbors_heuristic(node_id, &neighbors, m, lc, &vector)
+                    {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+
+                    // Update neighbor list (mutable borrow is safe here - not parallel)
+                    self.neighbors.set_neighbors(node_id, lc, pruned.clone());
+                    self.nodes[node_id as usize].set_neighbor_count(lc, pruned.len());
+                    pruned_count += 1;
+                }
+            }
+        }
+
+        let prune_time = prune_start.elapsed().as_secs_f64();
         let total_time = graph_start.elapsed().as_secs_f64();
         let final_rate = batch_size as f64 / total_time;
 
-        // NOTE: Pruning is skipped during batch insert for performance
-        // Over-connected nodes don't significantly hurt recall (HNSW paper)
-        //
         // KNOWN ISSUE: Parallel batch insert achieves only ~1.2x speedup on 16 cores
         // due to RwLock contention in search_layer. To achieve hnswlib-level perf
         // (10x faster), would need lock-free neighbor list reads using AtomicPtr.
 
         info!(
             inserted = node_ids.len(),
+            pruned = pruned_count,
+            prune_secs = prune_time,
             duration_secs = total_time,
             rate_vec_per_sec = final_rate as u64,
             "Parallel batch insertion complete"
