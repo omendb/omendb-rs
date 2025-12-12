@@ -72,6 +72,7 @@ impl PrefetchConfig {
     ///
     /// Apple Silicon uses 128-byte cache lines, everyone else uses 64 bytes
     #[inline(always)]
+    #[allow(dead_code)] // Used in tests, useful utility
     pub const fn cache_line_size() -> usize {
         #[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
         {
@@ -87,6 +88,7 @@ impl PrefetchConfig {
 
 /// Conditionally execute prefetch based on platform
 #[inline(always)]
+#[allow(dead_code)] // Useful utility for future use
 pub fn prefetch_if_enabled<F: FnOnce()>(f: F) {
     if PrefetchConfig::enabled() {
         f();

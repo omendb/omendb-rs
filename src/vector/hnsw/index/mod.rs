@@ -1023,7 +1023,7 @@ impl HNSWIndex {
                 Ok((id, dist))
             })
             .collect::<Result<Vec<_>>>()?;
-        sorted_candidates.sort_by_key(|c| OrderedFloat(c.1));
+        sorted_candidates.sort_unstable_by_key(|c| OrderedFloat(c.1));
 
         let mut result = Vec::with_capacity(m);
         let mut remaining = Vec::new();
@@ -1131,16 +1131,15 @@ impl HNSWIndex {
         };
 
         // Convert to SearchResult and return k nearest
-        let mut results: Vec<SearchResult> = candidates
-            .iter()
-            .map(|&id| {
-                let distance = self.distance_exact(query, id)?;
-                Ok(SearchResult::new(id, distance))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        // Pre-allocate with exact capacity to avoid reallocations
+        let mut results = Vec::with_capacity(candidates.len());
+        for &id in &candidates {
+            let distance = self.distance_exact(query, id)?;
+            results.push(SearchResult::new(id, distance));
+        }
 
-        // Sort by distance (closest first)
-        results.sort_by_key(|r| OrderedFloat(r.distance));
+        // Sort by distance (closest first) - unstable is faster
+        results.sort_unstable_by_key(|r| OrderedFloat(r.distance));
 
         // Return top k
         results.truncate(k);
@@ -1449,15 +1448,14 @@ impl HNSWIndex {
             self.search_layer_with_filter(query, &nearest, ef.max(k), 0, &filter_fn, selectivity)?;
 
         // Convert to SearchResult and return k nearest
-        let mut results: Vec<SearchResult> = candidates
-            .iter()
-            .map(|&id| {
-                let distance = self.distance_exact(query, id)?;
-                Ok(SearchResult::new(id, distance))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        // Pre-allocate with exact capacity to avoid reallocations
+        let mut results = Vec::with_capacity(candidates.len());
+        for &id in &candidates {
+            let distance = self.distance_exact(query, id)?;
+            results.push(SearchResult::new(id, distance));
+        }
 
-        results.sort_by_key(|r| OrderedFloat(r.distance));
+        results.sort_unstable_by_key(|r| OrderedFloat(r.distance));
         results.truncate(k);
 
         debug!(
@@ -1617,6 +1615,7 @@ impl HNSWIndex {
             let candidates = &mut buffers.candidates;
             let working = &mut buffers.working;
             let neighbors_to_explore = &mut buffers.unvisited; // Reuse unvisited buffer
+            let results_buf = &mut buffers.results;
 
             // Initialize with entry points (only add if they match filter)
             for &ep in entry_points {
@@ -1735,9 +1734,12 @@ impl HNSWIndex {
             }
 
             // Return node IDs sorted by distance (closest first)
-            let mut results: Vec<_> = working.drain().collect();
-            results.sort_by_key(|c| c.distance);
-            Ok(results.into_iter().map(|c| c.node_id).collect())
+            // Use pre-allocated buffer to avoid per-search allocation
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance);
+            let mut output = Vec::with_capacity(results_buf.len());
+            output.extend(results_buf.iter().map(|c| c.node_id));
+            Ok(output)
         })
     }
 
@@ -1798,6 +1800,7 @@ impl HNSWIndex {
             let candidates = &mut buffers.candidates;
             let working = &mut buffers.working;
             let unvisited = &mut buffers.unvisited;
+            let results_buf = &mut buffers.results;
 
             // Initialize with entry points
             for &ep in entry_points {
@@ -1890,9 +1893,12 @@ impl HNSWIndex {
             }
 
             // Return node IDs sorted by distance (closest first)
-            let mut results: Vec<_> = working.drain().collect();
-            results.sort_by_key(|c| c.distance);
-            Ok(results.into_iter().map(|c| c.node_id).collect())
+            // Use pre-allocated buffer to avoid per-search allocation
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance); // unstable is faster
+            let mut output = Vec::with_capacity(results_buf.len());
+            output.extend(results_buf.iter().map(|c| c.node_id));
+            Ok(output)
         })
     }
 
@@ -1914,6 +1920,7 @@ impl HNSWIndex {
             let candidates = &mut buffers.candidates;
             let working = &mut buffers.working;
             let unvisited = &mut buffers.unvisited;
+            let results_buf = &mut buffers.results;
 
             // Initialize with entry points
             for &ep in entry_points {
@@ -1983,9 +1990,12 @@ impl HNSWIndex {
                 }
             }
 
-            let mut results: Vec<_> = working.drain().collect();
-            results.sort_by_key(|c| c.distance);
-            Ok(results.into_iter().map(|c| c.node_id).collect())
+            // Use pre-allocated buffer to avoid per-search allocation
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance);
+            let mut output = Vec::with_capacity(results_buf.len());
+            output.extend(results_buf.iter().map(|c| c.node_id));
+            Ok(output)
         })
     }
 
@@ -2036,6 +2046,7 @@ impl HNSWIndex {
             let candidates = &mut buffers.candidates;
             let working = &mut buffers.working;
             let unvisited = &mut buffers.unvisited;
+            let results_buf = &mut buffers.results;
 
             for &ep in entry_points {
                 let dist = self.distance_with_adc(query, ep, adc_table.as_ref())?;
@@ -2107,9 +2118,12 @@ impl HNSWIndex {
             }
 
             // Return node IDs sorted by distance (closest first)
-            let mut results: Vec<_> = working.drain().collect();
-            results.sort_by_key(|c| c.distance);
-            Ok(results.into_iter().map(|c| c.node_id).collect())
+            // Use pre-allocated buffer to avoid per-search allocation
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance);
+            let mut output = Vec::with_capacity(results_buf.len());
+            output.extend(results_buf.iter().map(|c| c.node_id));
+            Ok(output)
         })
     }
 
