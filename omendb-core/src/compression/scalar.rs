@@ -169,6 +169,7 @@ impl ScalarParams {
     ///
     /// Uses asymmetric distance: query stays f32, candidate is dequantized on-the-fly.
     #[must_use]
+    #[allow(clippy::needless_return)] // returns needed for cfg-conditional control flow
     pub fn asymmetric_l2_squared(&self, query: &[f32], quantized: &[u8]) -> f32 {
         assert_eq!(query.len(), self.dimensions);
         assert_eq!(quantized.len(), self.dimensions);
@@ -397,6 +398,7 @@ impl SQ8ADCTable {
     /// Cost: dimensions lookups + additions (extremely fast)
     #[must_use]
     #[inline]
+    #[allow(clippy::needless_return)] // returns needed for cfg-conditional control flow
     pub fn distance_squared(&self, quantized: &[u8]) -> f32 {
         debug_assert_eq!(quantized.len(), self.dimensions);
 
@@ -410,7 +412,7 @@ impl SQ8ADCTable {
             if is_x86_feature_detected!("avx2") {
                 return unsafe { self.distance_squared_avx2(quantized) };
             }
-            return self.distance_squared_scalar(quantized);
+            self.distance_squared_scalar(quantized)
         }
 
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
