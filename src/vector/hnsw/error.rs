@@ -63,11 +63,15 @@ pub type Result<T> = std::result::Result<T, HNSWError>;
 
 impl HNSWError {
     /// Create an internal error (for unexpected conditions)
+    ///
+    /// Marked cold since internal errors should never happen in production.
+    #[cold]
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(msg.into())
     }
 
     /// Create a storage error
+    #[cold]
     pub fn storage(msg: impl Into<String>) -> Self {
         Self::Storage(msg.into())
     }
