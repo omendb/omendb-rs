@@ -5,11 +5,11 @@ OmenDB Benchmark Runner
 Runs benchmarks and records results to JSONL with full system/config context.
 
 Usage:
-    python benchmarks/run.py                        # Run, no save (dev)
-    python benchmarks/run.py --output FILE          # Run and save to FILE
-    python benchmarks/run.py --quick                # Quick run (~15s)
+    python benchmarks/run.py                        # Full benchmark suite
+    python benchmarks/run.py --ci                   # Fast CI mode (<10s, with recall)
+    python benchmarks/run.py --quick                # Quick run (~20s)
+    python benchmarks/run.py --output FILE          # Save results to FILE
     python benchmarks/run.py --history              # Show history
-    python benchmarks/run.py --history --output F   # Show history from F
     python benchmarks/run.py --compare              # Compare last 2 runs
     python benchmarks/run.py --notes "text"         # Add notes to run
 
@@ -59,6 +59,19 @@ class BenchmarkResult:
     single_latency_ms: float
     batch_latency_ms: float
     speedup: float
+    recall_at_10: Optional[float] = None
+
+
+def brute_force_knn(query: np.ndarray, vectors: np.ndarray, k: int) -> list[int]:
+    """Compute ground truth k-NN using brute force L2 distance."""
+    distances = np.linalg.norm(vectors - query, axis=1)
+    return np.argsort(distances)[:k].tolist()
+
+
+def compute_recall(result_ids: list[str], ground_truth: list[int]) -> float:
+    """Compute recall between HNSW results and brute force ground truth."""
+    hnsw_indices = {int(id[1:]) for id in result_ids}  # d0 -> 0
+    return len(hnsw_indices & set(ground_truth)) / len(ground_truth)
 
 
 def get_system_info() -> dict:
@@ -145,12 +158,19 @@ def generate_vectors(n: int, dim: int) -> np.ndarray:
     return np.random.randn(n, dim).astype(np.float32)
 
 
-def run_benchmark(config: BenchmarkConfig, quick: bool = False) -> BenchmarkResult:
+def run_benchmark(
+    config: BenchmarkConfig, quick: bool = False, measure_recall: bool = False
+) -> BenchmarkResult:
     """Run a single benchmark configuration."""
     np.random.seed(42)  # Reproducibility
 
     vectors = generate_vectors(config.n_vectors, config.dimensions)
     queries = generate_vectors(config.n_queries, config.dimensions)
+
+    # Pre-compute ground truth if measuring recall
+    ground_truth = None
+    if measure_recall:
+        ground_truth = [brute_force_knn(q, vectors, config.k) for q in queries]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db = omendb.open(f"{tmpdir}/bench", dimensions=config.dimensions)
@@ -158,6 +178,16 @@ def run_benchmark(config: BenchmarkConfig, quick: bool = False) -> BenchmarkResu
         # Insert vectors
         items = [{"id": f"d{i}", "vector": v.tolist()} for i, v in enumerate(vectors)]
         db.set(items)
+
+        # Measure recall if requested
+        recall_at_10 = None
+        if measure_recall and ground_truth:
+            recall_sum = 0.0
+            for i, q in enumerate(queries):
+                results = db.search(q.tolist(), k=config.k)
+                result_ids = [r["id"] for r in results]
+                recall_sum += compute_recall(result_ids, ground_truth[i])
+            recall_at_10 = recall_sum / len(queries)
 
         # Warmup
         for q in queries[:5]:
@@ -197,10 +227,28 @@ def run_benchmark(config: BenchmarkConfig, quick: bool = False) -> BenchmarkResu
         single_latency_ms=round(single_latency_ms, 3),
         batch_latency_ms=round(batch_latency_ms, 3),
         speedup=round(batch_qps / single_qps, 1),
+        recall_at_10=round(recall_at_10, 4) if recall_at_10 else None,
     )
 
 
-def run_all_benchmarks(quick: bool = False) -> list[BenchmarkResult]:
+def run_ci_benchmark() -> list[BenchmarkResult]:
+    """Run fast CI benchmark: 2K vectors, 768D, with recall. Target <10s."""
+    config = BenchmarkConfig(n_vectors=2_000, n_queries=50, dimensions=768, k=10)
+
+    print("Running CI benchmark (2K vectors, 768D)...", file=sys.stderr)
+    result = run_benchmark(config, quick=True, measure_recall=True)
+    print(
+        f"  {result.single_qps:,} / {result.batch_qps:,} QPS, "
+        f"recall@10: {result.recall_at_10:.1%}",
+        file=sys.stderr,
+    )
+
+    return [result]
+
+
+def run_all_benchmarks(
+    quick: bool = False, recall: bool = False
+) -> list[BenchmarkResult]:
     """Run the standard benchmark suite."""
     configs = [
         BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=128, k=10),
@@ -211,9 +259,18 @@ def run_all_benchmarks(quick: bool = False) -> list[BenchmarkResult]:
     results = []
     for config in configs:
         print(f"Running {config.dimensions}D...", file=sys.stderr)
-        result = run_benchmark(config, quick=quick)
+        result = run_benchmark(config, quick=quick, measure_recall=recall)
+        if result.recall_at_10 is not None:
+            print(
+                f"  {result.single_qps:,} / {result.batch_qps:,} QPS, "
+                f"recall@10: {result.recall_at_10:.1%}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"  {result.single_qps:,} / {result.batch_qps:,} QPS", file=sys.stderr
+            )
         results.append(result)
-        print(f"  {result.single_qps:,} / {result.batch_qps:,} QPS", file=sys.stderr)
 
     return results
 
@@ -222,12 +279,19 @@ def save_run(
     results: list[BenchmarkResult], history_file: Path, notes: str = ""
 ) -> dict:
     """Save benchmark run to JSONL file."""
+    results_dict = {}
+    for r in results:
+        entry = {"s": r.single_qps, "b": r.batch_qps}
+        if r.recall_at_10 is not None:
+            entry["r"] = r.recall_at_10
+        results_dict[r.name] = entry
+
     run = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "sys": get_system_info(),
         "git": get_git_info(),
         "ver": get_version_info(),
-        "results": {r.name: {"s": r.single_qps, "b": r.batch_qps} for r in results},
+        "results": results_dict,
     }
     if notes:
         run["notes"] = notes
@@ -258,18 +322,31 @@ def load_history(history_file: Path, limit: int = None) -> list[dict]:
 def print_summary(run: dict):
     """Print a summary of a benchmark run."""
     dirty = " [dirty]" if run["git"]["dirty"] else ""
-    print(f"\n{'=' * 55}")
+    has_recall = any("r" in r for r in run["results"].values())
+
+    print(f"\n{'=' * 65}")
     print("OmenDB Benchmark Results")
-    print(f"{'=' * 55}")
+    print(f"{'=' * 65}")
     print(f"Time:   {run['ts']}")
     print(f"System: {run['sys']['cpu']} ({run['sys']['cores']} cores)")
     print(f"Git:    {run['git']['commit']} ({run['git']['branch']}){dirty}")
     print()
-    print("| Dim   | Single QPS | Batch QPS | Speedup |")
-    print("|-------|------------|-----------|---------|")
-    for name, r in run["results"].items():
-        speedup = r["b"] / r["s"]
-        print(f"| {name:5} | {r['s']:>10,} | {r['b']:>9,} | {speedup:>6.1f}x |")
+
+    if has_recall:
+        print("| Dim   | Single QPS | Batch QPS | Speedup | Recall |")
+        print("|-------|------------|-----------|---------|--------|")
+        for name, r in run["results"].items():
+            speedup = r["b"] / r["s"]
+            recall = f"{r['r']:.1%}" if "r" in r else "-"
+            print(
+                f"| {name:5} | {r['s']:>10,} | {r['b']:>9,} | {speedup:>6.1f}x | {recall:>6} |"
+            )
+    else:
+        print("| Dim   | Single QPS | Batch QPS | Speedup |")
+        print("|-------|------------|-----------|---------|")
+        for name, r in run["results"].items():
+            speedup = r["b"] / r["s"]
+            print(f"| {name:5} | {r['s']:>10,} | {r['b']:>9,} | {speedup:>6.1f}x |")
     print()
 
 
@@ -329,7 +406,13 @@ def compare_runs(run1: dict, run2: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="OmenDB Benchmark Runner")
-    parser.add_argument("--quick", action="store_true", help="Fewer iterations (~15s)")
+    parser.add_argument(
+        "--ci", action="store_true", help="Fast CI mode (<10s, with recall)"
+    )
+    parser.add_argument("--quick", action="store_true", help="Fewer iterations (~20s)")
+    parser.add_argument(
+        "--recall", action="store_true", help="Measure recall@10 vs brute force"
+    )
     parser.add_argument("--output", "-o", type=str, help="Save results to file (JSONL)")
     parser.add_argument("--notes", type=str, default="", help="Notes to include")
     parser.add_argument("--history", action="store_true", help="Show history")
@@ -352,14 +435,25 @@ def main():
         return
 
     # Run benchmarks
-    results = run_all_benchmarks(quick=args.quick)
+    if args.ci:
+        results = run_ci_benchmark()
+    else:
+        results = run_all_benchmarks(quick=args.quick, recall=args.recall)
+
+    # Build run record
+    results_dict = {}
+    for r in results:
+        entry = {"s": r.single_qps, "b": r.batch_qps}
+        if r.recall_at_10 is not None:
+            entry["r"] = r.recall_at_10
+        results_dict[r.name] = entry
 
     run = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "sys": get_system_info(),
         "git": get_git_info(),
         "ver": get_version_info(),
-        "results": {r.name: {"s": r.single_qps, "b": r.batch_qps} for r in results},
+        "results": results_dict,
     }
     if args.notes:
         run["notes"] = args.notes
