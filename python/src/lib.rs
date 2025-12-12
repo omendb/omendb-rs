@@ -636,14 +636,15 @@ impl VectorDatabase {
     /// give better recall but slower search.
     ///
     /// Returns:
-    ///     int or None: Current ef_search value, or None if not set
+    ///     int: Current ef_search value (default: 100)
     ///
     /// Examples:
     ///     >>> db.get_ef_search()
     ///     100
-    fn get_ef_search(&self) -> Option<usize> {
+    fn get_ef_search(&self) -> usize {
         let inner = self.inner.read();
-        inner.store.get_ef_search()
+        // VectorStore always returns Some now
+        inner.store.get_ef_search().unwrap()
     }
 
     /// Set ef_search value for search quality/speed tradeoff.
