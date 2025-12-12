@@ -1091,3 +1091,93 @@ fn test_batch_insert_neighbor_bounds() {
         over_bound_count, m_max_l0, max_neighbors_l0
     );
 }
+
+#[test]
+fn test_sequential_vs_batch_recall() {
+    use rand::Rng;
+    use std::collections::HashSet;
+
+    let mut rng = rand::thread_rng();
+    let n_vectors = 2000;
+    let n_queries = 50;
+    let dimensions = 128;
+    let k = 10;
+
+    // Generate deterministic vectors for reproducibility
+    let vectors: Vec<Vec<f32>> = (0..n_vectors)
+        .map(|_| (0..dimensions).map(|_| rng.gen::<f32>()).collect())
+        .collect();
+
+    let queries: Vec<Vec<f32>> = (0..n_queries)
+        .map(|_| (0..dimensions).map(|_| rng.gen::<f32>()).collect())
+        .collect();
+
+    // Compute ground truth (brute force)
+    let ground_truth: Vec<HashSet<u32>> = queries
+        .iter()
+        .map(|q| {
+            let mut distances: Vec<(u32, f32)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let dist: f32 = q.iter().zip(v.iter()).map(|(a, b)| (a - b).powi(2)).sum();
+                    (i as u32, dist)
+                })
+                .collect();
+            distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            distances.iter().take(k).map(|(id, _)| *id).collect()
+        })
+        .collect();
+
+    // Test 1: Batch insert
+    let params = HNSWParams::default();
+    let mut batch_index =
+        HNSWIndex::new(dimensions, params.clone(), DistanceFunction::L2, false).unwrap();
+    batch_index.batch_insert(vectors.clone()).unwrap();
+
+    let ef = 100; // Standard search ef
+    let mut batch_recall_sum = 0.0;
+    for (i, q) in queries.iter().enumerate() {
+        let results = batch_index.search(q, k, ef).unwrap();
+        let result_ids: HashSet<u32> = results.iter().map(|r| r.id).collect();
+        batch_recall_sum += result_ids.intersection(&ground_truth[i]).count() as f64 / k as f64;
+    }
+    let batch_recall = batch_recall_sum / n_queries as f64;
+
+    // Test 2: Sequential insert
+    let mut seq_index = HNSWIndex::new(dimensions, params, DistanceFunction::L2, false).unwrap();
+    for v in &vectors {
+        seq_index.insert(v).unwrap();
+    }
+
+    let mut seq_recall_sum = 0.0;
+    for (i, q) in queries.iter().enumerate() {
+        let results = seq_index.search(q, k, ef).unwrap();
+        let result_ids: HashSet<u32> = results.iter().map(|r| r.id).collect();
+        seq_recall_sum += result_ids.intersection(&ground_truth[i]).count() as f64 / k as f64;
+    }
+    let seq_recall = seq_recall_sum / n_queries as f64;
+
+    eprintln!("Batch insert recall@{}: {:.1}%", k, batch_recall * 100.0);
+    eprintln!("Sequential insert recall@{}: {:.1}%", k, seq_recall * 100.0);
+
+    // Both should achieve at least 90% recall
+    assert!(
+        batch_recall >= 0.90,
+        "Batch insert recall {:.1}% is below 90% threshold",
+        batch_recall * 100.0
+    );
+    assert!(
+        seq_recall >= 0.90,
+        "Sequential insert recall {:.1}% is below 90% threshold",
+        seq_recall * 100.0
+    );
+
+    // Sequential should not be significantly worse than batch (within 5%)
+    assert!(
+        seq_recall >= batch_recall - 0.05,
+        "Sequential recall {:.1}% is more than 5% worse than batch {:.1}%",
+        seq_recall * 100.0,
+        batch_recall * 100.0
+    );
+}
