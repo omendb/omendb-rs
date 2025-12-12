@@ -31,9 +31,9 @@ class TestEfSearchBasic:
             db_path = os.path.join(tmpdir, "test_db")
             db = omendb.open(db_path, dimensions=64)
 
-            # Empty db returns None (HNSW index not yet created)
+            # Empty db returns the default value (100)
             ef = db.get_ef_search()
-            assert ef is None
+            assert ef == 100
 
     def test_get_ef_search_after_insert(self):
         """Test get_ef_search after inserting vectors"""
