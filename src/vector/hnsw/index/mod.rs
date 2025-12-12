@@ -1236,17 +1236,21 @@ impl HNSWIndex {
                         }
                     });
 
-                // VSAG stride prefetching: prefetch 4 ahead to hide memory latency
-                const PREFETCH_DISTANCE: usize = 4;
+                // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
+                use crate::vector::hnsw::prefetch::PrefetchConfig;
+                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
                 let unvisited_slice = unvisited.as_slice();
 
-                // Initial burst prefetch
-                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                    self.vectors.prefetch_quantized(id);
+                if PREFETCH_ENABLED {
+                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                        self.vectors.prefetch_quantized(id);
+                    }
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
                         self.vectors
                             .prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
@@ -1671,17 +1675,23 @@ impl HNSWIndex {
                         }
                     });
 
-                // VSAG stride prefetching: prefetch 4 ahead to hide memory latency
-                const PREFETCH_DISTANCE: usize = 4;
+                // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
+                // enabled on x86/ARM servers where it provides 8-50% gains
+                use crate::vector::hnsw::prefetch::PrefetchConfig;
+                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
                 let unvisited_slice = unvisited.as_slice();
 
-                // Initial burst prefetch
-                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                    self.vectors.prefetch(id);
+                // Initial burst prefetch (skip on Apple Silicon)
+                if PREFETCH_ENABLED {
+                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                        self.vectors.prefetch(id);
+                    }
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
                         self.vectors
                             .prefetch(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
@@ -1763,17 +1773,21 @@ impl HNSWIndex {
                         }
                     });
 
-                // VSAG stride prefetching: prefetch 4 ahead to hide memory latency
-                const PREFETCH_DISTANCE: usize = 4;
+                // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
+                use crate::vector::hnsw::prefetch::PrefetchConfig;
+                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
                 let unvisited_slice = unvisited.as_slice();
 
-                // Initial burst prefetch
-                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                    self.vectors.prefetch(id);
+                if PREFETCH_ENABLED {
+                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                        self.vectors.prefetch(id);
+                    }
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
                         self.vectors
                             .prefetch(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
@@ -1882,17 +1896,21 @@ impl HNSWIndex {
                         }
                     });
 
-                // VSAG stride prefetching: prefetch 4 ahead to hide memory latency
-                const PREFETCH_DISTANCE: usize = 4;
+                // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
+                use crate::vector::hnsw::prefetch::PrefetchConfig;
+                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
                 let unvisited_slice = unvisited.as_slice();
 
-                // Initial burst prefetch
-                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                    self.vectors.prefetch_quantized(id);
+                if PREFETCH_ENABLED {
+                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                        self.vectors.prefetch_quantized(id);
+                    }
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
                         self.vectors
                             .prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }

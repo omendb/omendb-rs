@@ -10,6 +10,7 @@ mod error;
 mod graph_storage;
 mod index;
 mod merge;
+mod prefetch;
 mod query_buffers;
 mod storage;
 mod types;
