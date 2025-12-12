@@ -204,6 +204,7 @@ impl ScalarParams {
 
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
+    #[allow(clippy::needless_range_loop)] // index needed for multiple array accesses
     unsafe fn asymmetric_l2_squared_avx2(&self, query: &[f32], quantized: &[u8]) -> f32 {
         let mut sum = _mm256_setzero_ps();
         let mut i = 0;
@@ -474,6 +475,7 @@ impl SQ8ADCTable {
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
     #[inline]
+    #[allow(clippy::needless_range_loop)] // index needed for d * 256 calculation
     unsafe fn distance_squared_avx2(&self, quantized: &[u8]) -> f32 {
         let mut sum = _mm256_setzero_ps();
         let mut i = 0;
