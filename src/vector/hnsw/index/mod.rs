@@ -1236,10 +1236,19 @@ impl HNSWIndex {
                         }
                     });
 
+                // VSAG stride prefetching: prefetch 4 ahead to hide memory latency
+                const PREFETCH_DISTANCE: usize = 4;
                 let unvisited_slice = unvisited.as_slice();
+
+                // Initial burst prefetch
+                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                    self.vectors.prefetch_quantized(id);
+                }
+
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if i + 1 < unvisited_slice.len() {
-                        self.vectors.prefetch_quantized(unvisited_slice[i + 1]);
+                    if i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                        self.vectors
+                            .prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
 
                     visited.insert(neighbor_id);
@@ -1662,13 +1671,19 @@ impl HNSWIndex {
                         }
                     });
 
-                // Process unvisited neighbors with prefetching
-                // Prefetch next neighbor's vector data while computing distance to current
+                // VSAG stride prefetching: prefetch 4 ahead to hide memory latency
+                const PREFETCH_DISTANCE: usize = 4;
                 let unvisited_slice = unvisited.as_slice();
+
+                // Initial burst prefetch
+                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                    self.vectors.prefetch(id);
+                }
+
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    // Prefetch next neighbor's vector (hides memory latency)
-                    if i + 1 < unvisited_slice.len() {
-                        self.vectors.prefetch(unvisited_slice[i + 1]);
+                    if i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                        self.vectors
+                            .prefetch(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
 
                     visited.insert(neighbor_id);
@@ -1748,10 +1763,19 @@ impl HNSWIndex {
                         }
                     });
 
+                // VSAG stride prefetching: prefetch 4 ahead to hide memory latency
+                const PREFETCH_DISTANCE: usize = 4;
                 let unvisited_slice = unvisited.as_slice();
+
+                // Initial burst prefetch
+                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                    self.vectors.prefetch(id);
+                }
+
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if i + 1 < unvisited_slice.len() {
-                        self.vectors.prefetch(unvisited_slice[i + 1]);
+                    if i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                        self.vectors
+                            .prefetch(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
 
                     visited.insert(neighbor_id);
@@ -1858,12 +1882,19 @@ impl HNSWIndex {
                         }
                     });
 
-                // Process unvisited neighbors with prefetching
+                // VSAG stride prefetching: prefetch 4 ahead to hide memory latency
+                const PREFETCH_DISTANCE: usize = 4;
                 let unvisited_slice = unvisited.as_slice();
+
+                // Initial burst prefetch
+                for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                    self.vectors.prefetch_quantized(id);
+                }
+
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    // Prefetch quantized data for next neighbor
-                    if i + 1 < unvisited_slice.len() {
-                        self.vectors.prefetch_quantized(unvisited_slice[i + 1]);
+                    if i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                        self.vectors
+                            .prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
 
                     visited.insert(neighbor_id);
