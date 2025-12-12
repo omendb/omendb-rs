@@ -1071,7 +1071,7 @@ impl VectorStorage {
     /// - Only dot product is computed per-vector (2N FLOPs vs 3N)
     ///
     /// Returns None if decomposition is not available (non-FullPrecision storage).
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub fn distance_l2_decomposed(&self, query: &[f32], query_norm: f32, id: u32) -> Option<f32> {
         match self {

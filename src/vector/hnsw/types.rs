@@ -235,7 +235,7 @@ impl DistanceFunction {
     /// For Cosine/NegativeDotProduct: same as `distance()`
     ///
     /// This is ~10-15% faster for L2 in HNSW `search_layer`.
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub fn distance_for_comparison(&self, a: &[f32], b: &[f32]) -> f32 {
         match self {
@@ -261,6 +261,106 @@ impl DistanceFunction {
 
 // Re-export SIMD distance functions
 pub use omendb_core::distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
+
+// ============================================================================
+// Trait-based distance for static dispatch (monomorphization)
+// ============================================================================
+
+/// Trait for distance functions with static dispatch.
+///
+/// This enables monomorphization - the compiler generates specialized code
+/// for each distance function, eliminating runtime dispatch overhead.
+/// Critical for x86/ARM servers where branch misprediction is more costly.
+pub trait Distance: Clone + Copy + Send + Sync + 'static {
+    /// Distance for internal comparisons (may be squared for L2).
+    /// Used in hot path - implementations must use `#[inline(always)]`.
+    fn compare(a: &[f32], b: &[f32]) -> f32;
+
+    /// Actual distance for reporting to users.
+    fn exact(a: &[f32], b: &[f32]) -> f32;
+
+    /// Convert comparison distance to actual distance.
+    fn comparison_to_actual(d: f32) -> f32;
+
+    /// Get the corresponding enum variant (for serialization).
+    fn as_enum() -> DistanceFunction;
+}
+
+/// L2 (Euclidean) distance with static dispatch.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct L2;
+
+impl Distance for L2 {
+    #[inline(always)]
+    fn compare(a: &[f32], b: &[f32]) -> f32 {
+        l2_distance_squared(a, b)
+    }
+
+    #[inline(always)]
+    fn exact(a: &[f32], b: &[f32]) -> f32 {
+        l2_distance(a, b)
+    }
+
+    #[inline(always)]
+    fn comparison_to_actual(d: f32) -> f32 {
+        d.sqrt()
+    }
+
+    fn as_enum() -> DistanceFunction {
+        DistanceFunction::L2
+    }
+}
+
+/// Cosine distance with static dispatch.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Cosine;
+
+impl Distance for Cosine {
+    #[inline(always)]
+    fn compare(a: &[f32], b: &[f32]) -> f32 {
+        cosine_distance(a, b)
+    }
+
+    #[inline(always)]
+    fn exact(a: &[f32], b: &[f32]) -> f32 {
+        cosine_distance(a, b)
+    }
+
+    #[inline(always)]
+    fn comparison_to_actual(d: f32) -> f32 {
+        d
+    }
+
+    fn as_enum() -> DistanceFunction {
+        DistanceFunction::Cosine
+    }
+}
+
+/// Negative dot product distance with static dispatch.
+/// Used for maximum inner product search (MIPS).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NegDot;
+
+impl Distance for NegDot {
+    #[inline(always)]
+    fn compare(a: &[f32], b: &[f32]) -> f32 {
+        -dot_product(a, b)
+    }
+
+    #[inline(always)]
+    fn exact(a: &[f32], b: &[f32]) -> f32 {
+        -dot_product(a, b)
+    }
+
+    #[inline(always)]
+    fn comparison_to_actual(d: f32) -> f32 {
+        d
+    }
+
+    fn as_enum() -> DistanceFunction {
+        DistanceFunction::NegativeDotProduct
+    }
+}
 
 /// Candidate during search (node ID + distance)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

@@ -8,7 +8,9 @@
 use super::error::{HNSWError, Result};
 use super::graph_storage::GraphStorage;
 use super::storage::{NeighborLists, UnifiedADC, VectorStorage};
-use super::types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
+use super::types::{
+    Candidate, Cosine, Distance, DistanceFunction, HNSWNode, HNSWParams, NegDot, SearchResult, L2,
+};
 use omendb_core::compression::RaBitQParams;
 use omendb_core::distance::norm_squared;
 use ordered_float::OrderedFloat;
@@ -338,7 +340,7 @@ impl HNSWIndex {
     /// Distance from query to node for ordering comparisons
     ///
     /// Tries asymmetric distance first (for SQ8/RaBitQ), falls back to full precision.
-    #[inline]
+    #[inline(always)]
     fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
         // Try asymmetric distance first (for SQ8/RaBitQ storage)
         if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
@@ -347,6 +349,21 @@ impl HNSWIndex {
         // Fallback to full precision
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance_for_comparison(query, vec))
+    }
+
+    /// Monomorphized distance computation (static dispatch, no match)
+    ///
+    /// Critical for x86/ARM servers where branch misprediction hurts performance.
+    /// The Distance trait enables compile-time specialization.
+    #[inline(always)]
+    fn distance_cmp_mono<D: Distance>(&self, query: &[f32], id: u32) -> Result<f32> {
+        // Try asymmetric distance first (for SQ8/RaBitQ storage)
+        if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
+            return Ok(dist);
+        }
+        // Fallback to full precision with static dispatch
+        let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
+        Ok(D::compare(query, vec))
     }
 
     /// Distance from query to node using full precision (f32-to-f32)
@@ -395,7 +412,7 @@ impl HNSWIndex {
     /// Query norm is computed once per search and passed in.
     ///
     /// Returns None if decomposition is not available (non-FullPrecision storage).
-    #[inline]
+    #[inline(always)]
     fn distance_l2_decomposed(&self, query: &[f32], query_norm: f32, id: u32) -> Option<f32> {
         self.vectors.distance_l2_decomposed(query, query_norm, id)
     }
@@ -1517,8 +1534,54 @@ impl HNSWIndex {
     /// Optimized (Nov 25, 2025):
     /// - Uses `VisitedList` with O(1) clear (generation-based, like hnswlib)
     /// - Reuses pre-allocated unvisited buffer to avoid per-iteration allocation
+    /// - Monomorphized distance dispatch (Dec 12, 2025)
     #[allow(clippy::too_many_arguments)]
     fn search_layer_with_filter<F>(
+        &self,
+        query: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+        filter_fn: &F,
+        selectivity: f32,
+    ) -> Result<Vec<u32>>
+    where
+        F: Fn(u32) -> bool,
+    {
+        // Dispatch once at the top level to get full monomorphization benefits
+        match self.distance_fn {
+            DistanceFunction::L2 => self.search_layer_with_filter_mono::<L2, F>(
+                query,
+                entry_points,
+                ef,
+                level,
+                filter_fn,
+                selectivity,
+            ),
+            DistanceFunction::Cosine => self.search_layer_with_filter_mono::<Cosine, F>(
+                query,
+                entry_points,
+                ef,
+                level,
+                filter_fn,
+                selectivity,
+            ),
+            DistanceFunction::NegativeDotProduct => self
+                .search_layer_with_filter_mono::<NegDot, F>(
+                    query,
+                    entry_points,
+                    ef,
+                    level,
+                    filter_fn,
+                    selectivity,
+                ),
+        }
+    }
+
+    /// Monomorphized filtered search layer (static dispatch, no match in hot loop)
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn search_layer_with_filter_mono<D: Distance, F>(
         &self,
         query: &[f32],
         entry_points: &[u32],
@@ -1541,7 +1604,8 @@ impl HNSWIndex {
         }
 
         // L2 decomposition optimization: pre-compute query norm once
-        let use_l2_decomposition = self.supports_l2_decomposition();
+        let use_l2_decomposition =
+            self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
         let query_norm = if use_l2_decomposition {
             norm_squared(query)
         } else {
@@ -1565,7 +1629,7 @@ impl HNSWIndex {
                     self.distance_l2_decomposed(query, query_norm, ep)
                         .ok_or(HNSWError::VectorNotFound(ep))?
                 } else {
-                    self.distance_cmp(query, ep)?
+                    self.distance_cmp_mono::<D>(query, ep)?
                 };
                 let candidate = Candidate::new(ep, dist);
 
@@ -1632,7 +1696,7 @@ impl HNSWIndex {
                         self.distance_l2_decomposed(query, query_norm, neighbor_id)
                             .ok_or(HNSWError::VectorNotFound(neighbor_id))?
                     } else {
-                        self.distance_cmp(query, neighbor_id)?
+                        self.distance_cmp_mono::<D>(query, neighbor_id)?
                     };
                     let neighbor = Candidate::new(neighbor_id, dist);
 
@@ -1675,11 +1739,38 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
     ) -> Result<Vec<u32>> {
+        // Dispatch once at the top level to get full monomorphization benefits
+        // inside the hot loop. Critical for x86/ARM servers.
+        match self.distance_fn {
+            DistanceFunction::L2 => self.search_layer_mono::<L2>(query, entry_points, ef, level),
+            DistanceFunction::Cosine => {
+                self.search_layer_mono::<Cosine>(query, entry_points, ef, level)
+            }
+            DistanceFunction::NegativeDotProduct => {
+                self.search_layer_mono::<NegDot>(query, entry_points, ef, level)
+            }
+        }
+    }
+
+    /// Monomorphized search layer (static dispatch, no match in hot loop)
+    ///
+    /// The Distance trait enables compile-time specialization. The compiler
+    /// generates separate versions for L2, Cosine, and NegDot with the
+    /// distance function fully inlined.
+    #[inline(never)] // Prevent inlining dispatcher - we want separate code paths
+    fn search_layer_mono<D: Distance>(
+        &self,
+        query: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+    ) -> Result<Vec<u32>> {
         use super::query_buffers;
 
         // L2 decomposition optimization: pre-compute query norm once
         // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ (~7% faster for L2)
-        let use_l2_decomposition = self.supports_l2_decomposition();
+        let use_l2_decomposition =
+            self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
         let query_norm = if use_l2_decomposition {
             norm_squared(query)
         } else {
@@ -1698,7 +1789,7 @@ impl HNSWIndex {
                     self.distance_l2_decomposed(query, query_norm, ep)
                         .ok_or(HNSWError::VectorNotFound(ep))?
                 } else {
-                    self.distance_cmp(query, ep)?
+                    self.distance_cmp_mono::<D>(query, ep)?
                 };
                 let candidate = Candidate::new(ep, dist);
 
@@ -1750,12 +1841,13 @@ impl HNSWIndex {
 
                     visited.insert(neighbor_id);
 
-                    // Use L2 decomposition when available (~7% faster)
+                    // Use L2 decomposition when available (~7% faster for L2)
+                    // Otherwise use monomorphized distance (static dispatch)
                     let dist = if use_l2_decomposition {
                         self.distance_l2_decomposed(query, query_norm, neighbor_id)
                             .ok_or(HNSWError::VectorNotFound(neighbor_id))?
                     } else {
-                        self.distance_cmp(query, neighbor_id)?
+                        self.distance_cmp_mono::<D>(query, neighbor_id)?
                     };
                     let neighbor = Candidate::new(neighbor_id, dist);
 

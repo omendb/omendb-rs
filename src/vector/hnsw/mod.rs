@@ -18,6 +18,9 @@ mod types;
 // Public API exports
 pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
 
+// Export trait-based distance types for monomorphization
+pub use types::{Cosine, Distance, NegDot, L2};
+
 // Re-export SIMD-enabled distance functions (single source of truth)
 pub use omendb_core::distance::{cosine_distance, dot_product, l2_distance};
 
