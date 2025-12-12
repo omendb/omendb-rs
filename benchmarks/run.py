@@ -2,12 +2,11 @@
 """
 OmenDB Benchmark Runner
 
-Runs benchmarks and records results to JSONL with full system/config context.
+Runs benchmarks with QPS and recall measurement.
 
 Usage:
-    python benchmarks/run.py                        # Full benchmark suite
-    python benchmarks/run.py --ci                   # Fast CI mode (<10s, with recall)
-    python benchmarks/run.py --quick                # Quick run (~20s)
+    python benchmarks/run.py                        # Full benchmark (~45s)
+    python benchmarks/run.py --quick                # Quick run (~10s)
     python benchmarks/run.py --output FILE          # Save results to FILE
     python benchmarks/run.py --history              # Show history
     python benchmarks/run.py --compare              # Compare last 2 runs
@@ -231,25 +230,8 @@ def run_benchmark(
     )
 
 
-def run_ci_benchmark() -> list[BenchmarkResult]:
-    """Run fast CI benchmark: 2K vectors, 768D, with recall. Target <10s."""
-    config = BenchmarkConfig(n_vectors=2_000, n_queries=50, dimensions=768, k=10)
-
-    print("Running CI benchmark (2K vectors, 768D)...", file=sys.stderr)
-    result = run_benchmark(config, quick=True, measure_recall=True)
-    print(
-        f"  {result.single_qps:,} / {result.batch_qps:,} QPS, "
-        f"recall@10: {result.recall_at_10:.1%}",
-        file=sys.stderr,
-    )
-
-    return [result]
-
-
-def run_all_benchmarks(
-    quick: bool = False, recall: bool = False
-) -> list[BenchmarkResult]:
-    """Run the standard benchmark suite."""
+def run_all_benchmarks(quick: bool = False) -> list[BenchmarkResult]:
+    """Run the standard benchmark suite with recall measurement."""
     configs = [
         BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=128, k=10),
         BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=768, k=10),
@@ -259,17 +241,12 @@ def run_all_benchmarks(
     results = []
     for config in configs:
         print(f"Running {config.dimensions}D...", file=sys.stderr)
-        result = run_benchmark(config, quick=quick, measure_recall=recall)
-        if result.recall_at_10 is not None:
-            print(
-                f"  {result.single_qps:,} / {result.batch_qps:,} QPS, "
-                f"recall@10: {result.recall_at_10:.1%}",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"  {result.single_qps:,} / {result.batch_qps:,} QPS", file=sys.stderr
-            )
+        result = run_benchmark(config, quick=quick, measure_recall=True)
+        print(
+            f"  {result.single_qps:,} / {result.batch_qps:,} QPS, "
+            f"recall@10: {result.recall_at_10:.1%}",
+            file=sys.stderr,
+        )
         results.append(result)
 
     return results
@@ -406,13 +383,7 @@ def compare_runs(run1: dict, run2: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="OmenDB Benchmark Runner")
-    parser.add_argument(
-        "--ci", action="store_true", help="Fast CI mode (<10s, with recall)"
-    )
-    parser.add_argument("--quick", action="store_true", help="Fewer iterations (~20s)")
-    parser.add_argument(
-        "--recall", action="store_true", help="Measure recall@10 vs brute force"
-    )
+    parser.add_argument("--quick", action="store_true", help="Quick mode (~10s)")
     parser.add_argument("--output", "-o", type=str, help="Save results to file (JSONL)")
     parser.add_argument("--notes", type=str, default="", help="Notes to include")
     parser.add_argument("--history", action="store_true", help="Show history")
@@ -434,11 +405,8 @@ def main():
         compare_runs(runs[0], runs[1])
         return
 
-    # Run benchmarks
-    if args.ci:
-        results = run_ci_benchmark()
-    else:
-        results = run_all_benchmarks(quick=args.quick, recall=args.recall)
+    # Run benchmarks (always includes recall)
+    results = run_all_benchmarks(quick=args.quick)
 
     # Build run record
     results_dict = {}
