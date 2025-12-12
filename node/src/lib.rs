@@ -431,8 +431,8 @@ impl VectorDatabase {
     /// Save database to disk.
     #[napi]
     pub fn save(&self) -> Result<()> {
-        let inner = self.inner.read();
-        inner.store.save_to_disk(&self.path).map_err(convert_error)
+        let mut inner = self.inner.write();
+        inner.store.flush().map_err(convert_error)
     }
 
     /// Get number of vectors in database.
@@ -894,7 +894,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
             8 => RaBitQParams::bits8(),
             _ => unreachable!(),
         };
-        store_options = store_options.quantization(params);
+        store_options = store_options.quantization_rabitq_params(params);
     }
     if let Some(rescore_val) = rescore {
         store_options = store_options.rescore(rescore_val);
