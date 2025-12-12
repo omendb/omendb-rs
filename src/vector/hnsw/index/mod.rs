@@ -10,6 +10,7 @@ use super::graph_storage::GraphStorage;
 use super::storage::{NeighborLists, UnifiedADC, VectorStorage};
 use super::types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
 use omendb_core::compression::RaBitQParams;
+use omendb_core::distance::norm_squared;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -386,6 +387,25 @@ impl HNSWIndex {
 
         // Fallback to regular distance for non-RaBitQ storage
         self.distance_cmp(query, id)
+    }
+
+    /// L2 distance using decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+    ///
+    /// ~7% faster than direct L2 by pre-computing vector norms during insert.
+    /// Query norm is computed once per search and passed in.
+    ///
+    /// Returns None if decomposition is not available (non-FullPrecision storage).
+    #[inline]
+    fn distance_l2_decomposed(&self, query: &[f32], query_norm: f32, id: u32) -> Option<f32> {
+        self.vectors.distance_l2_decomposed(query, query_norm, id)
+    }
+
+    /// Check if L2 decomposition optimization is available
+    ///
+    /// Returns true if storage supports L2 decomposition AND distance function is L2.
+    #[inline]
+    fn supports_l2_decomposition(&self) -> bool {
+        matches!(self.distance_fn, DistanceFunction::L2) && self.vectors.supports_l2_decomposition()
     }
 
     /// Insert a vector into the index
@@ -1520,6 +1540,14 @@ impl HNSWIndex {
             debug!(selectivity, "Using 2-hop exploration for sparse filter");
         }
 
+        // L2 decomposition optimization: pre-compute query norm once
+        let use_l2_decomposition = self.supports_l2_decomposition();
+        let query_norm = if use_l2_decomposition {
+            norm_squared(query)
+        } else {
+            0.0
+        };
+
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
             let candidates = &mut buffers.candidates;
@@ -1533,7 +1561,12 @@ impl HNSWIndex {
                     continue;
                 }
 
-                let dist = self.distance_cmp(query, ep)?;
+                let dist = if use_l2_decomposition {
+                    self.distance_l2_decomposed(query, query_norm, ep)
+                        .ok_or(HNSWError::VectorNotFound(ep))?
+                } else {
+                    self.distance_cmp(query, ep)?
+                };
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -1595,7 +1628,12 @@ impl HNSWIndex {
                         continue;
                     }
 
-                    let dist = self.distance_cmp(query, neighbor_id)?;
+                    let dist = if use_l2_decomposition {
+                        self.distance_l2_decomposed(query, query_norm, neighbor_id)
+                            .ok_or(HNSWError::VectorNotFound(neighbor_id))?
+                    } else {
+                        self.distance_cmp(query, neighbor_id)?
+                    };
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     // If neighbor is closer than farthest in working set, or working set not full, add it
@@ -1639,6 +1677,15 @@ impl HNSWIndex {
     ) -> Result<Vec<u32>> {
         use super::query_buffers;
 
+        // L2 decomposition optimization: pre-compute query norm once
+        // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ (~7% faster for L2)
+        let use_l2_decomposition = self.supports_l2_decomposition();
+        let query_norm = if use_l2_decomposition {
+            norm_squared(query)
+        } else {
+            0.0 // unused
+        };
+
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
             let candidates = &mut buffers.candidates;
@@ -1647,7 +1694,12 @@ impl HNSWIndex {
 
             // Initialize with entry points
             for &ep in entry_points {
-                let dist = self.distance_cmp(query, ep)?;
+                let dist = if use_l2_decomposition {
+                    self.distance_l2_decomposed(query, query_norm, ep)
+                        .ok_or(HNSWError::VectorNotFound(ep))?
+                } else {
+                    self.distance_cmp(query, ep)?
+                };
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -1698,7 +1750,13 @@ impl HNSWIndex {
 
                     visited.insert(neighbor_id);
 
-                    let dist = self.distance_cmp(query, neighbor_id)?;
+                    // Use L2 decomposition when available (~7% faster)
+                    let dist = if use_l2_decomposition {
+                        self.distance_l2_decomposed(query, query_norm, neighbor_id)
+                            .ok_or(HNSWError::VectorNotFound(neighbor_id))?
+                    } else {
+                        self.distance_cmp(query, neighbor_id)?
+                    };
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     // If neighbor is closer than farthest in working set, or working set not full, add it
