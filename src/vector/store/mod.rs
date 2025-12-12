@@ -1692,6 +1692,7 @@ impl VectorStore {
 
     /// Set HNSW `ef_search` parameter (runtime tuning)
     pub fn set_ef_search(&mut self, ef_search: usize) {
+        self.hnsw_ef_search = ef_search;
         if let Some(ref mut index) = self.hnsw_index {
             index.set_ef_search(ef_search);
         }
@@ -1699,9 +1700,8 @@ impl VectorStore {
 
     /// Get HNSW `ef_search` parameter
     pub fn get_ef_search(&self) -> Option<usize> {
-        self.hnsw_index
-            .as_ref()
-            .map(super::hnsw_index::HNSWIndex::get_ef_search)
+        // Return stored value even if no index yet
+        Some(self.hnsw_ef_search)
     }
 
     // ============================================================================
