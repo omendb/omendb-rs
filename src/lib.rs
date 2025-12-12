@@ -79,7 +79,7 @@
 //! ```
 
 // Core modules (from omendb-core)
-pub use omendb_core::{compression, distance, sampling, types};
+pub use omendb_core::{compression, distance, types};
 
 // omendb-specific modules
 pub mod config;
