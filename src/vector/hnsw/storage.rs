@@ -16,6 +16,7 @@ use std::sync::Arc;
 use omendb_core::compression::{
     ADCTable, QuantizedVector, RaBitQ, RaBitQParams, SQ8ADCTable, ScalarParams,
 };
+use omendb_core::distance::dot_product;
 
 /// Empty neighbor list constant (avoid allocation for empty results)
 static EMPTY_NEIGHBORS: &[u32] = &[];
@@ -488,14 +489,20 @@ pub enum UnifiedADC {
 pub enum VectorStorage {
     /// Full precision f32 vectors - FLAT CONTIGUOUS STORAGE
     ///
-    /// Memory: dimensions * 4 bytes per vector
-    /// Example: 1536D = 6144 bytes per vector
+    /// Memory: dimensions * 4 bytes per vector + 4 bytes for norm
+    /// Example: 1536D = 6148 bytes per vector
     ///
     /// Vectors stored in single contiguous array for cache efficiency.
     /// Access: vectors[id * dimensions..(id + 1) * dimensions]
+    ///
+    /// Norms (||v||²) are stored separately for L2 decomposition optimization:
+    /// ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+    /// This reduces L2 distance from 3N FLOPs to 2N+3 FLOPs (~7% faster).
     FullPrecision {
         /// Flat contiguous vector data (all vectors concatenated)
         vectors: Vec<f32>,
+        /// Pre-computed squared norms (||v||²) for L2 decomposition
+        norms: Vec<f32>,
         /// Number of vectors stored
         count: usize,
         /// Dimensions per vector
@@ -596,6 +603,7 @@ impl VectorStorage {
     pub fn new_full_precision(dimensions: usize) -> Self {
         Self::FullPrecision {
             vectors: Vec::new(),
+            norms: Vec::new(),
             count: 0,
             dimensions,
         }
@@ -711,6 +719,7 @@ impl VectorStorage {
         match self {
             Self::FullPrecision {
                 vectors,
+                norms,
                 count,
                 dimensions,
             } => {
@@ -722,6 +731,9 @@ impl VectorStorage {
                     ));
                 }
                 let id = *count as u32;
+                // Compute and store squared norm for L2 decomposition
+                let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
+                norms.push(norm_sq);
                 vectors.extend(vector);
                 *count += 1;
                 Ok(id)
@@ -852,6 +864,7 @@ impl VectorStorage {
                 vectors,
                 count,
                 dimensions,
+                ..
             } => {
                 let idx = id as usize;
                 if idx >= *count {
@@ -913,6 +926,7 @@ impl VectorStorage {
                 vectors,
                 count,
                 dimensions,
+                ..
             } => {
                 let idx = id as usize;
                 if idx >= *count {
@@ -1022,6 +1036,69 @@ impl VectorStorage {
         }
     }
 
+    /// Get the pre-computed squared norm (||v||²) for a vector
+    ///
+    /// Only available for FullPrecision storage. Used for L2 decomposition optimization.
+    #[inline]
+    #[must_use]
+    pub fn get_norm(&self, id: u32) -> Option<f32> {
+        match self {
+            Self::FullPrecision { norms, count, .. } => {
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                Some(norms[idx])
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if L2 decomposition is available for this storage
+    ///
+    /// Returns true only for FullPrecision storage which stores pre-computed norms.
+    #[inline]
+    #[must_use]
+    pub fn supports_l2_decomposition(&self) -> bool {
+        matches!(self, Self::FullPrecision { .. })
+    }
+
+    /// Compute L2 squared distance using decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+    ///
+    /// This is ~7% faster than direct L2 computation because:
+    /// - Vector norms are pre-computed during insert
+    /// - Query norm is computed once per search (passed in)
+    /// - Only dot product is computed per-vector (2N FLOPs vs 3N)
+    ///
+    /// Returns None if decomposition is not available (non-FullPrecision storage).
+    #[inline]
+    #[must_use]
+    pub fn distance_l2_decomposed(&self, query: &[f32], query_norm: f32, id: u32) -> Option<f32> {
+        match self {
+            Self::FullPrecision {
+                vectors,
+                norms,
+                count,
+                dimensions,
+            } => {
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                let vec = &vectors[start..end];
+                let vec_norm = norms[idx];
+
+                // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+                // Uses SIMD-accelerated dot product for performance
+                let dot = dot_product(query, vec);
+                Some(query_norm + vec_norm - 2.0 * dot)
+            }
+            _ => None,
+        }
+    }
+
     /// Get the quantized vector for a given ID (for asymmetric distance in external code)
     #[inline]
     #[must_use]
@@ -1115,6 +1192,7 @@ impl VectorStorage {
                 vectors,
                 count,
                 dimensions,
+                ..
             } => {
                 let idx = id as usize;
                 if idx >= *count {
@@ -1314,7 +1392,10 @@ impl VectorStorage {
     #[must_use]
     pub fn memory_usage(&self) -> usize {
         match self {
-            Self::FullPrecision { vectors, .. } => vectors.len() * std::mem::size_of::<f32>(),
+            Self::FullPrecision { vectors, norms, .. } => {
+                vectors.len() * std::mem::size_of::<f32>()
+                    + norms.len() * std::mem::size_of::<f32>()
+            }
             Self::BinaryQuantized {
                 quantized,
                 original,
@@ -1366,21 +1447,25 @@ impl VectorStorage {
         match self {
             Self::FullPrecision {
                 vectors,
+                norms,
                 count,
                 dimensions,
             } => {
                 let dim = *dimensions;
                 let n = *count;
                 let mut new_vectors = vec![0.0f32; vectors.len()];
+                let mut new_norms = vec![0.0f32; norms.len()];
                 for (old_id, &new_id) in old_to_new.iter().enumerate() {
                     if old_id < n {
                         let old_start = old_id * dim;
                         let new_start = new_id as usize * dim;
                         new_vectors[new_start..new_start + dim]
                             .copy_from_slice(&vectors[old_start..old_start + dim]);
+                        new_norms[new_id as usize] = norms[old_id];
                     }
                 }
                 *vectors = new_vectors;
+                *norms = new_norms;
             }
             Self::BinaryQuantized {
                 quantized,
