@@ -15,7 +15,7 @@ use omendb_core::compression::RaBitQParams;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Default ef_search value for deserialization
+/// Default `ef_search` value for deserialization
 fn default_ef_search() -> usize {
     100
 }
