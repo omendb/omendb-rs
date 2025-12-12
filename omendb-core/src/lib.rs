@@ -29,24 +29,21 @@
 //! - Vector quantization (`RaBitQ`)
 //! - SIMD-accelerated distance computation
 //! - HNSW graph construction and search
-//! - Sampling-based search optimization
 //!
 //! # Architecture
 //!
 //! ```text
 //! omendb-core (this crate)     omendb (full database)
 //! ├── compression/             ├── depends on omendb-core
-//! ├── distance/                ├── storage/ (seerdb)
+//! ├── distance/                ├── omen/ (.omen storage)
 //! ├── hnsw/                    ├── text/ (tantivy)
-//! ├── sampling/                └── vector/store/
-//! └── types.rs
+//! └── types.rs                 └── vector/store/
 //! ```
 
 // Core modules
 pub mod compression;
 pub mod distance;
 pub mod hnsw;
-pub mod sampling;
 pub mod types;
 
 // Re-export core types
