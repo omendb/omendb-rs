@@ -444,9 +444,9 @@ impl VectorDatabase {
 
     /// Get current ef_search value.
     #[napi(getter, js_name = "efSearch")]
-    pub fn get_ef_search(&self) -> Option<u32> {
+    pub fn get_ef_search(&self) -> u32 {
         let inner = self.inner.read();
-        inner.store.get_ef_search().map(|e| e as u32)
+        inner.store.get_ef_search().unwrap_or(100) as u32
     }
 
     /// Set ef_search value.

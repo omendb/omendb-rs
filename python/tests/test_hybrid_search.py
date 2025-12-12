@@ -15,6 +15,7 @@ def test_enable_text_search():
         assert not db.has_text_search()
         db.enable_text_search()
         assert db.has_text_search()
+        del db  # Ensure cleanup before temp dir removal
 
 
 def test_set_with_text():
