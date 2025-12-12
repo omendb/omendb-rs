@@ -1243,7 +1243,9 @@ impl RaBitQ {
     /// ```
     #[must_use]
     pub fn build_adc_table(&self, query: &[f32]) -> Option<ADCTable> {
-        self.trained.as_ref().map(|trained| ADCTable::new_trained(query, trained, &self.params))
+        self.trained
+            .as_ref()
+            .map(|trained| ADCTable::new_trained(query, trained, &self.params))
     }
 
     /// Build ADC table with explicit scale (DEPRECATED)

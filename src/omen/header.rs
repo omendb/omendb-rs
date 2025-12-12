@@ -111,7 +111,7 @@ impl Default for OmenHeader {
 
 impl OmenHeader {
     /// Create a new header with the given dimensions
-    #[must_use] 
+    #[must_use]
     pub fn new(dimensions: u32) -> Self {
         Self {
             dimensions,
@@ -120,7 +120,7 @@ impl OmenHeader {
     }
 
     /// Serialize header to bytes (4KB)
-    #[must_use] 
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; HEADER_SIZE] {
         let mut buf = [0u8; HEADER_SIZE];
         let mut cursor = io::Cursor::new(&mut buf[..]);
@@ -280,7 +280,7 @@ impl OmenHeader {
     }
 
     /// Get section by type
-    #[must_use] 
+    #[must_use]
     pub fn get_section(&self, section_type: SectionType) -> Option<&SectionEntry> {
         self.sections
             .iter()
