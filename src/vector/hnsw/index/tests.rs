@@ -1070,11 +1070,11 @@ fn test_asymmetric_hnsw_search() {
     assert!(index.is_asymmetric());
     assert!(index.is_empty());
 
-    // Insert some vectors
-    let num_vectors = 100;
+    // Insert some vectors with unique patterns (use i directly, not i%32)
+    let num_vectors = 32; // Keep under dimension to ensure unique patterns
     for i in 0..num_vectors {
         let mut vec = vec![0.0f32; 32];
-        vec[i % 32] = 1.0;
+        vec[i] = 1.0;
         vec[(i + 1) % 32] = 0.5;
         index.insert(&vec).unwrap();
     }
