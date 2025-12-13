@@ -79,7 +79,7 @@ def main():
         # Test persistence
         print("\n4. Testing persistence (save/load)...")
         start = time.time()
-        db.save()
+        db.flush()
         save_time = time.time() - start
         print(f"   SAVE: {save_time:.1f}s")
 

@@ -51,7 +51,7 @@ DOCS = [
     },
     {
         "id": "persist",
-        "text": "Data persists automatically. Use db.save() to flush.",
+        "text": "Data persists automatically. Use db.flush() to flush.",
         "source": "api",
     },
 ]

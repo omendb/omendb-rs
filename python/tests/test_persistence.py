@@ -18,7 +18,7 @@ def test_save_and_load(temp_db_path):
     db.set(vectors)
 
     # Save
-    db.save()
+    db.flush()
 
     # Close and reopen
     del db
@@ -39,7 +39,7 @@ def test_save_creates_files(temp_db_path):
     vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
 
-    db.save()
+    db.flush()
 
     # Check that .omen file was created
     directory = os.path.dirname(temp_db_path)
@@ -68,7 +68,7 @@ def test_load_preserves_metadata(temp_db_path):
         }
     ]
     db.set(vectors)
-    db.save()
+    db.flush()
 
     del db
     db2 = omendb.open(temp_db_path, dimensions=128)
@@ -95,7 +95,7 @@ def test_load_preserves_distances(temp_db_path):
     results_before = db.search([1.0, 0.0, 0.0, 0.0], k=2)
     distances_before = [r["distance"] for r in results_before]
 
-    db.save()
+    db.flush()
     del db
 
     # Search after load
@@ -119,7 +119,7 @@ def test_save_after_delete(temp_db_path):
 
     # Delete v2
     db.delete(["v2"])
-    db.save()
+    db.flush()
 
     del db
     db2 = omendb.open(temp_db_path, dimensions=128)
@@ -141,12 +141,12 @@ def test_save_multiple_times(temp_db_path):
     # First save
     vectors1 = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors1)
-    db.save()
+    db.flush()
 
     # Second save with more data
     vectors2 = [{"id": "v2", "vector": [0.2] * 128, "metadata": {}}]
     db.set(vectors2)
-    db.save()
+    db.flush()
 
     del db
 
@@ -167,7 +167,7 @@ def test_load_without_save_fails(temp_db_path):
 def test_save_empty_database(temp_db_path):
     """Test saving empty database"""
     db = omendb.open(temp_db_path, dimensions=128)
-    db.save()
+    db.flush()
 
     del db
     db2 = omendb.open(temp_db_path, dimensions=128)
@@ -180,7 +180,7 @@ def test_load_with_wrong_dimensions(temp_db_path):
     db = omendb.open(temp_db_path, dimensions=128)
     vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
-    db.save()
+    db.flush()
     del db
 
     # Try to load with 64 dims - should succeed (dimensions is just a parameter)
@@ -198,12 +198,12 @@ def test_incremental_updates(temp_db_path):
     # First batch
     batch1 = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(10)]
     db.set(batch1)
-    db.save()
+    db.flush()
 
     # Second batch
     batch2 = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(10, 20)]
     db.set(batch2)
-    db.save()
+    db.flush()
 
     del db
 
@@ -217,7 +217,7 @@ def test_set_after_reload(temp_db_path):
     # Initial save
     db = omendb.open(temp_db_path, dimensions=128)
     db.set([{"id": "v1", "vector": [0.1] * 128, "metadata": {}}])
-    db.save()
+    db.flush()
     del db
 
     # Reload and add more
@@ -238,7 +238,7 @@ def test_delete_after_reload(temp_db_path):
             {"id": "v2", "vector": [0.2] * 128, "metadata": {}},
         ]
     )
-    db.save()
+    db.flush()
     del db
 
     # Reload and delete

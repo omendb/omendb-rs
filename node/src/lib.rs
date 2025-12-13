@@ -428,13 +428,6 @@ impl VectorDatabase {
             .map_err(convert_error)
     }
 
-    /// Save database to disk.
-    #[napi]
-    pub fn save(&self) -> Result<()> {
-        let mut inner = self.inner.write();
-        inner.store.flush().map_err(convert_error)
-    }
-
     /// Get number of vectors in database.
     #[napi(getter)]
     pub fn count(&self) -> u32 {

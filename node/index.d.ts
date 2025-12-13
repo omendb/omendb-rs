@@ -33,12 +33,10 @@ export declare class VectorDatabase {
   delete(ids: Array<string>): number
   /** Update a vector's data and/or metadata. */
   update(id: string, vector: Array<number> | Float32Array, metadata?: Record<string, unknown> | undefined): void
-  /** Save database to disk. */
-  save(): void
   /** Get number of vectors in database. */
   get count(): number
   /** Get current ef_search value. */
-  get efSearch(): number | null
+  get efSearch(): number
   /** Set ef_search value. */
   set efSearch(efSearch: number)
   /** Get or create a named collection. */
@@ -125,6 +123,14 @@ export interface GetResult {
  *   dimensions: 128,
  *   quantization: 4  // 4-bit quantization
  * });
+ *
+ * // Quantization with custom rescore settings
+ * const db = omendb.open("./mydb", {
+ *   dimensions: 128,
+ *   quantization: 4,
+ *   rescore: false,    // Disable rescore for max speed
+ *   oversample: 5.0    // Or increase oversample for better recall
+ * });
  * ```
  */
 export declare function open(path: string, options?: OpenOptions | undefined | null): VectorDatabase
@@ -138,6 +144,8 @@ export declare function open(path: string, options?: OpenOptions | undefined | n
  * - efConstruction: 100 (build quality, higher = better graph, slower build)
  * - efSearch: 100 (search quality, higher = better recall, slower search)
  * - quantization: null (RaBitQ bit width: 2, 4, or 8 for compression)
+ * - rescore: true when quantization enabled (rerank candidates with exact distance)
+ * - oversample: 3.0 (fetch k*oversample candidates when rescoring)
  */
 export interface OpenOptions {
   /** Vector dimensions (default: 128, auto-detected on first insert) */
@@ -153,6 +161,16 @@ export interface OpenOptions {
    * Enables 4-16x memory compression with ~1-2% recall loss
    */
   quantization?: number
+  /**
+   * Rescore candidates with exact distance (default: true when quantization enabled)
+   * Set to false for maximum speed at the cost of ~20% recall
+   */
+  rescore?: boolean
+  /**
+   * Oversampling factor for rescoring (default: 3.0)
+   * Fetches k*oversample candidates then reranks to return top k
+   */
+  oversample?: number
 }
 
 export interface SearchResult {
