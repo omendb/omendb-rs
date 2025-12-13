@@ -67,7 +67,7 @@ def main():
         print(f"\nDeleted {deleted} vector(s), {len(db)} remaining")
 
         # --- PERSISTENCE ---
-        # Save explicitly (also auto-saves on close)
+        # Flush to disk (also auto-flushes on close)
         db.flush()
 
         # Reopen to verify persistence
