@@ -1,6 +1,6 @@
 {
   "name": "@omendb/omendb",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Fast embedded vector database with HNSW indexing",
   "main": "index.js",
   "types": "index.d.ts",
@@ -49,9 +49,9 @@
     "omendb.node"
   ],
   "optionalDependencies": {
-    "@omendb/omendb-darwin-x64": "0.0.9",
-    "@omendb/omendb-darwin-arm64": "0.0.9",
-    "@omendb/omendb-linux-x64-gnu": "0.0.9",
-    "@omendb/omendb-linux-arm64-gnu": "0.0.9"
+    "@omendb/omendb-darwin-x64": "0.0.10",
+    "@omendb/omendb-darwin-arm64": "0.0.10",
+    "@omendb/omendb-linux-x64-gnu": "0.0.10",
+    "@omendb/omendb-linux-arm64-gnu": "0.0.10"
   }
 }
