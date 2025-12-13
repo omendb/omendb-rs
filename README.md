@@ -14,8 +14,8 @@ pip install omendb
 ```python
 import omendb
 
-# Create database (persistent)
-db = omendb.open("./vectors", dimensions=128)
+# Create database (persistent) - creates ./mydb.omen file
+db = omendb.open("./mydb", dimensions=128)
 
 # Add vectors with metadata
 db.set([
@@ -92,7 +92,7 @@ db.flush()                              # Flush to disk
 
 ```python
 db = omendb.open(
-    "./vectors",
+    "./mydb",              # Creates ./mydb.omen + ./mydb.wal
     dimensions=384,
     m=16,                # HNSW connections per node (default: 16)
     ef_construction=200, # Index build quality (default: 100)

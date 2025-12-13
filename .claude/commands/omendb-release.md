@@ -6,27 +6,18 @@ Run before any release. Validates versions, tests, docs, and performance.
 
 Execute ALL of these checks in order. Stop and fix any failures before proceeding.
 
-### 1. Version Check
+### 1. Version Check (9 locations)
 
 ```bash
-# Get published versions
+# Run the sync script to verify ALL 9 locations match
+./scripts/sync-version.sh --check
+
+# Compare to published
 PYPI=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.info.version')
-CRATES=$(curl -sf https://crates.io/api/v1/crates/omendb | jq -r '.versions[0].num')
-NPM=$(npm view omendb version 2>/dev/null || echo "not found")
-
-echo "Published: PyPI=$PYPI, crates=$CRATES, npm=$NPM"
-
-# Get code versions (ALL 6 locations)
-echo "Code versions:"
-grep '^version = ' Cargo.toml | head -1
-grep '^version = ' python/Cargo.toml | head -1
-grep '^version = ' node/Cargo.toml | head -1
-grep '"version"' node/package.json | head -1
-grep '"version"' node/wrapper/package.json | head -1
-grep '@omendb/omendb' node/wrapper/package.json
+echo "PyPI: $PYPI, Code: $(cat VERSION)"
 ```
 
-**VERIFY**: All 6 code versions match AND are higher than all published versions.
+**VERIFY**: All 9 locations match AND version is higher than PyPI.
 
 ### 2. CI Runner Check
 
@@ -57,12 +48,33 @@ print('Doc examples: OK')
 "
 ```
 
-### 5. Check for Outdated Docs
+### 5. README Accuracy Check
 
 ```bash
-# These should return minimal/no results
-grep -r "set_with_text" ../cloud/ai/ --include="*.md" | grep -v "legacy\|deprecated" || true
-grep -r "enable_text_search()" ../cloud/ai/ --include="*.md" | grep -v "advanced\|optional" || true
+# Verify README API matches actual implementation
+echo "=== Checking README accuracy ==="
+
+# Storage format (should show .omen + .wal)
+grep -n "\.omen\|\.wal" README.md || echo "WARNING: No .omen/.wal docs"
+
+# Quantization API (should NOT show old bits syntax)
+grep -n "quantization=" README.md
+echo "VERIFY: Should show True/\"sq8\"/\"rabitq\", NOT numbers like 2/4/8"
+
+# Check for removed APIs
+grep -n "\.save()" README.md && echo "ERROR: save() removed, use flush()" || echo "OK: No save()"
+
+# Verify params match docstrings
+cd python && uv run python -c "
+import omendb
+# Check open() params are documented
+sig = str(omendb.open.__doc__)
+for param in ['alpha', 'rescore', 'oversample', 'quantization']:
+    if param in sig:
+        print(f'OK: {param} documented')
+    else:
+        print(f'WARN: {param} missing from docstring')
+"
 ```
 
 ### 6. Benchmark Quick Check
