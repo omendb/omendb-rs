@@ -58,7 +58,11 @@ db.search_batch(queries, k)             # Batch search (parallel)
 
 # Hybrid search (requires text field in vectors)
 db.search_hybrid(query_vector, query_text, k)
+db.search_hybrid(query_vector, query_text, k, alpha=0.7)  # 70% vector, 30% text
 db.search_text(query_text, k)           # Text-only BM25
+
+# Persistence
+db.flush()                              # Flush to disk
 ```
 
 ## Filters
@@ -92,12 +96,22 @@ db = omendb.open(
     dimensions=384,
     m=16,                # HNSW connections per node (default: 16)
     ef_construction=200, # Index build quality (default: 100)
-    ef_search=100,       # Search quality (default: 50)
-    quantization=4,      # RaBitQ bits: 2, 4, or 8 (default: None)
+    ef_search=100,       # Search quality (default: 100)
+    quantization=True,   # SQ8 quantization (default: None)
 )
-```
 
-**Note:** `quantization` enables two-phase search (fast filtering with quantized vectors, then reranking with originals). This improves search speed at scale but does not reduce disk or memory usage.
+# Quantization options:
+# - True or "sq8": SQ8 ~4x smaller, ~99% recall (recommended)
+# - "rabitq": RaBitQ ~8x smaller, ~98% recall
+# - None/False: Full precision (default)
+
+# Context manager (auto-flush on exit)
+with omendb.open("./db", dimensions=768) as db:
+    db.set([...])
+
+# Hybrid search with alpha (0=text, 1=vector, default=0.5)
+db.search_hybrid(query_vec, "query text", k=10, alpha=0.7)
+```
 
 ## Performance
 
