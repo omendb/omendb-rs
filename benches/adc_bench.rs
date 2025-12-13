@@ -5,6 +5,8 @@
 //!
 //! Run: cargo bench --bench adc_bench
 
+#![allow(deprecated)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use omendb::compression::{RaBitQ, RaBitQParams};
 use rand::Rng;
@@ -52,8 +54,8 @@ fn bench_adc_distance(c: &mut Criterion) {
         // Quantize all vectors
         let quantized: Vec<_> = vectors.iter().map(|v| quantizer.quantize(v)).collect();
 
-        // Build ADC table once
-        let adc = quantizer.build_adc_table(&query, 1.0);
+        // Build ADC table once (use with_scale since quantizer not trained)
+        let adc = quantizer.build_adc_table_with_scale(&query, 1.0);
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
             b.iter(|| {
@@ -79,8 +81,8 @@ fn bench_adc_distance_simd(c: &mut Criterion) {
         // Quantize all vectors
         let quantized: Vec<_> = vectors.iter().map(|v| quantizer.quantize(v)).collect();
 
-        // Build ADC table once
-        let adc = quantizer.build_adc_table(&query, 1.0);
+        // Build ADC table once (use with_scale since quantizer not trained)
+        let adc = quantizer.build_adc_table_with_scale(&query, 1.0);
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
             b.iter(|| {
@@ -104,7 +106,7 @@ fn bench_adc_table_build(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
             b.iter(|| {
-                black_box(quantizer.build_adc_table(&query, 1.0));
+                black_box(quantizer.build_adc_table_with_scale(&query, 1.0));
             })
         });
     }
@@ -126,7 +128,7 @@ fn bench_adc_bit_widths(c: &mut Criterion) {
     ] {
         let quantizer = RaBitQ::new(params);
         let quantized: Vec<_> = vectors.iter().map(|v| quantizer.quantize(v)).collect();
-        let adc = quantizer.build_adc_table(&query, 1.0);
+        let adc = quantizer.build_adc_table_with_scale(&query, 1.0);
 
         group.bench_with_input(BenchmarkId::from_parameter(name), &name, |b, _| {
             b.iter(|| {

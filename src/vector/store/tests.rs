@@ -134,7 +134,7 @@ fn test_quantization_insert() {
     assert!(store
         .hnsw_index
         .as_ref()
-        .map_or(false, |h| h.is_asymmetric()));
+        .is_some_and(super::super::hnsw_index::HNSWIndex::is_asymmetric));
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn test_quantization_batch_insert() {
     assert!(store
         .hnsw_index
         .as_ref()
-        .map_or(false, |h| h.is_asymmetric()));
+        .is_some_and(super::super::hnsw_index::HNSWIndex::is_asymmetric));
 }
 
 #[test]

@@ -35,7 +35,7 @@ fn main() {
     // Build SQ8 index (lazy training: trains on first 256 vectors automatically)
     println!("Building SQ8 index...");
     let params = HNSWParams::default();
-    let mut sq8_index = HNSWIndex::new_with_sq8(dim, params.clone(), DistanceFunction::L2).unwrap();
+    let mut sq8_index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
 
     let build_start = Instant::now();
     for vec in &vectors {
