@@ -39,7 +39,12 @@ export declare class VectorDatabase {
   get efSearch(): number
   /** Set ef_search value. */
   set efSearch(efSearch: number)
-  /** Get or create a named collection. */
+  /**
+   * Get or create a named collection.
+   *
+   * Collection handles share state - changes made through one handle
+   * are immediately visible through another (no flush required).
+   */
   collection(name: string): VectorDatabase
   /** List all collections. */
   collections(): Array<string>

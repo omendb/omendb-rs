@@ -8,6 +8,7 @@ use omendb::vector::{MetadataFilter, RaBitQParams, Vector, VectorStore, VectorSt
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 // ============================================================================
 // Helper Functions
@@ -201,10 +202,12 @@ struct VectorDatabaseInner {
 
 #[napi]
 pub struct VectorDatabase {
-    inner: RwLock<VectorDatabaseInner>,
+    inner: Arc<RwLock<VectorDatabaseInner>>,
     path: String,
     dimensions: u32,
     is_persistent: bool,
+    /// Cache of open collection handles (same name = shared state)
+    collections_cache: RwLock<HashMap<String, Arc<RwLock<VectorDatabaseInner>>>>,
 }
 
 #[napi]
@@ -451,6 +454,9 @@ impl VectorDatabase {
     }
 
     /// Get or create a named collection.
+    ///
+    /// Collection handles share state - changes made through one handle
+    /// are immediately visible through another (no flush required).
     #[napi]
     pub fn collection(&self, name: String) -> Result<VectorDatabase> {
         if name.is_empty() {
@@ -473,6 +479,38 @@ impl VectorDatabase {
             ));
         }
 
+        // Check cache first
+        {
+            let cache = self.collections_cache.read();
+            if let Some(cached_inner) = cache.get(&name) {
+                let base_path = std::path::Path::new(&self.path);
+                let collection_path = base_path.join("collections").join(&name);
+                return Ok(VectorDatabase {
+                    inner: Arc::clone(cached_inner),
+                    path: collection_path.to_string_lossy().to_string(),
+                    dimensions: self.dimensions,
+                    is_persistent: true,
+                    collections_cache: RwLock::new(HashMap::new()),
+                });
+            }
+        }
+
+        // Not in cache - create new collection
+        let mut cache = self.collections_cache.write();
+
+        // Double-check after acquiring write lock
+        if let Some(cached_inner) = cache.get(&name) {
+            let base_path = std::path::Path::new(&self.path);
+            let collection_path = base_path.join("collections").join(&name);
+            return Ok(VectorDatabase {
+                inner: Arc::clone(cached_inner),
+                path: collection_path.to_string_lossy().to_string(),
+                dimensions: self.dimensions,
+                is_persistent: true,
+                collections_cache: RwLock::new(HashMap::new()),
+            });
+        }
+
         let base_path = std::path::Path::new(&self.path);
         let collection_path = base_path.join("collections").join(&name);
 
@@ -490,15 +528,21 @@ impl VectorDatabase {
                 .map_err(convert_error)?
         };
 
+        let inner = Arc::new(RwLock::new(VectorDatabaseInner {
+            store,
+            index_to_id_cache: HashMap::new(),
+            cache_valid: false,
+        }));
+
+        // Cache and return
+        cache.insert(name, Arc::clone(&inner));
+
         Ok(VectorDatabase {
-            inner: RwLock::new(VectorDatabaseInner {
-                store,
-                index_to_id_cache: HashMap::new(),
-                cache_valid: false,
-            }),
+            inner,
             path: collection_path.to_string_lossy().to_string(),
             dimensions: self.dimensions,
             is_persistent: true,
+            collections_cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -565,6 +609,12 @@ impl VectorDatabase {
                 Status::InvalidArg,
                 format!("Collection '{}' does not exist", name),
             ));
+        }
+
+        // Remove from cache first
+        {
+            let mut cache = self.collections_cache.write();
+            cache.remove(&name);
         }
 
         // Remove .omen file
@@ -915,14 +965,15 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         })?;
 
         return Ok(VectorDatabase {
-            inner: RwLock::new(VectorDatabaseInner {
+            inner: Arc::new(RwLock::new(VectorDatabaseInner {
                 store,
                 index_to_id_cache: HashMap::new(),
                 cache_valid: true,
-            }),
+            })),
             path,
             dimensions: dimensions as u32,
             is_persistent: false,
+            collections_cache: RwLock::new(HashMap::new()),
         });
     }
 
@@ -942,13 +993,14 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let store = store_options.open(&path).map_err(convert_error)?;
 
     Ok(VectorDatabase {
-        inner: RwLock::new(VectorDatabaseInner {
+        inner: Arc::new(RwLock::new(VectorDatabaseInner {
             store,
             index_to_id_cache: HashMap::new(),
             cache_valid: false,
-        }),
+        })),
         path,
         dimensions: dimensions as u32,
         is_persistent: true,
+        collections_cache: RwLock::new(HashMap::new()),
     })
 }
