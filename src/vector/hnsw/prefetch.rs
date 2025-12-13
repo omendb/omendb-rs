@@ -106,11 +106,15 @@ mod tests {
         const STRIDE: usize = PrefetchConfig::stride();
         const CACHE_LINE: usize = PrefetchConfig::cache_line_size();
 
-        // Sanity checks
-        if ENABLED {
-            assert!(STRIDE > 0);
-        }
-        assert!(CACHE_LINE == 64 || CACHE_LINE == 128);
+        // Sanity checks - use const blocks for constant assertions
+        const { assert!(!PrefetchConfig::enabled() || PrefetchConfig::stride() > 0) };
+        const {
+            assert!(
+                PrefetchConfig::cache_line_size() == 64 || PrefetchConfig::cache_line_size() == 128
+            );
+        };
+        // Silence unused variable warnings
+        let _ = (ENABLED, STRIDE, CACHE_LINE);
     }
 
     #[test]

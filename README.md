@@ -99,6 +99,18 @@ db = omendb.open(
 
 **Note:** `quantization` enables two-phase search (fast filtering with quantized vectors, then reranking with originals). This improves search speed at scale but does not reduce disk or memory usage.
 
+## Performance
+
+10K vectors on Apple M3 Max:
+
+| Dimension | Single QPS | Batch QPS | Recall@10 |
+| --------- | ---------- | --------- | --------- |
+| 128       | 12,500+    | 95,000+   | 91%       |
+| 768       | 3,400+     | 21,000+   | 82%       |
+| 1536      | 1,600+     | 6,600+    | 79%       |
+
+_Batch operations use rayon for parallel search._
+
 ## Examples
 
 See [`python/examples/`](python/examples/) for complete working examples:
