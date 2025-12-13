@@ -37,7 +37,7 @@ pub fn norm_squared(v: &[f32]) -> f32 {
 
 /// L2 distance squared using decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
 ///
-/// This trades fewer FLOPs for one extra memory read (b_norm).
+/// This trades fewer FLOPs for one extra memory read (`b_norm`).
 /// Useful when vector norms are precomputed during insert.
 #[inline]
 #[must_use]
