@@ -139,12 +139,22 @@ struct VectorDatabaseInner {
 /// - ACORN-1 filtered search (37.79x speedup)
 ///
 /// Auto-persists to disk for seamless data durability.
+///
+/// Supports context manager protocol for automatic cleanup:
+///
+/// ```python
+/// with omendb.open("./db", dimensions=768) as db:
+///     db.set([...])
+/// # Automatically flushed on exit
+/// ```
 #[pyclass]
 pub struct VectorDatabase {
     inner: RwLock<VectorDatabaseInner>,
     path: String,
     dimensions: usize,
     is_persistent: bool,
+    /// Cache of open collection handles (same name = same object)
+    collections_cache: RwLock<HashMap<String, Py<VectorDatabase>>>,
 }
 
 /// Convert search results to Python list of dicts
@@ -605,16 +615,29 @@ impl VectorDatabase {
         }
     }
 
-    /// Flush pending changes to disk.
-    ///
-    /// For persistent databases, commits vector/metadata/HNSW changes to `.omen` storage.
-    /// For in-memory databases (`:memory:`), this is a no-op.
+    /// Context manager entry - returns self for `with` statement.
     ///
     /// Examples:
-    ///     >>> db.save()  # Flush to disk
-    fn save(&self) -> PyResult<()> {
+    ///     >>> with omendb.open("./db", dimensions=768) as db:
+    ///     ...     db.set([...])
+    ///     # Automatically flushed on exit
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    /// Context manager exit - flushes changes on exit.
+    ///
+    /// Called automatically when exiting a `with` block.
+    /// Flushes pending changes to disk for persistent databases.
+    fn __exit__(
+        &self,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_val: Option<Py<PyAny>>,
+        _exc_tb: Option<Py<PyAny>>,
+    ) -> PyResult<bool> {
         let mut inner = self.inner.write();
-        inner.store.flush().map_err(convert_error)
+        inner.store.flush().map_err(convert_error)?;
+        Ok(false) // Don't suppress exceptions
     }
 
     /// Get current ef_search value.
@@ -729,7 +752,13 @@ impl VectorDatabase {
     ///     >>> # IDs are scoped to collection
     ///     >>> users.set([{"id": "doc1", ...}])
     ///     >>> products.set([{"id": "doc1", ...}])  # No conflict!
-    fn collection(&self, name: String) -> PyResult<VectorDatabase> {
+    ///
+    ///     Collection handles are cached - same name returns same object:
+    ///
+    ///     >>> col1 = db.collection("users")
+    ///     >>> col2 = db.collection("users")
+    ///     >>> col1 is col2  # True - same object
+    fn collection(&self, py: Python<'_>, name: String) -> PyResult<Py<VectorDatabase>> {
         // Validate collection name
         if name.is_empty() {
             return Err(PyValueError::new_err("Collection name cannot be empty"));
@@ -745,6 +774,22 @@ impl VectorDatabase {
             return Err(PyValueError::new_err(
                 "Collections require persistent storage",
             ));
+        }
+
+        // Check cache first
+        {
+            let cache = self.collections_cache.read();
+            if let Some(cached) = cache.get(&name) {
+                return Ok(cached.clone_ref(py));
+            }
+        }
+
+        // Not in cache - create new collection
+        let mut cache = self.collections_cache.write();
+
+        // Double-check after acquiring write lock
+        if let Some(cached) = cache.get(&name) {
+            return Ok(cached.clone_ref(py));
         }
 
         // Create collection path: {base_path}/collections/{name}
@@ -764,7 +809,7 @@ impl VectorDatabase {
                 .map_err(convert_error)?
         };
 
-        Ok(VectorDatabase {
+        let collection_db = VectorDatabase {
             inner: RwLock::new(VectorDatabaseInner {
                 store,
                 index_to_id_cache: HashMap::new(),
@@ -773,7 +818,13 @@ impl VectorDatabase {
             path: collection_path.to_string_lossy().to_string(),
             dimensions: self.dimensions,
             is_persistent: true,
-        })
+            collections_cache: RwLock::new(HashMap::new()),
+        };
+
+        // Cache and return
+        let py_db = Py::new(py, collection_db)?;
+        cache.insert(name, py_db.clone_ref(py));
+        Ok(py_db)
     }
 
     /// List all collections in this database.
@@ -1129,6 +1180,12 @@ impl VectorDatabase {
             )));
         }
 
+        // Remove from cache first
+        {
+            let mut cache = self.collections_cache.write();
+            cache.remove(&name);
+        }
+
         // Remove .omen file
         std::fs::remove_file(&omen_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete collection: {}", e)))?;
@@ -1274,6 +1331,7 @@ fn open(
             path,
             dimensions: effective_dims,
             is_persistent: false,
+            collections_cache: RwLock::new(HashMap::new()),
         });
     }
 
@@ -1358,6 +1416,7 @@ fn open(
             path,
             dimensions: effective_dims,
             is_persistent: true,
+            collections_cache: RwLock::new(HashMap::new()),
         });
     }
 
@@ -1390,6 +1449,7 @@ fn open(
         path,
         dimensions: effective_dims,
         is_persistent: false,
+        collections_cache: RwLock::new(HashMap::new()),
     })
 }
 

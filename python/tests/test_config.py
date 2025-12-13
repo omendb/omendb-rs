@@ -91,7 +91,7 @@ def test_config_persistence(temp_db_path):
     # Create with config
     db = omendb.open(temp_db_path, dimensions=128, config=config)
     db.set([{"id": "v1", "vector": [0.1] * 128, "metadata": {}}])
-    db.save()
+    db.flush()
     del db
 
     # Reload (config comes from saved state)

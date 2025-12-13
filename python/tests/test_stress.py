@@ -218,7 +218,7 @@ class TestPersistenceScale:
 
             # Save
             start = time.time()
-            db.save()
+            db.flush()
             save_time = time.time() - start
             print(f"\n10K save: {save_time:.2f}s")
 

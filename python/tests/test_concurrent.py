@@ -578,7 +578,7 @@ class TestStressConditions:
             db = omendb.open(db_path, dimensions=64)
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
-            db.save()
+            db.flush()
 
             errors = []
             lock = threading.Lock()

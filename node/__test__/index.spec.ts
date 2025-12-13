@@ -326,7 +326,7 @@ describe("VectorDatabase", () => {
 				},
 				{ id: "persist2", vector: Array(64).fill(0.9) },
 			]);
-			db1.save();
+			db1.flush();
 
 			// Reopen and verify
 			const db2 = open(dbPath, { dimensions: 64 });

@@ -43,7 +43,7 @@ def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str)
         os._exit(1)
     elif crash_type == "save_then_crash":
         # Save first, then crash
-        db.save()
+        db.flush()
         os.kill(os.getpid(), signal.SIGKILL)
 
 
@@ -62,7 +62,7 @@ def child_insert_save_crash(db_path: str, dims: int, count: int):
         for i in range(count)
     ]
     db.set(vectors)
-    db.save()
+    db.flush()
 
     # Crash after save
     os.kill(os.getpid(), signal.SIGKILL)
@@ -172,7 +172,7 @@ class TestCrashRecoveryWithExistingData:
             for i in range(50)
         ]
         db.set(initial_vectors)
-        db.save()
+        db.flush()
         del db
 
         # Then: child process tries to add more but crashes
@@ -206,7 +206,7 @@ class TestCrashRecoveryWithExistingData:
             {"id": f"vec_{i}", "vector": [float(i)] * dims, "metadata": {}} for i in range(100)
         ]
         db.set(vectors)
-        db.save()
+        db.flush()
         del db
 
         # Child tries to delete but crashes
@@ -235,7 +235,7 @@ class TestCrashRecoveryEdgeCases:
         # Initial save
         db = omendb.open(temp_db_path, dimensions=dims)
         db.set([{"id": "survivor", "vector": [1.0] * dims, "metadata": {"cycles": 0}}])
-        db.save()
+        db.flush()
         del db
 
         # Multiple crash cycles
@@ -259,7 +259,7 @@ class TestCrashRecoveryEdgeCases:
         # Initial data
         db = omendb.open(temp_db_path, dimensions=dims)
         db.set([{"id": "anchor", "vector": [0.5] * dims, "metadata": {}}])
-        db.save()
+        db.flush()
         del db
 
         # Rapid crash cycles (using quick exit instead of SIGKILL for speed)
@@ -284,7 +284,7 @@ class TestCrashRecoveryEdgeCases:
         # Save initial data
         db = omendb.open(temp_db_path, dimensions=dims)
         db.set([{"id": f"safe_{i}", "vector": [0.1] * dims, "metadata": {}} for i in range(100)])
-        db.save()
+        db.flush()
         del db
 
         # Try to insert 10K vectors then crash
@@ -330,7 +330,7 @@ class TestDatabaseIntegrity:
                 for i in range(100)
             ]
         )
-        db.save()
+        db.flush()
         del db
 
         # Crash while open
@@ -347,7 +347,7 @@ class TestDatabaseIntegrity:
             _ = len(db2)
             _ = db2.search([0.5] * dims, k=10)
             db2.set([{"id": "new", "vector": [0.5] * dims, "metadata": {}}])
-            db2.save()
+            db2.flush()
         except Exception as e:
             pytest.fail(f"Database corrupted after crash: {e}")
 
@@ -366,7 +366,7 @@ class TestDatabaseIntegrity:
                 {"id": "west", "vector": [0.0, -1.0, 0.0, 0.0], "metadata": {}},
             ]
         )
-        db.save()
+        db.flush()
         del db
 
         # Crash with unsaved additions

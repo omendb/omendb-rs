@@ -68,7 +68,7 @@ def main():
 
         # --- PERSISTENCE ---
         # Save explicitly (also auto-saves on close)
-        db.save()
+        db.flush()
 
         # Reopen to verify persistence
         db2 = omendb.open(str(db_path), dimensions=3)
