@@ -653,8 +653,7 @@ impl VectorDatabase {
     ///     100
     fn get_ef_search(&self) -> usize {
         let inner = self.inner.read();
-        // VectorStore always returns Some now
-        inner.store.get_ef_search().unwrap()
+        inner.store.get_ef_search().unwrap_or(100)
     }
 
     /// Set ef_search value for search quality/speed tradeoff.
