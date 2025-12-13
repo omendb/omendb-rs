@@ -15,10 +15,14 @@
     // Documentation - errors/panics are clear from context
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
+    clippy::doc_markdown,              // Math notation in docs doesn't need backticks
     // Design choices
     clippy::unsafe_derive_deserialize, // Serde derive is safe, unsafe methods are for SIMD/RNG
     clippy::too_many_lines,            // Complex functions (batch_insert, load_from_disk) are well-structured
-    clippy::needless_pass_by_value     // Public API takes owned values for clarity and storage
+    clippy::needless_pass_by_value,    // Public API takes owned values for clarity and storage
+    clippy::inline_always,             // Hot path functions are intentionally force-inlined
+    clippy::items_after_statements,    // Local items near usage improve readability
+    clippy::manual_let_else            // Match pattern is clearer in some contexts
 )]
 
 //! Core algorithms for `OmenDB`: HNSW, `RaBitQ` compression, SIMD distance functions.

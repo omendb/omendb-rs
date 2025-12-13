@@ -366,7 +366,7 @@ impl HNSWIndex {
 
     /// Distance from query to node for ordering comparisons
     ///
-    /// For L2 with FullPrecision storage, uses decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+    /// For L2 with `FullPrecision` storage, uses decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
     /// This gives ~8% speedup by precomputing vector norms during insert.
     #[inline]
     fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
@@ -376,7 +376,7 @@ impl HNSWIndex {
 
     /// Distance using L2 decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
     ///
-    /// Requires precomputed query_norm and uses stored vector norms.
+    /// Requires precomputed `query_norm` and uses stored vector norms.
     /// ~8% faster than direct L2² calculation in isolation, but current hot path
     /// integration adds overhead (match + bounds check) that negates the savings.
     /// Infrastructure for future monomorphization optimization.
@@ -882,25 +882,27 @@ impl HNSWIndex {
                     self.params.m
                 };
 
-                let neighbors = match self.neighbors.get_neighbors(node_id, lc) {
-                    Ok(n) => n,
-                    Err(_) => continue,
+                let Ok(neighbors) = self.neighbors.get_neighbors(node_id, lc) else {
+                    continue;
                 };
 
                 if neighbors.len() > m {
-                    let vector = match self.vectors.get(node_id) {
-                        Some(v) => v,
-                        None => continue,
+                    let Some(vector) = self.vectors.get(node_id) else {
+                        continue;
                     };
 
-                    let pruned =
-                        match self.select_neighbors_heuristic(node_id, &neighbors, m, lc, vector) {
-                            Ok(p) => p,
-                            Err(_) => continue,
-                        };
+                    let Ok(pruned) =
+                        self.select_neighbors_heuristic(node_id, &neighbors, m, lc, vector)
+                    else {
+                        continue;
+                    };
 
                     // Update neighbor list (mutable borrow is safe here - not parallel)
-                    if let Err(_) = self.neighbors.set_neighbors(node_id, lc, pruned.clone()) {
+                    if self
+                        .neighbors
+                        .set_neighbors(node_id, lc, pruned.clone())
+                        .is_err()
+                    {
                         continue;
                     }
                     self.nodes[node_id as usize].set_neighbor_count(lc, pruned.len());
