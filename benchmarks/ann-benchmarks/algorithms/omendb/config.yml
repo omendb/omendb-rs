@@ -1,0 +1,51 @@
+float:
+  any:
+    # Standard OmenDB (f32)
+    - base_args: ["@metric"]
+      constructor: OmenDB
+      module: ann_benchmarks.algorithms.omendb
+      docker_tag: ann-benchmarks-omendb
+      run_groups:
+        omendb-m-8:
+          args:
+            - m: 8
+              ef_construction: 100
+          query_args:
+            - ef: [10, 20, 40, 80, 100, 120, 200, 400]
+        omendb-m-16:
+          args:
+            - m: 16
+              ef_construction: 100
+          query_args:
+            - ef: [10, 20, 40, 80, 100, 120, 200, 400]
+        omendb-m-24:
+          args:
+            - m: 24
+              ef_construction: 100
+          query_args:
+            - ef: [10, 20, 40, 80, 100, 120, 200, 400]
+        omendb-m-32:
+          args:
+            - m: 32
+              ef_construction: 200
+          query_args:
+            - ef: [10, 20, 40, 80, 100, 120, 200, 400]
+
+    # OmenDB with SQ8 quantization
+    - base_args: ["@metric"]
+      constructor: OmenDBQuantized
+      module: ann_benchmarks.algorithms.omendb
+      docker_tag: ann-benchmarks-omendb
+      run_groups:
+        omendb-sq8-m-16:
+          args:
+            - m: 16
+              ef_construction: 100
+          query_args:
+            - ef: [10, 20, 40, 80, 100, 120, 200, 400]
+        omendb-sq8-m-24:
+          args:
+            - m: 24
+              ef_construction: 100
+          query_args:
+            - ef: [10, 20, 40, 80, 100, 120, 200, 400]
