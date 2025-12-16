@@ -58,6 +58,7 @@ dev = [
     "langchain-core>=0.2.0",
     "llama-index-core>=0.10.0",
     "sentence-transformers>=5.1.2",
+    "pyright>=1.1.407",
 ]
 
 [tool.ruff]
