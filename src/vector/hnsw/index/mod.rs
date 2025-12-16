@@ -12,6 +12,7 @@
 // - persistence.rs: Save/load to disk
 // - stats.rs: Statistics, memory usage, cache optimization
 
+mod delete;
 mod insert;
 mod persistence;
 mod search;

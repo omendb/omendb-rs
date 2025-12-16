@@ -606,6 +606,59 @@ impl HNSWIndex {
     pub fn core_index_mut(&mut self) -> &mut CoreHNSW {
         &mut self.index
     }
+
+    /// Mark a node as deleted and repair the graph using MN-RU algorithm
+    ///
+    /// This method repairs the HNSW graph structure after a node is deleted,
+    /// maintaining recall quality by reconnecting orphaned edges.
+    ///
+    /// # Arguments
+    /// * `node_id` - The node ID to mark as deleted
+    ///
+    /// # Returns
+    /// Number of edges repaired across all levels
+    pub fn mark_deleted(&mut self, node_id: u32) -> Result<usize> {
+        self.index
+            .mark_deleted(node_id)
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Batch mark multiple nodes as deleted with graph repair
+    ///
+    /// More efficient than individual deletions when deleting many nodes.
+    ///
+    /// # Arguments
+    /// * `node_ids` - Node IDs to delete
+    ///
+    /// # Returns
+    /// Total number of edges repaired
+    pub fn mark_deleted_batch(&mut self, node_ids: &[u32]) -> Result<usize> {
+        self.index
+            .mark_deleted_batch(node_ids)
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Check if a node is effectively deleted (has no neighbors)
+    #[must_use]
+    pub fn is_orphaned(&self, node_id: u32) -> bool {
+        self.index.is_orphaned(node_id)
+    }
+
+    /// Count orphaned nodes (nodes with no neighbors)
+    ///
+    /// Useful for monitoring graph health after deletions.
+    #[must_use]
+    pub fn count_orphaned(&self) -> usize {
+        self.index.count_orphaned()
+    }
+
+    /// Validate graph connectivity after deletions
+    ///
+    /// Returns (reachable_count, orphan_count).
+    #[must_use]
+    pub fn validate_connectivity(&self) -> (usize, usize) {
+        self.index.validate_connectivity()
+    }
 }
 
 #[cfg(test)]

@@ -1072,6 +1072,12 @@ impl VectorStore {
     }
 
     /// Delete vector by string ID
+    ///
+    /// This method:
+    /// 1. Marks the vector as deleted (soft delete)
+    /// 2. Repairs the HNSW graph using MN-RU algorithm to maintain recall quality
+    /// 3. Removes from text index if present
+    /// 4. Persists to WAL
     pub fn delete(&mut self, id: &str) -> Result<()> {
         let index = self
             .id_to_index
@@ -1081,6 +1087,19 @@ impl VectorStore {
 
         self.deleted.insert(index, true);
         self.metadata_index.remove(index as u32);
+
+        // Repair HNSW graph using MN-RU algorithm
+        // This maintains graph connectivity and recall quality after deletion
+        if let Some(ref mut hnsw) = self.hnsw_index {
+            if let Err(e) = hnsw.mark_deleted(index as u32) {
+                tracing::warn!(
+                    id = id,
+                    index = index,
+                    error = ?e,
+                    "Failed to repair HNSW graph after deletion"
+                );
+            }
+        }
 
         // Use OmenFile::delete for WAL-backed persistence
         if let Some(ref mut storage) = self.storage {
@@ -1098,14 +1117,48 @@ impl VectorStore {
     }
 
     /// Delete multiple vectors by string IDs
+    ///
+    /// Uses batch MN-RU graph repair for better efficiency than individual deletes.
     pub fn delete_batch(&mut self, ids: &[String]) -> Result<usize> {
-        let mut deleted_count = 0;
+        // Collect valid indices first
+        let mut node_ids: Vec<u32> = Vec::with_capacity(ids.len());
+        let mut valid_ids: Vec<String> = Vec::with_capacity(ids.len());
+
         for id in ids {
-            if self.delete(id).is_ok() {
-                deleted_count += 1;
+            if let Some(&index) = self.id_to_index.get(id) {
+                self.deleted.insert(index, true);
+                self.metadata_index.remove(index as u32);
+                node_ids.push(index as u32);
+                valid_ids.push(id.clone());
             }
         }
-        Ok(deleted_count)
+
+        // Batch repair HNSW graph using MN-RU algorithm
+        if !node_ids.is_empty() {
+            if let Some(ref mut hnsw) = self.hnsw_index {
+                if let Err(e) = hnsw.mark_deleted_batch(&node_ids) {
+                    tracing::warn!(
+                        count = node_ids.len(),
+                        error = ?e,
+                        "Failed to batch repair HNSW graph after deletion"
+                    );
+                }
+            }
+        }
+
+        // Persist deletions and clean up mappings
+        for (id, &node_id) in valid_ids.iter().zip(node_ids.iter()) {
+            if let Some(ref mut storage) = self.storage {
+                let _ = storage.delete(id);
+            }
+            if let Some(ref mut text_index) = self.text_index {
+                let _ = text_index.delete_document(id);
+            }
+            self.id_to_index.remove(id);
+            self.index_to_id.remove(&(node_id as usize));
+        }
+
+        Ok(valid_ids.len())
     }
 
     /// Get vector by string ID
@@ -1345,13 +1398,22 @@ impl VectorStore {
         }
 
         if let Some(ref index) = self.hnsw_index {
-            if index.is_asymmetric() {
+            let results = if index.is_asymmetric() {
                 if self.rescore_enabled && !self.vectors.is_empty() {
-                    return self.knn_search_with_rescore(query, k, ef);
+                    self.knn_search_with_rescore(query, k, ef)?
+                } else {
+                    index.search_asymmetric_ef(&query.data, k, ef)?
                 }
-                return index.search_asymmetric_ef(&query.data, k, ef);
+            } else {
+                index.search_ef(&query.data, k, ef)?
+            };
+
+            // Fall back to brute force if HNSW returns nothing but we have data
+            // This can happen after heavy deletions leave the graph disconnected
+            if results.is_empty() && self.has_live_vectors() {
+                return self.knn_search_brute_force(query, k);
             }
-            return index.search_ef(&query.data, k, ef);
+            return Ok(results);
         }
 
         self.knn_search_brute_force(query, k)
@@ -1553,7 +1615,7 @@ impl VectorStore {
             self.knn_search_with_filter_ef_readonly(query, k, f, ef)
         } else {
             let results = self.knn_search_readonly(query, k, ef)?;
-            Ok(results
+            let filtered: Vec<(usize, f32, JsonValue)> = results
                 .into_iter()
                 .filter_map(|(index, distance)| {
                     if self.deleted.contains_key(&index) {
@@ -1566,8 +1628,48 @@ impl VectorStore {
                         .unwrap_or(serde_json::json!({}));
                     Some((index, distance, metadata))
                 })
-                .collect())
+                .collect();
+
+            // Fall back to brute force if HNSW results were all deleted
+            // This handles orphaned nodes after heavy deletions
+            if filtered.is_empty() && self.has_live_vectors() {
+                return self.knn_search_brute_force_with_metadata(query, k);
+            }
+
+            Ok(filtered)
         }
+    }
+
+    /// Check if there are any non-deleted vectors
+    fn has_live_vectors(&self) -> bool {
+        let total = self
+            .vectors
+            .len()
+            .max(self.hnsw_index.as_ref().map(|idx| idx.len()).unwrap_or(0));
+        total > self.deleted.len()
+    }
+
+    /// Brute-force search with metadata (fallback for orphaned nodes)
+    fn knn_search_brute_force_with_metadata(
+        &self,
+        query: &Vector,
+        k: usize,
+    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+        let results = self.knn_search_brute_force(query, k)?;
+        Ok(results
+            .into_iter()
+            .filter_map(|(index, distance)| {
+                if self.deleted.contains_key(&index) {
+                    return None;
+                }
+                let metadata = self
+                    .metadata
+                    .get(&index)
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+                Some((index, distance, metadata))
+            })
+            .collect())
     }
 
     /// Parallel batch search for multiple queries
@@ -1612,17 +1714,34 @@ impl VectorStore {
             );
         }
 
-        if self.vectors.is_empty() {
+        // Determine total vector count (in-memory or storage)
+        let total_count = if !self.vectors.is_empty() {
+            self.vectors.len()
+        } else if let Some(ref idx) = self.hnsw_index {
+            idx.len()
+        } else {
+            return Ok(Vec::new());
+        };
+
+        if total_count == 0 {
             return Ok(Vec::new());
         }
 
-        let mut distances: Vec<(usize, f32)> = self
-            .vectors
-            .iter()
-            .enumerate()
-            .map(|(id, vec)| {
-                let dist = query.l2_distance(vec).unwrap_or(f32::MAX);
-                (id, dist)
+        let mut distances: Vec<(usize, f32)> = (0..total_count)
+            .filter_map(|id| {
+                // Get vector data from memory or storage
+                let data = if let Some(vec) = self.vectors.get(id) {
+                    Some(vec.data.clone())
+                } else if let Some(ref storage) = self.storage {
+                    storage.get_vector(id).ok().flatten()
+                } else {
+                    None
+                };
+
+                data.map(|vec_data| {
+                    let dist = l2_distance(&query.data, &vec_data);
+                    (id, dist)
+                })
             })
             .collect();
 
