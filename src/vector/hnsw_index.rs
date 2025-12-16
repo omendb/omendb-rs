@@ -480,6 +480,19 @@ impl HNSWIndex {
         self.ef_search
     }
 
+    /// Optimize cache locality by reordering nodes using BFS
+    ///
+    /// Improves query performance by placing frequently-accessed neighbors
+    /// close together in memory. Should be called after index construction
+    /// and before querying for best performance.
+    ///
+    /// Returns the number of nodes reordered.
+    pub fn optimize_cache_locality(&mut self) -> Result<usize> {
+        self.index
+            .optimize_cache_locality()
+            .map_err(|e| anyhow::anyhow!("Optimization failed: {e}"))
+    }
+
     /// Number of vectors in index
     #[must_use]
     pub fn len(&self) -> usize {

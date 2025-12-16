@@ -1774,6 +1774,30 @@ impl VectorStore {
     }
 
     // ============================================================================
+    // Optimization
+    // ============================================================================
+
+    /// Optimize index for cache-efficient search
+    ///
+    /// Reorders graph nodes and vectors using BFS traversal to improve memory locality.
+    /// Nodes that are frequently accessed together during search will be stored
+    /// adjacently in memory, reducing cache misses and improving QPS.
+    ///
+    /// Call this after loading/building the index and before querying for best results.
+    /// Based on NeurIPS 2022 "Graph Reordering for Cache-Efficient Near Neighbor Search".
+    ///
+    /// Returns the number of nodes reordered, or 0 if index is empty/not initialized.
+    pub fn optimize(&mut self) -> Result<usize> {
+        if let Some(ref mut index) = self.hnsw_index {
+            index
+                .optimize_cache_locality()
+                .map_err(|e| anyhow::anyhow!("Optimization failed: {e}"))
+        } else {
+            Ok(0)
+        }
+    }
+
+    // ============================================================================
     // Accessors
     // ============================================================================
 
