@@ -60,7 +60,7 @@ impl HNSWIndex {
 
         // Update entry point if we're deleting it
         if self.entry_point == Some(node_id) {
-            self.update_entry_point_after_delete(node_id)?;
+            self.update_entry_point_after_delete(node_id);
         }
 
         debug!(
@@ -177,7 +177,7 @@ impl HNSWIndex {
     }
 
     /// Update entry point after deleting the current entry point
-    fn update_entry_point_after_delete(&mut self, deleted_id: u32) -> Result<()> {
+    fn update_entry_point_after_delete(&mut self, deleted_id: u32) {
         // Find the highest-level node that isn't deleted
         // Prefer nodes with neighbors, but fall back to any remaining node
         let mut best_connected: Option<(u32, u8)> = None;
@@ -216,8 +216,6 @@ impl HNSWIndex {
         // Prefer connected node, fall back to any remaining node
         self.entry_point = best_connected.or(best_fallback).map(|(id, _)| id);
         debug!(new_entry = ?self.entry_point, "Updated entry point after deletion");
-
-        Ok(())
     }
 
     /// Batch mark multiple nodes as deleted with graph repair
@@ -290,6 +288,7 @@ impl HNSWIndex {
     }
 
     /// Validate connectivity with optional verbose output for debugging
+    #[must_use]
     pub fn validate_connectivity_verbose(&self, verbose: bool) -> (usize, usize) {
         use std::collections::VecDeque;
 
@@ -313,10 +312,7 @@ impl HNSWIndex {
                 for &neighbor_id in &self.neighbors.get_neighbors(node_id, lc) {
                     if visited.insert(neighbor_id) {
                         if verbose {
-                            println!(
-                                "  BFS: node {} level {} -> neighbor {}",
-                                node_id, lc, neighbor_id
-                            );
+                            println!("  BFS: node {node_id} level {lc} -> neighbor {neighbor_id}");
                         }
                         queue.push_back(neighbor_id);
                     }
@@ -328,7 +324,7 @@ impl HNSWIndex {
         let orphans = self.nodes.len() - reachable;
 
         if verbose {
-            println!("  BFS visited: {:?}", visited);
+            println!("  BFS visited: {visited:?}");
         }
 
         (reachable, orphans)

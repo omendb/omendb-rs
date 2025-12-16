@@ -1645,7 +1645,7 @@ impl VectorStore {
         let total = self
             .vectors
             .len()
-            .max(self.hnsw_index.as_ref().map(|idx| idx.len()).unwrap_or(0));
+            .max(self.hnsw_index.as_ref().map_or(0, HNSWIndex::len));
         total > self.deleted.len()
     }
 
