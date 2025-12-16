@@ -25,3 +25,4 @@ target
 python/benchmark_results/
 benchmarks/results/
 benchmarks/history.jsonl
+*.hdf5
