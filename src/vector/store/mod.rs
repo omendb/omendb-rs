@@ -29,6 +29,26 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 mod tests;
 
+/// Compute optimal oversample factor based on quantization mode.
+///
+/// Different quantization modes have different baseline recall:
+/// - SQ8: ~99% accurate, needs minimal oversampling (2.0x)
+/// - RaBitQ 2-bit: ~93% accurate, needs more candidates (4.0x)
+/// - RaBitQ 4-bit: ~96% accurate, moderate oversampling (3.0x)
+/// - RaBitQ 8-bit: ~99% accurate, minimal oversampling (2.0x)
+/// - No quantization: 1.0 (rescore disabled, oversample unused)
+fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
+    match mode {
+        None => 1.0,
+        Some(QuantizationMode::SQ8) => 2.0,
+        Some(QuantizationMode::RaBitQ(params)) => match params.bits_per_dim.to_u8() {
+            2 => 4.0, // ~93% recall baseline
+            8 => 2.0, // ~99% recall baseline
+            _ => 3.0, // 4-bit default: ~96% recall baseline
+        },
+    }
+}
+
 /// Vector store with HNSW indexing
 pub struct VectorStore {
     /// All vectors stored in memory (used for rescore when quantization enabled)
@@ -429,7 +449,9 @@ impl VectorStore {
 
         // Determine rescore settings
         let rescore_enabled = options.rescore.unwrap_or(options.quantization.is_some());
-        let oversample_factor = options.oversample.unwrap_or(3.0);
+        let oversample_factor = options
+            .oversample
+            .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
 
         Ok(Self {
             vectors: Vec::new(),
@@ -493,7 +515,9 @@ impl VectorStore {
 
         // Determine rescore settings
         let rescore_enabled = options.rescore.unwrap_or(options.quantization.is_some());
-        let oversample_factor = options.oversample.unwrap_or(3.0);
+        let oversample_factor = options
+            .oversample
+            .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
 
         Ok(Self {
             vectors: Vec::new(),
