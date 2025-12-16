@@ -1,6 +1,8 @@
 """Type stubs for omendb - Fast embedded vector database."""
 
-from typing import Any, Literal, Self, Sequence, TypedDict, overload
+from typing import Any, Literal, Sequence, TypedDict, overload
+
+from typing_extensions import Self
 
 import numpy as np
 import numpy.typing as npt
