@@ -1,16 +1,6 @@
 //! HNSW search operations
 //!
 //! Implements k-NN search, filtered search (ACORN-1), and layer-level search.
-//!
-//! # Early Termination
-//!
-//! Uses "Patience in Proximity" strategy (Teofili & Lin, ECIR 2025):
-//! - Track when working set stops improving
-//! - Terminate after PATIENCE consecutive iterations with no improvement
-//! - Results: 20-60% QPS improvement with minimal recall loss
-
-// Allow comparisons with PATIENCE constant (disabled when PATIENCE=0)
-#![allow(clippy::absurd_extreme_comparisons)]
 
 use super::HNSWIndex;
 use crate::vector::hnsw::error::{HNSWError, Result};
@@ -22,20 +12,6 @@ use omendb_core::distance::norm_squared;
 use ordered_float::OrderedFloat;
 use std::cmp::Reverse;
 use tracing::{debug, error, instrument, warn};
-
-/// Early termination patience (Teofili & Lin, ECIR 2025).
-///
-/// Stop layer-0 search after this many consecutive iterations with no working set improvement.
-/// Set to 0 to disable early termination (default).
-///
-/// Tested on 10K vectors (M3 Max):
-/// - PATIENCE=5:  7% recall drop, +13% single QPS
-/// - PATIENCE=10: 3% recall drop, +4% single QPS
-/// - PATIENCE=20: 1% recall drop, +12% QPS (1536D only)
-///
-/// Paper reports 20-60% speedup on million-vector datasets (BEIR).
-/// Benefits scale with dataset size - minimal at 10K, significant at 1M+.
-const PATIENCE: usize = 0;
 
 impl HNSWIndex {
     /// Search for k nearest neighbors
@@ -792,11 +768,6 @@ impl HNSWIndex {
                 visited.insert(ep);
             }
 
-            // Early termination: track consecutive iterations with no working set improvement
-            // Only apply at layer 0 (beam search), not upper layers (greedy with ef=1)
-            let use_patience = PATIENCE > 0 && level == 0 && ef > 1;
-            let mut stagnation_count: usize = 0;
-
             // Greedy search
             while let Some(Reverse(current)) = candidates.pop() {
                 // If current is farther than farthest in working set, stop
@@ -834,9 +805,6 @@ impl HNSWIndex {
                     }
                 }
 
-                // Track if working set improves this iteration
-                let mut improved = false;
-
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
                     // Stride prefetch: vectors and neighbor lists
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
@@ -862,7 +830,6 @@ impl HNSWIndex {
                         if dist < farthest.distance.0 || working.len() < ef {
                             candidates.push(Reverse(neighbor));
                             working.push(neighbor);
-                            improved = true;
 
                             // Prune working set to ef size
                             if working.len() > ef {
@@ -872,21 +839,6 @@ impl HNSWIndex {
                     } else {
                         candidates.push(Reverse(neighbor));
                         working.push(neighbor);
-                        improved = true;
-                    }
-                }
-
-                // Patience-based early termination (Teofili & Lin, ECIR 2025)
-                // Stop if working set hasn't improved for PATIENCE consecutive iterations
-                // Only apply when working set is full to avoid premature termination
-                if use_patience && working.len() >= ef {
-                    if improved {
-                        stagnation_count = 0;
-                    } else {
-                        stagnation_count += 1;
-                        if stagnation_count >= PATIENCE {
-                            break;
-                        }
                     }
                 }
             }
@@ -1056,10 +1008,6 @@ impl HNSWIndex {
                 visited.insert(ep);
             }
 
-            // Early termination: track consecutive iterations with no working set improvement
-            let use_patience = PATIENCE > 0 && level == 0 && ef > 1;
-            let mut stagnation_count: usize = 0;
-
             // Greedy search
             while let Some(Reverse(current)) = candidates.pop() {
                 // If current is farther than farthest in working set, stop
@@ -1093,9 +1041,6 @@ impl HNSWIndex {
                     }
                 }
 
-                // Track if working set improves this iteration
-                let mut improved = false;
-
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
                         self.vectors
@@ -1111,7 +1056,6 @@ impl HNSWIndex {
                         if dist < farthest.distance.0 || working.len() < ef {
                             candidates.push(Reverse(neighbor));
                             working.push(neighbor);
-                            improved = true;
 
                             if working.len() > ef {
                                 working.pop();
@@ -1120,20 +1064,6 @@ impl HNSWIndex {
                     } else {
                         candidates.push(Reverse(neighbor));
                         working.push(neighbor);
-                        improved = true;
-                    }
-                }
-
-                // Patience-based early termination
-                // Only apply when working set is full to avoid premature termination
-                if use_patience && working.len() >= ef {
-                    if improved {
-                        stagnation_count = 0;
-                    } else {
-                        stagnation_count += 1;
-                        if stagnation_count >= PATIENCE {
-                            break;
-                        }
                     }
                 }
             }
