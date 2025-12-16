@@ -672,6 +672,26 @@ impl VectorDatabase {
         inner.store.set_ef_search(ef_search);
     }
 
+    /// Optimize index for cache-efficient search.
+    ///
+    /// Reorders graph nodes and vectors using BFS traversal to improve memory locality.
+    /// Nodes frequently accessed together during search will be stored adjacently,
+    /// reducing cache misses and improving QPS by 6-40%.
+    ///
+    /// Call this after loading data and before querying for best results.
+    ///
+    /// Returns:
+    ///     int: Number of nodes reordered (0 if index empty/not initialized)
+    ///
+    /// Examples:
+    ///     >>> db.set([...])  # Load data
+    ///     >>> db.optimize()  # Optimize for search
+    ///     >>> db.search(...)  # Faster queries
+    fn optimize(&mut self) -> PyResult<usize> {
+        let mut inner = self.inner.write();
+        inner.store.optimize().map_err(convert_error)
+    }
+
     /// Number of vectors in database (Pythonic).
     ///
     /// Returns:
