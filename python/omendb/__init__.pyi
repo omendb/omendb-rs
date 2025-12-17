@@ -96,12 +96,12 @@ class VectorDatabase:
         id: str,
         vector: Vector,
         metadata: dict[str, Any] | None = None,
-    ) -> list[int]:
+    ) -> int:
         """Insert single vector."""
         ...
 
     @overload
-    def set(self, items: list[VectorRecord]) -> list[int]:
+    def set(self, items: list[VectorRecord]) -> int:
         """Insert batch of vectors."""
         ...
 
@@ -112,7 +112,7 @@ class VectorDatabase:
         ids: list[str],
         vectors: list[list[float]] | VectorBatch,
         metadatas: list[dict[str, Any]] | None = None,
-    ) -> list[int]:
+    ) -> int:
         """Insert batch using kwargs."""
         ...
 
@@ -125,7 +125,7 @@ class VectorDatabase:
         ids: list[str] | None = None,
         vectors: list[list[float]] | VectorBatch | None = None,
         metadatas: list[dict[str, Any]] | None = None,
-    ) -> list[int]:
+    ) -> int:
         """Set (insert or replace) vectors.
 
         Supports multiple input formats:
@@ -142,7 +142,7 @@ class VectorDatabase:
             metadatas: List of metadata dicts (batch kwargs format)
 
         Returns:
-            List of internal indices for stored vectors.
+            Number of vectors inserted/updated.
 
         Raises:
             ValueError: If required fields missing or dimensions mismatch.
@@ -227,17 +227,20 @@ class VectorDatabase:
     def update(
         self,
         id: str,
-        vector: Vector,
+        vector: Vector | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Update vector and/or metadata for existing ID.
 
+        At least one of vector or metadata must be provided.
+
         Args:
             id: Vector ID to update.
-            vector: New vector data.
-            metadata: New metadata (replaces existing).
+            vector: New vector data (optional).
+            metadata: New metadata (replaces existing, optional).
 
         Raises:
+            ValueError: If neither vector nor metadata is provided.
             RuntimeError: If vector with given ID doesn't exist.
         """
         ...
@@ -281,13 +284,19 @@ class VectorDatabase:
         """Check if database is empty."""
         ...
 
-    def ids(self) -> list[str]:
-        """List all vector IDs (without loading vector data).
+    def ids(self) -> Iterator[str]:
+        """Iterate over all vector IDs (without loading vector data).
 
-        Efficient way to get all IDs for iteration, export, or debugging.
+        Returns a lazy iterator. Use `list(db.ids())` if you need all IDs at once.
+        Memory efficient for large datasets.
 
         Returns:
-            List of all vector IDs in the database.
+            Iterator over all vector IDs in the database.
+
+        Examples:
+            >>> for id in db.ids():
+            ...     print(id)
+            >>> all_ids = list(db.ids())  # Get as list if needed
         """
         ...
 
@@ -410,13 +419,13 @@ class VectorDatabase:
         """Check if text search is enabled."""
         ...
 
-    def set_with_text(self, items: list[VectorRecord]) -> list[int]:
+    def set_with_text(self, items: list[VectorRecord]) -> int:
         """Set vectors with text for hybrid search.
 
         Each item must have id, vector, and text fields.
 
         Returns:
-            List of internal indices.
+            Number of vectors inserted.
         """
         ...
 
