@@ -1232,6 +1232,10 @@ impl VectorDatabase {
 ///         - False/None: Full precision (no quantization)
 ///     rescore (bool): Rerank with full precision (default: True when quantized)
 ///     oversample (float): Candidate multiplier for rescoring (default: 3.0)
+///     metric (str): Distance metric for similarity search (default: "l2")
+///         - "l2" or "euclidean": Euclidean distance (default)
+///         - "cosine": Cosine distance (1 - cosine similarity)
+///         - "dot" or "ip": Inner product (for MIPS)
 ///     config (dict): Advanced config (deprecated, use top-level params instead)
 ///
 /// Returns:
@@ -1259,8 +1263,11 @@ impl VectorDatabase {
 ///
 ///     # Custom oversample factor (default 3.0)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, oversample=5.0)
+///
+///     # With cosine distance metric
+///     >>> db = omendb.open("./vectors", dimensions=768, metric="cosine")
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, rescore=None, oversample=None, config=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, rescore=None, oversample=None, metric=None, config=None))]
 fn open(
     path: String,
     dimensions: usize,
@@ -1270,6 +1277,7 @@ fn open(
     quantization: Option<&Bound<'_, PyAny>>,
     rescore: Option<bool>,
     oversample: Option<f32>,
+    metric: Option<String>,
     config: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<VectorDatabase> {
     use std::path::{Path, PathBuf};
@@ -1311,6 +1319,19 @@ fn open(
         }
     }
 
+    // Validate metric
+    if let Some(ref m) = metric {
+        match m.to_lowercase().as_str() {
+            "l2" | "euclidean" | "cosine" | "dot" | "ip" => {}
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown metric: '{}'. Valid: l2, euclidean, cosine, dot, ip",
+                    m
+                )));
+            }
+        }
+    }
+
     // Resolve effective dimensions (use 128 as default if not specified)
     let effective_dims = if dimensions == 0 { 128 } else { dimensions };
 
@@ -1335,6 +1356,11 @@ fn open(
         }
         if let Some(oversample_val) = oversample {
             options = options.oversample(oversample_val);
+        }
+        if let Some(ref metric_str) = metric {
+            options = options
+                .metric(metric_str)
+                .map_err(|e| PyValueError::new_err(e))?;
         }
 
         let store = options
@@ -1386,6 +1412,11 @@ fn open(
         }
         if let Some(oversample_val) = oversample {
             options = options.oversample(oversample_val);
+        }
+        if let Some(ref metric_str) = metric {
+            options = options
+                .metric(metric_str)
+                .map_err(|e| PyValueError::new_err(e))?;
         }
 
         // Handle config dict for backward compatibility
@@ -1453,6 +1484,11 @@ fn open(
     }
     if let Some(mode) = quant_mode.clone() {
         options = options.quantization(mode);
+    }
+    if let Some(ref metric_str) = metric {
+        options = options
+            .metric(metric_str)
+            .map_err(|e| PyValueError::new_err(e))?;
     }
 
     let store = options

@@ -58,6 +58,45 @@ impl From<u8> for DistanceFunction {
     }
 }
 
+impl DistanceFunction {
+    /// Parse from string (case-insensitive, with aliases).
+    ///
+    /// # Supported values
+    /// - `"l2"` or `"euclidean"`: Euclidean distance (default)
+    /// - `"cosine"`: Cosine distance (1 - cosine similarity)
+    /// - `"dot"` or `"ip"`: Inner product (for MIPS)
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "l2" | "euclidean" => Ok(Self::L2),
+            "cosine" => Ok(Self::Cosine),
+            "dot" | "ip" => Ok(Self::Dot),
+            _ => Err(format!(
+                "Unknown metric: '{s}'. Valid: l2, euclidean, cosine, dot, ip"
+            )),
+        }
+    }
+
+    /// Convert to HNSW's DistanceFunction.
+    #[must_use]
+    pub fn to_hnsw(&self) -> crate::vector::hnsw::DistanceFunction {
+        match self {
+            Self::L2 => crate::vector::hnsw::DistanceFunction::L2,
+            Self::Cosine => crate::vector::hnsw::DistanceFunction::Cosine,
+            Self::Dot => crate::vector::hnsw::DistanceFunction::NegativeDotProduct,
+        }
+    }
+
+    /// Get the string representation.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::L2 => "l2",
+            Self::Cosine => "cosine",
+            Self::Dot => "dot",
+        }
+    }
+}
+
 /// .omen file header
 #[derive(Debug, Clone)]
 pub struct OmenHeader {
