@@ -815,6 +815,7 @@ impl VectorDatabase {
 /// - quantization: null (RaBitQ bit width: 2, 4, or 8 for compression)
 /// - rescore: true when quantization enabled (rerank candidates with exact distance)
 /// - oversample: 3.0 (fetch k*oversample candidates when rescoring)
+/// - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
 #[napi(object)]
 pub struct OpenOptions {
     /// Vector dimensions (default: 128, auto-detected on first insert)
@@ -834,6 +835,8 @@ pub struct OpenOptions {
     /// Oversampling factor for rescoring (default: 3.0)
     /// Fetches k*oversample candidates then reranks to return top k
     pub oversample: Option<f64>,
+    /// Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip"
+    pub metric: Option<String>,
 }
 
 // ============================================================================
@@ -883,6 +886,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         quantization: None,
         rescore: None,
         oversample: None,
+        metric: None,
     });
 
     let dimensions = opts.dimensions.unwrap_or(128) as usize;
@@ -930,6 +934,19 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         }
     }
 
+    // Validate metric
+    if let Some(ref m) = opts.metric {
+        match m.to_lowercase().as_str() {
+            "l2" | "euclidean" | "cosine" | "dot" | "ip" => {}
+            _ => {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    format!("Unknown metric: '{}'. Valid: l2, euclidean, cosine, dot, ip", m),
+                ));
+            }
+        }
+    }
+
     // Build options from parameters
     let mut store_options = VectorStoreOptions::default().dimensions(dimensions);
 
@@ -956,6 +973,11 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     }
     if let Some(oversample_val) = oversample {
         store_options = store_options.oversample(oversample_val as f32);
+    }
+    if let Some(ref metric_str) = opts.metric {
+        store_options = store_options.metric(metric_str).map_err(|e| {
+            Error::new(Status::InvalidArg, e)
+        })?;
     }
 
     // Handle :memory: for in-memory database
