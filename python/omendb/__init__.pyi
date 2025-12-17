@@ -272,10 +272,6 @@ class VectorDatabase:
         """
         ...
 
-    def len(self) -> int:
-        """Number of vectors in database."""
-        ...
-
     def __len__(self) -> int:
         """Number of vectors in database."""
         ...
