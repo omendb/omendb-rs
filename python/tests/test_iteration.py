@@ -14,7 +14,7 @@ def test_ids():
         ]
     )
 
-    ids = db.ids()
+    ids = list(db.ids())
     assert len(ids) == 3
     assert set(ids) == {"a", "b", "c"}
 
@@ -30,14 +30,14 @@ def test_ids_excludes_deleted():
     )
     db.delete(["a"])
 
-    ids = db.ids()
+    ids = list(db.ids())
     assert ids == ["b"]
 
 
 def test_ids_empty():
     """Test ids() on empty database"""
     db = omendb.open(":memory:", dimensions=3)
-    assert db.ids() == []
+    assert list(db.ids()) == []
 
 
 def test_items():
@@ -203,7 +203,7 @@ def test_delete_where_simple():
 
     count = db.delete_where({"status": "archived"})
     assert count == 2
-    assert set(db.ids()) == {"a"}
+    assert set(list(db.ids())) == {"a"}
 
 
 def test_delete_where_comparison():
@@ -220,7 +220,7 @@ def test_delete_where_comparison():
     # Delete low scores
     count = db.delete_where({"score": {"$lt": 0.5}})
     assert count == 1
-    assert set(db.ids()) == {"b", "c"}
+    assert set(list(db.ids())) == {"b", "c"}
 
 
 def test_delete_where_complex():
@@ -237,7 +237,7 @@ def test_delete_where_complex():
     # Delete docs with low score
     count = db.delete_where({"$and": [{"type": "doc"}, {"score": {"$lt": 0.8}}]})
     assert count == 1
-    assert set(db.ids()) == {"b", "c"}
+    assert set(list(db.ids())) == {"b", "c"}
 
 
 def test_delete_where_no_match():
@@ -247,7 +247,7 @@ def test_delete_where_no_match():
 
     count = db.delete_where({"x": 999})
     assert count == 0
-    assert db.ids() == ["a"]
+    assert list(db.ids()) == ["a"]
 
 
 def test_delete_where_all():
@@ -262,7 +262,7 @@ def test_delete_where_all():
 
     count = db.delete_where({"active": True})
     assert count == 2
-    assert db.ids() == []
+    assert list(db.ids()) == []
 
 
 def test_iteration_is_lazy():

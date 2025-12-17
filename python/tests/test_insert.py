@@ -8,7 +8,7 @@ def test_insert_single_vector(db):
     vector = {"id": "test1", "vector": [0.1] * 128, "metadata": {}}
     indices = db.set([vector])
 
-    assert len(indices) == 1
+    assert indices == 1
     assert len(db) == 1
 
 
@@ -19,14 +19,14 @@ def test_insert_multiple_vectors(db):
     ]
     indices = db.set(vectors)
 
-    assert len(indices) == 100
+    assert indices == 100
     assert len(db) == 100
 
 
 def test_insert_empty_list(db):
     """Test inserting empty list"""
     indices = db.set([])
-    assert len(indices) == 0
+    assert indices == 0
     assert len(db) == 0
 
 
@@ -35,7 +35,7 @@ def test_insert_without_metadata(db):
     vector = {"id": "test1", "vector": [0.1] * 128}
     indices = db.set([vector])
 
-    assert len(indices) == 1
+    assert indices == 1
     results = db.search([0.1] * 128, k=1)
     assert len(results) == 1
     assert results[0]["metadata"] == {}
@@ -146,7 +146,7 @@ def test_insert_special_characters_in_id(db):
     ]
     indices = db.set(vectors)
 
-    assert len(indices) == 4
+    assert indices == 4
     assert len(db) == 4
 
 

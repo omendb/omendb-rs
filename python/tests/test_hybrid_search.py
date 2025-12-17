@@ -44,7 +44,7 @@ def test_set_with_text():
 
         db.flush()
 
-        assert len(indices) == 2
+        assert indices == 2
         assert len(db) == 2
 
 

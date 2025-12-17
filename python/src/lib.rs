@@ -158,6 +158,43 @@ pub struct VectorDatabase {
     collections_cache: RwLock<HashMap<String, Py<VectorDatabase>>>,
 }
 
+/// Lazy iterator for VectorDatabase IDs.
+///
+/// Memory efficient: iterates over IDs one at a time from a snapshot.
+/// Handles deletions during iteration gracefully (skips deleted IDs).
+#[pyclass]
+pub struct VectorDatabaseIdIterator {
+    /// Reference to the database inner state
+    inner: Arc<RwLock<VectorDatabaseInner>>,
+    /// IDs to iterate over
+    ids: Vec<String>,
+    /// Current position
+    index: usize,
+}
+
+#[pymethods]
+impl VectorDatabaseIdIterator {
+    fn __iter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __next__(&mut self) -> Option<String> {
+        // Loop to skip items deleted during iteration
+        while self.index < self.ids.len() {
+            let id = &self.ids[self.index];
+            self.index += 1;
+
+            // Check if ID still exists
+            let inner = self.inner.read();
+            if inner.store.contains(id) {
+                return Some(id.clone());
+            }
+            // Item was deleted during iteration, continue to next
+        }
+        None
+    }
+}
+
 /// Lazy iterator for VectorDatabase items.
 ///
 /// Enables `for item in db:` syntax with true lazy evaluation.
@@ -256,7 +293,7 @@ impl VectorDatabase {
     ///         - document (str, optional): Document text (stored in metadata["document"])
     ///
     /// Returns:
-    ///     list[int]: Internal indices of stored vectors
+    ///     int: Number of vectors inserted/updated
     ///
     /// Raises:
     ///     ValueError: If any item is missing required fields or has invalid dimensions
@@ -309,7 +346,7 @@ impl VectorDatabase {
         ids: Option<Vec<String>>,
         vectors: Option<Vec<Vec<f32>>>,
         metadatas: Option<&Bound<'_, PyList>>,
-    ) -> PyResult<Vec<usize>> {
+    ) -> PyResult<usize> {
         // Handle kwargs batch format (no text support in this path)
         if let (Some(ids), Some(vectors)) = (&ids, &vectors) {
             if ids.len() != vectors.len() {
@@ -335,7 +372,7 @@ impl VectorDatabase {
             let mut inner = self.inner.write();
             let result = inner.store.set_batch(batch).map_err(convert_error)?;
             inner.cache_valid = false;
-            return Ok(result);
+            return Ok(result.len());
         }
 
         // Handle single item: set("id", [...], {...})
@@ -349,12 +386,12 @@ impl VectorDatabase {
                     .unwrap_or_else(|| serde_json::json!({}));
 
                 let mut inner = self.inner.write();
-                let result = inner
+                inner
                     .store
                     .set(id_str, Vector::new(vec_data), meta)
                     .map_err(convert_error)?;
                 inner.cache_valid = false;
-                return Ok(vec![result]);
+                return Ok(1);
             }
 
             // Handle batch: set([{...}, {...}])
@@ -400,7 +437,7 @@ impl VectorDatabase {
                 };
 
                 inner.cache_valid = false;
-                return Ok(results);
+                return Ok(results.len());
             }
 
             return Err(PyValueError::new_err(
@@ -625,12 +662,15 @@ impl VectorDatabase {
 
     /// Update vector and/or metadata for existing ID.
     ///
+    /// At least one of vector or metadata must be provided.
+    ///
     /// Args:
     ///     id (str): Vector ID to update
     ///     vector (list[float], optional): New vector data
     ///     metadata (dict, optional): New metadata (replaces existing)
     ///
     /// Raises:
+    ///     ValueError: If neither vector nor metadata is provided
     ///     RuntimeError: If vector with given ID doesn't exist
     ///
     /// Examples:
@@ -645,13 +685,20 @@ impl VectorDatabase {
     ///     Update both:
     ///
     ///     >>> db.update("doc1", vector=[0.4, 0.5, 0.6], metadata={"title": "New"})
+    #[pyo3(signature = (id, vector=None, metadata=None))]
     fn update(
         &self,
         id: String,
-        vector_data: Vec<f32>,
+        vector: Option<Vec<f32>>,
         metadata: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<()> {
-        let vector = Some(Vector::new(vector_data));
+        if vector.is_none() && metadata.is_none() {
+            return Err(PyValueError::new_err(
+                "update() requires at least one of vector or metadata",
+            ));
+        }
+
+        let vector = vector.map(Vector::new);
         let metadata_json = if let Some(m) = metadata {
             Some(pyobject_to_json(m.as_any())?)
         } else {
@@ -874,23 +921,33 @@ impl VectorDatabase {
         inner.store.is_empty()
     }
 
-    /// List all vector IDs (without loading vector data).
+    /// Iterate over all vector IDs (without loading vector data).
     ///
-    /// Efficient way to get all IDs for iteration, export, or debugging.
-    /// Does not load vector data - only returns ID strings.
+    /// Returns a lazy iterator that yields IDs one at a time.
+    /// Memory efficient for large datasets. Use `list(db.ids())` if you need all IDs at once.
     ///
     /// Returns:
-    ///     list[str]: All vector IDs in the database
+    ///     Iterator[str]: Iterator over all vector IDs
     ///
     /// Examples:
-    ///     >>> ids = db.ids()
-    ///     >>> len(ids)
+    ///     >>> for id in db.ids():
+    ///     ...     print(id)
+    ///
+    ///     >>> # Get as list if needed
+    ///     >>> all_ids = list(db.ids())
+    ///     >>> len(all_ids)
     ///     1000
-    ///     >>> ids[:5]
-    ///     ['doc1', 'doc2', 'doc3', 'doc4', 'doc5']
-    fn ids(&self) -> Vec<String> {
-        let inner = self.inner.read();
-        inner.store.ids()
+    fn ids(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<VectorDatabaseIdIterator>> {
+        let borrowed = slf.borrow(py);
+        let ids = borrowed.inner.read().store.ids();
+        Py::new(
+            py,
+            VectorDatabaseIdIterator {
+                inner: Arc::clone(&borrowed.inner),
+                ids,
+                index: 0,
+            },
+        )
     }
 
     /// Get all items as list of dicts.
@@ -1188,7 +1245,7 @@ impl VectorDatabase {
     ///     - metadata (dict, optional): Additional metadata
     ///
     /// Returns:
-    ///     list[int]: Internal indices of stored vectors
+    ///     int: Number of vectors inserted
     ///
     /// Examples:
     ///     >>> db.enable_text_search()
@@ -1198,7 +1255,7 @@ impl VectorDatabase {
     ///     ... ])
     ///     >>> db.flush()  # Commit text index changes
     #[pyo3(name = "set_with_text")]
-    fn set_with_text(&self, items: &Bound<'_, PyList>) -> PyResult<Vec<usize>> {
+    fn set_with_text(&self, items: &Bound<'_, PyList>) -> PyResult<usize> {
         let mut inner = self.inner.write();
 
         if !inner.store.has_text_search() {
@@ -1207,7 +1264,7 @@ impl VectorDatabase {
             ));
         }
 
-        let mut results = Vec::with_capacity(items.len());
+        let mut count = 0;
 
         for (idx, item) in items.iter().enumerate() {
             let dict = item.cast::<PyDict>().map_err(|_| {
@@ -1237,16 +1294,16 @@ impl VectorDatabase {
                 serde_json::json!({})
             };
 
-            let index = inner
+            inner
                 .store
                 .set_with_text(id, Vector::new(vector_data), &text, metadata)
                 .map_err(convert_error)?;
 
-            results.push(index);
+            count += 1;
         }
 
         inner.cache_valid = false;
-        Ok(results)
+        Ok(count)
     }
 
     /// Search using text only (BM25 scoring).
@@ -2016,5 +2073,6 @@ fn json_to_pyobject(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
 fn omendb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open, m)?)?;
     m.add_class::<VectorDatabase>()?;
+    m.add_class::<VectorDatabaseIdIterator>()?;
     Ok(())
 }
