@@ -289,8 +289,8 @@ impl VectorDatabase {
     ///         - id (str): Unique identifier for the vector
     ///         - vector (list[float]): Vector data (must match database dimensions)
     ///         - metadata (dict, optional): Arbitrary metadata as JSON-compatible dict
-    ///         - text (str, optional): Text for hybrid search (auto-enables text search)
-    ///         - document (str, optional): Document text (stored in metadata["document"])
+    ///         - text (str, optional): Text for hybrid search - indexed for BM25 AND
+    ///           auto-stored in metadata["text"] for retrieval
     ///
     /// Returns:
     ///     int: Number of vectors inserted/updated
@@ -306,21 +306,14 @@ impl VectorDatabase {
     ///     ...     {"id": "doc1", "vector": [0.1, 0.2, 0.3], "metadata": {"title": "Hello"}},
     ///     ...     {"id": "doc2", "vector": [0.4, 0.5, 0.6], "metadata": {"title": "World"}},
     ///     ... ])
-    ///     [0, 1]
-    ///
-    ///     Replace existing vector:
-    ///
-    ///     >>> db.set([{"id": "doc1", "vector": [0.7, 0.8, 0.9]}])
-    ///     [0]
-    ///
-    ///     With document:
-    ///
-    ///     >>> db.set([{"id": "doc1", "vector": [...], "document": "Original text content"}])
+    ///     2
     ///
     ///     With text for hybrid search (auto-enables text search):
     ///
     ///     >>> db.set([{"id": "doc1", "vector": [...], "text": "Machine learning intro"}])
-    ///     >>> results = db.hybrid_search([...], "machine learning", k=10)  # Works immediately!
+    ///     >>> db.get("doc1")["metadata"]["text"]  # Text is auto-stored
+    ///     'Machine learning intro'
+    ///     >>> results = db.search_hybrid([...], "machine learning", k=10)
     ///
     /// Performance:
     ///     - Throughput: 20,000-28,000 vec/s @ 10K vectors
@@ -1875,17 +1868,8 @@ fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<Parsed
             serde_json::json!({})
         };
 
-        // Handle optional document field (store in metadata)
-        if let Some(document) = dict.get_item("document")? {
-            let doc_str: String = document.extract().map_err(|_| {
-                PyValueError::new_err(format!("Item '{}': 'document' must be a string", id))
-            })?;
-            if let Some(obj) = metadata_json.as_object_mut() {
-                obj.insert("document".to_string(), serde_json::json!(doc_str));
-            }
-        }
-
         // Handle optional text field for hybrid search
+        // Text is both indexed for BM25 AND stored in metadata["text"]
         let text: Option<String> = dict
             .get_item("text")?
             .map(|t| t.extract())
@@ -1893,6 +1877,20 @@ fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<Parsed
             .map_err(|_| {
                 PyValueError::new_err(format!("Item '{}': 'text' must be a string", id))
             })?;
+
+        // Auto-store text in metadata for retrieval
+        if let Some(ref text_str) = text {
+            if let Some(obj) = metadata_json.as_object_mut() {
+                // Check for conflict
+                if obj.contains_key("text") {
+                    return Err(PyValueError::new_err(format!(
+                        "Item '{}': cannot have both 'text' field and 'metadata.text' - use one or the other",
+                        id
+                    )));
+                }
+                obj.insert("text".to_string(), serde_json::json!(text_str));
+            }
+        }
 
         batch.push(ParsedItem {
             id,
