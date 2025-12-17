@@ -18,14 +18,15 @@ def test_enable_text_search():
         del db  # Ensure cleanup before temp dir removal
 
 
-def test_set_with_text():
-    """Test inserting documents with text content"""
+def test_set_with_text_auto_enables():
+    """Test that set() with text field auto-enables text search"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        indices = db.set_with_text(
+        assert not db.has_text_search()
+
+        count = db.set(
             [
                 {
                     "id": "doc1",
@@ -44,8 +45,9 @@ def test_set_with_text():
 
         db.flush()
 
-        assert indices == 2
+        assert count == 2
         assert len(db) == 2
+        assert db.has_text_search()  # Auto-enabled
 
 
 def test_text_search():
@@ -53,9 +55,8 @@ def test_text_search():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        db.set_with_text(
+        db.set(
             [
                 {
                     "id": "doc1",
@@ -93,9 +94,8 @@ def test_hybrid_search_basic():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        db.set_with_text(
+        db.set(
             [
                 {
                     "id": "doc1",
@@ -135,9 +135,8 @@ def test_hybrid_search_with_alpha():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        db.set_with_text(
+        db.set(
             [
                 {"id": "vec_close", "vector": [1.0, 0.0, 0.0, 0.0], "text": "unrelated topic"},
                 {
@@ -178,9 +177,8 @@ def test_hybrid_search_with_rrf_k():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        db.set_with_text(
+        db.set(
             [
                 {"id": "doc1", "vector": [1.0, 0.0, 0.0, 0.0], "text": "test document one"},
                 {"id": "doc2", "vector": [0.0, 1.0, 0.0, 0.0], "text": "test document two"},
@@ -206,9 +204,8 @@ def test_hybrid_search_with_filter():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        db.set_with_text(
+        db.set(
             [
                 {
                     "id": "doc1",
@@ -249,9 +246,8 @@ def test_hybrid_search_metadata_in_results():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        db.set_with_text(
+        db.set(
             [
                 {
                     "id": "doc1",
@@ -280,9 +276,8 @@ def test_hybrid_search_empty_results():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        db.set_with_text(
+        db.set(
             [
                 {"id": "doc1", "vector": [1.0, 0.0, 0.0, 0.0], "text": "python programming"},
             ]
@@ -296,27 +291,13 @@ def test_hybrid_search_empty_results():
         assert len(results) == 0
 
 
-def test_hybrid_search_without_enable():
-    """Test that hybrid search fails if text search not enabled"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
-
-        try:
-            db.set_with_text([{"id": "doc1", "vector": [1.0, 0.0, 0.0, 0.0], "text": "test"}])
-            raise AssertionError("Should have raised an error")
-        except RuntimeError as e:
-            assert "not enabled" in str(e).lower()
-
-
 def test_hybrid_search_all_params():
     """Test hybrid search with all parameters specified"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
         db = omendb.open(db_path, dimensions=4)
-        db.enable_text_search()
 
-        db.set_with_text(
+        db.set(
             [
                 {
                     "id": "doc1",
@@ -350,7 +331,7 @@ def test_hybrid_search_all_params():
 
 if __name__ == "__main__":
     test_enable_text_search()
-    test_set_with_text()
+    test_set_with_text_auto_enables()
     test_text_search()
     test_hybrid_search_basic()
     test_hybrid_search_with_alpha()
@@ -358,6 +339,5 @@ if __name__ == "__main__":
     test_hybrid_search_with_filter()
     test_hybrid_search_metadata_in_results()
     test_hybrid_search_empty_results()
-    test_hybrid_search_without_enable()
     test_hybrid_search_all_params()
-    print("✅ All hybrid search tests passed!")
+    print("All hybrid search tests passed!")
