@@ -37,8 +37,7 @@ class VectorRecord(TypedDict, total=False):
     id: str  # Required
     vector: list[float]  # Required
     metadata: dict[str, Any]
-    text: str  # For hybrid search
-    document: str  # Stored in metadata["document"]
+    text: str  # For hybrid search - indexed AND auto-stored in metadata["text"]
 
 class GetResult(TypedDict):
     """Result from get()."""

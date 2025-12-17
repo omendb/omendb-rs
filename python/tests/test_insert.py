@@ -184,46 +184,46 @@ def test_insert_nested_metadata(db):
     assert results[0]["metadata"]["tags"] == ["important", "verified"]
 
 
-def test_insert_with_document(db):
-    """Test inserting vectors with document field"""
+def test_insert_with_text(db):
+    """Test inserting vectors with text field auto-stores in metadata"""
     vector = {
         "id": "doc1",
         "vector": [0.1] * 128,
-        "document": "This is the original text content.",
+        "text": "This is searchable text content.",
     }
     db.set([vector])
 
     results = db.search([0.1] * 128, k=1)
     assert results[0]["id"] == "doc1"
-    assert results[0]["metadata"]["document"] == "This is the original text content."
+    # Text is auto-stored in metadata["text"]
+    assert results[0]["metadata"]["text"] == "This is searchable text content."
 
 
-def test_insert_document_with_metadata(db):
-    """Test document field is merged with existing metadata"""
+def test_insert_text_with_metadata(db):
+    """Test text field is merged with existing metadata"""
     vector = {
         "id": "doc1",
         "vector": [0.1] * 128,
-        "document": "Some text",
+        "text": "Searchable text",
         "metadata": {"title": "Test Document", "author": "Alice"},
     }
     db.set([vector])
 
     results = db.search([0.1] * 128, k=1)
-    assert results[0]["metadata"]["document"] == "Some text"
+    assert results[0]["metadata"]["text"] == "Searchable text"
     assert results[0]["metadata"]["title"] == "Test Document"
     assert results[0]["metadata"]["author"] == "Alice"
 
 
-def test_insert_document_overwrites_metadata_document(db):
-    """Test document field overwrites metadata['document'] if both provided"""
+def test_insert_text_conflicts_with_metadata_text(db):
+    """Test that text field and metadata['text'] conflict raises error"""
+    import pytest
+
     vector = {
         "id": "doc1",
         "vector": [0.1] * 128,
-        "document": "Document field value",
-        "metadata": {"document": "Metadata document value"},
+        "text": "Text field value",
+        "metadata": {"text": "Metadata text value"},
     }
-    db.set([vector])
-
-    results = db.search([0.1] * 128, k=1)
-    # The document field should take precedence
-    assert results[0]["metadata"]["document"] == "Document field value"
+    with pytest.raises(ValueError, match="cannot have both"):
+        db.set([vector])
