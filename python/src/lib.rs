@@ -157,6 +157,44 @@ pub struct VectorDatabase {
     collections_cache: RwLock<HashMap<String, Py<VectorDatabase>>>,
 }
 
+/// Iterator for VectorDatabase items.
+///
+/// Enables `for item in db:` syntax.
+#[pyclass]
+pub struct VectorDatabaseIterator {
+    /// Raw items data: (id, vector, metadata_json)
+    items: Vec<(String, Vec<f32>, JsonValue)>,
+    index: usize,
+}
+
+#[pymethods]
+impl VectorDatabaseIterator {
+    fn __iter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<HashMap<String, Py<PyAny>>>> {
+        if self.index < self.items.len() {
+            let (id, vector, metadata) = &self.items[self.index];
+            self.index += 1;
+
+            let mut result = HashMap::new();
+            result.insert(
+                "id".to_string(),
+                id.clone().into_pyobject(py).unwrap().unbind().into(),
+            );
+            result.insert(
+                "vector".to_string(),
+                vector.clone().into_pyobject(py).unwrap().unbind().into(),
+            );
+            result.insert("metadata".to_string(), json_to_pyobject(py, metadata)?);
+            Ok(Some(result))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 /// Convert search results to Python list of dicts
 fn results_to_py(
     py: Python<'_>,
@@ -529,6 +567,51 @@ impl VectorDatabase {
         Ok(result)
     }
 
+    /// Delete vectors matching a metadata filter.
+    ///
+    /// Evaluates the filter against all vectors and deletes those that match.
+    /// Uses the same MongoDB-style filter syntax as search().
+    ///
+    /// Args:
+    ///     filter (dict): MongoDB-style metadata filter
+    ///
+    /// Returns:
+    ///     int: Number of vectors deleted
+    ///
+    /// Examples:
+    ///     Delete by equality:
+    ///
+    ///     >>> db.delete_where({"status": "archived"})
+    ///     5
+    ///
+    ///     Delete with comparison operators:
+    ///
+    ///     >>> db.delete_where({"score": {"$lt": 0.5}})
+    ///     3
+    ///
+    ///     Delete with complex filter:
+    ///
+    ///     >>> db.delete_where({"$and": [{"type": "draft"}, {"age": {"$gt": 30}}]})
+    ///     2
+    #[pyo3(signature = (filter))]
+    fn delete_where(&self, filter: &Bound<'_, PyDict>) -> PyResult<usize> {
+        let parsed_filter = parse_filter(filter)?;
+
+        let mut inner = self.inner.write();
+
+        let result = inner
+            .store
+            .delete_by_filter(&parsed_filter)
+            .map_err(convert_error)?;
+
+        // Invalidate cache since id_to_index changed
+        if result > 0 {
+            inner.cache_valid = false;
+        }
+
+        Ok(result)
+    }
+
     /// Update vector and/or metadata for existing ID.
     ///
     /// Args:
@@ -613,6 +696,57 @@ impl VectorDatabase {
         } else {
             Ok(None)
         }
+    }
+
+    /// Get multiple vectors by ID.
+    ///
+    /// Batch version of get(). More efficient than calling get() in a loop.
+    ///
+    /// Args:
+    ///     ids (list[str]): List of vector IDs to retrieve
+    ///
+    /// Returns:
+    ///     list[dict | None]: List of results in same order as input.
+    ///                        None for IDs that don't exist.
+    ///
+    /// Examples:
+    ///     >>> results = db.get_many(["doc1", "doc2", "missing"])
+    ///     >>> results[0]  # doc1
+    ///     {'id': 'doc1', 'vector': [...], 'metadata': {...}}
+    ///     >>> results[2]  # missing
+    ///     None
+    fn get_many(
+        &self,
+        py: Python<'_>,
+        ids: Vec<String>,
+    ) -> PyResult<Vec<Option<HashMap<String, Py<PyAny>>>>> {
+        let inner = self.inner.read();
+
+        ids.into_iter()
+            .map(|id| {
+                if let Some((vector, metadata)) = inner.store.get_by_id(&id) {
+                    let mut result = HashMap::new();
+                    result.insert(
+                        "id".to_string(),
+                        id.into_pyobject(py).unwrap().unbind().into(),
+                    );
+                    result.insert(
+                        "vector".to_string(),
+                        vector
+                            .data
+                            .clone()
+                            .into_pyobject(py)
+                            .unwrap()
+                            .unbind()
+                            .into(),
+                    );
+                    result.insert("metadata".to_string(), json_to_pyobject(py, metadata)?);
+                    Ok(Some(result))
+                } else {
+                    Ok(None)
+                }
+            })
+            .collect()
     }
 
     /// Context manager entry - returns self for `with` statement.
@@ -727,6 +861,107 @@ impl VectorDatabase {
     fn is_empty(&self) -> bool {
         let inner = self.inner.read();
         inner.store.is_empty()
+    }
+
+    /// List all vector IDs (without loading vector data).
+    ///
+    /// Efficient way to get all IDs for iteration, export, or debugging.
+    /// Does not load vector data - only returns ID strings.
+    ///
+    /// Returns:
+    ///     list[str]: All vector IDs in the database
+    ///
+    /// Examples:
+    ///     >>> ids = db.ids()
+    ///     >>> len(ids)
+    ///     1000
+    ///     >>> ids[:5]
+    ///     ['doc1', 'doc2', 'doc3', 'doc4', 'doc5']
+    fn ids(&self) -> Vec<String> {
+        let inner = self.inner.read();
+        inner.store.ids()
+    }
+
+    /// Get all items as list of dicts.
+    ///
+    /// Returns all vectors with their IDs and metadata. Use for export,
+    /// migration, or analytics. For large datasets, consider chunked processing.
+    ///
+    /// Returns:
+    ///     list[dict]: List of {"id": str, "vector": list[float], "metadata": dict}
+    ///
+    /// Examples:
+    ///     >>> items = db.items()
+    ///     >>> len(items)
+    ///     1000
+    ///     >>> items[0]
+    ///     {'id': 'doc1', 'vector': [0.1, 0.2, ...], 'metadata': {'title': 'Hello'}}
+    ///
+    ///     # Export to pandas
+    ///     >>> import pandas as pd
+    ///     >>> df = pd.DataFrame(db.items())
+    fn items(&self, py: Python<'_>) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
+        let inner = self.inner.read();
+        let items = inner.store.items();
+
+        items
+            .into_iter()
+            .map(|(id, vector, metadata)| {
+                let mut result = HashMap::new();
+                result.insert(
+                    "id".to_string(),
+                    id.into_pyobject(py).unwrap().unbind().into(),
+                );
+                result.insert(
+                    "vector".to_string(),
+                    vector.into_pyobject(py).unwrap().unbind().into(),
+                );
+                result.insert("metadata".to_string(), json_to_pyobject(py, &metadata)?);
+                Ok(result)
+            })
+            .collect()
+    }
+
+    /// Check if an ID exists in the database.
+    ///
+    /// Args:
+    ///     id (str): Vector ID to check
+    ///
+    /// Returns:
+    ///     bool: True if ID exists and is not deleted
+    ///
+    /// Examples:
+    ///     >>> db.exists("doc1")
+    ///     True
+    ///     >>> db.exists("nonexistent")
+    ///     False
+    fn exists(&self, id: String) -> bool {
+        let inner = self.inner.read();
+        inner.store.contains(&id)
+    }
+
+    /// Support `in` operator for checking ID existence.
+    ///
+    /// Examples:
+    ///     >>> "doc1" in db
+    ///     True
+    fn __contains__(&self, id: String) -> bool {
+        let inner = self.inner.read();
+        inner.store.contains(&id)
+    }
+
+    /// Iteration support - returns list of items.
+    ///
+    /// Enables `for item in db:` syntax.
+    ///
+    /// Examples:
+    ///     >>> for item in db:
+    ///     ...     print(item["id"], item["vector"][:3])
+    fn __iter__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<VectorDatabaseIterator>> {
+        let borrowed = slf.borrow(py);
+        let inner = borrowed.inner.read();
+        let items = inner.store.items();
+        Py::new(py, VectorDatabaseIterator { items, index: 0 })
     }
 
     /// Get database statistics.

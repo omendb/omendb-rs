@@ -294,6 +294,184 @@ describe("VectorDatabase", () => {
 				expect(db.count).toBe(2);
 			});
 		});
+
+		describe("ids", () => {
+			it("should return all vector IDs", () => {
+				db.set([
+					{ id: "a", vector: Array(128).fill(0.1) },
+					{ id: "b", vector: Array(128).fill(0.2) },
+					{ id: "c", vector: Array(128).fill(0.3) },
+				]);
+
+				const ids = db.ids();
+				expect(ids).toHaveLength(3);
+				expect(new Set(ids)).toEqual(new Set(["a", "b", "c"]));
+			});
+
+			it("should exclude deleted vectors", () => {
+				db.set([
+					{ id: "a", vector: Array(128).fill(0.1) },
+					{ id: "b", vector: Array(128).fill(0.2) },
+				]);
+				db.delete(["a"]);
+
+				const ids = db.ids();
+				expect(ids).toEqual(["b"]);
+			});
+
+			it("should return empty array for empty database", () => {
+				expect(db.ids()).toEqual([]);
+			});
+		});
+
+		describe("items", () => {
+			it("should return all items with metadata", () => {
+				db.set([
+					{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } },
+					{ id: "b", vector: Array(128).fill(0.2), metadata: { x: 2 } },
+				]);
+
+				const items = db.items();
+				expect(items).toHaveLength(2);
+
+				const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+				expect(byId.a.metadata).toEqual({ x: 1 });
+				expect(byId.b.metadata).toEqual({ x: 2 });
+			});
+
+			it("should exclude deleted vectors", () => {
+				db.set([
+					{ id: "a", vector: Array(128).fill(0.1) },
+					{ id: "b", vector: Array(128).fill(0.2) },
+				]);
+				db.delete(["a"]);
+
+				const items = db.items();
+				expect(items).toHaveLength(1);
+				expect(items[0].id).toBe("b");
+			});
+		});
+
+		describe("exists", () => {
+			it("should return true for existing ID", () => {
+				db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
+				expect(db.exists("a")).toBe(true);
+			});
+
+			it("should return false for non-existent ID", () => {
+				expect(db.exists("nonexistent")).toBe(false);
+			});
+
+			it("should return false for deleted ID", () => {
+				db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
+				db.delete(["a"]);
+				expect(db.exists("a")).toBe(false);
+			});
+		});
+
+		describe("getMany", () => {
+			beforeEach(() => {
+				db.set([
+					{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } },
+					{ id: "b", vector: Array(128).fill(0.2), metadata: { x: 2 } },
+				]);
+			});
+
+			it("should return multiple vectors by ID", () => {
+				const results = db.getMany(["a", "b", "c"]); // c doesn't exist
+
+				expect(results).toHaveLength(3);
+				expect(results[0]?.id).toBe("a");
+				expect(results[1]?.id).toBe("b");
+				expect(results[2]).toBeNull();
+			});
+
+			it("should preserve input order", () => {
+				const results = db.getMany(["b", "a"]);
+				expect(results[0]?.id).toBe("b");
+				expect(results[1]?.id).toBe("a");
+			});
+
+			it("should return empty array for empty input", () => {
+				expect(db.getMany([])).toEqual([]);
+			});
+
+			it("should return all null for missing IDs", () => {
+				const results = db.getMany(["x", "y", "z"]);
+				expect(results).toEqual([null, null, null]);
+			});
+		});
+
+		describe("deleteWhere", () => {
+			it("should delete by equality filter", () => {
+				db.set([
+					{
+						id: "a",
+						vector: Array(128).fill(0.1),
+						metadata: { status: "active" },
+					},
+					{
+						id: "b",
+						vector: Array(128).fill(0.2),
+						metadata: { status: "archived" },
+					},
+					{
+						id: "c",
+						vector: Array(128).fill(0.3),
+						metadata: { status: "archived" },
+					},
+				]);
+
+				const count = db.deleteWhere({ status: "archived" });
+				expect(count).toBe(2);
+				expect(new Set(db.ids())).toEqual(new Set(["a"]));
+			});
+
+			it("should delete with comparison operators", () => {
+				db.set([
+					{ id: "a", vector: Array(128).fill(0.1), metadata: { score: 0.3 } },
+					{ id: "b", vector: Array(128).fill(0.2), metadata: { score: 0.7 } },
+					{ id: "c", vector: Array(128).fill(0.3), metadata: { score: 0.9 } },
+				]);
+
+				const count = db.deleteWhere({ score: { $lt: 0.5 } });
+				expect(count).toBe(1);
+				expect(new Set(db.ids())).toEqual(new Set(["b", "c"]));
+			});
+
+			it("should return 0 when no match", () => {
+				db.set([{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } }]);
+				const count = db.deleteWhere({ x: 999 });
+				expect(count).toBe(0);
+				expect(db.ids()).toEqual(["a"]);
+			});
+
+			it("should delete with complex filter", () => {
+				db.set([
+					{
+						id: "a",
+						vector: Array(128).fill(0.1),
+						metadata: { type: "doc", score: 0.5 },
+					},
+					{
+						id: "b",
+						vector: Array(128).fill(0.2),
+						metadata: { type: "doc", score: 0.9 },
+					},
+					{
+						id: "c",
+						vector: Array(128).fill(0.3),
+						metadata: { type: "image", score: 0.3 },
+					},
+				]);
+
+				const count = db.deleteWhere({
+					$and: [{ type: "doc" }, { score: { $lt: 0.8 } }],
+				});
+				expect(count).toBe(1);
+				expect(new Set(db.ids())).toEqual(new Set(["b", "c"]));
+			});
+		});
 	});
 
 	describe("persistent", () => {
