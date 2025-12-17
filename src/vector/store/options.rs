@@ -3,6 +3,7 @@
 //! Follows `std::fs::OpenOptions` pattern for familiar, ergonomic API.
 
 use super::VectorStore;
+use crate::omen::DistanceFunction;
 use crate::text::TextSearchConfig;
 use crate::vector::QuantizationMode;
 use anyhow::Result;
@@ -62,6 +63,9 @@ pub struct VectorStoreOptions {
     /// Oversampling factor for rescore (default: 3.0)
     /// Fetches `k * oversample` candidates during quantized search.
     pub(super) oversample: Option<f32>,
+
+    /// Distance metric for similarity search (default: L2)
+    pub(super) metric: Option<DistanceFunction>,
 
     /// Text search configuration (None = disabled)
     pub(super) text_search_config: Option<TextSearchConfig>,
@@ -183,6 +187,35 @@ impl VectorStoreOptions {
     #[must_use]
     pub fn oversample(mut self, factor: f32) -> Self {
         self.oversample = Some(factor.max(1.0));
+        self
+    }
+
+    /// Set distance metric for similarity search.
+    ///
+    /// # Metrics
+    /// - `"l2"` or `"euclidean"`: Euclidean distance (default)
+    /// - `"cosine"`: Cosine distance (1 - cosine similarity)
+    /// - `"dot"` or `"ip"`: Inner product (for MIPS)
+    ///
+    /// # Errors
+    /// Returns error if metric string is not recognized.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let store = VectorStoreOptions::default()
+    ///     .dimensions(768)
+    ///     .metric("cosine")?
+    ///     .open("./vectors")?;
+    /// ```
+    pub fn metric(mut self, m: &str) -> Result<Self, String> {
+        self.metric = Some(DistanceFunction::parse(m)?);
+        Ok(self)
+    }
+
+    /// Set distance metric directly (no parsing).
+    #[must_use]
+    pub fn metric_fn(mut self, m: DistanceFunction) -> Self {
+        self.metric = Some(m);
         self
     }
 

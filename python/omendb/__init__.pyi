@@ -392,6 +392,7 @@ def open(
     quantization: bool | Literal["sq8", "rabitq"] | None = None,
     rescore: bool | None = None,
     oversample: float | None = None,
+    metric: Literal["l2", "euclidean", "cosine", "dot", "ip"] | None = None,
     config: dict[str, Any] | None = None,
 ) -> VectorDatabase:
     """Open or create a vector database.
@@ -408,6 +409,10 @@ def open(
             - None/False: Full precision
         rescore: Rerank with full precision (default: True when quantized).
         oversample: Candidate multiplier for rescoring (default: 3.0).
+        metric: Distance metric for similarity search (default: "l2"):
+            - "l2" or "euclidean": Euclidean distance (default)
+            - "cosine": Cosine distance (1 - cosine similarity)
+            - "dot" or "ip": Inner product (for MIPS)
         config: Advanced config dict (deprecated).
 
     Returns:

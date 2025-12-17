@@ -13,10 +13,11 @@ mod options;
 pub use filter::MetadataFilter;
 pub use options::VectorStoreOptions;
 
-use super::hnsw::{DistanceFunction, HNSWParams};
+use super::hnsw::HNSWParams;
 use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
 use super::QuantizationMode;
+use crate::omen::DistanceFunction;
 use crate::omen::{MetadataIndex, OmenFile};
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
@@ -100,6 +101,9 @@ pub struct VectorStore {
     hnsw_m: usize,
     hnsw_ef_construction: usize,
     hnsw_ef_search: usize,
+
+    /// Distance metric for similarity search (default: L2)
+    distance_metric: DistanceFunction,
 }
 
 impl VectorStore {
@@ -129,6 +133,7 @@ impl VectorStore {
             hnsw_m: 16,
             hnsw_ef_construction: 100,
             hnsw_ef_search: 100,
+            distance_metric: DistanceFunction::L2,
         }
     }
 
@@ -156,6 +161,7 @@ impl VectorStore {
             hnsw_m: 16,
             hnsw_ef_construction: 100,
             hnsw_ef_search: 100,
+            distance_metric: DistanceFunction::L2,
         }
     }
 
@@ -193,6 +199,7 @@ impl VectorStore {
             hnsw_m: m,
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
+            distance_metric: DistanceFunction::L2,
         })
     }
 
@@ -340,6 +347,9 @@ impl VectorStore {
             .as_ref()
             .is_some_and(super::hnsw_index::HNSWIndex::is_asymmetric);
 
+        // Read distance metric from storage header (defaults to L2)
+        let distance_metric = storage.header().distance_fn;
+
         Ok(Self {
             vectors,
             hnsw_index,
@@ -359,6 +369,7 @@ impl VectorStore {
             hnsw_m: 16,
             hnsw_ef_construction: 100,
             hnsw_ef_search: 100,
+            distance_metric,
         })
     }
 
@@ -453,6 +464,9 @@ impl VectorStore {
             .oversample
             .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
 
+        // Get distance metric from options (default: L2)
+        let distance_metric = options.metric.unwrap_or(DistanceFunction::L2);
+
         Ok(Self {
             vectors: Vec::new(),
             hnsw_index,
@@ -472,6 +486,7 @@ impl VectorStore {
             hnsw_m: m,
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
+            distance_metric,
         })
     }
 
@@ -519,6 +534,9 @@ impl VectorStore {
             .oversample
             .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
 
+        // Get distance metric from options (default: L2)
+        let distance_metric = options.metric.unwrap_or(DistanceFunction::L2);
+
         Ok(Self {
             vectors: Vec::new(),
             hnsw_index,
@@ -538,6 +556,7 @@ impl VectorStore {
             hnsw_m: m,
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
+            distance_metric,
         })
     }
 
@@ -585,14 +604,16 @@ impl VectorStore {
                 }
 
                 let index = match quant_mode {
-                    QuantizationMode::SQ8 => {
-                        HNSWIndex::new_with_sq8(dimensions, hnsw_params, DistanceFunction::L2)?
-                    }
+                    QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
+                        dimensions,
+                        hnsw_params,
+                        self.distance_metric.to_hnsw(),
+                    )?,
                     QuantizationMode::RaBitQ(params) => {
                         let mut idx = HNSWIndex::new_with_asymmetric(
                             dimensions,
                             hnsw_params,
-                            DistanceFunction::L2,
+                            self.distance_metric.to_hnsw(),
                             params,
                         )?;
                         idx.train_quantizer(std::slice::from_ref(&vector.data))?;
@@ -728,14 +749,16 @@ impl VectorStore {
                     }
 
                     let index = match quant_mode {
-                        QuantizationMode::SQ8 => {
-                            HNSWIndex::new_with_sq8(dimensions, hnsw_params, DistanceFunction::L2)?
-                        }
+                        QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
+                            dimensions,
+                            hnsw_params,
+                            self.distance_metric.to_hnsw(),
+                        )?,
                         QuantizationMode::RaBitQ(params) => {
                             let mut idx = HNSWIndex::new_with_asymmetric(
                                 dimensions,
                                 hnsw_params,
-                                DistanceFunction::L2,
+                                self.distance_metric.to_hnsw(),
                                 params,
                             )?;
                             let training_vectors: Vec<Vec<f32>> =
@@ -1240,14 +1263,16 @@ impl VectorStore {
                     .with_ef_search(self.hnsw_ef_search);
 
                 let index = match quant_mode {
-                    QuantizationMode::SQ8 => {
-                        HNSWIndex::new_with_sq8(self.dimensions, hnsw_params, DistanceFunction::L2)?
-                    }
+                    QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
+                        self.dimensions,
+                        hnsw_params,
+                        self.distance_metric.to_hnsw(),
+                    )?,
                     QuantizationMode::RaBitQ(params) => {
                         let mut idx = HNSWIndex::new_with_asymmetric(
                             self.dimensions,
                             hnsw_params,
-                            DistanceFunction::L2,
+                            self.distance_metric.to_hnsw(),
                             params,
                         )?;
                         let training_vectors: Vec<Vec<f32>> =

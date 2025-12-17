@@ -762,6 +762,12 @@ impl OmenFile {
         &self.path
     }
 
+    /// Get reference to the header
+    #[must_use]
+    pub fn header(&self) -> &OmenHeader {
+        &self.header
+    }
+
     /// Flush all pending writes to disk
     pub fn flush(&mut self) -> Result<()> {
         self.checkpoint()?;
