@@ -282,7 +282,7 @@ impl VectorDatabase {
     /// Otherwise, a new vector will be inserted.
     ///
     /// When any item includes a `text` field, text search is automatically enabled.
-    /// This allows immediate use of hybrid_search() without calling enable_text_search().
+    /// This allows immediate use of search_hybrid() without calling enable_text_search().
     ///
     /// Args:
     ///     items (list[dict]): List of dictionaries, each containing:
@@ -893,15 +893,6 @@ impl VectorDatabase {
     ///     >>> len(db)
     ///     1000
     fn __len__(&self) -> usize {
-        let inner = self.inner.read();
-        inner.store.len()
-    }
-
-    /// Number of vectors in database.
-    ///
-    /// Returns:
-    ///     int: Total vector count
-    fn len(&self) -> usize {
         let inner = self.inner.read();
         inner.store.len()
     }
