@@ -1,6 +1,6 @@
 """Type stubs for omendb - Fast embedded vector database."""
 
-from typing import Any, Literal, Sequence, TypedDict, overload
+from typing import Any, Iterator, Literal, Sequence, TypedDict, overload
 
 from typing_extensions import Self
 
@@ -202,6 +202,28 @@ class VectorDatabase:
         """
         ...
 
+    def delete_where(self, filter: MetadataFilter) -> int:
+        """Delete vectors matching a metadata filter.
+
+        Evaluates the filter against all vectors and deletes those that match.
+        Uses the same MongoDB-style filter syntax as search().
+
+        Args:
+            filter: MongoDB-style metadata filter.
+
+        Returns:
+            Number of vectors deleted.
+
+        Examples:
+            >>> db.delete_where({"status": "archived"})
+            5
+            >>> db.delete_where({"score": {"$lt": 0.5}})
+            3
+            >>> db.delete_where({"$and": [{"type": "draft"}, {"age": {"$gt": 30}}]})
+            2
+        """
+        ...
+
     def update(
         self,
         id: str,
@@ -257,6 +279,64 @@ class VectorDatabase:
 
     def is_empty(self) -> bool:
         """Check if database is empty."""
+        ...
+
+    def ids(self) -> list[str]:
+        """List all vector IDs (without loading vector data).
+
+        Efficient way to get all IDs for iteration, export, or debugging.
+
+        Returns:
+            List of all vector IDs in the database.
+        """
+        ...
+
+    def items(self) -> list[GetResult]:
+        """Get all items as list of dicts.
+
+        Returns all vectors with their IDs and metadata. For large datasets,
+        consider iterating with `for item in db:` instead.
+
+        Returns:
+            List of {"id": str, "vector": list[float], "metadata": dict}
+        """
+        ...
+
+    def exists(self, id: str) -> bool:
+        """Check if an ID exists in the database.
+
+        Args:
+            id: Vector ID to check.
+
+        Returns:
+            True if ID exists and is not deleted.
+        """
+        ...
+
+    def __contains__(self, id: str) -> bool:
+        """Support `in` operator: `"id" in db`"""
+        ...
+
+    def __iter__(self) -> Iterator[GetResult]:
+        """Iterate over all items.
+
+        Examples:
+            >>> for item in db:
+            ...     print(item["id"])
+        """
+        ...
+
+    def get_many(self, ids: list[str]) -> list[GetResult | None]:
+        """Get multiple vectors by ID.
+
+        Batch version of get(). More efficient than calling get() in a loop.
+
+        Args:
+            ids: List of vector IDs to retrieve.
+
+        Returns:
+            List of results in same order as input. None for missing IDs.
+        """
         ...
 
     def stats(self) -> StatsResult:

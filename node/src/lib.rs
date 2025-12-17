@@ -415,6 +415,45 @@ impl VectorDatabase {
         Ok(result as u32)
     }
 
+    /// Delete vectors matching a metadata filter.
+    ///
+    /// Evaluates the filter against all vectors and deletes those that match.
+    /// Uses the same MongoDB-style filter syntax as search().
+    ///
+    /// @param filter - MongoDB-style metadata filter
+    /// @returns Number of vectors deleted
+    ///
+    /// @example
+    /// ```javascript
+    /// // Delete by equality
+    /// db.deleteWhere({ status: "archived" });
+    ///
+    /// // Delete with comparison
+    /// db.deleteWhere({ score: { $lt: 0.5 } });
+    ///
+    /// // Complex filter
+    /// db.deleteWhere({ $and: [{ type: "draft" }, { age: { $gt: 30 } }] });
+    /// ```
+    #[napi]
+    pub fn delete_where(
+        &self,
+        #[napi(ts_arg_type = "Record<string, unknown>")] filter: JsonValue,
+    ) -> Result<u32> {
+        let parsed_filter = parse_filter(&filter)?;
+
+        let mut inner = self.inner.write();
+        let result = inner
+            .store
+            .delete_by_filter(&parsed_filter)
+            .map_err(convert_error)?;
+
+        if result > 0 {
+            inner.cache_valid = false;
+        }
+
+        Ok(result as u32)
+    }
+
     /// Update a vector's data and/or metadata.
     #[napi]
     pub fn update(
@@ -798,6 +837,69 @@ impl VectorDatabase {
         inner.cache_valid = false;
 
         Ok(count as u32)
+    }
+
+    // =========================================================================
+    // Iteration Methods
+    // =========================================================================
+
+    /// List all vector IDs (without loading vector data).
+    ///
+    /// Efficient way to get all IDs for iteration, export, or debugging.
+    /// @returns Array of all vector IDs in the database
+    #[napi]
+    pub fn ids(&self) -> Vec<String> {
+        let inner = self.inner.read();
+        inner.store.ids()
+    }
+
+    /// Get all items as array of {id, vector, metadata}.
+    ///
+    /// Returns all vectors with their IDs and metadata.
+    /// For large datasets, consider using ids() and get() in batches.
+    #[napi]
+    pub fn items(&self) -> Vec<GetResult> {
+        let inner = self.inner.read();
+        inner
+            .store
+            .items()
+            .into_iter()
+            .map(|(id, vector, metadata)| GetResult {
+                id,
+                vector: vector.into_iter().map(|x| x as f64).collect(),
+                metadata,
+            })
+            .collect()
+    }
+
+    /// Check if an ID exists in the database.
+    ///
+    /// @param id - Vector ID to check
+    /// @returns true if ID exists and is not deleted
+    #[napi]
+    pub fn exists(&self, id: String) -> bool {
+        let inner = self.inner.read();
+        inner.store.contains(&id)
+    }
+
+    /// Get multiple vectors by ID.
+    ///
+    /// Batch version of get(). More efficient than calling get() in a loop.
+    ///
+    /// @param ids - Array of vector IDs to retrieve
+    /// @returns Array of results in same order as input, null for missing IDs
+    #[napi]
+    pub fn get_many(&self, ids: Vec<String>) -> Vec<Option<GetResult>> {
+        let inner = self.inner.read();
+        ids.iter()
+            .map(|id| {
+                inner.store.get_by_id(id).map(|(vec, metadata)| GetResult {
+                    id: id.clone(),
+                    vector: vec.data.iter().map(|&x| x as f64).collect(),
+                    metadata: metadata.clone(),
+                })
+            })
+            .collect()
     }
 }
 

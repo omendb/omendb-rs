@@ -1208,6 +1208,41 @@ impl VectorStore {
         Ok(valid_ids.len())
     }
 
+    /// Delete vectors matching a metadata filter
+    ///
+    /// Evaluates the filter against all vectors and deletes those that match.
+    /// This is more efficient than manually iterating and calling delete_batch.
+    ///
+    /// # Arguments
+    /// * `filter` - MongoDB-style metadata filter
+    ///
+    /// # Returns
+    /// Number of vectors deleted
+    pub fn delete_by_filter(&mut self, filter: &MetadataFilter) -> Result<usize> {
+        // Find matching IDs
+        let ids_to_delete: Vec<String> = self
+            .id_to_index
+            .iter()
+            .filter_map(|(id, &idx)| {
+                if self.deleted.contains_key(&idx) {
+                    return None;
+                }
+                let metadata = self.metadata.get(&idx)?;
+                if filter.matches(metadata) {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if ids_to_delete.is_empty() {
+            return Ok(0);
+        }
+
+        self.delete_batch(&ids_to_delete)
+    }
+
     /// Get vector by string ID
     #[must_use]
     pub fn get_by_id(&self, id: &str) -> Option<(&Vector, &JsonValue)> {
@@ -1864,6 +1899,50 @@ impl VectorStore {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// List all non-deleted IDs
+    ///
+    /// Returns vector IDs without loading vector data.
+    /// O(n) time, O(n) memory for strings only.
+    #[must_use]
+    pub fn ids(&self) -> Vec<String> {
+        self.id_to_index
+            .iter()
+            .filter_map(|(id, &idx)| {
+                if self.deleted.contains_key(&idx) {
+                    None
+                } else {
+                    Some(id.clone())
+                }
+            })
+            .collect()
+    }
+
+    /// Get all items as (id, vector, metadata) tuples
+    ///
+    /// Returns all non-deleted items. O(n) time and memory.
+    #[must_use]
+    pub fn items(&self) -> Vec<(String, Vec<f32>, JsonValue)> {
+        self.id_to_index
+            .iter()
+            .filter_map(|(id, &idx)| {
+                if self.deleted.contains_key(&idx) {
+                    return None;
+                }
+                let vector = self.vectors.get(idx)?;
+                let metadata = self.metadata.get(&idx).cloned().unwrap_or_default();
+                Some((id.clone(), vector.data.clone(), metadata))
+            })
+            .collect()
+    }
+
+    /// Check if an ID exists (not deleted)
+    #[must_use]
+    pub fn contains(&self, id: &str) -> bool {
+        self.id_to_index
+            .get(id)
+            .is_some_and(|&idx| !self.deleted.contains_key(&idx))
     }
 
     /// Memory usage estimate (bytes)
