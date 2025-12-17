@@ -294,8 +294,9 @@ class VectorDatabase:
     def items(self) -> list[GetResult]:
         """Get all items as list of dicts.
 
-        Returns all vectors with their IDs and metadata. For large datasets,
-        consider iterating with `for item in db:` instead.
+        WARNING: Loads all vectors into memory. For 1M vectors at 768D,
+        this uses ~3GB RAM. For large datasets, use `for item in db:` which
+        is lazy, or use `ids()` + `get_many()` with batching.
 
         Returns:
             List of {"id": str, "vector": list[float], "metadata": dict}
@@ -318,11 +319,19 @@ class VectorDatabase:
         ...
 
     def __iter__(self) -> Iterator[GetResult]:
-        """Iterate over all items.
+        """Iterate over all items lazily.
+
+        Memory efficient: stores only IDs (~20MB for 1M items), fetches
+        vectors one at a time. Handles deletions during iteration gracefully.
+
+        For export/migration of small datasets, `items()` is more convenient.
 
         Examples:
             >>> for item in db:
             ...     print(item["id"])
+            >>> # Early termination is efficient
+            >>> for i, item in enumerate(db):
+            ...     if i >= 10: break
         """
         ...
 

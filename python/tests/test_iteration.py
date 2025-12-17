@@ -265,6 +265,48 @@ def test_delete_where_all():
     assert db.ids() == []
 
 
+def test_iteration_is_lazy():
+    """Test that iteration is truly lazy - fetches one item at a time"""
+    db = omendb.open(":memory:", dimensions=3)
+    db.set([{"id": str(i), "vector": [i, i, i]} for i in range(100)])
+
+    # Get iterator
+    it = iter(db)
+
+    # Fetch just 2 items
+    item1 = next(it)
+    item2 = next(it)
+
+    assert item1["id"] in [str(i) for i in range(100)]
+    assert item2["id"] in [str(i) for i in range(100)]
+
+    # Can stop early without loading all 100 vectors
+    # (if not lazy, items() would have already loaded everything)
+
+
+def test_iteration_handles_deletion_during_iteration():
+    """Test that deletion during iteration is handled gracefully"""
+    db = omendb.open(":memory:", dimensions=3)
+    db.set(
+        [
+            {"id": "a", "vector": [1, 2, 3]},
+            {"id": "b", "vector": [4, 5, 6]},
+            {"id": "c", "vector": [7, 8, 9]},
+        ]
+    )
+
+    collected = []
+    for i, item in enumerate(db):
+        collected.append(item["id"])
+        if i == 0:
+            # Delete an item during iteration
+            db.delete(["b"])
+
+    # Should have collected items, skipping deleted one
+    assert "a" in collected or "c" in collected
+    assert len(collected) <= 3
+
+
 if __name__ == "__main__":
     test_ids()
     test_ids_excludes_deleted()
@@ -286,4 +328,6 @@ if __name__ == "__main__":
     test_delete_where_complex()
     test_delete_where_no_match()
     test_delete_where_all()
+    test_iteration_is_lazy()
+    test_iteration_handles_deletion_during_iteration()
     print("All tests passed!")

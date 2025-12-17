@@ -13,6 +13,7 @@ use pyo3::types::{PyDict, PyList};
 use pyo3::Py;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Parse quantization parameter and return QuantizationMode if enabled
 ///
@@ -149,7 +150,7 @@ struct VectorDatabaseInner {
 /// ```
 #[pyclass]
 pub struct VectorDatabase {
-    inner: RwLock<VectorDatabaseInner>,
+    inner: Arc<RwLock<VectorDatabaseInner>>,
     path: String,
     dimensions: usize,
     is_persistent: bool,
@@ -157,13 +158,18 @@ pub struct VectorDatabase {
     collections_cache: RwLock<HashMap<String, Py<VectorDatabase>>>,
 }
 
-/// Iterator for VectorDatabase items.
+/// Lazy iterator for VectorDatabase items.
 ///
-/// Enables `for item in db:` syntax.
+/// Enables `for item in db:` syntax with true lazy evaluation.
+/// Memory efficient: stores only IDs (~20MB for 1M items), fetches vectors one at a time.
+/// Handles items deleted during iteration gracefully (skips them).
 #[pyclass]
 pub struct VectorDatabaseIterator {
-    /// Raw items data: (id, vector, metadata_json)
-    items: Vec<(String, Vec<f32>, JsonValue)>,
+    /// Reference to the database inner state
+    inner: Arc<RwLock<VectorDatabaseInner>>,
+    /// IDs to iterate over (lightweight - just strings)
+    ids: Vec<String>,
+    /// Current position
     index: usize,
 }
 
@@ -174,24 +180,29 @@ impl VectorDatabaseIterator {
     }
 
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<HashMap<String, Py<PyAny>>>> {
-        if self.index < self.items.len() {
-            let (id, vector, metadata) = &self.items[self.index];
+        // Loop to skip items deleted during iteration
+        while self.index < self.ids.len() {
+            let id = &self.ids[self.index];
             self.index += 1;
 
-            let mut result = HashMap::new();
-            result.insert(
-                "id".to_string(),
-                id.clone().into_pyobject(py).unwrap().unbind().into(),
-            );
-            result.insert(
-                "vector".to_string(),
-                vector.clone().into_pyobject(py).unwrap().unbind().into(),
-            );
-            result.insert("metadata".to_string(), json_to_pyobject(py, metadata)?);
-            Ok(Some(result))
-        } else {
-            Ok(None)
+            // Fetch item lazily - only loads one vector at a time
+            let inner = self.inner.read();
+            if let Some((vec, meta)) = inner.store.get_by_id(id) {
+                let mut result = HashMap::new();
+                result.insert(
+                    "id".to_string(),
+                    id.clone().into_pyobject(py).unwrap().unbind().into(),
+                );
+                result.insert(
+                    "vector".to_string(),
+                    vec.data.clone().into_pyobject(py).unwrap().unbind().into(),
+                );
+                result.insert("metadata".to_string(), json_to_pyobject(py, meta)?);
+                return Ok(Some(result));
+            }
+            // Item was deleted during iteration, continue to next
         }
+        Ok(None)
     }
 }
 
@@ -959,9 +970,16 @@ impl VectorDatabase {
     ///     ...     print(item["id"], item["vector"][:3])
     fn __iter__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<VectorDatabaseIterator>> {
         let borrowed = slf.borrow(py);
-        let inner = borrowed.inner.read();
-        let items = inner.store.items();
-        Py::new(py, VectorDatabaseIterator { items, index: 0 })
+        // Get just the IDs (lightweight - ~20 bytes per ID vs ~3KB per 768D vector)
+        let ids = borrowed.inner.read().store.ids();
+        Py::new(
+            py,
+            VectorDatabaseIterator {
+                inner: Arc::clone(&borrowed.inner),
+                ids,
+                index: 0,
+            },
+        )
     }
 
     /// Get database statistics.
@@ -1064,11 +1082,11 @@ impl VectorDatabase {
         };
 
         let collection_db = VectorDatabase {
-            inner: RwLock::new(VectorDatabaseInner {
+            inner: Arc::new(RwLock::new(VectorDatabaseInner {
                 store,
                 index_to_id_cache: HashMap::new(),
                 cache_valid: false,
-            }),
+            })),
             path: collection_path.to_string_lossy().to_string(),
             dimensions: self.dimensions,
             is_persistent: true,
@@ -1603,11 +1621,11 @@ fn open(
             .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
 
         return Ok(VectorDatabase {
-            inner: RwLock::new(VectorDatabaseInner {
+            inner: Arc::new(RwLock::new(VectorDatabaseInner {
                 store,
                 index_to_id_cache: HashMap::new(),
                 cache_valid: true,
-            }),
+            })),
             path,
             dimensions: effective_dims,
             is_persistent: false,
@@ -1693,11 +1711,11 @@ fn open(
         let store = options.open(&path).map_err(convert_error)?;
 
         return Ok(VectorDatabase {
-            inner: RwLock::new(VectorDatabaseInner {
+            inner: Arc::new(RwLock::new(VectorDatabaseInner {
                 store,
                 index_to_id_cache: HashMap::new(),
                 cache_valid: false,
-            }),
+            })),
             path,
             dimensions: effective_dims,
             is_persistent: true,
@@ -1731,11 +1749,11 @@ fn open(
         .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
 
     Ok(VectorDatabase {
-        inner: RwLock::new(VectorDatabaseInner {
+        inner: Arc::new(RwLock::new(VectorDatabaseInner {
             store,
             index_to_id_cache: HashMap::new(),
             cache_valid: true,
-        }),
+        })),
         path,
         dimensions: effective_dims,
         is_persistent: false,
