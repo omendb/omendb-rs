@@ -410,6 +410,9 @@ class VectorDatabase:
     def enable_text_search(self, buffer_mb: int | None = None) -> None:
         """Enable text search for hybrid search.
 
+        Note: Called automatically when using set() with items that have a `text` field.
+        Only call manually if you need custom buffer_mb config.
+
         Args:
             buffer_mb: Writer buffer size in MB (default: 50).
         """
@@ -417,16 +420,6 @@ class VectorDatabase:
 
     def has_text_search(self) -> bool:
         """Check if text search is enabled."""
-        ...
-
-    def set_with_text(self, items: list[VectorRecord]) -> int:
-        """Set vectors with text for hybrid search.
-
-        Each item must have id, vector, and text fields.
-
-        Returns:
-            Number of vectors inserted.
-        """
         ...
 
     def search_text(self, query: str, k: int) -> list[TextSearchResult]:

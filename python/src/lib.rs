@@ -1201,14 +1201,13 @@ impl VectorDatabase {
 
     /// Enable text search for hybrid (vector + text) search.
     ///
-    /// Must be called before using set_with_text() or hybrid_search().
-    /// Creates a tantivy text index for BM25 scoring.
+    /// Note: This is called automatically when using set() with items that have
+    /// a `text` field. Only call manually if you need custom buffer_mb config.
     ///
     /// Args:
     ///     buffer_mb (int, optional): Writer buffer size in MB (default: 50)
     ///
     /// Examples:
-    ///     >>> db.enable_text_search()
     ///     >>> db.enable_text_search(buffer_mb=100)  # For high-throughput
     #[pyo3(name = "enable_text_search", signature = (buffer_mb=None))]
     fn enable_text_search(&self, buffer_mb: Option<usize>) -> PyResult<()> {
@@ -1231,79 +1230,6 @@ impl VectorDatabase {
     fn has_text_search(&self) -> bool {
         let inner = self.inner.read();
         inner.store.has_text_search()
-    }
-
-    /// Set vectors with associated text for hybrid search.
-    ///
-    /// Args:
-    ///     items (list[dict]): List of items with id, vector, text, and optional metadata
-    ///
-    /// Each item must have:
-    ///     - id (str): Unique identifier
-    ///     - vector (list[float]): Vector embedding
-    ///     - text (str): Text content for BM25 search
-    ///     - metadata (dict, optional): Additional metadata
-    ///
-    /// Returns:
-    ///     int: Number of vectors inserted
-    ///
-    /// Examples:
-    ///     >>> db.enable_text_search()
-    ///     >>> db.set_with_text([
-    ///     ...     {"id": "doc1", "vector": [...], "text": "Machine learning intro"},
-    ///     ...     {"id": "doc2", "vector": [...], "text": "Deep learning guide"},
-    ///     ... ])
-    ///     >>> db.flush()  # Commit text index changes
-    #[pyo3(name = "set_with_text")]
-    fn set_with_text(&self, items: &Bound<'_, PyList>) -> PyResult<usize> {
-        let mut inner = self.inner.write();
-
-        if !inner.store.has_text_search() {
-            return Err(PyRuntimeError::new_err(
-                "Text search not enabled. Call enable_text_search() first.",
-            ));
-        }
-
-        let mut count = 0;
-
-        for (idx, item) in items.iter().enumerate() {
-            let dict = item.cast::<PyDict>().map_err(|_| {
-                PyValueError::new_err(format!("Item at index {} must be a dict", idx))
-            })?;
-
-            let id: String = dict
-                .get_item("id")?
-                .ok_or_else(|| {
-                    PyValueError::new_err(format!("Item at index {} missing 'id'", idx))
-                })?
-                .extract()?;
-
-            let vector_data: Vec<f32> = dict
-                .get_item("vector")?
-                .ok_or_else(|| PyValueError::new_err(format!("Item '{}' missing 'vector'", id)))?
-                .extract()?;
-
-            let text: String = dict
-                .get_item("text")?
-                .ok_or_else(|| PyValueError::new_err(format!("Item '{}' missing 'text'", id)))?
-                .extract()?;
-
-            let metadata = if let Some(m) = dict.get_item("metadata")? {
-                pyobject_to_json(&m)?
-            } else {
-                serde_json::json!({})
-            };
-
-            inner
-                .store
-                .set_with_text(id, Vector::new(vector_data), &text, metadata)
-                .map_err(convert_error)?;
-
-            count += 1;
-        }
-
-        inner.cache_valid = false;
-        Ok(count)
     }
 
     /// Search using text only (BM25 scoring).
