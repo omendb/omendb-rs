@@ -87,6 +87,47 @@ def test_text_search():
             assert "id" in r
             assert "score" in r
             assert r["score"] > 0
+            # search_text now returns metadata
+            assert "metadata" in r
+            assert "text" in r["metadata"]
+
+
+def test_update_text():
+    """Test updating text re-indexes for BM25 search"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test_db")
+        db = omendb.open(db_path, dimensions=4)
+
+        # Insert with text
+        db.set(
+            [
+                {
+                    "id": "doc1",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "text": "Python programming language",
+                },
+            ]
+        )
+        db.flush()
+
+        # Verify initial search works
+        results = db.search_text("Python", k=10)
+        assert len(results) == 1
+        assert results[0]["id"] == "doc1"
+
+        # Update text
+        db.update("doc1", text="JavaScript web development")
+        db.flush()
+
+        # Old text should not match
+        results = db.search_text("Python", k=10)
+        assert len(results) == 0
+
+        # New text should match
+        results = db.search_text("JavaScript", k=10)
+        assert len(results) == 1
+        assert results[0]["id"] == "doc1"
+        assert results[0]["metadata"]["text"] == "JavaScript web development"
 
 
 def test_hybrid_search_basic():

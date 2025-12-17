@@ -653,17 +653,18 @@ impl VectorDatabase {
         Ok(result)
     }
 
-    /// Update vector and/or metadata for existing ID.
+    /// Update vector, metadata, and/or text for existing ID.
     ///
-    /// At least one of vector or metadata must be provided.
+    /// At least one of vector, metadata, or text must be provided.
     ///
     /// Args:
     ///     id (str): Vector ID to update
     ///     vector (list[float], optional): New vector data
     ///     metadata (dict, optional): New metadata (replaces existing)
+    ///     text (str, optional): New text for hybrid search (re-indexed for BM25)
     ///
     /// Raises:
-    ///     ValueError: If neither vector nor metadata is provided
+    ///     ValueError: If no update parameters provided
     ///     RuntimeError: If vector with given ID doesn't exist
     ///
     /// Examples:
@@ -675,30 +676,76 @@ impl VectorDatabase {
     ///
     ///     >>> db.update("doc1", metadata={"title": "Updated"})
     ///
-    ///     Update both:
+    ///     Update text (re-indexes for BM25 search):
     ///
-    ///     >>> db.update("doc1", vector=[0.4, 0.5, 0.6], metadata={"title": "New"})
-    #[pyo3(signature = (id, vector=None, metadata=None))]
+    ///     >>> db.update("doc1", text="New searchable content")
+    #[pyo3(signature = (id, vector=None, metadata=None, text=None))]
     fn update(
         &self,
         id: String,
         vector: Option<Vec<f32>>,
         metadata: Option<&Bound<'_, PyDict>>,
+        text: Option<String>,
     ) -> PyResult<()> {
-        if vector.is_none() && metadata.is_none() {
+        if vector.is_none() && metadata.is_none() && text.is_none() {
             return Err(PyValueError::new_err(
-                "update() requires at least one of vector or metadata",
+                "update() requires at least one of vector, metadata, or text",
             ));
         }
 
+        let mut inner = self.inner.write();
+
+        // Handle text update - requires re-indexing
+        if let Some(ref new_text) = text {
+            // Get existing data
+            let (existing_vec, existing_meta) = inner.store.get_by_id(&id).ok_or_else(|| {
+                PyRuntimeError::new_err(format!("Vector with ID '{}' not found", id))
+            })?;
+
+            // Determine final vector
+            let final_vec = vector.map(Vector::new).unwrap_or(existing_vec.clone());
+
+            // Determine final metadata, incorporating new text
+            let mut final_meta = if let Some(m) = metadata {
+                pyobject_to_json(m.as_any())?
+            } else {
+                existing_meta.clone()
+            };
+
+            // Check for conflict
+            if let Some(obj) = final_meta.as_object_mut() {
+                if metadata.is_some() && obj.contains_key("text") {
+                    return Err(PyValueError::new_err(
+                        "Cannot provide both 'text' parameter and 'metadata.text' - use one or the other",
+                    ));
+                }
+                obj.insert("text".to_string(), serde_json::json!(new_text));
+            }
+
+            // Re-index text and update vector/metadata
+            if inner.store.has_text_search() {
+                inner
+                    .store
+                    .set_with_text(id, final_vec, new_text, final_meta)
+                    .map_err(convert_error)?;
+            } else {
+                // Text search not enabled, just update metadata
+                inner
+                    .store
+                    .set(id, final_vec, final_meta)
+                    .map_err(convert_error)?;
+            }
+            inner.cache_valid = false;
+            return Ok(());
+        }
+
+        // No text update - use standard update path
         let vector = vector.map(Vector::new);
         let metadata_json = if let Some(m) = metadata {
             Some(pyobject_to_json(m.as_any())?)
         } else {
             None
         };
-
-        let mut inner = self.inner.write();
 
         inner
             .store
@@ -1223,12 +1270,12 @@ impl VectorDatabase {
     ///     k (int): Number of results to return
     ///
     /// Returns:
-    ///     list[dict]: Results with {id, score} sorted by BM25 score descending
+    ///     list[dict]: Results with {id, score, metadata} sorted by BM25 score descending
     ///
     /// Examples:
     ///     >>> results = db.search_text("machine learning", k=10)
     ///     >>> for r in results:
-    ///     ...     print(f"{r['id']}: {r['score']:.4f}")
+    ///     ...     print(f"{r['id']}: {r['score']:.4f}, text={r['metadata']['text']}")
     #[pyo3(name = "search_text")]
     fn search_text(&self, py: Python<'_>, query: &str, k: usize) -> PyResult<Vec<Py<PyDict>>> {
         if k == 0 {
@@ -1247,8 +1294,16 @@ impl VectorDatabase {
         let mut py_results = Vec::with_capacity(results.len());
         for (id, score) in results {
             let dict = PyDict::new(py);
-            dict.set_item("id", id)?;
+            dict.set_item("id", id.clone())?;
             dict.set_item("score", score)?;
+
+            // Include metadata for consistency with search_hybrid
+            if let Some((_, meta)) = inner.store.get_by_id(&id) {
+                dict.set_item("metadata", json_to_pyobject(py, meta)?)?;
+            } else {
+                dict.set_item("metadata", PyDict::new(py))?;
+            }
+
             py_results.push(dict.into());
         }
 

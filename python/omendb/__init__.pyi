@@ -23,6 +23,7 @@ class TextSearchResult(TypedDict):
 
     id: str
     score: float
+    metadata: dict[str, Any]
 
 class HybridSearchResult(TypedDict):
     """Single hybrid search result."""
@@ -228,18 +229,20 @@ class VectorDatabase:
         id: str,
         vector: Vector | None = None,
         metadata: dict[str, Any] | None = None,
+        text: str | None = None,
     ) -> None:
-        """Update vector and/or metadata for existing ID.
+        """Update vector, metadata, and/or text for existing ID.
 
-        At least one of vector or metadata must be provided.
+        At least one of vector, metadata, or text must be provided.
 
         Args:
             id: Vector ID to update.
             vector: New vector data (optional).
             metadata: New metadata (replaces existing, optional).
+            text: New text for hybrid search (re-indexed for BM25, optional).
 
         Raises:
-            ValueError: If neither vector nor metadata is provided.
+            ValueError: If no update parameters provided.
             RuntimeError: If vector with given ID doesn't exist.
         """
         ...
@@ -425,7 +428,7 @@ class VectorDatabase:
             k: Number of results.
 
         Returns:
-            List of results with id and score.
+            List of results with id, score, and metadata.
         """
         ...
 
