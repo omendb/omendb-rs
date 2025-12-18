@@ -228,6 +228,9 @@ pub struct VectorStore {
 
     /// Distance metric for similarity search (default: L2)
     distance_metric: DistanceFunction,
+
+    /// Next available index for vectors (reliable counter even when skip_ram enabled)
+    next_index: usize,
 }
 
 impl VectorStore {
@@ -258,6 +261,7 @@ impl VectorStore {
             hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
             hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
             distance_metric: DistanceFunction::L2,
+            next_index: 0,
         }
     }
 
@@ -286,6 +290,7 @@ impl VectorStore {
             hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
             hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
             distance_metric: DistanceFunction::L2,
+            next_index: 0,
         }
     }
 
@@ -326,6 +331,7 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
+            next_index: 0,
         })
     }
 
@@ -509,6 +515,9 @@ impl VectorStore {
         // Verify mapping consistency before returning
         debug_assert_mapping_consistency(&id_to_index, &index_to_id);
 
+        // Calculate next_index from loaded mappings (max index + 1)
+        let next_index = id_to_index.values().max().map_or(0, |&max| max + 1);
+
         Ok(Self {
             vectors,
             hnsw_index,
@@ -529,6 +538,7 @@ impl VectorStore {
             hnsw_ef_construction: hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION),
             hnsw_ef_search: hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH),
             distance_metric,
+            next_index,
         })
     }
 
@@ -650,6 +660,7 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
+            next_index: 0,
         })
     }
 
@@ -721,6 +732,7 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
+            next_index: 0,
         })
     }
 
@@ -730,7 +742,8 @@ impl VectorStore {
 
     /// Insert vector and return its ID
     pub fn insert(&mut self, vector: Vector) -> Result<usize> {
-        let id = self.vectors.len();
+        // Use next_index counter (reliable even when skip_ram enabled for quantized stores)
+        let id = self.next_index;
 
         // Lazy initialize HNSW on first insert
         if self.hnsw_index.is_none() {
@@ -823,6 +836,10 @@ impl VectorStore {
         if !self.is_quantized() || self.storage.is_none() {
             self.vectors.push(vector);
         }
+
+        // Increment next_index for the next insert
+        self.next_index += 1;
+
         Ok(id)
     }
 
@@ -978,7 +995,9 @@ impl VectorStore {
 
             // Insert vectors into HNSW using batch_insert for optimal graph construction
             // batch_insert works for all modes (f32, SQ8, RaBitQ) after fix to use get_dequantized
-            let base_index = self.vectors.len();
+            // Use next_index counter (reliable even when skip_ram enabled for quantized stores)
+            let base_index = self.next_index;
+            let insert_count = inserts.len();
             if let Some(ref mut index) = self.hnsw_index {
                 index.batch_insert(&vectors_data)?;
             }
@@ -1019,6 +1038,9 @@ impl VectorStore {
                 self.id_to_index.insert(id, idx);
                 result_indices.push(idx);
             }
+
+            // Update next_index counter
+            self.next_index += insert_count;
 
             // Verify mapping consistency after batch insert
             debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
@@ -1257,7 +1279,8 @@ impl VectorStore {
         vector: Option<Vector>,
         metadata: Option<JsonValue>,
     ) -> Result<()> {
-        if index >= self.vectors.len() {
+        // Use next_index for bounds check (works for quantized stores where vectors is empty)
+        if index >= self.next_index {
             anyhow::bail!("Vector index {index} does not exist");
         }
         if self.deleted.contains_key(&index) {
@@ -1273,7 +1296,10 @@ impl VectorStore {
                 );
             }
 
-            self.vectors[index] = new_vector.clone();
+            // Update in RAM if vectors are stored there (non-quantized or in-memory mode)
+            if let Some(v) = self.vectors.get_mut(index) {
+                *v = new_vector.clone();
+            }
 
             if let Some(ref mut storage) = self.storage {
                 storage.put_vector(index, &new_vector.data)?;
