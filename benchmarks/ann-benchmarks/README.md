@@ -35,15 +35,15 @@ python ann_dataset_test.py --dataset fashion-mnist-784-euclidean
 
 ## Supported Datasets
 
-| Dataset                     | Dimensions | Vectors | Metric | Status                |
-| --------------------------- | ---------- | ------- | ------ | --------------------- |
-| sift-128-euclidean          | 128        | 1M      | L2     | Supported             |
-| fashion-mnist-784-euclidean | 784        | 60K     | L2     | Supported             |
-| glove-25-angular            | 25         | 1.2M    | Cosine | Needs cosine distance |
-| glove-100-angular           | 100        | 1.2M    | Cosine | Needs cosine distance |
-| gist-960-euclidean          | 960        | 1M      | L2     | Supported             |
+| Dataset                     | Dimensions | Vectors | Metric | Status    |
+| --------------------------- | ---------- | ------- | ------ | --------- |
+| sift-128-euclidean          | 128        | 1M      | L2     | Supported |
+| fashion-mnist-784-euclidean | 784        | 60K     | L2     | Supported |
+| glove-25-angular            | 25         | 1.2M    | Cosine | Supported |
+| glove-100-angular           | 100        | 1.2M    | Cosine | Supported |
+| gist-960-euclidean          | 960        | 1M      | L2     | Supported |
 
-Note: OmenDB currently only supports L2 (euclidean) distance. Angular/cosine datasets require adding cosine distance support.
+Note: Angular datasets map to OmenDB's cosine metric. Results may vary due to implementation differences in how angular distance is computed.
 
 ## Configurations
 

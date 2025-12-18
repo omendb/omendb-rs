@@ -68,6 +68,7 @@ def benchmark_omendb(
     train: np.ndarray,
     test: np.ndarray,
     neighbors: np.ndarray,
+    metric: str = "euclidean",
     k: int = 10,
     ef_values: list = None,
     m: int = 16,
@@ -79,13 +80,19 @@ def benchmark_omendb(
     if ef_values is None:
         ef_values = [10, 20, 40, 80, 100, 200]
 
+    # Map ann-benchmarks metric names to omendb
+    metric_map = {"euclidean": "l2", "angular": "cosine"}
+    omendb_metric = metric_map.get(metric, metric)
+
     dim = train.shape[1]
     n_train = train.shape[0]
     n_test = min(test.shape[0], max_test)
 
     print(f"\n{'=' * 60}")
     print(f"OmenDB Benchmark: {n_train:,} train, {n_test:,} test, {dim}D")
-    print(f"Config: m={m}, ef_construction={ef_construction}, k={k}")
+    print(
+        f"Config: m={m}, ef_construction={ef_construction}, k={k}, metric={omendb_metric}"
+    )
     print(f"{'=' * 60}")
 
     # Build index
@@ -96,6 +103,7 @@ def benchmark_omendb(
         dimensions=dim,
         m=m,
         ef_construction=ef_construction,
+        metric=omendb_metric,
     )
 
     # Insert in batches for progress
@@ -221,6 +229,7 @@ def main():
         train,
         test,
         neighbors,
+        metric=metric,
         k=args.k,
         m=args.m,
         ef_construction=args.ef_construction,
