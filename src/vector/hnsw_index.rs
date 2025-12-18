@@ -645,7 +645,7 @@ impl HNSWIndex {
         }
 
         // Use provided ef or fall back to auto-tuned default
-        let effective_ef = ef.unwrap_or_else(|| (k * 4).max(64).max(self.ef_search));
+        let effective_ef = ef.unwrap_or_else(|| self.compute_ef(k));
 
         // Search with ACORN-1 filtered search
         let results = self

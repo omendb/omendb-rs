@@ -1168,6 +1168,122 @@ fn test_hybrid_search_without_text_enabled() {
         .contains("Text search not enabled"));
 }
 
+#[test]
+fn test_hybrid_search_with_subscores() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    // doc1: matches both vector and text
+    store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "machine learning algorithms",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // doc2: matches text only (very different vector)
+    store
+        .set_with_text(
+            "doc2".to_string(),
+            Vector::new(vec![0.0, 0.0, 0.0, 1.0]),
+            "machine learning models",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // doc3: matches vector only (no matching text)
+    store
+        .set_with_text(
+            "doc3".to_string(),
+            Vector::new(vec![0.9, 0.1, 0.0, 0.0]),
+            "cooking recipes",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    store.flush().unwrap();
+
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+    let results = store
+        .hybrid_search_with_subscores(&query, "machine learning", 3, None, None)
+        .unwrap();
+
+    assert_eq!(results.len(), 3);
+
+    // doc1 should have both scores
+    let doc1 = results.iter().find(|(r, _)| r.id == "doc1").unwrap();
+    assert!(
+        doc1.0.keyword_score.is_some(),
+        "doc1 should have keyword_score"
+    );
+    assert!(
+        doc1.0.semantic_score.is_some(),
+        "doc1 should have semantic_score"
+    );
+
+    // doc2 should have keyword but possibly no semantic (if not in vector top-k)
+    let doc2 = results.iter().find(|(r, _)| r.id == "doc2").unwrap();
+    assert!(
+        doc2.0.keyword_score.is_some(),
+        "doc2 should have keyword_score"
+    );
+
+    // doc3 should have semantic but no keyword (text doesn't match "machine learning")
+    let doc3 = results.iter().find(|(r, _)| r.id == "doc3").unwrap();
+    assert!(
+        doc3.0.semantic_score.is_some(),
+        "doc3 should have semantic_score"
+    );
+    assert!(
+        doc3.0.keyword_score.is_none(),
+        "doc3 should not have keyword_score"
+    );
+
+    // doc1 should rank highest (both vector similarity and text match)
+    assert_eq!(results[0].0.id, "doc1");
+}
+
+#[test]
+fn test_hybrid_search_with_filter_subscores() {
+    let mut store = VectorStore::new(4);
+    store.enable_text_search().unwrap();
+
+    store
+        .set_with_text(
+            "doc1".to_string(),
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "machine learning",
+            serde_json::json!({"year": 2024}),
+        )
+        .unwrap();
+
+    store
+        .set_with_text(
+            "doc2".to_string(),
+            Vector::new(vec![0.9, 0.1, 0.0, 0.0]),
+            "machine learning",
+            serde_json::json!({"year": 2023}),
+        )
+        .unwrap();
+
+    store.flush().unwrap();
+
+    let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
+    let filter = MetadataFilter::Gte("year".to_string(), 2024.0);
+
+    let results = store
+        .hybrid_search_with_filter_subscores(&query, "machine learning", 10, &filter, None, None)
+        .unwrap();
+
+    // Only doc1 should match (year >= 2024)
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0.id, "doc1");
+    assert!(results[0].0.keyword_score.is_some());
+    assert!(results[0].0.semantic_score.is_some());
+}
+
 // ============================================================================
 // Property-Based Tests
 // ============================================================================

@@ -1361,9 +1361,11 @@ impl VectorDatabase {
     ///     k (int): Number of results to return
     ///     filter (dict, optional): Metadata filter
     ///     alpha (float, optional): Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
+    ///     subscores (bool, optional): Return separate keyword_score and semantic_score (default: False)
     ///
     /// Returns:
-    ///     list[dict]: Results with {id, score} sorted by RRF score descending
+    ///     list[dict]: Results with {id, score, metadata} sorted by RRF score descending.
+    ///                 When subscores=True, also includes keyword_score and semantic_score.
     ///
     /// Examples:
     ///     >>> results = db.search_hybrid([0.1, 0.2, ...], "machine learning", k=10)
@@ -1375,7 +1377,13 @@ impl VectorDatabase {
     ///
     ///     Favor vector similarity (70% vector, 30% text):
     ///     >>> results = db.search_hybrid(vec, "ML", k=10, alpha=0.7)
-    #[pyo3(name = "search_hybrid", signature = (query_vector, query_text, k, filter=None, alpha=None, rrf_k=None))]
+    ///
+    ///     Get separate keyword and semantic scores:
+    ///     >>> results = db.search_hybrid(vec, "ML", k=10, subscores=True)
+    ///     >>> for r in results:
+    ///     ...     print(f"{r['id']}: combined={r['score']:.3f}")
+    ///     ...     print(f"  keyword={r.get('keyword_score')}, semantic={r.get('semantic_score')}")
+    #[pyo3(name = "search_hybrid", signature = (query_vector, query_text, k, filter=None, alpha=None, rrf_k=None, subscores=None))]
     fn search_hybrid(
         &self,
         py: Python<'_>,
@@ -1385,6 +1393,7 @@ impl VectorDatabase {
         filter: Option<&Bound<'_, PyDict>>,
         alpha: Option<f32>,
         rrf_k: Option<usize>,
+        subscores: Option<bool>,
     ) -> PyResult<Vec<Py<PyDict>>> {
         // Validate inputs
         if k == 0 {
@@ -1414,6 +1423,45 @@ impl VectorDatabase {
             inner.store.flush().map_err(convert_error)?;
         }
 
+        // Use subscores path when requested
+        if subscores.unwrap_or(false) {
+            let results = if let Some(f) = rust_filter {
+                inner
+                    .store
+                    .hybrid_search_with_filter_subscores(
+                        &query_vec, query_text, k, &f, alpha, rrf_k,
+                    )
+                    .map_err(convert_error)?
+            } else {
+                inner
+                    .store
+                    .hybrid_search_with_subscores(&query_vec, query_text, k, alpha, rrf_k)
+                    .map_err(convert_error)?
+            };
+
+            let mut py_results = Vec::with_capacity(results.len());
+            for (hybrid_result, metadata) in results {
+                let dict = PyDict::new(py);
+                dict.set_item("id", &hybrid_result.id)?;
+                dict.set_item("score", hybrid_result.score)?;
+                dict.set_item("metadata", json_to_pyobject(py, &metadata)?)?;
+
+                // Add subscores (None if document only appeared in one search)
+                match hybrid_result.keyword_score {
+                    Some(score) => dict.set_item("keyword_score", score)?,
+                    None => dict.set_item("keyword_score", py.None())?,
+                }
+                match hybrid_result.semantic_score {
+                    Some(score) => dict.set_item("semantic_score", score)?,
+                    None => dict.set_item("semantic_score", py.None())?,
+                }
+
+                py_results.push(dict.into());
+            }
+            return Ok(py_results);
+        }
+
+        // Standard path without subscores
         let results = if let Some(f) = rust_filter {
             inner
                 .store

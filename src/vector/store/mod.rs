@@ -19,7 +19,10 @@ use super::types::Vector;
 use super::QuantizationMode;
 use crate::omen::DistanceFunction;
 use crate::omen::{MetadataIndex, OmenFile};
-use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
+use crate::text::{
+    weighted_reciprocal_rank_fusion, weighted_reciprocal_rank_fusion_with_subscores, HybridResult,
+    TextIndex, TextSearchConfig, DEFAULT_RRF_K,
+};
 use anyhow::Result;
 use omendb_core::compression::QuantizationBits;
 use omendb_core::distance::l2_distance;
@@ -1264,6 +1267,124 @@ impl VectorStore {
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
                 (id, score, metadata)
+            })
+            .collect()
+    }
+
+    /// Hybrid search returning separate keyword and semantic scores.
+    ///
+    /// Returns [`HybridResult`] with `keyword_score` (BM25) and `semantic_score` (vector distance)
+    /// for each result, enabling custom post-processing or debugging.
+    pub fn hybrid_search_with_subscores(
+        &mut self,
+        query_vector: &Vector,
+        query_text: &str,
+        k: usize,
+        alpha: Option<f32>,
+        rrf_k: Option<usize>,
+    ) -> Result<Vec<(HybridResult, JsonValue)>> {
+        if query_vector.data.len() != self.dimensions {
+            anyhow::bail!(
+                "Query vector dimension {} does not match store dimension {}",
+                query_vector.data.len(),
+                self.dimensions
+            );
+        }
+        if self.text_index.is_none() {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        }
+
+        let fetch_k = k * 2;
+
+        let vector_results = self.knn_search(query_vector, fetch_k)?;
+        let vector_results: Vec<(String, f32)> = vector_results
+            .into_iter()
+            .filter_map(|(idx, distance)| {
+                self.index_to_id.get(&idx).map(|id| (id.clone(), distance))
+            })
+            .collect();
+
+        let text_results = self.text_search(query_text, fetch_k)?;
+
+        let fused = weighted_reciprocal_rank_fusion_with_subscores(
+            vector_results,
+            text_results,
+            k,
+            rrf_k.unwrap_or(DEFAULT_RRF_K),
+            alpha.unwrap_or(0.5),
+        );
+
+        Ok(self.attach_metadata_to_hybrid_results(fused))
+    }
+
+    /// Hybrid search with filter returning separate keyword and semantic scores.
+    pub fn hybrid_search_with_filter_subscores(
+        &mut self,
+        query_vector: &Vector,
+        query_text: &str,
+        k: usize,
+        filter: &MetadataFilter,
+        alpha: Option<f32>,
+        rrf_k: Option<usize>,
+    ) -> Result<Vec<(HybridResult, JsonValue)>> {
+        if query_vector.data.len() != self.dimensions {
+            anyhow::bail!(
+                "Query vector dimension {} does not match store dimension {}",
+                query_vector.data.len(),
+                self.dimensions
+            );
+        }
+        if self.text_index.is_none() {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        }
+
+        let fetch_k = k * 4;
+
+        let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
+        let vector_results: Vec<(String, f32)> = vector_results
+            .into_iter()
+            .filter_map(|(idx, distance, _)| {
+                self.index_to_id.get(&idx).map(|id| (id.clone(), distance))
+            })
+            .collect();
+
+        let text_results = self.text_search(query_text, fetch_k)?;
+        let text_results: Vec<(String, f32)> = text_results
+            .into_iter()
+            .filter(|(id, _)| {
+                self.id_to_index
+                    .get(id)
+                    .and_then(|&idx| self.metadata.get(&idx))
+                    .is_some_and(|meta| filter.matches(meta))
+            })
+            .collect();
+
+        let fused = weighted_reciprocal_rank_fusion_with_subscores(
+            vector_results,
+            text_results,
+            k,
+            rrf_k.unwrap_or(DEFAULT_RRF_K),
+            alpha.unwrap_or(0.5),
+        );
+
+        Ok(self.attach_metadata_to_hybrid_results(fused))
+    }
+
+    /// Attach metadata to hybrid results with subscores
+    fn attach_metadata_to_hybrid_results(
+        &self,
+        results: Vec<HybridResult>,
+    ) -> Vec<(HybridResult, JsonValue)> {
+        results
+            .into_iter()
+            .map(|result| {
+                let metadata = self
+                    .id_to_index
+                    .get(&result.id)
+                    .and_then(|&idx| self.metadata.get(&idx))
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+                (result, metadata)
             })
             .collect()
     }

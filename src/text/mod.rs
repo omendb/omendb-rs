@@ -239,6 +239,21 @@ impl TextIndex {
 /// Default RRF constant (k=60 per Cormack et al. 2009).
 pub const DEFAULT_RRF_K: usize = 60;
 
+/// Result from hybrid search with separate keyword and semantic scores.
+///
+/// Useful for debugging, custom weighting, or query-adaptive fusion.
+#[derive(Debug, Clone)]
+pub struct HybridResult {
+    /// Document ID
+    pub id: String,
+    /// Combined RRF score
+    pub score: f32,
+    /// BM25 keyword matching score (None if document only matched vector search)
+    pub keyword_score: Option<f32>,
+    /// Vector similarity score (None if document only matched text search)
+    pub semantic_score: Option<f32>,
+}
+
 /// Reciprocal Rank Fusion for combining vector and text search results.
 ///
 /// RRF combines rankings from multiple sources without requiring score normalization.
@@ -310,6 +325,65 @@ pub fn weighted_reciprocal_rank_fusion(
     // Sort by RRF score descending
     let mut results: Vec<_> = scores.into_iter().collect();
     results.sort_by(|a, b| b.1.total_cmp(&a.1));
+    results.truncate(limit);
+
+    results
+}
+
+/// Weighted RRF with separate keyword and semantic scores returned.
+///
+/// Returns [`HybridResult`] with raw BM25 and vector distance scores
+/// for transparency and custom post-processing.
+///
+/// # Arguments
+/// * `vector_results` - Results from vector search as (id, distance)
+/// * `text_results` - Results from text search as (id, bm25_score)
+/// * `limit` - Maximum results to return
+/// * `rrf_k` - RRF constant (default: 60)
+/// * `alpha` - Weight for vector results (0.0 = text only, 1.0 = vector only, 0.5 = balanced)
+#[must_use]
+pub fn weighted_reciprocal_rank_fusion_with_subscores(
+    vector_results: Vec<(String, f32)>,
+    text_results: Vec<(String, f32)>,
+    limit: usize,
+    rrf_k: usize,
+    alpha: f32,
+) -> Vec<HybridResult> {
+    use std::collections::HashMap;
+
+    let alpha = alpha.clamp(0.0, 1.0);
+
+    // Track RRF scores and raw scores separately
+    let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+    let mut semantic_scores: HashMap<String, f32> = HashMap::new();
+    let mut keyword_scores: HashMap<String, f32> = HashMap::new();
+
+    // Vector results: store distance as semantic_score
+    for (rank, (id, distance)) in vector_results.iter().enumerate() {
+        let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
+        *rrf_scores.entry(id.clone()).or_default() += alpha * rrf_score;
+        semantic_scores.insert(id.clone(), *distance);
+    }
+
+    // Text results: store BM25 as keyword_score
+    for (rank, (id, bm25_score)) in text_results.iter().enumerate() {
+        let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
+        *rrf_scores.entry(id.clone()).or_default() += (1.0 - alpha) * rrf_score;
+        keyword_scores.insert(id.clone(), *bm25_score);
+    }
+
+    // Build results with subscores
+    let mut results: Vec<HybridResult> = rrf_scores
+        .into_iter()
+        .map(|(id, score)| HybridResult {
+            keyword_score: keyword_scores.get(&id).copied(),
+            semantic_score: semantic_scores.get(&id).copied(),
+            id,
+            score,
+        })
+        .collect();
+
+    results.sort_by(|a, b| b.score.total_cmp(&a.score));
     results.truncate(limit);
 
     results

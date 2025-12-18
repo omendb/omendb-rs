@@ -370,6 +370,115 @@ def test_hybrid_search_all_params():
             assert r["metadata"]["score"] >= 50
 
 
+def test_hybrid_search_with_subscores():
+    """Test hybrid search with subscores=True returns keyword and semantic scores"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test_db")
+        db = omendb.open(db_path, dimensions=4)
+
+        db.set(
+            [
+                # doc1: matches both vector and text
+                {
+                    "id": "doc1",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "text": "machine learning algorithms",
+                },
+                # doc2: matches text only (very different vector)
+                {
+                    "id": "doc2",
+                    "vector": [0.0, 0.0, 0.0, 1.0],
+                    "text": "machine learning models",
+                },
+                # doc3: matches vector only (no matching text)
+                {
+                    "id": "doc3",
+                    "vector": [0.9, 0.1, 0.0, 0.0],
+                    "text": "cooking recipes",
+                },
+            ]
+        )
+        db.flush()
+
+        # Test without subscores (default) - should NOT have keyword_score/semantic_score
+        results_default = db.search_hybrid(
+            query_vector=[1.0, 0.0, 0.0, 0.0], query_text="machine learning", k=3
+        )
+        assert len(results_default) == 3
+        assert "keyword_score" not in results_default[0]
+        assert "semantic_score" not in results_default[0]
+
+        # Test with subscores=True - should have keyword_score and semantic_score
+        results = db.search_hybrid(
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            query_text="machine learning",
+            k=3,
+            subscores=True,
+        )
+
+        assert len(results) == 3
+
+        # All results should have the subscores keys
+        for r in results:
+            assert "id" in r
+            assert "score" in r
+            assert "keyword_score" in r
+            assert "semantic_score" in r
+            assert "metadata" in r
+
+        # doc1 should have both scores (matches both)
+        doc1 = next(r for r in results if r["id"] == "doc1")
+        assert doc1["keyword_score"] is not None, "doc1 should have keyword_score"
+        assert doc1["semantic_score"] is not None, "doc1 should have semantic_score"
+
+        # doc3 should have semantic but no keyword (text doesn't match "machine learning")
+        doc3 = next(r for r in results if r["id"] == "doc3")
+        assert doc3["semantic_score"] is not None, "doc3 should have semantic_score"
+        assert doc3["keyword_score"] is None, "doc3 should not have keyword_score"
+
+        # doc1 should rank highest (both vector similarity and text match)
+        assert results[0]["id"] == "doc1"
+
+
+def test_hybrid_search_subscores_with_filter():
+    """Test hybrid search with subscores and filter"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test_db")
+        db = omendb.open(db_path, dimensions=4)
+
+        db.set(
+            [
+                {
+                    "id": "doc1",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "text": "machine learning",
+                    "metadata": {"year": 2024},
+                },
+                {
+                    "id": "doc2",
+                    "vector": [0.9, 0.1, 0.0, 0.0],
+                    "text": "machine learning",
+                    "metadata": {"year": 2023},
+                },
+            ]
+        )
+        db.flush()
+
+        results = db.search_hybrid(
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            query_text="machine learning",
+            k=10,
+            filter={"year": 2024},
+            subscores=True,
+        )
+
+        # Only doc1 should match (year == 2024)
+        assert len(results) == 1
+        assert results[0]["id"] == "doc1"
+        assert results[0]["keyword_score"] is not None
+        assert results[0]["semantic_score"] is not None
+
+
 if __name__ == "__main__":
     test_enable_text_search()
     test_set_with_text_auto_enables()

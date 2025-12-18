@@ -32,6 +32,15 @@ class HybridSearchResult(TypedDict):
     score: float
     metadata: dict[str, Any]
 
+class HybridSearchResultWithSubscores(TypedDict):
+    """Hybrid search result with separate keyword and semantic scores."""
+
+    id: str
+    score: float
+    metadata: dict[str, Any]
+    keyword_score: float | None  # BM25 score (None if only matched vector search)
+    semantic_score: float | None  # Vector distance (None if only matched text search)
+
 class VectorRecord(TypedDict, total=False):
     """Input record for set()."""
 
@@ -454,6 +463,7 @@ class VectorDatabase:
         """
         ...
 
+    @overload
     def search_hybrid(
         self,
         query_vector: Vector,
@@ -462,7 +472,35 @@ class VectorDatabase:
         filter: MetadataFilter | None = None,
         alpha: float | None = None,
         rrf_k: int | None = None,
+        subscores: Literal[False] | None = None,
     ) -> list[HybridSearchResult]:
+        """Hybrid search combining vector and text."""
+        ...
+
+    @overload
+    def search_hybrid(
+        self,
+        query_vector: Vector,
+        query_text: str,
+        k: int,
+        filter: MetadataFilter | None = None,
+        alpha: float | None = None,
+        rrf_k: int | None = None,
+        subscores: Literal[True] = ...,
+    ) -> list[HybridSearchResultWithSubscores]:
+        """Hybrid search with separate keyword and semantic scores."""
+        ...
+
+    def search_hybrid(
+        self,
+        query_vector: Vector,
+        query_text: str,
+        k: int,
+        filter: MetadataFilter | None = None,
+        alpha: float | None = None,
+        rrf_k: int | None = None,
+        subscores: bool | None = None,
+    ) -> list[HybridSearchResult] | list[HybridSearchResultWithSubscores]:
         """Hybrid search combining vector and text.
 
         Uses Reciprocal Rank Fusion (RRF) to combine results.
@@ -474,9 +512,17 @@ class VectorDatabase:
             filter: Optional metadata filter.
             alpha: Vector vs text weight (0.0=text, 1.0=vector, default=0.5).
             rrf_k: RRF constant (default: 60).
+            subscores: Return separate keyword_score and semantic_score (default: False).
 
         Returns:
             List of results with id, score, metadata.
+            When subscores=True, also includes keyword_score and semantic_score.
+
+        Examples:
+            >>> results = db.search_hybrid(vec, "query", k=10)
+            >>> results = db.search_hybrid(vec, "query", k=10, subscores=True)
+            >>> for r in results:
+            ...     print(f"{r['id']}: keyword={r['keyword_score']}, semantic={r['semantic_score']}")
         """
         ...
 
