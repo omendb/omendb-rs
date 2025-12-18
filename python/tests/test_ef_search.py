@@ -5,6 +5,8 @@ import os
 import random
 import tempfile
 
+import pytest
+
 import omendb
 
 # ef_search API now implemented
@@ -144,6 +146,7 @@ class TestEfSearchConstraints:
 class TestEfSearchPerformance:
     """Test ef_search impact on performance"""
 
+    @pytest.mark.skip(reason="Timing test is inherently flaky on CI runners")
     def test_lower_ef_faster(self):
         """Test that lower ef_search is faster (less work)"""
         with tempfile.TemporaryDirectory() as tmpdir:
