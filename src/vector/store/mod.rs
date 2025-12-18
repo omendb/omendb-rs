@@ -1612,6 +1612,10 @@ impl VectorStore {
         filter: &MetadataFilter,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
+        // Use provided ef, or fall back to stored hnsw_ef_search
+        // Ensure ef >= k (HNSW requirement)
+        let effective_ef = ef.unwrap_or(self.hnsw_ef_search).max(k);
+
         // Try bitmap-based filtering (O(1) per candidate)
         let filter_bitmap = filter.evaluate_bitmap(&self.metadata_index);
 
@@ -1625,7 +1629,7 @@ impl VectorStore {
                     let index = node_id as usize;
                     !deleted_map.contains_key(&index) && bitmap.contains(node_id)
                 };
-                hnsw.search_with_filter_ef(&query.data, k, ef, filter_fn)?
+                hnsw.search_with_filter_ef(&query.data, k, Some(effective_ef), filter_fn)?
             } else {
                 // Slow path: JSON-based filtering
                 let filter_fn = |node_id: u32| -> bool {
@@ -1639,7 +1643,7 @@ impl VectorStore {
                         .unwrap_or(serde_json::json!({}));
                     filter.matches(&metadata)
                 };
-                hnsw.search_with_filter_ef(&query.data, k, ef, filter_fn)?
+                hnsw.search_with_filter_ef(&query.data, k, Some(effective_ef), filter_fn)?
             };
 
             let filtered_results: Vec<(usize, f32, JsonValue)> = search_results
