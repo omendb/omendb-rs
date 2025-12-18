@@ -29,6 +29,68 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Default HNSW M parameter (neighbors per node)
+const DEFAULT_HNSW_M: usize = 16;
+/// Default HNSW ef_construction parameter (build quality)
+const DEFAULT_HNSW_EF_CONSTRUCTION: usize = 100;
+/// Default HNSW ef_search parameter (search quality)
+const DEFAULT_HNSW_EF_SEARCH: usize = 100;
+/// Default oversample factor for rescore
+const DEFAULT_OVERSAMPLE_FACTOR: f32 = 3.0;
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Compute effective ef_search value.
+///
+/// Ensures ef >= k (HNSW requirement) and falls back to default if not specified.
+#[inline]
+fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> usize {
+    ef.unwrap_or(stored_ef).max(k)
+}
+
+/// Assert ID mapping consistency (debug builds only).
+///
+/// Verifies that id_to_index and index_to_id are inverse mappings.
+#[cfg(debug_assertions)]
+fn debug_assert_mapping_consistency(
+    id_to_index: &HashMap<String, usize>,
+    index_to_id: &HashMap<usize, String>,
+) {
+    // Both maps must have same size
+    debug_assert_eq!(
+        id_to_index.len(),
+        index_to_id.len(),
+        "ID mapping size mismatch: id_to_index={}, index_to_id={}",
+        id_to_index.len(),
+        index_to_id.len()
+    );
+
+    // Every entry in id_to_index must have inverse in index_to_id
+    for (id, &idx) in id_to_index {
+        debug_assert_eq!(
+            index_to_id.get(&idx),
+            Some(id),
+            "Mapping inconsistency: id_to_index[{id}]={idx} but index_to_id[{idx}]={:?}",
+            index_to_id.get(&idx)
+        );
+    }
+}
+
+#[cfg(not(debug_assertions))]
+#[inline]
+fn debug_assert_mapping_consistency(
+    _id_to_index: &HashMap<String, usize>,
+    _index_to_id: &HashMap<usize, String>,
+) {
+    // No-op in release builds
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -86,8 +148,10 @@ fn create_hnsw_index(
     quantization_mode: Option<&QuantizationMode>,
     training_vectors: &[Vec<f32>],
 ) -> Result<HNSWIndex> {
-    let m = hnsw_m.max(16);
-    let ef_construction = hnsw_ef_construction.max(100);
+    // Ensure minimum values for HNSW parameters
+    let m = hnsw_m.max(DEFAULT_HNSW_M);
+    let ef_construction = hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION);
+    let ef_search = hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH);
 
     let hnsw_params = HNSWParams {
         m,
@@ -123,7 +187,7 @@ fn create_hnsw_index(
             dimensions,
             m,
             ef_construction,
-            hnsw_ef_search.max(100),
+            ef_search,
             distance_metric.to_hnsw(),
         ),
     }
@@ -198,7 +262,7 @@ impl VectorStore {
             hnsw_index: None,
             dimensions,
             rescore_enabled: false,
-            oversample_factor: 3.0,
+            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -209,9 +273,9 @@ impl VectorStore {
             text_index: None,
             text_search_config: None,
             pending_quantization: None,
-            hnsw_m: 16,
-            hnsw_ef_construction: 100,
-            hnsw_ef_search: 100,
+            hnsw_m: DEFAULT_HNSW_M,
+            hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
+            hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
             distance_metric: DistanceFunction::L2,
         }
     }
@@ -226,7 +290,7 @@ impl VectorStore {
             hnsw_index: None,
             dimensions,
             rescore_enabled: true,
-            oversample_factor: 3.0,
+            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -237,9 +301,9 @@ impl VectorStore {
             text_index: None,
             text_search_config: None,
             pending_quantization: Some(mode),
-            hnsw_m: 16,
-            hnsw_ef_construction: 100,
-            hnsw_ef_search: 100,
+            hnsw_m: DEFAULT_HNSW_M,
+            hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
+            hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
             distance_metric: DistanceFunction::L2,
         }
     }
@@ -266,7 +330,7 @@ impl VectorStore {
             hnsw_index,
             dimensions,
             rescore_enabled: false,
-            oversample_factor: 3.0,
+            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata: HashMap::new(),
             id_to_index: HashMap::new(),
             index_to_id: HashMap::new(),
@@ -461,12 +525,15 @@ impl VectorStore {
             .as_ref()
             .is_some_and(super::hnsw_index::HNSWIndex::is_asymmetric);
 
+        // Verify mapping consistency before returning
+        debug_assert_mapping_consistency(&id_to_index, &index_to_id);
+
         Ok(Self {
             vectors,
             hnsw_index,
             dimensions,
             rescore_enabled,
-            oversample_factor: 3.0,
+            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata,
             id_to_index,
             index_to_id,
@@ -477,9 +544,9 @@ impl VectorStore {
             text_index,
             text_search_config: None,
             pending_quantization: None,
-            hnsw_m: hnsw_m.max(16),
-            hnsw_ef_construction: hnsw_ef_construction.max(100),
-            hnsw_ef_search: hnsw_ef_search.max(100),
+            hnsw_m: hnsw_m.max(DEFAULT_HNSW_M),
+            hnsw_ef_construction: hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION),
+            hnsw_ef_search: hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH),
             distance_metric,
         })
     }
@@ -799,6 +866,9 @@ impl VectorStore {
         self.id_to_index.insert(id.clone(), index);
         self.index_to_id.insert(index, id.clone());
 
+        // Verify mapping consistency
+        debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
+
         if let Some(ref mut storage) = self.storage {
             storage.put_metadata(index, &metadata)?;
             storage.put_id_mapping(&id, index)?;
@@ -968,6 +1038,9 @@ impl VectorStore {
                 self.id_to_index.insert(id, idx);
                 result_indices.push(idx);
             }
+
+            // Verify mapping consistency after batch insert
+            debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
         }
 
         Ok(result_indices)
@@ -1298,6 +1371,9 @@ impl VectorStore {
         self.id_to_index.remove(id);
         self.index_to_id.remove(&index);
 
+        // Verify mapping consistency
+        debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
+
         Ok(())
     }
 
@@ -1342,6 +1418,9 @@ impl VectorStore {
             self.id_to_index.remove(id);
             self.index_to_id.remove(&(node_id as usize));
         }
+
+        // Verify mapping consistency
+        debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
 
         Ok(valid_ids.len())
     }
@@ -1642,7 +1721,7 @@ impl VectorStore {
     ) -> Result<Vec<(usize, f32)>> {
         // Use provided ef, or fall back to stored hnsw_ef_search
         // Ensure ef >= k (HNSW requirement)
-        let effective_ef = ef.unwrap_or(self.hnsw_ef_search).max(k);
+        let effective_ef = compute_effective_ef(ef, self.hnsw_ef_search, k);
         self.knn_search_ef(query, k, effective_ef)
     }
 
@@ -1765,7 +1844,7 @@ impl VectorStore {
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
         // Use provided ef, or fall back to stored hnsw_ef_search
         // Ensure ef >= k (HNSW requirement)
-        let effective_ef = ef.unwrap_or(self.hnsw_ef_search).max(k);
+        let effective_ef = compute_effective_ef(ef, self.hnsw_ef_search, k);
 
         // Try bitmap-based filtering (O(1) per candidate)
         let filter_bitmap = filter.evaluate_bitmap(&self.metadata_index);
@@ -1964,7 +2043,7 @@ impl VectorStore {
     ) -> Vec<Result<Vec<(usize, f32)>>> {
         // Use provided ef, or fall back to stored hnsw_ef_search
         // Ensure ef >= k (HNSW requirement)
-        let effective_ef = ef.unwrap_or(self.hnsw_ef_search).max(k);
+        let effective_ef = compute_effective_ef(ef, self.hnsw_ef_search, k);
         queries
             .par_iter()
             .map(|q| self.knn_search_ef(q, k, effective_ef))
