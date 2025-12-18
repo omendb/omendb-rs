@@ -189,10 +189,15 @@ impl NumericIndex {
     }
 
     pub fn insert(&mut self, doc_id: u32, value: f64) {
-        // Add to sorted entries
+        // Skip NaN values (can't be compared or indexed meaningfully)
+        if value.is_nan() {
+            return;
+        }
+
+        // Add to sorted entries (total_cmp handles -0.0 vs 0.0, NaN already filtered)
         let pos = self
             .entries
-            .binary_search_by(|(v, _)| v.partial_cmp(&value).unwrap())
+            .binary_search_by(|(v, _)| v.total_cmp(&value))
             .unwrap_or_else(|p| p);
         self.entries.insert(pos, (value, doc_id));
 
