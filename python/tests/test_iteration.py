@@ -203,7 +203,7 @@ def test_delete_where_simple():
 
     count = db.delete_where({"status": "archived"})
     assert count == 2
-    assert set(list(db.ids())) == {"a"}
+    assert set(db.ids()) == {"a"}
 
 
 def test_delete_where_comparison():
@@ -220,7 +220,7 @@ def test_delete_where_comparison():
     # Delete low scores
     count = db.delete_where({"score": {"$lt": 0.5}})
     assert count == 1
-    assert set(list(db.ids())) == {"b", "c"}
+    assert set(db.ids()) == {"b", "c"}
 
 
 def test_delete_where_complex():
@@ -237,7 +237,7 @@ def test_delete_where_complex():
     # Delete docs with low score
     count = db.delete_where({"$and": [{"type": "doc"}, {"score": {"$lt": 0.8}}]})
     assert count == 1
-    assert set(list(db.ids())) == {"b", "c"}
+    assert set(db.ids()) == {"b", "c"}
 
 
 def test_delete_where_no_match():
@@ -307,6 +307,63 @@ def test_iteration_handles_deletion_during_iteration():
     assert len(collected) <= 3
 
 
+def test_count_no_filter():
+    """Test count() without filter returns total count"""
+    db = omendb.open(":memory:", dimensions=3)
+    db.set(
+        [
+            {"id": "a", "vector": [1, 2, 3], "metadata": {"status": "active"}},
+            {"id": "b", "vector": [4, 5, 6], "metadata": {"status": "active"}},
+            {"id": "c", "vector": [7, 8, 9], "metadata": {"status": "archived"}},
+        ]
+    )
+
+    assert db.count() == 3
+    assert db.count() == len(db)
+
+
+def test_count_with_filter():
+    """Test count() with filter returns filtered count"""
+    db = omendb.open(":memory:", dimensions=3)
+    db.set(
+        [
+            {"id": "a", "vector": [1, 2, 3], "metadata": {"status": "active", "score": 0.9}},
+            {"id": "b", "vector": [4, 5, 6], "metadata": {"status": "active", "score": 0.5}},
+            {"id": "c", "vector": [7, 8, 9], "metadata": {"status": "archived", "score": 0.3}},
+        ]
+    )
+
+    # Simple equality filter
+    assert db.count(filter={"status": "active"}) == 2
+    assert db.count(filter={"status": "archived"}) == 1
+
+    # Comparison filter
+    assert db.count(filter={"score": {"$gte": 0.5}}) == 2
+    assert db.count(filter={"score": {"$lt": 0.5}}) == 1
+
+    # Filter with no matches
+    assert db.count(filter={"status": "unknown"}) == 0
+
+
+def test_count_excludes_deleted():
+    """Test count() excludes deleted vectors"""
+    db = omendb.open(":memory:", dimensions=3)
+    db.set(
+        [
+            {"id": "a", "vector": [1, 2, 3], "metadata": {"x": 1}},
+            {"id": "b", "vector": [4, 5, 6], "metadata": {"x": 1}},
+        ]
+    )
+
+    assert db.count() == 2
+    assert db.count(filter={"x": 1}) == 2
+
+    db.delete(["a"])
+
+    assert db.count() == 1
+    assert db.count(filter={"x": 1}) == 1
+
+
 if __name__ == "__main__":
     test_ids()
     test_ids_excludes_deleted()
@@ -330,4 +387,7 @@ if __name__ == "__main__":
     test_delete_where_all()
     test_iteration_is_lazy()
     test_iteration_handles_deletion_during_iteration()
+    test_count_no_filter()
+    test_count_with_filter()
+    test_count_excludes_deleted()
     print("All tests passed!")

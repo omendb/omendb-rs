@@ -454,6 +454,41 @@ impl VectorDatabase {
         Ok(result as u32)
     }
 
+    /// Count vectors, optionally filtered by metadata.
+    ///
+    /// Without a filter, returns total count (same as db.length).
+    /// With a filter, returns count of vectors matching the filter.
+    ///
+    /// @param filter - Optional MongoDB-style metadata filter
+    /// @returns Number of vectors (matching filter if provided)
+    ///
+    /// @example
+    /// ```javascript
+    /// // Total count
+    /// const total = db.count();
+    ///
+    /// // Filtered count
+    /// const active = db.count({ status: "active" });
+    ///
+    /// // With comparison operators
+    /// const highScore = db.count({ score: { $gte: 0.8 } });
+    /// ```
+    #[napi(js_name = "count")]
+    pub fn count_method(
+        &self,
+        #[napi(ts_arg_type = "Record<string, unknown> | undefined")]
+        filter: Option<JsonValue>,
+    ) -> Result<u32> {
+        let inner = self.inner.read();
+        match filter {
+            Some(f) => {
+                let parsed_filter = parse_filter(&f)?;
+                Ok(inner.store.count_by_filter(&parsed_filter) as u32)
+            }
+            None => Ok(inner.store.len() as u32),
+        }
+    }
+
     /// Update a vector's data and/or metadata.
     #[napi]
     pub fn update(
@@ -472,7 +507,7 @@ impl VectorDatabase {
 
     /// Get number of vectors in database.
     #[napi(getter)]
-    pub fn count(&self) -> u32 {
+    pub fn length(&self) -> u32 {
         let inner = self.inner.read();
         inner.store.len() as u32
     }

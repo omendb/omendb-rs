@@ -1,11 +1,11 @@
 """Type stubs for omendb - Fast embedded vector database."""
 
-from typing import Any, Iterator, Literal, Sequence, TypedDict, overload
-
-from typing_extensions import Self
+from collections.abc import Iterator, Sequence
+from typing import Any, Literal, TypedDict, overload
 
 import numpy as np
 import numpy.typing as npt
+from typing_extensions import Self
 
 # Type aliases for vectors
 Vector = Sequence[float] | npt.NDArray[np.floating[Any]]
@@ -221,6 +221,28 @@ class VectorDatabase:
             3
             >>> db.delete_where({"$and": [{"type": "draft"}, {"age": {"$gt": 30}}]})
             2
+        """
+        ...
+
+    def count(self, filter: MetadataFilter | None = None) -> int:
+        """Count vectors, optionally filtered by metadata.
+
+        Without a filter, returns total count (same as len(db)).
+        With a filter, returns count of vectors matching the filter.
+
+        Args:
+            filter: Optional MongoDB-style metadata filter.
+
+        Returns:
+            Number of vectors (matching filter if provided).
+
+        Examples:
+            >>> db.count()
+            1000
+            >>> db.count(filter={"status": "active"})
+            750
+            >>> db.count(filter={"score": {"$gte": 0.8}})
+            250
         """
         ...
 
