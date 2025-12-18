@@ -5,8 +5,6 @@ import os
 import random
 import tempfile
 
-import pytest
-
 import omendb
 
 # ef_search API now implemented
@@ -141,46 +139,6 @@ class TestEfSearchConstraints:
             db.set_ef_search(10)
             results = db.search(vectors[0]["vector"], k=10)
             assert len(results) == 10
-
-
-class TestEfSearchPerformance:
-    """Test ef_search impact on performance"""
-
-    @pytest.mark.skip(reason="Timing test is inherently flaky on CI runners")
-    def test_lower_ef_faster(self):
-        """Test that lower ef_search is faster (less work)"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
-
-            # Insert enough vectors to see timing difference
-            vectors = generate_random_vectors(5000, 128)
-            db.set(vectors)
-
-            query = generate_random_vectors(1, 128, seed=9000)[0]["vector"]
-
-            import time
-
-            # Time with low ef_search
-            db.set_ef_search(20)
-            start = time.time()
-            for _ in range(10):
-                db.search(query, k=10)
-            low_ef_time = time.time() - start
-
-            # Time with high ef_search
-            db.set_ef_search(200)
-            start = time.time()
-            for _ in range(10):
-                db.search(query, k=10)
-            high_ef_time = time.time() - start
-
-            # High ef should take more time (exploring more nodes)
-            # Allow some variance - just check high isn't faster
-            assert high_ef_time >= low_ef_time * 0.5, (
-                f"High ef ({high_ef_time:.3f}s) should not be faster than "
-                f"low ef ({low_ef_time:.3f}s)"
-            )
 
 
 class TestEfSearchPersistence:
