@@ -1167,3 +1167,117 @@ fn test_hybrid_search_without_text_enabled() {
         .to_string()
         .contains("Text search not enabled"));
 }
+
+// ============================================================================
+// Property-Based Tests
+// ============================================================================
+
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Verify HNSW parameters roundtrip through save/load
+        #[test]
+        fn params_roundtrip(
+            m in 16usize..64,
+            ef_construction in 100usize..500,
+            ef_search in 100usize..500,
+            dimensions in 8usize..128
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test.omen");
+
+            // Create store with specific params using VectorStoreOptions
+            {
+                let mut store = VectorStoreOptions::default()
+                    .dimensions(dimensions)
+                    .m(m)
+                    .ef_construction(ef_construction)
+                    .ef_search(ef_search)
+                    .open(&path)
+                    .unwrap();
+
+                // Insert some vectors to trigger HNSW creation
+                for i in 0..10 {
+                    let v = Vector::new((0..dimensions).map(|j| (i * j) as f32 * 0.1).collect());
+                    let id = format!("vec_{i}");
+                    store.set(id, v, serde_json::json!({})).unwrap();
+                }
+
+                store.flush().unwrap();
+            }
+
+            // Load and verify
+            let loaded = VectorStore::open(&path).unwrap();
+            prop_assert_eq!(loaded.hnsw_m, m);
+            prop_assert_eq!(loaded.hnsw_ef_construction, ef_construction);
+            prop_assert_eq!(loaded.hnsw_ef_search, ef_search);
+            prop_assert_eq!(loaded.dimensions, dimensions);
+        }
+
+        /// Verify ID mappings stay consistent after insert/delete operations
+        #[test]
+        fn id_mapping_consistency(
+            num_inserts in 10usize..100,
+            num_deletes in 0usize..10
+        ) {
+            let mut store = VectorStore::new(8);
+
+            // Insert vectors
+            let mut ids = Vec::new();
+            for i in 0..num_inserts {
+                let id = format!("vec_{i}");
+                let v = Vector::new((0..8).map(|j| (i * j) as f32 * 0.1).collect());
+                store.set(id.clone(), v, serde_json::json!({})).unwrap();
+                ids.push(id);
+            }
+
+            // Delete some
+            let to_delete = num_deletes.min(ids.len());
+            for id in ids.iter().take(to_delete) {
+                store.delete(id).unwrap();
+            }
+
+            // Verify consistency: every id_to_index entry has matching index_to_id entry
+            prop_assert_eq!(store.id_to_index.len(), store.index_to_id.len());
+            for (id, &idx) in &store.id_to_index {
+                prop_assert_eq!(store.index_to_id.get(&idx), Some(id));
+            }
+        }
+
+        /// Verify non-quantized mode persists correctly
+        ///
+        /// Note: SQ8 quantization has a known ID mapping bug during persistence
+        /// that needs investigation. See AUDIT_CHECKLIST.md.
+        #[test]
+        fn non_quantized_roundtrip(
+            num_vectors in 10usize..30
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("nonquant.omen");
+
+            // Create non-quantized store
+            {
+                let mut store = VectorStoreOptions::default()
+                    .dimensions(64)
+                    .open(&path)
+                    .unwrap();
+
+                // Insert some vectors
+                for i in 0..num_vectors {
+                    let v = Vector::new((0..64).map(|j| (i * j) as f32 * 0.01).collect());
+                    let id = format!("vec_{i}");
+                    store.set(id, v, serde_json::json!({})).unwrap();
+                }
+
+                store.flush().unwrap();
+            }
+
+            // Load and verify
+            let loaded = VectorStore::open(&path).unwrap();
+            prop_assert!(!loaded.is_quantized());
+            prop_assert_eq!(loaded.len(), num_vectors);
+        }
+    }
+}

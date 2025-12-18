@@ -756,6 +756,15 @@ impl OmenFile {
         self.hnsw_index_bytes.is_some()
     }
 
+    /// Update HNSW parameters in the header
+    ///
+    /// These values are persisted to disk on the next checkpoint/flush.
+    pub fn set_hnsw_params(&mut self, m: u16, ef_construction: u16, ef_search: u16) {
+        self.header.m = m;
+        self.header.ef_construction = ef_construction;
+        self.header.ef_search = ef_search;
+    }
+
     /// Get storage path
     #[must_use]
     pub fn path(&self) -> &Path {
