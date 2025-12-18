@@ -367,4 +367,42 @@ mod tests {
         let result = OmenHeader::from_bytes(&buf);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_corrupted_header_detected() {
+        let header = OmenHeader::new(768);
+        let mut bytes = header.to_bytes();
+
+        // Corrupt a byte in the middle of the header (dimensions field)
+        bytes[20] ^= 0xFF;
+
+        let result = OmenHeader::from_bytes(&bytes);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("checksum mismatch"));
+    }
+
+    #[test]
+    fn test_checksum_calculated_correctly() {
+        let mut header = OmenHeader::new(768);
+        header.count = 12345;
+        header.m = 32;
+        header.ef_construction = 200;
+
+        let bytes = header.to_bytes();
+
+        // Extract the stored checksum
+        let stored_checksum =
+            u32::from_le_bytes(bytes[HEADER_SIZE - 8..HEADER_SIZE - 4].try_into().unwrap());
+
+        // Verify it's not zero (would indicate checksum wasn't calculated)
+        assert_ne!(stored_checksum, 0);
+
+        // Verify we can read it back (proves checksum is correct)
+        let parsed = OmenHeader::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.dimensions, 768);
+        assert_eq!(parsed.count, 12345);
+    }
 }
