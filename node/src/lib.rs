@@ -399,8 +399,8 @@ impl VectorDatabase {
 
         inner.store.get_by_id(&id).map(|(vec, metadata)| GetResult {
             id,
-            vector: vec.data.iter().map(|&x| x as f64).collect(),
-            metadata: metadata.clone(),
+            vector: vec.data.into_iter().map(|x| x as f64).collect(),
+            metadata,
         })
     }
 
@@ -930,8 +930,8 @@ impl VectorDatabase {
             .map(|id| {
                 inner.store.get_by_id(id).map(|(vec, metadata)| GetResult {
                     id: id.clone(),
-                    vector: vec.data.iter().map(|&x| x as f64).collect(),
-                    metadata: metadata.clone(),
+                    vector: vec.data.into_iter().map(|x| x as f64).collect(),
+                    metadata,
                 })
             })
             .collect()

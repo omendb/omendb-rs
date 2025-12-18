@@ -577,11 +577,35 @@ impl OmenFile {
 
     /// Get a vector by internal index
     pub fn get_vector(&self, id: usize) -> Result<Option<Vec<f32>>> {
+        // Try memory first
         if id < self.vectors_mem.len() && !self.vectors_mem[id].is_empty() {
-            Ok(Some(self.vectors_mem[id].clone()))
-        } else {
-            Ok(None)
+            return Ok(Some(self.vectors_mem[id].clone()));
         }
+
+        // Fall back to mmap for quantized stores (vectors not in RAM)
+        if let Some(ref mmap) = self.mmap {
+            if let Some(vec_section) = self.header.get_section(SectionType::Vectors) {
+                let dim = self.header.dimensions as usize;
+                if dim > 0 && id < self.header.count as usize {
+                    let vec_offset = vec_section.offset as usize;
+                    let start = vec_offset + id * dim * 4;
+                    let end = start + dim * 4;
+                    if end <= mmap.len() {
+                        let bytes = &mmap[start..end];
+                        let vector: Vec<f32> = bytes
+                            .chunks(4)
+                            .map(|chunk| {
+                                let arr: [u8; 4] = chunk.try_into().unwrap_or([0; 4]);
+                                f32::from_le_bytes(arr)
+                            })
+                            .collect();
+                        return Ok(Some(vector));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Store metadata for a vector (as JSON)
