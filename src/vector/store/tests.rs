@@ -1247,9 +1247,6 @@ mod proptest_tests {
         }
 
         /// Verify non-quantized mode persists correctly
-        ///
-        /// Note: SQ8 quantization has a known ID mapping bug during persistence
-        /// that needs investigation. See AUDIT_CHECKLIST.md.
         #[test]
         fn non_quantized_roundtrip(
             num_vectors in 10usize..30
@@ -1278,6 +1275,75 @@ mod proptest_tests {
             let loaded = VectorStore::open(&path).unwrap();
             prop_assert!(!loaded.is_quantized());
             prop_assert_eq!(loaded.len(), num_vectors);
+        }
+
+        /// Verify SQ8 quantized mode persists ID mappings correctly
+        ///
+        /// This tests the fix for the SQ8 ID mapping corruption bug where
+        /// multiple batches would overwrite previous IDs because vectors.len()
+        /// was used instead of next_index counter.
+        #[test]
+        fn sq8_quantized_roundtrip(
+            num_vectors in 10usize..30
+        ) {
+            use crate::vector::QuantizationMode;
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("sq8quant.omen");
+
+            // Create SQ8 quantized store
+            {
+                let mut store = VectorStoreOptions::default()
+                    .dimensions(64)
+                    .quantization(QuantizationMode::SQ8)
+                    .open(&path)
+                    .unwrap();
+
+                // Insert vectors in batches to trigger the bug
+                for batch in 0..3 {
+                    let batch_vectors: Vec<_> = (0..num_vectors / 3)
+                        .map(|i| {
+                            let idx = batch * (num_vectors / 3) + i;
+                            let v = Vector::new((0..64).map(|j| (idx * j + batch) as f32 * 0.01).collect());
+                            let id = format!("vec_{idx}");
+                            (id, v, serde_json::json!({"batch": batch}))
+                        })
+                        .collect();
+                    store.set_batch(batch_vectors).unwrap();
+                }
+
+                store.flush().unwrap();
+
+                // Verify mapping consistency before close
+                prop_assert_eq!(
+                    store.id_to_index.len(),
+                    store.index_to_id.len(),
+                    "ID mapping inconsistent before close"
+                );
+            }
+
+            // Load and verify
+            let loaded = VectorStore::open(&path).unwrap();
+            prop_assert!(loaded.is_quantized());
+
+            // Critical: ID mappings must be consistent after reload
+            prop_assert_eq!(
+                loaded.id_to_index.len(),
+                loaded.index_to_id.len(),
+                "ID mapping corrupted after reload: id_to_index={}, index_to_id={}",
+                loaded.id_to_index.len(),
+                loaded.index_to_id.len()
+            );
+
+            // Verify all IDs are searchable
+            for (id, &idx) in &loaded.id_to_index {
+                prop_assert!(
+                    loaded.index_to_id.get(&idx) == Some(id),
+                    "ID '{}' at index {} not found in reverse map",
+                    id,
+                    idx
+                );
+            }
         }
     }
 }
