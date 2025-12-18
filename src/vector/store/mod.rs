@@ -647,7 +647,11 @@ impl VectorStore {
             }
         }
 
-        self.vectors.push(vector);
+        // Only store in RAM if not quantized OR no disk storage (in-memory mode)
+        // When quantized with disk storage, we fetch from disk for rescore
+        if !self.is_quantized() || self.storage.is_none() {
+            self.vectors.push(vector);
+        }
         Ok(id)
     }
 
@@ -821,9 +825,13 @@ impl VectorStore {
             }
 
             // Add vectors to in-memory structures
+            // Skip RAM storage when quantized with disk storage (fetch from disk for rescore)
+            let skip_ram = self.is_quantized() && self.storage.is_some();
             for (i, (id, vector, metadata)) in inserts.into_iter().enumerate() {
                 let idx = base_index + i;
-                self.vectors.push(vector);
+                if !skip_ram {
+                    self.vectors.push(vector);
+                }
                 self.metadata.insert(idx, metadata.clone());
                 self.metadata_index.index_json(idx as u32, &metadata);
                 self.index_to_id.insert(idx, id.clone());
@@ -1483,7 +1491,9 @@ impl VectorStore {
 
         if let Some(ref index) = self.hnsw_index {
             let results = if index.is_asymmetric() {
-                if self.rescore_enabled && !self.vectors.is_empty() {
+                // Rescore if we have storage (fetch from disk) OR vectors in RAM
+                let can_rescore = self.storage.is_some() || !self.vectors.is_empty();
+                if self.rescore_enabled && can_rescore {
                     self.knn_search_with_rescore(query, k, ef)?
                 } else {
                     index.search_asymmetric_ef(&query.data, k, ef)?
@@ -1731,6 +1741,15 @@ impl VectorStore {
             .len()
             .max(self.hnsw_index.as_ref().map_or(0, HNSWIndex::len));
         total > self.deleted.len()
+    }
+
+    /// Check if this store has quantization enabled (affects RAM storage)
+    fn is_quantized(&self) -> bool {
+        self.pending_quantization.is_some()
+            || self
+                .hnsw_index
+                .as_ref()
+                .is_some_and(HNSWIndex::is_asymmetric)
     }
 
     /// Brute-force search with metadata (fallback for orphaned nodes)
