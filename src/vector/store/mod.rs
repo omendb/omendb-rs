@@ -171,6 +171,7 @@ impl VectorStore {
         m: usize,
         ef_construction: usize,
         ef_search: usize,
+        distance_metric: DistanceFunction,
     ) -> Result<Self> {
         let hnsw_index = Some(HNSWIndex::new_with_params(
             1_000_000,
@@ -178,7 +179,7 @@ impl VectorStore {
             m,
             ef_construction,
             ef_search,
-            DistanceFunction::L2.to_hnsw(), // TODO: Add distance_fn parameter to new_with_params
+            distance_metric.to_hnsw(),
         )?);
 
         Ok(Self {
@@ -200,7 +201,7 @@ impl VectorStore {
             hnsw_m: m,
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
-            distance_metric: DistanceFunction::L2,
+            distance_metric,
         })
     }
 
@@ -242,8 +243,12 @@ impl VectorStore {
         // Get dimensions from config
         let dimensions = storage.get_config("dimensions")?.unwrap_or(0) as usize;
 
-        // Get distance metric from header (for rebuilding HNSW if needed)
-        let distance_metric = storage.header().distance_fn;
+        // Get HNSW parameters from header (for rebuilding HNSW if needed)
+        let header = storage.header();
+        let distance_metric = header.distance_fn;
+        let hnsw_m = header.m as usize;
+        let hnsw_ef_construction = header.ef_construction as usize;
+        let hnsw_ef_search = header.ef_search as usize;
 
         // Load vectors to RAM only if NOT quantized
         let (vectors, real_indices) = if is_quantized {
@@ -290,9 +295,12 @@ impl VectorStore {
                             index.len(),
                             active_vector_count
                         );
-                        let mut new_index = HNSWIndex::new(
+                        let mut new_index = HNSWIndex::new_with_params(
                             vectors.len().max(10_000),
                             dimensions,
+                            hnsw_m.max(16),                // Use stored M, minimum 16
+                            hnsw_ef_construction.max(100), // Use stored ef_construction, minimum 100
+                            hnsw_ef_search.max(100),       // Use stored ef_search, minimum 100
                             distance_metric.to_hnsw(),
                         )?;
                         let vector_data: Vec<Vec<f32>> =
@@ -309,9 +317,12 @@ impl VectorStore {
                 }
             }
         } else if !vectors.is_empty() {
-            let mut index = HNSWIndex::new(
+            let mut index = HNSWIndex::new_with_params(
                 vectors.len().max(10_000),
                 dimensions,
+                hnsw_m.max(16),
+                hnsw_ef_construction.max(100),
+                hnsw_ef_search.max(100),
                 distance_metric.to_hnsw(),
             )?;
             let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
@@ -322,9 +333,12 @@ impl VectorStore {
             if vectors_data.is_empty() {
                 None
             } else {
-                let mut index = HNSWIndex::new(
+                let mut index = HNSWIndex::new_with_params(
                     vectors_data.len().max(10_000),
                     dimensions,
+                    hnsw_m.max(16),
+                    hnsw_ef_construction.max(100),
+                    hnsw_ef_search.max(100),
                     distance_metric.to_hnsw(),
                 )?;
                 let vector_data: Vec<Vec<f32>> =
@@ -379,9 +393,9 @@ impl VectorStore {
             text_index,
             text_search_config: None,
             pending_quantization: None,
-            hnsw_m: 16,
-            hnsw_ef_construction: 100,
-            hnsw_ef_search: 100,
+            hnsw_m: hnsw_m.max(16),
+            hnsw_ef_construction: hnsw_ef_construction.max(100),
+            hnsw_ef_search: hnsw_ef_search.max(100),
             distance_metric,
         })
     }
@@ -640,9 +654,12 @@ impl VectorStore {
                 };
                 self.hnsw_index = Some(index);
             } else {
-                self.hnsw_index = Some(HNSWIndex::new(
+                self.hnsw_index = Some(HNSWIndex::new_with_params(
                     10_000,
                     dimensions,
+                    self.hnsw_m,
+                    self.hnsw_ef_construction,
+                    self.hnsw_ef_search,
                     self.distance_metric.to_hnsw(),
                 )?);
             }
@@ -796,9 +813,12 @@ impl VectorStore {
 
                     self.hnsw_index = Some(index);
                 } else {
-                    self.hnsw_index = Some(HNSWIndex::new(
+                    self.hnsw_index = Some(HNSWIndex::new_with_params(
                         10_000,
                         dimensions,
+                        self.hnsw_m,
+                        self.hnsw_ef_construction,
+                        self.hnsw_ef_search,
                         self.distance_metric.to_hnsw(),
                     )?);
                 }
@@ -1379,9 +1399,12 @@ impl VectorStore {
                 self.hnsw_index = Some(index);
             } else {
                 let capacity = vectors.len().max(1_000_000);
-                self.hnsw_index = Some(HNSWIndex::new(
+                self.hnsw_index = Some(HNSWIndex::new_with_params(
                     capacity,
                     self.dimensions,
+                    self.hnsw_m,
+                    self.hnsw_ef_construction,
+                    self.hnsw_ef_search,
                     self.distance_metric.to_hnsw(),
                 )?);
             }
@@ -1409,9 +1432,12 @@ impl VectorStore {
             return Ok(());
         }
 
-        let mut index = HNSWIndex::new(
+        let mut index = HNSWIndex::new_with_params(
             self.vectors.len().max(1_000_000),
             self.dimensions,
+            self.hnsw_m,
+            self.hnsw_ef_construction,
+            self.hnsw_ef_search,
             self.distance_metric.to_hnsw(),
         )?;
 
@@ -1439,9 +1465,12 @@ impl VectorStore {
 
         if self.hnsw_index.is_none() {
             let capacity = (self.vectors.len() + other.vectors.len()).max(1_000_000);
-            self.hnsw_index = Some(HNSWIndex::new(
+            self.hnsw_index = Some(HNSWIndex::new_with_params(
                 capacity,
                 self.dimensions,
+                self.hnsw_m,
+                self.hnsw_ef_construction,
+                self.hnsw_ef_search,
                 self.distance_metric.to_hnsw(),
             )?);
         }

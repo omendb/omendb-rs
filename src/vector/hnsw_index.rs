@@ -553,15 +553,16 @@ impl HNSWIndex {
         // Extract parameters from loaded index
         let dimensions = index.dimensions();
         let num_vectors = index.len();
+        let params = index.params();
+        let m = params.m;
+        let ef_construction = params.ef_construction;
 
-        // Note: Parameters are determined by saved graph structure,
-        // these are just metadata
         Ok(Self {
             index,
             max_elements: num_vectors.max(1_000_000),
-            max_nb_connection: 16, // Default
-            ef_construction: 64,   // Default
-            ef_search: 100,        // Default
+            max_nb_connection: m,
+            ef_construction,
+            ef_search: ef_construction, // Default ef_search to ef_construction
             dimensions,
             num_vectors,
         })
