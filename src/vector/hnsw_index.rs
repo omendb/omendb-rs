@@ -50,7 +50,202 @@ pub struct HNSWParams {
     pub dimensions: usize,
 }
 
+// ============================================================================
+// Builder Pattern
+// ============================================================================
+
+/// Default HNSW M parameter (neighbors per node)
+const DEFAULT_M: usize = 16;
+/// Default HNSW ef_construction parameter (build quality)
+const DEFAULT_EF_CONSTRUCTION: usize = 100;
+/// Default HNSW ef_search parameter (search quality)
+const DEFAULT_EF_SEARCH: usize = 100;
+/// Default maximum elements
+const DEFAULT_MAX_ELEMENTS: usize = 1_000_000;
+
+/// Quantization mode for HNSW index
+#[derive(Debug, Clone)]
+pub enum HNSWQuantization {
+    /// No quantization (full f32 precision)
+    None,
+    /// SQ8 scalar quantization (4x compression, ~99% recall)
+    SQ8,
+    /// RaBitQ asymmetric quantization (8x compression, ~98% recall)
+    RaBitQ(RaBitQParams),
+}
+
+/// Builder for creating HNSWIndex with compile-time safety
+///
+/// Ensures all required parameters are provided and provides sensible defaults.
+///
+/// # Example
+/// ```ignore
+/// let index = HNSWIndex::builder()
+///     .dimensions(768)
+///     .m(16)
+///     .ef_construction(100)
+///     .metric(DistanceFunction::Cosine)
+///     .quantization(HNSWQuantization::SQ8)
+///     .build()?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct HNSWIndexBuilder {
+    dimensions: Option<usize>,
+    max_elements: usize,
+    m: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    metric: DistanceFunction,
+    quantization: HNSWQuantization,
+}
+
+impl Default for HNSWIndexBuilder {
+    fn default() -> Self {
+        Self {
+            dimensions: None,
+            max_elements: DEFAULT_MAX_ELEMENTS,
+            m: DEFAULT_M,
+            ef_construction: DEFAULT_EF_CONSTRUCTION,
+            ef_search: DEFAULT_EF_SEARCH,
+            metric: DistanceFunction::L2,
+            quantization: HNSWQuantization::None,
+        }
+    }
+}
+
+impl HNSWIndexBuilder {
+    /// Create a new builder with default values
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the vector dimensions (required)
+    #[must_use]
+    pub fn dimensions(mut self, dimensions: usize) -> Self {
+        self.dimensions = Some(dimensions);
+        self
+    }
+
+    /// Set the maximum number of elements
+    #[must_use]
+    pub fn max_elements(mut self, max_elements: usize) -> Self {
+        self.max_elements = max_elements;
+        self
+    }
+
+    /// Set the M parameter (neighbors per node)
+    ///
+    /// Higher values improve recall but use more memory.
+    /// Typical values: 16-48
+    #[must_use]
+    pub fn m(mut self, m: usize) -> Self {
+        self.m = m;
+        self
+    }
+
+    /// Set the ef_construction parameter (build quality)
+    ///
+    /// Higher values improve recall but slow down construction.
+    /// Typical values: 100-400
+    #[must_use]
+    pub fn ef_construction(mut self, ef_construction: usize) -> Self {
+        self.ef_construction = ef_construction;
+        self
+    }
+
+    /// Set the ef_search parameter (search quality)
+    ///
+    /// Higher values improve recall but slow down search.
+    /// Typical values: 100-400
+    #[must_use]
+    pub fn ef_search(mut self, ef_search: usize) -> Self {
+        self.ef_search = ef_search;
+        self
+    }
+
+    /// Set the distance metric
+    #[must_use]
+    pub fn metric(mut self, metric: DistanceFunction) -> Self {
+        self.metric = metric;
+        self
+    }
+
+    /// Set the quantization mode
+    #[must_use]
+    pub fn quantization(mut self, quantization: HNSWQuantization) -> Self {
+        self.quantization = quantization;
+        self
+    }
+
+    /// Build the HNSWIndex
+    ///
+    /// # Errors
+    /// Returns an error if dimensions is not set.
+    pub fn build(self) -> Result<HNSWIndex> {
+        let dimensions = self
+            .dimensions
+            .ok_or_else(|| anyhow::anyhow!("dimensions is required"))?;
+
+        let params = CoreParams {
+            m: self.m,
+            ef_construction: self.ef_construction,
+            ml: 1.0 / (self.m as f32).ln(),
+            seed: 42,
+            max_level: 8,
+        };
+
+        let index = match self.quantization {
+            HNSWQuantization::None => CoreHNSW::new(dimensions, params, self.metric, false)?,
+            HNSWQuantization::SQ8 => CoreHNSW::new_with_sq8(dimensions, params, self.metric)
+                .map_err(|e| anyhow::anyhow!(e))?,
+            HNSWQuantization::RaBitQ(rabitq_params) => {
+                CoreHNSW::new_with_asymmetric(dimensions, params, self.metric, rabitq_params)
+                    .map_err(|e| anyhow::anyhow!(e))?
+            }
+        };
+
+        Ok(HNSWIndex {
+            index,
+            max_elements: self.max_elements,
+            max_nb_connection: self.m,
+            ef_construction: self.ef_construction,
+            ef_search: self.ef_search,
+            dimensions,
+            num_vectors: 0,
+        })
+    }
+
+    /// Build the HNSWIndex and train quantizer with sample vectors
+    ///
+    /// Use this when you have training vectors available at construction time.
+    pub fn build_with_training(self, training_vectors: &[Vec<f32>]) -> Result<HNSWIndex> {
+        let mut index = self.build()?;
+        if !training_vectors.is_empty() && index.is_asymmetric() {
+            index.train_quantizer(training_vectors)?;
+        }
+        Ok(index)
+    }
+}
+
 impl HNSWIndex {
+    /// Create a new builder for constructing an HNSWIndex
+    ///
+    /// This is the recommended way to create an HNSWIndex.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let index = HNSWIndex::builder()
+    ///     .dimensions(768)
+    ///     .m(16)
+    ///     .metric(DistanceFunction::Cosine)
+    ///     .build()?;
+    /// ```
+    #[must_use]
+    pub fn builder() -> HNSWIndexBuilder {
+        HNSWIndexBuilder::new()
+    }
+
     /// Create new HNSW index with adaptive parameters
     ///
     /// # Arguments
@@ -684,6 +879,91 @@ impl HNSWIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================================================
+    // Builder Pattern Tests
+    // ========================================================================
+
+    #[test]
+    fn test_builder_basic() {
+        let index = HNSWIndex::builder().dimensions(128).build().unwrap();
+
+        assert_eq!(index.dimensions(), 128);
+        assert_eq!(index.params().max_nb_connection, DEFAULT_M);
+        assert_eq!(index.params().ef_construction, DEFAULT_EF_CONSTRUCTION);
+    }
+
+    #[test]
+    fn test_builder_custom_params() {
+        let index = HNSWIndex::builder()
+            .dimensions(64)
+            .m(32)
+            .ef_construction(200)
+            .ef_search(300)
+            .max_elements(50_000)
+            .metric(DistanceFunction::Cosine)
+            .build()
+            .unwrap();
+
+        let params = index.params();
+        assert_eq!(params.dimensions, 64);
+        assert_eq!(params.max_nb_connection, 32);
+        assert_eq!(params.ef_construction, 200);
+        assert_eq!(params.ef_search, 300);
+        assert_eq!(params.max_elements, 50_000);
+    }
+
+    #[test]
+    fn test_builder_sq8_quantization() {
+        let index = HNSWIndex::builder()
+            .dimensions(128)
+            .quantization(HNSWQuantization::SQ8)
+            .build()
+            .unwrap();
+
+        assert!(index.is_asymmetric());
+        assert!(index.is_sq8());
+    }
+
+    #[test]
+    fn test_builder_rabitq_quantization() {
+        let index = HNSWIndex::builder()
+            .dimensions(128)
+            .quantization(HNSWQuantization::RaBitQ(RaBitQParams::default()))
+            .build()
+            .unwrap();
+
+        assert!(index.is_asymmetric());
+        assert!(!index.is_sq8());
+    }
+
+    #[test]
+    fn test_builder_requires_dimensions() {
+        let result = HNSWIndex::builder().build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("dimensions is required"));
+    }
+
+    #[test]
+    fn test_builder_with_training() {
+        let training_data: Vec<Vec<f32>> = (0..100).map(|i| vec![(i as f32) / 100.0; 64]).collect();
+
+        let index = HNSWIndex::builder()
+            .dimensions(64)
+            .quantization(HNSWQuantization::SQ8)
+            .build_with_training(&training_data)
+            .unwrap();
+
+        assert!(index.is_asymmetric());
+        assert_eq!(index.dimensions(), 64);
+    }
+
+    // ========================================================================
+    // Legacy Constructor Tests
+    // ========================================================================
 
     #[test]
     fn test_hnsw_basic() {
