@@ -2247,6 +2247,13 @@ impl VectorStore {
             .transpose()?;
 
         if let Some(ref mut storage) = self.storage {
+            // Persist HNSW parameters to header
+            storage.set_hnsw_params(
+                self.hnsw_m as u16,
+                self.hnsw_ef_construction as u16,
+                self.hnsw_ef_search as u16,
+            );
+
             if let Some(bytes) = hnsw_bytes {
                 storage.put_hnsw_index(bytes);
             }
