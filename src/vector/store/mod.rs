@@ -148,49 +148,30 @@ fn create_hnsw_index(
     quantization_mode: Option<&QuantizationMode>,
     training_vectors: &[Vec<f32>],
 ) -> Result<HNSWIndex> {
+    use super::hnsw_index::HNSWQuantization;
+
     // Ensure minimum values for HNSW parameters
     let m = hnsw_m.max(DEFAULT_HNSW_M);
     let ef_construction = hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION);
     let ef_search = hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH);
 
-    let hnsw_params = HNSWParams {
-        m,
-        ef_construction,
-        ml: 1.0 / (m as f32).ln(),
-        seed: 42,
-        max_level: 8,
+    // Convert QuantizationMode to HNSWQuantization
+    let quantization = match quantization_mode {
+        Some(QuantizationMode::SQ8) => HNSWQuantization::SQ8,
+        Some(QuantizationMode::RaBitQ(params)) => HNSWQuantization::RaBitQ(params.clone()),
+        None => HNSWQuantization::None,
     };
 
-    match quantization_mode {
-        Some(QuantizationMode::SQ8) => {
-            let mut idx =
-                HNSWIndex::new_with_sq8(dimensions, hnsw_params, distance_metric.to_hnsw())?;
-            if !training_vectors.is_empty() {
-                idx.train_quantizer(training_vectors)?;
-            }
-            Ok(idx)
-        }
-        Some(QuantizationMode::RaBitQ(params)) => {
-            let mut idx = HNSWIndex::new_with_asymmetric(
-                dimensions,
-                hnsw_params,
-                distance_metric.to_hnsw(),
-                params.clone(),
-            )?;
-            if !training_vectors.is_empty() {
-                idx.train_quantizer(training_vectors)?;
-            }
-            Ok(idx)
-        }
-        None => HNSWIndex::new_with_params(
-            training_vectors.len().max(10_000),
-            dimensions,
-            m,
-            ef_construction,
-            ef_search,
-            distance_metric.to_hnsw(),
-        ),
-    }
+    // Use builder pattern for consistent index creation
+    HNSWIndex::builder()
+        .dimensions(dimensions)
+        .max_elements(training_vectors.len().max(10_000))
+        .m(m)
+        .ef_construction(ef_construction)
+        .ef_search(ef_search)
+        .metric(distance_metric.to_hnsw())
+        .quantization(quantization)
+        .build_with_training(training_vectors)
 }
 
 /// Vector store with HNSW indexing

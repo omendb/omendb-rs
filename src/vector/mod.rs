@@ -6,7 +6,7 @@ pub mod store;
 pub mod types;
 
 // Re-export main types
-pub use hnsw_index::HNSWIndex;
+pub use hnsw_index::{HNSWIndex, HNSWIndexBuilder, HNSWQuantization};
 pub use omendb_core::compression::{QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams};
 pub use store::{MetadataFilter, VectorStore, VectorStoreOptions};
 pub use types::Vector;
