@@ -1489,10 +1489,9 @@ impl VectorStore {
         k: usize,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
-        let effective_ef = match ef {
-            Some(e) => e,
-            None => (k * 4).max(64).max(100),
-        };
+        // Use provided ef, or fall back to stored hnsw_ef_search
+        // Ensure ef >= k (HNSW requirement)
+        let effective_ef = ef.unwrap_or(self.hnsw_ef_search).max(k);
         self.knn_search_ef(query, k, effective_ef)
     }
 
