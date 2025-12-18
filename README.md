@@ -71,6 +71,7 @@ db.search_batch(queries, k)             # Batch search (parallel)
 # Hybrid search (requires text field in vectors)
 db.search_hybrid(query_vector, query_text, k)
 db.search_hybrid(query_vector, query_text, k, alpha=0.7)  # 70% vector, 30% text
+db.search_hybrid(query_vector, query_text, k, subscores=True)  # Return separate scores
 db.search_text(query_text, k)           # Text-only BM25
 
 # Persistence
@@ -129,6 +130,10 @@ with omendb.open("./db", dimensions=768) as db:
 
 # Hybrid search with alpha (0=text, 1=vector, default=0.5)
 db.search_hybrid(query_vec, "query text", k=10, alpha=0.7)
+
+# Get separate keyword and semantic scores for debugging/tuning
+results = db.search_hybrid(query_vec, "query text", k=10, subscores=True)
+# Returns: {"id": "...", "score": 0.85, "keyword_score": 0.92, "semantic_score": 0.78}
 ```
 
 ## Performance
