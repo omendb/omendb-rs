@@ -16,7 +16,7 @@ describe("VectorDatabase", () => {
 			it("should insert single vector", () => {
 				const indices = db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
 				expect(indices).toHaveLength(1);
-				expect(db.count).toBe(1);
+				expect(db.count()).toBe(1);
 			});
 
 			it("should insert batch of vectors", () => {
@@ -27,7 +27,7 @@ describe("VectorDatabase", () => {
 				}));
 				const indices = db.set(items);
 				expect(indices).toHaveLength(100);
-				expect(db.count).toBe(100);
+				expect(db.count()).toBe(100);
 			});
 
 			it("should handle metadata", () => {
@@ -67,7 +67,7 @@ describe("VectorDatabase", () => {
 						metadata: { new: true },
 					},
 				]);
-				expect(db.count).toBe(1);
+				expect(db.count()).toBe(1);
 				const doc = db.get("doc1");
 				expect(doc?.metadata).toEqual({ new: true });
 			});
@@ -227,20 +227,20 @@ describe("VectorDatabase", () => {
 			it("should delete single vector", () => {
 				const deleted = db.delete(["doc1"]);
 				expect(deleted).toBe(1);
-				expect(db.count).toBe(2);
+				expect(db.count()).toBe(2);
 				expect(db.get("doc1")).toBeNull();
 			});
 
 			it("should delete multiple vectors", () => {
 				const deleted = db.delete(["doc1", "doc3"]);
 				expect(deleted).toBe(2);
-				expect(db.count).toBe(1);
+				expect(db.count()).toBe(1);
 			});
 
 			it("should return 0 for non-existent ids", () => {
 				const deleted = db.delete(["nonexistent"]);
 				expect(deleted).toBe(0);
-				expect(db.count).toBe(3);
+				expect(db.count()).toBe(3);
 			});
 		});
 
@@ -283,15 +283,15 @@ describe("VectorDatabase", () => {
 
 		describe("count", () => {
 			it("should return 0 for empty database", () => {
-				expect(db.count).toBe(0);
+				expect(db.count()).toBe(0);
 			});
 
 			it("should return correct count after inserts", () => {
 				db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
-				expect(db.count).toBe(1);
+				expect(db.count()).toBe(1);
 
 				db.set([{ id: "doc2", vector: Array(128).fill(0.2) }]);
-				expect(db.count).toBe(2);
+				expect(db.count()).toBe(2);
 			});
 		});
 
@@ -508,7 +508,7 @@ describe("VectorDatabase", () => {
 
 			// Reopen and verify
 			const db2 = open(dbPath, { dimensions: 64 });
-			expect(db2.count).toBe(2);
+			expect(db2.count()).toBe(2);
 
 			const doc = db2.get("persist1");
 			expect(doc?.id).toBe("persist1");
@@ -524,15 +524,15 @@ describe("VectorDatabase", () => {
 			users.set([{ id: "user1", vector: Array(64).fill(0.1) }]);
 			products.set([{ id: "prod1", vector: Array(64).fill(0.2) }]);
 
-			expect(users.count).toBe(1);
-			expect(products.count).toBe(1);
+			expect(users.count()).toBe(1);
+			expect(products.count()).toBe(1);
 
 			// IDs are independent
 			users.set([{ id: "item1", vector: Array(64).fill(0.3) }]);
 			products.set([{ id: "item1", vector: Array(64).fill(0.4) }]);
 
-			expect(users.count).toBe(2);
-			expect(products.count).toBe(2);
+			expect(users.count()).toBe(2);
+			expect(products.count()).toBe(2);
 		});
 
 		it("should list collections", () => {
