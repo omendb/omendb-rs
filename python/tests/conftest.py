@@ -16,17 +16,25 @@ def temp_db_path():
 @pytest.fixture
 def db(temp_db_path):
     """Create a fresh database instance for each test"""
+    import gc
+
     import omendb
 
-    return omendb.open(temp_db_path, dimensions=128)
+    database = omendb.open(temp_db_path, dimensions=128)
+    yield database
+    # Explicitly drop database and force GC to release file handles before temp dir cleanup
+    del database
+    gc.collect()
 
 
 @pytest.fixture
 def db_with_vectors(temp_db_path):
     """Create a database with sample vectors"""
+    import gc
+
     import omendb
 
-    db = omendb.open(temp_db_path, dimensions=128)
+    database = omendb.open(temp_db_path, dimensions=128)
 
     vectors = [
         {"id": "vec1", "vector": [0.1] * 128, "metadata": {"label": "A", "value": 1}},
@@ -35,8 +43,11 @@ def db_with_vectors(temp_db_path):
         {"id": "vec4", "vector": [0.4] * 128, "metadata": {"label": "A", "value": 4}},
         {"id": "vec5", "vector": [0.5] * 128, "metadata": {"label": "B", "value": 5}},
     ]
-    db.set(vectors)
-    return db
+    database.set(vectors)
+    yield database
+    # Explicitly drop database and force GC to release file handles before temp dir cleanup
+    del database
+    gc.collect()
 
 
 @pytest.fixture
