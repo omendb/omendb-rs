@@ -32,10 +32,15 @@ class OmenDB(BaseANN):
 
     def fit(self, X):
         """Build index from training vectors."""
+        # Map ann-benchmarks metric names to omendb
+        metric_map = {"euclidean": "l2", "angular": "cosine"}
+        omendb_metric = metric_map.get(self._metric, self._metric)
+
         kwargs = {
             "dimensions": X.shape[1],
             "m": self._m,
             "ef_construction": self._ef_construction,
+            "metric": omendb_metric,
         }
         if self._quantization:
             kwargs["quantization"] = self._quantization
