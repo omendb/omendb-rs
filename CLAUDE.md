@@ -25,21 +25,32 @@ npm install && npm run build && npm test
 | m               | 16                    | HNSW neighbors per node (industry standard) |
 | ef_construction | 100                   | Build quality                               |
 | ef_search       | 100                   | Search quality                              |
-| quantization    | off                   | RaBitQ bits: 2, 4, or 8                     |
+| quantization    | off                   | `True`/`"sq8"` or `"rabitq"`                |
 | rescore         | true (when quantized) | Rerank with exact L2                        |
 | oversample      | 3.0                   | Fetch k×oversample candidates               |
 
 **Quantization API:**
 
 ```python
-db = omendb.open("./db", dimensions=128, quantization=4)  # rescore=True by default
-db = omendb.open("./db", dimensions=128, quantization=4, rescore=False)  # max speed
+# Enable quantization (SQ8 is default, fastest, best recall)
+db = omendb.open("./db", dimensions=768, quantization=True)       # SQ8: 4x, ~99% recall
+db = omendb.open("./db", dimensions=768, quantization="sq8")      # Same as True
+db = omendb.open("./db", dimensions=768, quantization="rabitq")   # RaBitQ: 8x, ~98% recall
+
+# Tuning
+db = omendb.open("./db", dimensions=768, quantization=True, rescore=False)  # Skip rescore
 ```
 
-**Insert performance** (10K vectors, 128D):
+| Mode       | Compression | Recall | Speed  | Use Case                    |
+| ---------- | ----------- | ------ | ------ | --------------------------- |
+| `True`     | 4x          | ~99%   | Fast   | Default, most users         |
+| `"sq8"`    | 4x          | ~99%   | Fast   | Explicit scalar             |
+| `"rabitq"` | 8x          | ~98%   | Slower | Large datasets needing more |
 
-- Sequential (default): 1,430 vec/s, 100% recall
-- With quantization: 3,400 vec/s, 95.7% recall
+**Why only two modes?**
+
+- `rabitq-8` (8-bit): Same 4x as SQ8 but slower → use SQ8 instead
+- `rabitq-2` (2-bit): 93% recall too low → edge case not worth complexity
 
 ## Architecture
 
