@@ -234,7 +234,7 @@ impl VectorDatabaseIterator {
                     "vector".to_string(),
                     vec.data.clone().into_pyobject(py).unwrap().unbind().into(),
                 );
-                result.insert("metadata".to_string(), json_to_pyobject(py, meta)?);
+                result.insert("metadata".to_string(), json_to_pyobject(py, &meta)?);
                 return Ok(Some(result));
             }
             // Item was deleted during iteration, continue to next
@@ -742,13 +742,13 @@ impl VectorDatabase {
             })?;
 
             // Determine final vector
-            let final_vec = vector.map(Vector::new).unwrap_or(existing_vec.clone());
+            let final_vec = vector.map(Vector::new).unwrap_or(existing_vec);
 
             // Determine final metadata, incorporating new text
             let mut final_meta = if let Some(m) = metadata {
                 pyobject_to_json(m.as_any())?
             } else {
-                existing_meta.clone()
+                existing_meta
             };
 
             // Check for conflict
@@ -826,7 +826,7 @@ impl VectorDatabase {
                     .into(),
             );
 
-            let metadata_dict = json_to_pyobject(py, metadata)?;
+            let metadata_dict = json_to_pyobject(py, &metadata)?;
             result.insert("metadata".to_string(), metadata_dict);
 
             Ok(Some(result))
@@ -877,7 +877,7 @@ impl VectorDatabase {
                             .unbind()
                             .into(),
                     );
-                    result.insert("metadata".to_string(), json_to_pyobject(py, metadata)?);
+                    result.insert("metadata".to_string(), json_to_pyobject(py, &metadata)?);
                     Ok(Some(result))
                 } else {
                     Ok(None)
@@ -1338,7 +1338,7 @@ impl VectorDatabase {
 
             // Include metadata for consistency with search_hybrid
             if let Some((_, meta)) = inner.store.get_by_id(&id) {
-                dict.set_item("metadata", json_to_pyobject(py, meta)?)?;
+                dict.set_item("metadata", json_to_pyobject(py, &meta)?)?;
             } else {
                 dict.set_item("metadata", PyDict::new(py))?;
             }

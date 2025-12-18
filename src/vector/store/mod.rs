@@ -1614,16 +1614,34 @@ impl VectorStore {
     }
 
     /// Get vector by string ID
+    ///
+    /// Returns owned data since vectors may be loaded from disk for quantized stores.
     #[must_use]
-    pub fn get_by_id(&self, id: &str) -> Option<(&Vector, &JsonValue)> {
-        self.id_to_index.get(id).and_then(|&index| {
-            if self.deleted.contains_key(&index) {
-                return None;
+    pub fn get_by_id(&self, id: &str) -> Option<(Vector, JsonValue)> {
+        let &index = self.id_to_index.get(id)?;
+        if self.deleted.contains_key(&index) {
+            return None;
+        }
+
+        // Try in-memory vectors first
+        if let Some(vec) = self.vectors.get(index) {
+            return self
+                .metadata
+                .get(&index)
+                .map(|meta| (vec.clone(), meta.clone()));
+        }
+
+        // Fall back to storage for quantized stores (vectors not in RAM)
+        if let Some(ref storage) = self.storage {
+            if let Ok(Some(vec_data)) = storage.get_vector(index) {
+                return self
+                    .metadata
+                    .get(&index)
+                    .map(|meta| (Vector::new(vec_data), meta.clone()));
             }
-            self.vectors
-                .get(index)
-                .and_then(|vec| self.metadata.get(&index).map(|meta| (vec, meta)))
-        })
+        }
+
+        None
     }
 
     /// Get metadata by string ID (without loading vector data)

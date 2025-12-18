@@ -418,11 +418,7 @@ pub unsafe extern "C" fn omendb_search(
                 .find(|(_, &i)| i == idx)
                 .map_or_else(|| idx.to_string(), |(id, _)| id.clone());
 
-            let metadata = db
-                .store
-                .get_by_id(&id)
-                .map(|(_, m)| m.clone())
-                .unwrap_or(json!({}));
+            let metadata = db.store.get_by_id(&id).map(|(_, m)| m).unwrap_or(json!({}));
 
             json_results.push(json!({
                 "id": id,

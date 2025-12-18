@@ -417,7 +417,7 @@ fn test_get_by_id() {
     let (retrieved_vector, retrieved_metadata) = store.get_by_id("doc1").unwrap();
 
     assert_eq!(retrieved_vector.data, vector.data);
-    assert_eq!(retrieved_metadata, &metadata);
+    assert_eq!(retrieved_metadata, metadata);
 
     // Non-existent ID should return None
     assert!(store.get_by_id("nonexistent").is_none());
