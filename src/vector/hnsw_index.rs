@@ -67,11 +67,15 @@ impl HNSWIndex {
     /// ```ignore
     /// use omen::vector::HNSWIndex;
     ///
-    /// let mut index = HNSWIndex::new(1_000_000, 1536)?;
+    /// let mut index = HNSWIndex::new(1_000_000, 1536, DistanceFunction::L2)?;
     /// index.insert(&vector)?;
     /// let results = index.search(&query, 10)?;
     /// ```
-    pub fn new(max_elements: usize, dimensions: usize) -> Result<Self> {
+    pub fn new(
+        max_elements: usize,
+        dimensions: usize,
+        distance_fn: DistanceFunction,
+    ) -> Result<Self> {
         // Industry standard defaults (ChromaDB, hnswlib, Milvus, pgvector)
         // Users can override via new_with_params() if needed
         let m = 16;
@@ -85,7 +89,7 @@ impl HNSWIndex {
             max_level: 8,
         };
 
-        let index = CoreHNSW::new(dimensions, params, DistanceFunction::L2, false)?;
+        let index = CoreHNSW::new(dimensions, params, distance_fn, false)?;
 
         Ok(Self {
             index,
@@ -106,11 +110,12 @@ impl HNSWIndex {
     /// * `m` - Number of bidirectional links per node (typical: 16-48)
     /// * `ef_construction` - Candidate list size during construction (typical: 200-800)
     /// * `ef_search` - Candidate list size during search (typical: 200-1000)
+    /// * `distance_fn` - Distance function (L2, Cosine, NegDot)
     ///
     /// # Example
     /// ```ignore
     /// // Higher M for better recall at scale
-    /// let mut index = HNSWIndex::new_with_params(1_000_000, 128, 32, 400, 600)?;
+    /// let mut index = HNSWIndex::new_with_params(1_000_000, 128, 32, 400, 600, DistanceFunction::L2)?;
     /// ```
     pub fn new_with_params(
         max_elements: usize,
@@ -118,6 +123,7 @@ impl HNSWIndex {
         m: usize,
         ef_construction: usize,
         ef_search: usize,
+        distance_fn: DistanceFunction,
     ) -> Result<Self> {
         let params = CoreParams {
             m,
@@ -127,7 +133,7 @@ impl HNSWIndex {
             max_level: 8,
         };
 
-        let index = CoreHNSW::new(dimensions, params, DistanceFunction::L2, false)?;
+        let index = CoreHNSW::new(dimensions, params, distance_fn, false)?;
 
         Ok(Self {
             index,
@@ -680,7 +686,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_basic() {
-        let mut index = HNSWIndex::new(1000, 4).unwrap();
+        let mut index = HNSWIndex::new(1000, 4, DistanceFunction::L2).unwrap();
 
         // Insert vectors
         let v1 = vec![1.0, 0.0, 0.0, 0.0];
@@ -703,7 +709,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_batch_insert() {
-        let mut index = HNSWIndex::new(1000, 3).unwrap();
+        let mut index = HNSWIndex::new(1000, 3, DistanceFunction::L2).unwrap();
 
         let vectors = vec![
             vec![1.0, 0.0, 0.0],
@@ -719,7 +725,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_ef_search() {
-        let mut index = HNSWIndex::new(1000, 4).unwrap();
+        let mut index = HNSWIndex::new(1000, 4, DistanceFunction::L2).unwrap();
 
         assert_eq!(index.get_ef_search(), 100); // Default for <10K: M=16, ef=100
 

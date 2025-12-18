@@ -178,6 +178,7 @@ impl VectorStore {
             m,
             ef_construction,
             ef_search,
+            DistanceFunction::L2.to_hnsw(), // TODO: Add distance_fn parameter to new_with_params
         )?);
 
         Ok(Self {
@@ -241,6 +242,9 @@ impl VectorStore {
         // Get dimensions from config
         let dimensions = storage.get_config("dimensions")?.unwrap_or(0) as usize;
 
+        // Get distance metric from header (for rebuilding HNSW if needed)
+        let distance_metric = storage.header().distance_fn;
+
         // Load vectors to RAM only if NOT quantized
         let (vectors, real_indices) = if is_quantized {
             (Vec::new(), std::collections::HashSet::new())
@@ -286,7 +290,11 @@ impl VectorStore {
                             index.len(),
                             active_vector_count
                         );
-                        let mut new_index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
+                        let mut new_index = HNSWIndex::new(
+                            vectors.len().max(10_000),
+                            dimensions,
+                            distance_metric.to_hnsw(),
+                        )?;
                         let vector_data: Vec<Vec<f32>> =
                             vectors.iter().map(|v| v.data.clone()).collect();
                         new_index.batch_insert(&vector_data)?;
@@ -301,7 +309,11 @@ impl VectorStore {
                 }
             }
         } else if !vectors.is_empty() {
-            let mut index = HNSWIndex::new(vectors.len().max(10_000), dimensions)?;
+            let mut index = HNSWIndex::new(
+                vectors.len().max(10_000),
+                dimensions,
+                distance_metric.to_hnsw(),
+            )?;
             let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
             index.batch_insert(&vector_data)?;
             Some(index)
@@ -310,7 +322,11 @@ impl VectorStore {
             if vectors_data.is_empty() {
                 None
             } else {
-                let mut index = HNSWIndex::new(vectors_data.len().max(10_000), dimensions)?;
+                let mut index = HNSWIndex::new(
+                    vectors_data.len().max(10_000),
+                    dimensions,
+                    distance_metric.to_hnsw(),
+                )?;
                 let vector_data: Vec<Vec<f32>> =
                     vectors_data.iter().map(|(_, v)| v.clone()).collect();
                 index.batch_insert(&vector_data)?;
@@ -346,9 +362,6 @@ impl VectorStore {
         let rescore_enabled = hnsw_index
             .as_ref()
             .is_some_and(super::hnsw_index::HNSWIndex::is_asymmetric);
-
-        // Read distance metric from storage header (defaults to L2)
-        let distance_metric = storage.header().distance_fn;
 
         Ok(Self {
             vectors,
@@ -423,6 +436,9 @@ impl VectorStore {
         let ef_construction = options.ef_construction.unwrap_or(100);
         let ef_search = options.ef_search.unwrap_or(100);
 
+        // Get distance metric from options (default: L2)
+        let distance_metric = options.metric.unwrap_or(DistanceFunction::L2);
+
         // Initialize HNSW - defer when quantization enabled
         let (hnsw_index, pending_quantization) = if options.quantization.is_some() {
             (None, options.quantization.clone())
@@ -435,6 +451,7 @@ impl VectorStore {
                         m,
                         ef_construction,
                         ef_search,
+                        distance_metric.to_hnsw(),
                     )?),
                     None,
                 )
@@ -499,6 +516,9 @@ impl VectorStore {
         let ef_construction = options.ef_construction.unwrap_or(100);
         let ef_search = options.ef_search.unwrap_or(100);
 
+        // Get distance metric from options (default: L2)
+        let distance_metric = options.metric.unwrap_or(DistanceFunction::L2);
+
         // Initialize HNSW - defer when quantization enabled
         let (hnsw_index, pending_quantization) = if options.quantization.is_some() {
             (None, options.quantization.clone())
@@ -511,6 +531,7 @@ impl VectorStore {
                         m,
                         ef_construction,
                         ef_search,
+                        distance_metric.to_hnsw(),
                     )?),
                     None,
                 )
@@ -533,9 +554,6 @@ impl VectorStore {
         let oversample_factor = options
             .oversample
             .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
-
-        // Get distance metric from options (default: L2)
-        let distance_metric = options.metric.unwrap_or(DistanceFunction::L2);
 
         Ok(Self {
             vectors: Vec::new(),
@@ -622,7 +640,11 @@ impl VectorStore {
                 };
                 self.hnsw_index = Some(index);
             } else {
-                self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
+                self.hnsw_index = Some(HNSWIndex::new(
+                    10_000,
+                    dimensions,
+                    self.distance_metric.to_hnsw(),
+                )?);
             }
             self.dimensions = dimensions;
         } else if vector.dim() != self.dimensions {
@@ -774,7 +796,11 @@ impl VectorStore {
 
                     self.hnsw_index = Some(index);
                 } else {
-                    self.hnsw_index = Some(HNSWIndex::new(10_000, dimensions)?);
+                    self.hnsw_index = Some(HNSWIndex::new(
+                        10_000,
+                        dimensions,
+                        self.distance_metric.to_hnsw(),
+                    )?);
                 }
                 self.dimensions = dimensions;
             }
@@ -1353,7 +1379,11 @@ impl VectorStore {
                 self.hnsw_index = Some(index);
             } else {
                 let capacity = vectors.len().max(1_000_000);
-                self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions)?);
+                self.hnsw_index = Some(HNSWIndex::new(
+                    capacity,
+                    self.dimensions,
+                    self.distance_metric.to_hnsw(),
+                )?);
             }
         }
 
@@ -1379,7 +1409,11 @@ impl VectorStore {
             return Ok(());
         }
 
-        let mut index = HNSWIndex::new(self.vectors.len().max(1_000_000), self.dimensions)?;
+        let mut index = HNSWIndex::new(
+            self.vectors.len().max(1_000_000),
+            self.dimensions,
+            self.distance_metric.to_hnsw(),
+        )?;
 
         for vector in &self.vectors {
             index.insert(&vector.data)?;
@@ -1405,7 +1439,11 @@ impl VectorStore {
 
         if self.hnsw_index.is_none() {
             let capacity = (self.vectors.len() + other.vectors.len()).max(1_000_000);
-            self.hnsw_index = Some(HNSWIndex::new(capacity, self.dimensions)?);
+            self.hnsw_index = Some(HNSWIndex::new(
+                capacity,
+                self.dimensions,
+                self.distance_metric.to_hnsw(),
+            )?);
         }
 
         let mut merged_count = 0;
