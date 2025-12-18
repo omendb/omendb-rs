@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/omendb)](https://pypi.org/project/omendb/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/omendb/omendb/blob/main/LICENSE)
 
-Embedded vector database for Python. No server, no setup, just `pip install`.
+Embedded vector database for Python and Node.js. No server, no setup, just install.
 
 ```bash
 pip install omendb
@@ -34,9 +34,9 @@ results = db.search([0.1] * 128, k=5, filter={"category": "science"})
 
 - **Embedded** - Runs in-process, no server needed
 - **Persistent** - Data survives restarts automatically
-- **Filtered search** - Query by metadata using ACORN-1 algorithm
+- **Filtered search** - Query by metadata with JSON-style filters
 - **Hybrid search** - Combine vector similarity with BM25 text search
-- **RaBitQ quantization** - Two-phase search for faster candidate filtering
+- **Quantization** - 4-8x smaller indexes with minimal recall loss
 
 ## API
 
@@ -55,6 +55,8 @@ db.update(id, metadata)                 # Update metadata only
 
 # Iteration
 len(db)                                 # Number of vectors
+db.count()                              # Same as len(db)
+db.count(filter={...})                  # Count matching filter
 db.ids()                                # Iterate all IDs (lazy)
 db.items()                              # Get all items as list
 db.exists(id)                           # Check if ID exists
