@@ -53,7 +53,7 @@ describe("Hybrid Search", () => {
 			db.flush();
 
 			expect(indices).toHaveLength(2);
-			expect(db.count).toBe(2);
+			expect(db.count()).toBe(2);
 		});
 
 		it("should fail without enabling text search", () => {
