@@ -48,8 +48,18 @@ db = omendb.open(":memory:", dimensions)  # In-memory (ephemeral)
 # CRUD
 db.set(items)                           # Insert/update vectors
 db.get(id)                              # Get by ID
+db.get_many(ids)                        # Batch get by IDs
 db.delete(ids)                          # Delete by IDs
+db.delete_where(filter)                 # Delete by metadata filter
 db.update(id, metadata)                 # Update metadata only
+
+# Iteration
+len(db)                                 # Number of vectors
+db.ids()                                # Iterate all IDs (lazy)
+db.items()                              # Get all items as list
+db.exists(id)                           # Check if ID exists
+"id" in db                              # Same as exists()
+for item in db: ...                     # Iterate all items (lazy)
 
 # Search
 db.search(query, k)                     # Vector search
@@ -98,12 +108,18 @@ db = omendb.open(
     ef_construction=200, # Index build quality (default: 100)
     ef_search=100,       # Search quality (default: 100)
     quantization=True,   # SQ8 quantization (default: None)
+    metric="cosine",     # Distance metric (default: "l2")
 )
 
 # Quantization options:
 # - True or "sq8": SQ8 ~4x smaller, ~99% recall (recommended)
 # - "rabitq": RaBitQ ~8x smaller, ~98% recall
 # - None/False: Full precision (default)
+
+# Distance metric options:
+# - "l2" or "euclidean": Euclidean distance (default)
+# - "cosine": Cosine distance (1 - cosine similarity)
+# - "dot" or "ip": Inner product (for MIPS)
 
 # Context manager (auto-flush on exit)
 with omendb.open("./db", dimensions=768) as db:
