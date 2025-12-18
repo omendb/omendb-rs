@@ -1251,6 +1251,31 @@ impl VectorStore {
         self.delete_batch(&ids_to_delete)
     }
 
+    /// Count vectors matching a metadata filter
+    ///
+    /// Evaluates the filter against all vectors and returns the count of matches.
+    /// More efficient than iterating and counting manually.
+    ///
+    /// # Arguments
+    /// * `filter` - MongoDB-style metadata filter
+    ///
+    /// # Returns
+    /// Number of vectors matching the filter
+    #[must_use]
+    pub fn count_by_filter(&self, filter: &MetadataFilter) -> usize {
+        self.id_to_index
+            .iter()
+            .filter(|(_, &idx)| {
+                if self.deleted.contains_key(&idx) {
+                    return false;
+                }
+                self.metadata
+                    .get(&idx)
+                    .is_some_and(|metadata| filter.matches(metadata))
+            })
+            .count()
+    }
+
     /// Get vector by string ID
     #[must_use]
     pub fn get_by_id(&self, id: &str) -> Option<(&Vector, &JsonValue)> {

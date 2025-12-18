@@ -653,6 +653,45 @@ impl VectorDatabase {
         Ok(result)
     }
 
+    /// Count vectors, optionally filtered by metadata.
+    ///
+    /// Without a filter, returns total count (same as len(db)).
+    /// With a filter, returns count of vectors matching the filter.
+    ///
+    /// Args:
+    ///     filter (dict, optional): MongoDB-style metadata filter
+    ///
+    /// Returns:
+    ///     int: Number of vectors (matching filter if provided)
+    ///
+    /// Examples:
+    ///     Total count:
+    ///
+    ///     >>> db.count()
+    ///     1000
+    ///
+    ///     Filtered count:
+    ///
+    ///     >>> db.count(filter={"status": "active"})
+    ///     750
+    ///
+    ///     With comparison operators:
+    ///
+    ///     >>> db.count(filter={"score": {"$gte": 0.8}})
+    ///     250
+    #[pyo3(signature = (filter=None))]
+    fn count(&self, filter: Option<&Bound<'_, PyDict>>) -> PyResult<usize> {
+        let inner = self.inner.read();
+
+        match filter {
+            Some(f) => {
+                let parsed_filter = parse_filter(f)?;
+                Ok(inner.store.count_by_filter(&parsed_filter))
+            }
+            None => Ok(inner.store.len()),
+        }
+    }
+
     /// Update vector, metadata, and/or text for existing ID.
     ///
     /// At least one of vector, metadata, or text must be provided.
