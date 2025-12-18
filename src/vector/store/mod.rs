@@ -21,7 +21,9 @@ use crate::omen::DistanceFunction;
 use crate::omen::{MetadataIndex, OmenFile};
 use crate::text::{weighted_reciprocal_rank_fusion, TextIndex, TextSearchConfig, DEFAULT_RRF_K};
 use anyhow::Result;
+use omendb_core::compression::QuantizationBits;
 use omendb_core::distance::l2_distance;
+use omendb_core::RaBitQParams;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -47,6 +49,83 @@ fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
             8 => 2.0, // ~99% recall baseline
             _ => 3.0, // 4-bit default: ~96% recall baseline
         },
+    }
+}
+
+/// Convert stored quantization mode ID to QuantizationMode.
+///
+/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
+    match mode_id {
+        1 => Some(QuantizationMode::SQ8),
+        2 => Some(QuantizationMode::RaBitQ(RaBitQParams {
+            bits_per_dim: QuantizationBits::Bits4,
+            ..RaBitQParams::default()
+        })),
+        3 => Some(QuantizationMode::RaBitQ(RaBitQParams {
+            bits_per_dim: QuantizationBits::Bits2,
+            ..RaBitQParams::default()
+        })),
+        4 => Some(QuantizationMode::RaBitQ(RaBitQParams {
+            bits_per_dim: QuantizationBits::Bits8,
+            ..RaBitQParams::default()
+        })),
+        _ => None, // 0 and unknown values
+    }
+}
+
+/// Create HNSW index with proper quantization mode.
+///
+/// This ensures rebuilt indexes preserve the original quantization settings.
+fn create_hnsw_index(
+    dimensions: usize,
+    hnsw_m: usize,
+    hnsw_ef_construction: usize,
+    hnsw_ef_search: usize,
+    distance_metric: DistanceFunction,
+    quantization_mode: Option<&QuantizationMode>,
+    training_vectors: &[Vec<f32>],
+) -> Result<HNSWIndex> {
+    let m = hnsw_m.max(16);
+    let ef_construction = hnsw_ef_construction.max(100);
+
+    let hnsw_params = HNSWParams {
+        m,
+        ef_construction,
+        ml: 1.0 / (m as f32).ln(),
+        seed: 42,
+        max_level: 8,
+    };
+
+    match quantization_mode {
+        Some(QuantizationMode::SQ8) => {
+            let mut idx =
+                HNSWIndex::new_with_sq8(dimensions, hnsw_params, distance_metric.to_hnsw())?;
+            if !training_vectors.is_empty() {
+                idx.train_quantizer(training_vectors)?;
+            }
+            Ok(idx)
+        }
+        Some(QuantizationMode::RaBitQ(params)) => {
+            let mut idx = HNSWIndex::new_with_asymmetric(
+                dimensions,
+                hnsw_params,
+                distance_metric.to_hnsw(),
+                params.clone(),
+            )?;
+            if !training_vectors.is_empty() {
+                idx.train_quantizer(training_vectors)?;
+            }
+            Ok(idx)
+        }
+        None => HNSWIndex::new_with_params(
+            training_vectors.len().max(10_000),
+            dimensions,
+            m,
+            ef_construction,
+            hnsw_ef_search.max(100),
+            distance_metric.to_hnsw(),
+        ),
     }
 }
 
@@ -234,6 +313,8 @@ impl VectorStore {
 
         // Check if store was quantized - if so, skip loading vectors to RAM
         let is_quantized = storage.is_quantized()?;
+        let quantization_mode =
+            quantization_mode_from_id(storage.get_quantization_mode()?.unwrap_or(0));
 
         // Load metadata and mappings (always needed)
         let metadata = storage.load_all_metadata()?;
@@ -295,16 +376,17 @@ impl VectorStore {
                             index.len(),
                             active_vector_count
                         );
-                        let mut new_index = HNSWIndex::new_with_params(
-                            vectors.len().max(10_000),
-                            dimensions,
-                            hnsw_m.max(16),                // Use stored M, minimum 16
-                            hnsw_ef_construction.max(100), // Use stored ef_construction, minimum 100
-                            hnsw_ef_search.max(100),       // Use stored ef_search, minimum 100
-                            distance_metric.to_hnsw(),
-                        )?;
                         let vector_data: Vec<Vec<f32>> =
                             vectors.iter().map(|v| v.data.clone()).collect();
+                        let mut new_index = create_hnsw_index(
+                            dimensions,
+                            hnsw_m,
+                            hnsw_ef_construction,
+                            hnsw_ef_search,
+                            distance_metric,
+                            quantization_mode.as_ref(),
+                            &vector_data,
+                        )?;
                         new_index.batch_insert(&vector_data)?;
                         Some(new_index)
                     } else {
@@ -317,15 +399,16 @@ impl VectorStore {
                 }
             }
         } else if !vectors.is_empty() {
-            let mut index = HNSWIndex::new_with_params(
-                vectors.len().max(10_000),
-                dimensions,
-                hnsw_m.max(16),
-                hnsw_ef_construction.max(100),
-                hnsw_ef_search.max(100),
-                distance_metric.to_hnsw(),
-            )?;
             let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
+            let mut index = create_hnsw_index(
+                dimensions,
+                hnsw_m,
+                hnsw_ef_construction,
+                hnsw_ef_search,
+                distance_metric,
+                quantization_mode.as_ref(),
+                &vector_data,
+            )?;
             index.batch_insert(&vector_data)?;
             Some(index)
         } else if is_quantized && dimensions > 0 {
@@ -333,16 +416,17 @@ impl VectorStore {
             if vectors_data.is_empty() {
                 None
             } else {
-                let mut index = HNSWIndex::new_with_params(
-                    vectors_data.len().max(10_000),
-                    dimensions,
-                    hnsw_m.max(16),
-                    hnsw_ef_construction.max(100),
-                    hnsw_ef_search.max(100),
-                    distance_metric.to_hnsw(),
-                )?;
                 let vector_data: Vec<Vec<f32>> =
                     vectors_data.iter().map(|(_, v)| v.clone()).collect();
+                let mut index = create_hnsw_index(
+                    dimensions,
+                    hnsw_m,
+                    hnsw_ef_construction,
+                    hnsw_ef_search,
+                    distance_metric,
+                    quantization_mode.as_ref(),
+                    &vector_data,
+                )?;
                 index.batch_insert(&vector_data)?;
                 Some(index)
             }
