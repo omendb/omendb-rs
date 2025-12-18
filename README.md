@@ -138,15 +138,17 @@ results = db.search_hybrid(query_vec, "query text", k=10, subscores=True)
 
 ## Performance
 
-10K vectors on Apple M3 Max:
+10K vectors on Apple M3 Max (Dec 2025):
 
 | Dimension | Single QPS | Batch QPS | Recall@10 |
 | --------- | ---------- | --------- | --------- |
-| 128       | 12,500+    | 95,000+   | 91%       |
-| 768       | 3,400+     | 21,000+   | 82%       |
-| 1536      | 1,600+     | 6,600+    | 79%       |
+| 128       | 11,800+    | 87,000+   | 92%       |
+| 768       | 3,200+     | 19,900+   | 82%       |
+| 1536      | 1,700+     | 6,200+    | 78%       |
 
 _Batch operations use rayon for parallel search._
+
+**SIFT-1M** (1M vectors, Intel i9-13900KF): 4,300 QPS @ 98.4% recall
 
 ## Examples
 
