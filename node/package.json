@@ -1,57 +1,57 @@
 {
-  "name": "@omendb/omendb",
-  "version": "0.0.12",
-  "description": "Fast embedded vector database with HNSW indexing",
-  "main": "index.js",
-  "types": "index.d.ts",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/omendb/omendb"
-  },
-  "keywords": [
-    "vector",
-    "database",
-    "embeddings",
-    "hnsw",
-    "similarity-search",
-    "ai",
-    "machine-learning",
-    "napi-rs",
-    "rust"
-  ],
-  "author": "Nick Jaru",
-  "license": "AGPL-3.0",
-  "engines": {
-    "node": ">= 18"
-  },
-  "napi": {
-    "binaryName": "omendb",
-    "packageName": "@omendb/omendb",
-    "targets": [
-      "x86_64-apple-darwin",
-      "aarch64-apple-darwin",
-      "x86_64-unknown-linux-gnu",
-      "aarch64-unknown-linux-gnu"
-    ]
-  },
-  "scripts": {
-    "build": "napi build --release",
-    "build:debug": "napi build",
-    "test": "vitest run"
-  },
-  "devDependencies": {
-    "@napi-rs/cli": "^3.5.0",
-    "vitest": "^2.1.0"
-  },
-  "files": [
-    "index.js",
-    "index.d.ts",
-    "omendb.node"
-  ],
-  "optionalDependencies": {
-    "@omendb/omendb-darwin-x64": "0.0.12",
-    "@omendb/omendb-darwin-arm64": "0.0.12",
-    "@omendb/omendb-linux-x64-gnu": "0.0.12",
-    "@omendb/omendb-linux-arm64-gnu": "0.0.12"
-  }
+	"name": "@omendb/omendb",
+	"version": "0.0.12",
+	"description": "Fast embedded vector database with HNSW + ACORN-1 filtered search",
+	"main": "index.js",
+	"types": "index.d.ts",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/omendb/omendb"
+	},
+	"keywords": [
+		"vector",
+		"database",
+		"embeddings",
+		"hnsw",
+		"similarity-search",
+		"ai",
+		"machine-learning",
+		"napi-rs",
+		"rust"
+	],
+	"author": "Nick Jaru",
+	"license": "AGPL-3.0",
+	"engines": {
+		"node": ">= 18"
+	},
+	"napi": {
+		"binaryName": "omendb",
+		"packageName": "@omendb/omendb",
+		"targets": [
+			"x86_64-apple-darwin",
+			"aarch64-apple-darwin",
+			"x86_64-unknown-linux-gnu",
+			"aarch64-unknown-linux-gnu"
+		]
+	},
+	"scripts": {
+		"build": "napi build --release",
+		"build:debug": "napi build",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@napi-rs/cli": "^3.5.0",
+		"vitest": "^2.1.0"
+	},
+	"files": [
+		"index.js",
+		"index.d.ts",
+		"omendb.node"
+	],
+	"optionalDependencies": {
+		"@omendb/omendb-darwin-x64": "0.0.12",
+		"@omendb/omendb-darwin-arm64": "0.0.12",
+		"@omendb/omendb-linux-x64-gnu": "0.0.12",
+		"@omendb/omendb-linux-arm64-gnu": "0.0.12"
+	}
 }
