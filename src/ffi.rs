@@ -515,7 +515,7 @@ pub unsafe extern "C" fn omendb_free_string(s: *mut c_char) {
 /// Get `OmenDB` version
 #[no_mangle]
 pub extern "C" fn omendb_version() -> *const c_char {
-    static VERSION: &[u8] = b"0.0.11\0";
+    static VERSION: &[u8] = b"0.0.12\0";
     VERSION.as_ptr().cast::<c_char>()
 }
 
