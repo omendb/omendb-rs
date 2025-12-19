@@ -37,3 +37,10 @@ path = "fuzz_targets/text_ops.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "quantized_ops"
+path = "fuzz_targets/quantized_ops.rs"
+test = false
+doc = false
+bench = false

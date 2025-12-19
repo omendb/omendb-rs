@@ -20,6 +20,7 @@ on:
           - all
           - db_operations
           - distance_ops
+          - quantized_ops
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,6 +36,7 @@ jobs:
         target:
           - db_operations
           - distance_ops
+          - quantized_ops
     steps:
       - uses: actions/checkout@v4
 
