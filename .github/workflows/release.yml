@@ -10,7 +10,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -363,3 +363,25 @@ jobs:
         continue-on-error: true
         run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
         working-directory: node/wrapper
+
+  # ============================================================================
+  # STAGE 4: Create git tag and GitHub release
+  # ============================================================================
+
+  create-release:
+    needs: [verify, publish-npm]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="v${{ needs.verify.outputs.version }}"
+          echo "Creating release $VERSION"
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            --latest
