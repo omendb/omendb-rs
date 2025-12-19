@@ -610,3 +610,167 @@ class TestStressConditions:
             # Verify data integrity after all the open/close cycles
             db_final = omendb.open(db_path, dimensions=64)
             assert len(db_final) == 100
+
+
+class TestWriteStress:
+    """Heavy write stress tests for production verification"""
+
+    @pytest.mark.slow
+    def test_concurrent_write_stress(self):
+        """Stress test: many threads writing large batches with verification"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "stress_db")
+            db = omendb.open(db_path, dimensions=128)
+
+            errors = []
+            lock = threading.Lock()
+            num_threads = 10
+            vectors_per_thread = 500
+            expected_total = num_threads * vectors_per_thread
+
+            def write_worker(thread_id: int):
+                """Each thread writes vectors and verifies immediately"""
+                try:
+                    for batch_num in range(10):  # 10 batches of 50
+                        batch = []
+                        for i in range(50):
+                            idx = thread_id * 500 + batch_num * 50 + i
+                            vec_id = f"stress_{idx}"
+                            embedding = generate_random_vector(128, seed=idx)
+                            batch.append(
+                                {
+                                    "id": vec_id,
+                                    "vector": embedding,
+                                    "metadata": {"thread": thread_id, "batch": batch_num, "idx": i},
+                                }
+                            )
+                        db.set(batch)
+
+                        # Verify one vector from this batch
+                        verify_id = batch[25]["id"]
+                        result = db.get(verify_id)
+                        if result is None:
+                            with lock:
+                                errors.append(
+                                    f"Thread {thread_id}: {verify_id} missing after insert"
+                                )
+                except Exception as e:
+                    with lock:
+                        errors.append(f"Thread {thread_id} error: {e}")
+
+            start = time.time()
+            threads = []
+            for i in range(num_threads):
+                t = threading.Thread(target=write_worker, args=(i,))
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+            elapsed = time.time() - start
+
+            assert len(errors) == 0, f"Errors during write stress: {errors}"
+            assert len(db) == expected_total, f"Expected {expected_total}, got {len(db)}"
+
+            # Verify random samples
+            for i in range(100):
+                idx = random.randint(0, expected_total - 1)
+                vec_id = f"stress_{idx}"
+                result = db.get(vec_id)
+                assert result is not None, f"Missing vector: {vec_id}"
+
+            print(
+                f"\nWrite stress: {num_threads} threads, {expected_total} vectors: {elapsed:.2f}s ({expected_total / elapsed:.0f} vec/s)"
+            )
+
+    @pytest.mark.slow
+    def test_mixed_write_search_stress(self):
+        """Stress test: concurrent writes and searches, verify no corruption"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "mixed_stress_db")
+            db = omendb.open(db_path, dimensions=128)
+
+            # Seed with initial data
+            initial = generate_random_vectors(1000, 128)
+            for v in initial:
+                v["id"] = f"initial_{v['id']}"
+            db.set(initial)
+
+            errors = []
+            search_results = []
+            lock = threading.Lock()
+            stop_flag = threading.Event()
+
+            def writer_thread(thread_id: int):
+                """Continuously write new vectors"""
+                try:
+                    batch_num = 0
+                    while not stop_flag.is_set():
+                        batch = []
+                        for i in range(25):
+                            idx = thread_id * 100000 + batch_num * 25 + i
+                            batch.append(
+                                {
+                                    "id": f"writer_{thread_id}_vec_{idx}",
+                                    "vector": generate_random_vector(128, seed=idx),
+                                    "metadata": {"writer": thread_id},
+                                }
+                            )
+                        db.set(batch)
+                        batch_num += 1
+                        time.sleep(0.005)
+                except Exception as e:
+                    with lock:
+                        errors.append(f"Writer {thread_id} error: {e}")
+
+            def searcher_thread(thread_id: int, num_searches: int):
+                """Search and verify results make sense"""
+                try:
+                    for i in range(num_searches):
+                        query = generate_random_vector(128, seed=thread_id * 10000 + i)
+                        results = db.search(query, k=10)
+
+                        # Results should have valid IDs
+                        for r in results:
+                            if "id" not in r:
+                                with lock:
+                                    errors.append(f"Searcher {thread_id}: result missing id")
+                            if "distance" not in r:
+                                with lock:
+                                    errors.append(f"Searcher {thread_id}: result missing distance")
+
+                        with lock:
+                            search_results.append(len(results))
+                except Exception as e:
+                    with lock:
+                        errors.append(f"Searcher {thread_id} error: {e}")
+
+            # Start 4 writers
+            writers = []
+            for i in range(4):
+                t = threading.Thread(target=writer_thread, args=(i,))
+                writers.append(t)
+                t.start()
+
+            # Start 8 searchers doing 100 searches each
+            searchers = []
+            for i in range(8):
+                t = threading.Thread(target=searcher_thread, args=(i, 100))
+                searchers.append(t)
+                t.start()
+
+            # Wait for searchers
+            for t in searchers:
+                t.join()
+
+            # Stop writers
+            stop_flag.set()
+            for t in writers:
+                t.join()
+
+            assert len(errors) == 0, f"Errors during mixed stress: {errors}"
+            assert len(search_results) == 800  # 8 searchers * 100 searches
+            # All searches should return results
+            assert all(r > 0 for r in search_results), "Some searches returned no results"
+            assert len(db) > 1000, f"Expected more than 1000, got {len(db)}"
+            print(f"\nMixed stress complete: {len(db)} vectors after write+search")
