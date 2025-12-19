@@ -673,7 +673,7 @@ class TestWriteStress:
             assert len(db) == expected_total, f"Expected {expected_total}, got {len(db)}"
 
             # Verify random samples
-            for i in range(100):
+            for _ in range(100):
                 idx = random.randint(0, expected_total - 1)
                 vec_id = f"stress_{idx}"
                 result = db.get(vec_id)
