@@ -2352,9 +2352,19 @@ impl VectorStore {
                 if self.deleted.contains_key(&idx) {
                     return None;
                 }
-                let vector = self.vectors.get(idx)?;
+
+                // Try in-memory vectors first
+                let vec_data = if let Some(vec) = self.vectors.get(idx) {
+                    vec.data.clone()
+                } else if let Some(ref storage) = self.storage {
+                    // Fall back to storage for quantized stores
+                    storage.get_vector(idx).ok().flatten()?
+                } else {
+                    return None;
+                };
+
                 let metadata = self.metadata.get(&idx).cloned().unwrap_or_default();
-                Some((id.clone(), vector.data.clone(), metadata))
+                Some((id.clone(), vec_data, metadata))
             })
             .collect()
     }
