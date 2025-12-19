@@ -153,6 +153,10 @@ def test_sq8_multibatch_insert():
             result = db.get(f"batch{batch_num}_v50")
             assert result is not None, f"After reopen: could not find batch{batch_num}_v50"
 
+        # Verify items() works for quantized stores
+        items = db.items()
+        assert len(items) == 500, f"items() should return 500, got {len(items)}"
+
         print("  ✓ SQ8 multi-batch insert works")
         return True
 
