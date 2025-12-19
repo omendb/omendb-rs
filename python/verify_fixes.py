@@ -223,7 +223,7 @@ def test_header_corruption_detection():
 
         # Try to open - should fail with checksum error
         try:
-            db = omendb.open(db_path, dimensions=64)
+            omendb.open(db_path, dimensions=64)
             print("  ✗ Corruption not detected!")
             return False
         except Exception as e:
