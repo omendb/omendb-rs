@@ -144,6 +144,11 @@ jobs:
         working-directory: python
         run: uv run pytest tests/ -x --timeout=60 -m "not slow and not soak"
 
+      - name: Recall validation
+        working-directory: python
+        run: uv run python ../benchmarks/ci_validation.py
+        timeout-minutes: 2
+
   # ==========================================================================
   # Stage 2: Node.js bindings (parallel with Rust tests)
   # ==========================================================================

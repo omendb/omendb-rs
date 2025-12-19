@@ -1,0 +1,2 @@
+# Large HDF5 datasets (downloaded on demand)
+*.hdf5

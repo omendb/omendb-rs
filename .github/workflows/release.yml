@@ -124,11 +124,44 @@ jobs:
         run: cargo test --lib
 
   # ============================================================================
+  # STAGE 1.5: Recall Validation (before building artifacts)
+  # ============================================================================
+
+  validate:
+    needs: [verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync
+
+      - name: Build
+        working-directory: python
+        run: uv run maturin develop --release
+
+      - name: Release validation
+        working-directory: python
+        run: uv run python ../benchmarks/release_validation.py
+        timeout-minutes: 10
+
+  # ============================================================================
   # STAGE 2: Build all artifacts (parallel)
   # ============================================================================
 
   build-python-linux:
-    needs: [verify]
+    needs: [verify, validate]
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: true
@@ -151,7 +184,7 @@ jobs:
           path: dist
 
   build-python-macos:
-    needs: [verify]
+    needs: [verify, validate]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
@@ -177,7 +210,7 @@ jobs:
           path: dist
 
   build-python-sdist:
-    needs: [verify]
+    needs: [verify, validate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -192,7 +225,7 @@ jobs:
           path: dist
 
   build-node:
-    needs: [verify]
+    needs: [verify, validate]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
