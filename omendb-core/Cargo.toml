@@ -1,6 +1,6 @@
 [package]
 name = "omendb-core"
-version = "0.0.13"
+version = "0.0.14"
 edition = "2021"
 authors = ["OmenDB Team"]
 description = "Core algorithms for OmenDB: HNSW, RaBitQ compression, SIMD distance"
