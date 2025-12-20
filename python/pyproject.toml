@@ -60,6 +60,7 @@ dev = [
     "llama-index-core>=0.10.0",
     "sentence-transformers>=5.1.2",
     "ty>=0.0.2",
+    "h5py>=3.10.0",
 ]
 
 [tool.ruff]
