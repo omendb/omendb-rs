@@ -18,6 +18,20 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// Configure OpenOptions for cross-platform compatibility.
+/// On Windows, enables full file sharing to avoid "Access is denied" errors.
+#[cfg(windows)]
+fn configure_open_options(opts: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    opts.share_mode(0x1 | 0x2 | 0x4);
+}
+
+#[cfg(not(windows))]
+fn configure_open_options(_opts: &mut OpenOptions) {
+    // No-op on Unix
+}
+
 /// Serializable metadata for checkpoint persistence
 #[derive(Serialize, Deserialize, Default)]
 struct CheckpointMetadata {
@@ -89,12 +103,10 @@ impl OmenFile {
         };
 
         // Create empty file with header
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&omen_path)?;
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true).create(true).truncate(true);
+        configure_open_options(&mut opts);
+        let mut file = opts.open(&omen_path)?;
 
         let header = OmenHeader::new(dimensions);
         file.write_all(&header.to_bytes())?;
@@ -131,7 +143,10 @@ impl OmenFile {
             PathBuf::from(wal)
         };
 
-        let mut file = OpenOptions::new().read(true).write(true).open(&omen_path)?;
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true);
+        configure_open_options(&mut opts);
+        let mut file = opts.open(&omen_path)?;
 
         // Read header
         let mut header_buf = [0u8; HEADER_SIZE];
@@ -491,6 +506,10 @@ impl OmenFile {
         let metadata_offset = align_to_page(graph_offset + graph_size);
         let hnsw_offset = align_to_page(metadata_offset + metadata_size);
         let total_size = align_to_page(hnsw_offset + hnsw_size);
+
+        // Drop mmap before resizing file (required on Windows - file cannot be
+        // resized while memory-mapped)
+        self.mmap = None;
 
         // Extend file
         self.file.set_len(total_size as u64)?;
@@ -877,7 +896,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)] // Windows file locking prevents mmap resize
     fn test_checkpoint_and_reopen() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.omen");

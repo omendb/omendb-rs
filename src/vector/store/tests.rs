@@ -459,7 +459,6 @@ fn test_open_new_database() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore)] // Windows file locking prevents mmap resize
 fn test_persistent_roundtrip() {
     use tempfile::TempDir;
 
@@ -521,7 +520,6 @@ fn test_persistent_roundtrip() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore)] // Windows file locking prevents mmap resize
 fn test_persistent_delete() {
     use tempfile::TempDir;
 
@@ -567,7 +565,6 @@ fn test_persistent_delete() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore)] // Windows file locking prevents mmap resize
 fn test_persistent_search() {
     use tempfile::TempDir;
 
@@ -1367,7 +1364,6 @@ mod proptest_tests {
 
         /// Verify non-quantized mode persists correctly
         #[test]
-        #[cfg_attr(windows, ignore)] // Windows file locking prevents mmap resize
         fn non_quantized_roundtrip(
             num_vectors in 10usize..30
         ) {
@@ -1403,7 +1399,6 @@ mod proptest_tests {
         /// multiple batches would overwrite previous IDs because vectors.len()
         /// was used instead of next_index counter.
         #[test]
-        #[cfg_attr(windows, ignore)] // Windows file locking prevents mmap resize
         fn sq8_quantized_roundtrip(
             num_vectors in 10usize..30
         ) {
