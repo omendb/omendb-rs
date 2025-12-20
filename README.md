@@ -138,17 +138,37 @@ results = db.search_hybrid(query_vec, "query text", k=10, subscores=True)
 
 ## Performance
 
-10K vectors on Apple M3 Max (Dec 2025):
+**10K vectors, Apple M3 Max** (m=16, ef=100):
 
-| Dimension | Single QPS | Batch QPS | Recall@10 |
-| --------- | ---------- | --------- | --------- |
-| 128       | 11,800+    | 87,000+   | 92%       |
-| 768       | 3,200+     | 19,900+   | 82%       |
-| 1536      | 1,700+     | 6,200+    | 78%       |
+| Dimension | Single QPS | Batch QPS | Speedup |
+| --------- | ---------- | --------- | ------- |
+| 128D      | 12,000+    | 87,000+   | 7.2x    |
+| 768D      | 3,800+     | 20,500+   | 5.4x    |
+| 1536D     | 1,600+     | 6,200+    | 3.8x    |
 
-_Batch operations use rayon for parallel search._
+**SIFT-1M** (1M vectors, Intel i9-13900KF): **4,300 QPS @ 98.4% recall**
 
-**SIFT-1M** (1M vectors, Intel i9-13900KF): 4,300 QPS @ 98.4% recall
+**Quantization** reduces memory with minimal recall loss:
+
+| Mode   | Compression | Use Case                       |
+| ------ | ----------- | ------------------------------ |
+| f32    | 1x          | Default, highest recall        |
+| sq8    | 4x          | Recommended for most users     |
+| rabitq | 8x          | Large datasets, cost-sensitive |
+
+```python
+db = omendb.open("./db", dimensions=768, quantization=True)  # Enable SQ8
+```
+
+<details>
+<summary>Benchmark methodology</summary>
+
+- **Parameters**: m=16, ef_construction=100, ef_search=100
+- **Batch**: Uses Rayon for parallel search across all cores
+- **Recall**: Validated against brute-force ground truth on SIFT/GloVe
+- **Reproduce**: `uv run python benchmarks/run.py`
+
+</details>
 
 ## Examples
 
