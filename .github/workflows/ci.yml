@@ -132,9 +132,6 @@ jobs:
 
       - uses: astral-sh/setup-uv@v4
 
-      - name: Copy README for maturin
-        run: cp README.md python/README.md
-
       - name: Install dependencies
         working-directory: python
         run: uv sync

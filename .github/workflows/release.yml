@@ -143,9 +143,6 @@ jobs:
 
       - uses: astral-sh/setup-uv@v4
 
-      - name: Copy README for maturin
-        run: cp README.md python/README.md
-
       - name: Install dependencies
         working-directory: python
         run: uv sync
@@ -172,8 +169,6 @@ jobs:
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
-      - name: Copy README for maturin
-        run: cp README.md python/README.md
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -201,8 +196,6 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - name: Copy README for maturin
-        run: cp README.md python/README.md
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -221,8 +214,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Copy README for maturin
-        run: cp README.md python/README.md
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -240,8 +231,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Copy README for sdist
-        run: cp README.md python/README.md
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
