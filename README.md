@@ -38,6 +38,14 @@ results = db.search([0.1] * 128, k=5, filter={"category": "science"})
 - **Hybrid search** - Combine vector similarity with BM25 text search
 - **Quantization** - 4-8x smaller indexes with minimal recall loss
 
+## Platforms
+
+| Platform                     | Status       |
+| ---------------------------- | ------------ |
+| Linux (x86_64, ARM64)        | Supported    |
+| macOS (Intel, Apple Silicon) | Supported    |
+| Windows (x86_64)             | Experimental |
+
 ## API
 
 ```python
