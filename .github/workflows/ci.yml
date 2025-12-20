@@ -75,8 +75,12 @@ jobs:
 
   test:
     name: Test (Rust)
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: [fmt, clippy]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -109,8 +113,12 @@ jobs:
 
   python:
     name: Test (Python)
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: [fmt, clippy]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -129,10 +137,12 @@ jobs:
         run: uv sync
 
       - name: Check formatting (ruff)
+        if: matrix.os == 'ubuntu-latest'
         working-directory: python
         run: uv run ruff format --check .
 
       - name: Lint (ruff)
+        if: matrix.os == 'ubuntu-latest'
         working-directory: python
         run: uv run ruff check .
 
@@ -145,6 +155,7 @@ jobs:
         run: uv run pytest tests/ -x --timeout=60 -m "not slow and not soak"
 
       - name: Recall validation
+        if: matrix.os == 'ubuntu-latest'
         working-directory: python
         run: uv run python ../benchmarks/ci_validation.py
         timeout-minutes: 2
