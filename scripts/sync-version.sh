@@ -118,7 +118,8 @@ if [ "$CHECK_ONLY" = false ] && ([ "$NODE_V" != "$VERSION" ] || [ "$NODE_OPT" !=
         .optionalDependencies[\"@omendb/omendb-darwin-x64\"] = \"$VERSION\" |
         .optionalDependencies[\"@omendb/omendb-darwin-arm64\"] = \"$VERSION\" |
         .optionalDependencies[\"@omendb/omendb-linux-x64-gnu\"] = \"$VERSION\" |
-        .optionalDependencies[\"@omendb/omendb-linux-arm64-gnu\"] = \"$VERSION\"" \
+        .optionalDependencies[\"@omendb/omendb-linux-arm64-gnu\"] = \"$VERSION\" |
+        .optionalDependencies[\"@omendb/omendb-win32-x64-msvc\"] = \"$VERSION\"" \
         node/package.json > tmp.json && mv tmp.json node/package.json
 fi
 check_or_update "node/package.json (version)" "$NODE_V"
