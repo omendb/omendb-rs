@@ -209,6 +209,23 @@ jobs:
           name: wheels-macos-${{ matrix.target }}
           path: dist
 
+  build-python-windows:
+    needs: [verify, validate]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - name: Build wheels (experimental)
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist --find-interpreter -m python/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-x64
+          path: dist
+
   build-python-sdist:
     needs: [verify, validate]
     runs-on: ubuntu-latest
@@ -252,6 +269,9 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             build: npm run build -- --target aarch64-unknown-linux-gnu --platform --use-napi-cross
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            build: npm run build -- --target x86_64-pc-windows-msvc --platform
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -282,6 +302,7 @@ jobs:
         verify,
         build-python-linux,
         build-python-macos,
+        build-python-windows,
         build-python-sdist,
         build-node,
       ]
