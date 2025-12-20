@@ -14,6 +14,7 @@ license = "AGPL-3.0"
 keywords = ["vector-database", "embedded", "ai", "hnsw", "acorn"]
 categories = ["database", "embedded"]
 readme = "README.md"
+exclude = [".hhg/", ".claude/", ".github/", "benchmarks/", "scripts/", "*.md", "!README.md"]
 
 [lib]
 name = "omendb"
