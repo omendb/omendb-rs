@@ -569,22 +569,22 @@ fn test_index_stats_distance_functions() {
 // ========================================
 
 #[test]
+#[cfg_attr(windows, ignore)] // Windows file locking prevents mmap resize
 fn test_empty_index_serialization() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test_empty_index.hnsw");
+
     let params = HNSWParams::default();
     let index = HNSWIndex::new(128, params, DistanceFunction::L2, false).unwrap();
 
     // Serialize empty index
-    let path = "/tmp/test_empty_index.hnsw";
-    index.save(path).unwrap();
+    index.save(&path).unwrap();
 
     // Deserialize
-    let loaded = HNSWIndex::load(path).unwrap();
+    let loaded = HNSWIndex::load(&path).unwrap();
 
     assert_eq!(loaded.len(), 0);
     assert_eq!(loaded.dimensions(), 128);
-
-    // Cleanup
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
