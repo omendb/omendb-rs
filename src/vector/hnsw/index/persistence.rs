@@ -5,10 +5,24 @@ use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::graph_storage::GraphStorage;
 use crate::vector::hnsw::storage::{NeighborLists, VectorStorage};
 use crate::vector::hnsw::types::{DistanceFunction, HNSWNode, HNSWParams};
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use tracing::{error, info, instrument};
+
+/// Configure OpenOptions for cross-platform compatibility.
+/// On Windows, enables full file sharing to avoid "Access is denied" errors.
+#[cfg(windows)]
+fn configure_open_options(opts: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    opts.share_mode(0x1 | 0x2 | 0x4);
+}
+
+#[cfg(not(windows))]
+fn configure_open_options(_opts: &mut OpenOptions) {
+    // No-op on Unix
+}
 
 impl HNSWIndex {
     /// Save index to disk
@@ -30,7 +44,10 @@ impl HNSWIndex {
         info!("Starting index save");
         let start = std::time::Instant::now();
 
-        let file = File::create(path).map_err(|e| {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        configure_open_options(&mut opts);
+        let file = opts.open(path).map_err(|e| {
             error!(error = ?e, "Failed to create index file");
             HNSWError::from(e)
         })?;
@@ -100,7 +117,10 @@ impl HNSWIndex {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         info!("Starting index load");
         let start = std::time::Instant::now();
-        let file = File::open(path)?;
+        let mut opts = OpenOptions::new();
+        opts.read(true);
+        configure_open_options(&mut opts);
+        let file = opts.open(path)?;
         let mut reader = BufReader::new(file);
 
         // Read and verify magic bytes
