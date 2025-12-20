@@ -37,10 +37,11 @@ jobs:
           echo "VERSION file: $VERSION"
           echo ""
 
-          # Check all 9 version locations match VERSION
+          # Check all 10 version locations match VERSION
           ERRORS=0
 
           CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+          CORE_DEP_V=$(grep 'omendb-core.*version' Cargo.toml | sed 's/.*version = "\([^"]*\)".*/\1/' || echo "")
           CORE_V=$(grep '^version = ' omendb-core/Cargo.toml | head -1 | cut -d'"' -f2)
           PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
           INIT_V=$(grep '__version__' python/omendb/__init__.py | cut -d'"' -f2)
@@ -64,7 +65,8 @@ jobs:
             fi
           }
 
-          check_version "Cargo.toml" "$CARGO_V"
+          check_version "Cargo.toml (version)" "$CARGO_V"
+          check_version "Cargo.toml (omendb-core dep)" "$CORE_DEP_V"
           check_version "omendb-core/Cargo.toml" "$CORE_V"
           check_version "python/Cargo.toml" "$PYTHON_V"
           check_version "python/omendb/__init__.py" "$INIT_V"
@@ -84,7 +86,7 @@ jobs:
           fi
 
           echo ""
-          echo "All 9 version locations match: $VERSION"
+          echo "All 10 version locations match: $VERSION"
 
       - name: Check not already published
         run: |
