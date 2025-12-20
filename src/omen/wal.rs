@@ -218,11 +218,20 @@ impl Wal {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let mut opts = OpenOptions::new();
-        opts.read(true).create(true).append(true);
+        // Use write mode instead of append for Windows compatibility
+        // (append mode on Windows may prevent truncation)
+        opts.read(true).write(true).create(true);
         configure_open_options(&mut opts);
-        let file = opts.open(&path)?;
+        let mut file = opts.open(&path)?;
 
         let metadata = file.metadata()?;
+        let file_len = metadata.len();
+
+        // Seek to end for append-like behavior
+        if file_len > 0 {
+            file.seek(SeekFrom::End(0))?;
+        }
+
         let mut wal = Self {
             file: BufWriter::new(file),
             path,
@@ -231,7 +240,7 @@ impl Wal {
         };
 
         // Scan to find last timestamp
-        if metadata.len() > 0 {
+        if file_len > 0 {
             wal.scan_for_timestamp()?;
         }
 
@@ -345,6 +354,8 @@ impl Wal {
 
     /// Truncate WAL (after checkpoint)
     pub fn truncate(&mut self) -> io::Result<()> {
+        // Flush buffer before truncating (required on Windows)
+        self.file.flush()?;
         self.file.get_mut().set_len(0)?;
         self.file.get_mut().seek(SeekFrom::Start(0))?;
         self.next_timestamp = 0;
