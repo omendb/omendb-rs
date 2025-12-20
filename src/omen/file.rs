@@ -466,6 +466,9 @@ impl OmenFile {
             return Ok(());
         }
 
+        // Drop mmap before file operations (required on Windows)
+        self.mmap = None;
+
         // Serialize metadata with bincode (much faster than JSON)
         let checkpoint_meta = CheckpointMetadata {
             id_to_index: self.id_to_index.clone(),
