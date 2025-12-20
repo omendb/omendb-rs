@@ -172,6 +172,8 @@ jobs:
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
+      - name: Copy README for maturin
+        run: cp README.md python/README.md
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -199,6 +201,8 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
+      - name: Copy README for maturin
+        run: cp README.md python/README.md
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -217,6 +221,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Copy README for maturin
+        run: cp README.md python/README.md
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
