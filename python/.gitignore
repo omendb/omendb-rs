@@ -1,3 +1,6 @@
+# Copied from root during sdist build
+README.md
+
 data/*.hdf5
 
 # Test artifacts
