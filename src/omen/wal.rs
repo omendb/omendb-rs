@@ -6,6 +6,20 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+/// Configure OpenOptions for cross-platform compatibility.
+/// On Windows, enables full file sharing to avoid "Access is denied" errors.
+#[cfg(windows)]
+fn configure_open_options(opts: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    opts.share_mode(0x1 | 0x2 | 0x4);
+}
+
+#[cfg(not(windows))]
+fn configure_open_options(_opts: &mut OpenOptions) {
+    // No-op on Unix
+}
+
 /// WAL entry types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -203,11 +217,10 @@ impl Wal {
     /// Open or create WAL file
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let file = OpenOptions::new()
-            .read(true)
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut opts = OpenOptions::new();
+        opts.read(true).create(true).append(true);
+        configure_open_options(&mut opts);
+        let file = opts.open(&path)?;
 
         let metadata = file.metadata()?;
         let mut wal = Self {

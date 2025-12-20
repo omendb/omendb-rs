@@ -569,7 +569,6 @@ fn test_index_stats_distance_functions() {
 // ========================================
 
 #[test]
-#[cfg_attr(windows, ignore)] // Windows file locking prevents mmap resize
 fn test_empty_index_serialization() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test_empty_index.hnsw");
