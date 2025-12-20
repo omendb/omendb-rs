@@ -44,6 +44,10 @@ def db_with_vectors(temp_db_path):
         {"id": "vec5", "vector": [0.5] * 128, "metadata": {"label": "B", "value": 5}},
     ]
     database.set(vectors)
+
+    # Sanity check: verify all vectors were inserted
+    assert len(database) == 5, f"Expected 5 vectors, got {len(database)}"
+
     yield database
     # Explicitly drop database and force GC to release file handles before temp dir cleanup
     del database
