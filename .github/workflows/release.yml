@@ -37,12 +37,10 @@ jobs:
           echo "VERSION file: $VERSION"
           echo ""
 
-          # Check all 10 version locations match VERSION
+          # Check all 8 version locations match VERSION
           ERRORS=0
 
           CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
-          CORE_DEP_V=$(grep 'omendb-core.*version' Cargo.toml | sed 's/.*version = "\([^"]*\)".*/\1/' || echo "")
-          CORE_V=$(grep '^version = ' omendb-core/Cargo.toml | head -1 | cut -d'"' -f2)
           PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
           INIT_V=$(grep '__version__' python/omendb/__init__.py | cut -d'"' -f2)
           FFI_V=$(grep 'static VERSION' src/ffi.rs | sed 's/.*b"\([0-9.]*\).*/\1/' || echo "")
@@ -66,8 +64,6 @@ jobs:
           }
 
           check_version "Cargo.toml (version)" "$CARGO_V"
-          check_version "Cargo.toml (omendb-core dep)" "$CORE_DEP_V"
-          check_version "omendb-core/Cargo.toml" "$CORE_V"
           check_version "python/Cargo.toml" "$PYTHON_V"
           check_version "python/omendb/__init__.py" "$INIT_V"
           check_version "src/ffi.rs" "$FFI_V"
@@ -86,7 +82,7 @@ jobs:
           fi
 
           echo ""
-          echo "All 10 version locations match: $VERSION"
+          echo "All 8 version locations match: $VERSION"
 
       - name: Check not already published
         run: |
@@ -320,13 +316,6 @@ jobs:
       - name: Get crates.io token via OIDC
         uses: rust-lang/crates-io-auth-action@v1
         id: crates-io-auth
-      - name: Publish omendb-core to crates.io
-        continue-on-error: true
-        run: cargo publish -p omendb-core --token ${{ steps.crates-io-auth.outputs.token }}
-
-      - name: Wait for crates.io index update
-        run: sleep 30
-
       - name: Publish omendb to crates.io
         continue-on-error: true
         run: cargo publish -p omendb --token ${{ steps.crates-io-auth.outputs.token }}
