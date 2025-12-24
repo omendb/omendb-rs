@@ -15,6 +15,7 @@ impl PrefetchConfig {
     /// access patterns from memory contents, making software prefetch redundant
     /// and adding ~2-5% overhead.
     #[inline(always)]
+    #[must_use]
     pub const fn enabled() -> bool {
         // Apple Silicon: DMP handles prefetching optimally
         #[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
@@ -48,6 +49,7 @@ impl PrefetchConfig {
     /// - ARM servers: stride=2-4 depending on memory bandwidth
     /// - Apple: N/A (prefetch disabled)
     #[inline(always)]
+    #[must_use]
     pub const fn stride() -> usize {
         #[cfg(all(target_arch = "aarch64", not(target_vendor = "apple")))]
         {
@@ -72,6 +74,7 @@ impl PrefetchConfig {
     ///
     /// Apple Silicon uses 128-byte cache lines, everyone else uses 64 bytes
     #[inline(always)]
+    #[must_use]
     #[allow(dead_code)] // Used in tests, useful utility
     pub const fn cache_line_size() -> usize {
         #[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
