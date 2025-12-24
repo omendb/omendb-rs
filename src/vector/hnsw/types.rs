@@ -259,12 +259,12 @@ impl DistanceFunction {
     }
 }
 
-// Re-export SIMD distance functions from core (single source of truth)
-pub use omendb_core::distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
+// Re-export SIMD distance functions (single source of truth)
+pub use crate::distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
 
-// Re-export Distance trait and implementations from core (single source of truth)
+// Re-export Distance trait and implementations (single source of truth)
 // Enables monomorphization for ~10-15% faster search via static dispatch
-pub use omendb_core::hnsw::{Cosine, Distance, NegDot, L2};
+pub use crate::hnsw::{Cosine, Distance, NegDot, L2};
 
 /// Candidate during search (node ID + distance)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

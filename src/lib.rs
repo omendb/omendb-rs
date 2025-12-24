@@ -86,21 +86,28 @@
 //! let store = VectorStore::open("./vectors").unwrap();
 //! ```
 
-// Core modules (from omendb-core)
-pub use omendb_core::{compression, distance, types};
-
-// omendb-specific modules
+// Core modules
+pub mod compression;
 pub mod config;
+pub mod distance;
+pub mod hnsw;
 pub mod omen;
 pub mod text;
+pub mod types;
 pub mod vector;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
 
 // Re-export core types
+pub use compression::{ADCTable, QuantizedVector, RaBitQ, RaBitQParams};
+pub use distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
+pub use hnsw::{HNSWIndex, HNSWParams};
+pub use types::{
+    CompactionStats, CompressionTier, DistanceMetric, OmenDBError, Result, SearchResult,
+    StorageTier, VectorID,
+};
 pub use vector::{MetadataFilter, Vector, VectorStore, VectorStoreOptions};
 
 // Re-export storage types
 pub use config::StorageConfig;
-pub use types::{CompressionTier, DistanceMetric, OmenDBError, Result, StorageTier};

@@ -3,11 +3,11 @@
 //! Follows `std::fs::OpenOptions` pattern for familiar, ergonomic API.
 
 use super::VectorStore;
+use crate::compression::RaBitQParams;
 use crate::omen::DistanceFunction;
 use crate::text::TextSearchConfig;
 use crate::vector::QuantizationMode;
 use anyhow::Result;
-use omendb_core::compression::RaBitQParams;
 use std::path::Path;
 
 /// Configuration options for opening or creating a vector store.

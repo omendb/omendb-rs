@@ -25,7 +25,7 @@ use super::error::{HNSWError, Result};
 use super::graph_storage::GraphStorage;
 use super::storage::VectorStorage;
 use super::types::{Distance, DistanceFunction, HNSWNode, HNSWParams};
-use omendb_core::compression::RaBitQParams;
+use crate::compression::RaBitQParams;
 use serde::{Deserialize, Serialize};
 
 /// Index statistics for monitoring and debugging
