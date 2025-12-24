@@ -37,9 +37,9 @@ switch (platform) {
 				nativeBinding = require("./omendb.node");
 			} else {
 				if (arch === "x64") {
-					nativeBinding = require("@omendb/darwin-x64");
+					nativeBinding = require("@omendb/omendb-darwin-x64");
 				} else if (arch === "arm64") {
-					nativeBinding = require("@omendb/darwin-arm64");
+					nativeBinding = require("@omendb/omendb-darwin-arm64");
 				} else {
 					throw new Error(`Unsupported architecture on macOS: ${arch}`);
 				}
@@ -55,17 +55,17 @@ switch (platform) {
 				nativeBinding = require("./omendb.node");
 			} else if (isMusl()) {
 				if (arch === "x64") {
-					nativeBinding = require("@omendb/linux-x64-musl");
+					nativeBinding = require("@omendb/omendb-linux-x64-musl");
 				} else if (arch === "arm64") {
-					nativeBinding = require("@omendb/linux-arm64-musl");
+					nativeBinding = require("@omendb/omendb-linux-arm64-musl");
 				} else {
 					throw new Error(`Unsupported architecture on Linux musl: ${arch}`);
 				}
 			} else {
 				if (arch === "x64") {
-					nativeBinding = require("@omendb/linux-x64-gnu");
+					nativeBinding = require("@omendb/omendb-linux-x64-gnu");
 				} else if (arch === "arm64") {
-					nativeBinding = require("@omendb/linux-arm64-gnu");
+					nativeBinding = require("@omendb/omendb-linux-arm64-gnu");
 				} else {
 					throw new Error(`Unsupported architecture on Linux: ${arch}`);
 				}
@@ -81,7 +81,7 @@ switch (platform) {
 				nativeBinding = require("./omendb.node");
 			} else {
 				if (arch === "x64") {
-					nativeBinding = require("@omendb/win32-x64-msvc");
+					nativeBinding = require("@omendb/omendb-win32-x64-msvc");
 				} else {
 					throw new Error(`Unsupported architecture on Windows: ${arch}`);
 				}
