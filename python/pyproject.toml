@@ -4,7 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "omendb"
-dynamic = ["version", "readme"]  # Read from python/Cargo.toml, maturin finds README
+dynamic = ["version"]
+readme = "../README.md"
 description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
 authors = [{ name = "OmenDB Team" }]
 license = { text = "AGPL-3.0" }
