@@ -163,14 +163,15 @@ impl HNSWIndex {
     /// close together in memory. Should be called after index construction
     /// and before querying for best performance.
     ///
-    /// Returns the number of nodes reordered.
+    /// Returns the old-to-new node ID mapping (old_to_new[old_id] = new_id).
+    /// Callers must use this mapping to update any external state that references node IDs.
     #[instrument(skip(self), fields(num_nodes = self.len()))]
-    pub fn optimize_cache_locality(&mut self) -> Result<usize> {
+    pub fn optimize_cache_locality(&mut self) -> Result<Vec<u32>> {
         let entry = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
 
         if self.nodes.is_empty() {
             info!("Index is empty, skipping cache optimization");
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
         let max_level = self.nodes.iter().map(|n| n.level).max().unwrap_or(0);
@@ -210,9 +211,10 @@ impl HNSWIndex {
 
         info!(
             new_entry_point = self.entry_point,
+            num_reordered = old_to_new.len(),
             "BFS graph reordering complete"
         );
 
-        Ok(self.nodes.len())
+        Ok(old_to_new)
     }
 }

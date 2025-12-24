@@ -960,7 +960,10 @@ impl VectorDatabase {
     ///     >>> db.search(...)  # Faster queries
     fn optimize(&mut self) -> PyResult<usize> {
         let mut inner = self.inner.write();
-        inner.store.optimize().map_err(convert_error)
+        let result = inner.store.optimize().map_err(convert_error)?;
+        // Invalidate cache since internal indices have been remapped
+        inner.cache_valid = false;
+        Ok(result)
     }
 
     /// Number of vectors in database (Pythonic).

@@ -2266,17 +2266,69 @@ impl VectorStore {
     /// adjacently in memory, reducing cache misses and improving QPS.
     ///
     /// Call this after loading/building the index and before querying for best results.
-    /// Based on NeurIPS 2022 "Graph Reordering for Cache-Efficient Near Neighbor Search".
+    /// Based on NeurIPS 2021 "Graph Reordering for Cache-Efficient Near Neighbor Search".
     ///
     /// Returns the number of nodes reordered, or 0 if index is empty/not initialized.
     pub fn optimize(&mut self) -> Result<usize> {
-        if let Some(ref mut index) = self.hnsw_index {
-            index
-                .optimize_cache_locality()
-                .map_err(|e| anyhow::anyhow!("Optimization failed: {e}"))
-        } else {
-            Ok(0)
+        let Some(ref mut index) = self.hnsw_index else {
+            return Ok(0);
+        };
+
+        // Get the old-to-new mapping from HNSW reordering
+        let old_to_new = index
+            .optimize_cache_locality()
+            .map_err(|e| anyhow::anyhow!("Optimization failed: {e}"))?;
+
+        if old_to_new.is_empty() {
+            return Ok(0);
         }
+
+        let num_reordered = old_to_new.len();
+
+        // Reorder VectorStore's own vectors (used for rescore)
+        if !self.vectors.is_empty() {
+            let old_vectors = std::mem::take(&mut self.vectors);
+            let mut new_vectors = Vec::with_capacity(old_vectors.len());
+            new_vectors.resize_with(old_vectors.len(), || Vector::new(Vec::new()));
+
+            for (old_idx, &new_idx) in old_to_new.iter().enumerate() {
+                if old_idx < old_vectors.len() {
+                    new_vectors[new_idx as usize] = old_vectors[old_idx].clone();
+                }
+            }
+            self.vectors = new_vectors;
+        }
+
+        // Update ID mappings: id_to_index and index_to_id
+        let mut new_id_to_index = HashMap::with_capacity(self.id_to_index.len());
+        let mut new_index_to_id = HashMap::with_capacity(self.index_to_id.len());
+
+        for (string_id, &old_idx) in &self.id_to_index {
+            if old_idx < old_to_new.len() {
+                let new_idx = old_to_new[old_idx] as usize;
+                new_id_to_index.insert(string_id.clone(), new_idx);
+                new_index_to_id.insert(new_idx, string_id.clone());
+            }
+        }
+
+        self.id_to_index = new_id_to_index;
+        self.index_to_id = new_index_to_id;
+
+        // Update deleted tombstones
+        if !self.deleted.is_empty() {
+            let mut new_deleted = HashMap::with_capacity(self.deleted.len());
+            for (&old_idx, &is_deleted) in &self.deleted {
+                if old_idx < old_to_new.len() {
+                    let new_idx = old_to_new[old_idx] as usize;
+                    new_deleted.insert(new_idx, is_deleted);
+                }
+            }
+            self.deleted = new_deleted;
+        }
+
+        // Note: metadata_index uses string IDs, not internal indices, so no update needed
+
+        Ok(num_reordered)
     }
 
     // ============================================================================
