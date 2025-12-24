@@ -3,14 +3,12 @@
 //! Implements k-NN search, filtered search (ACORN-1), and layer-level search.
 
 use super::HNSWIndex;
+use crate::distance::norm_squared;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::storage::UnifiedADC;
 use crate::vector::hnsw::types::{
     Candidate, Cosine, Distance, DistanceFunction, NegDot, SearchResult, L2,
 };
-// Use crate::hnsw DistanceFunction for D::as_enum() comparisons (Distance trait returns that type)
-use crate::distance::norm_squared;
-use crate::hnsw::DistanceFunction as HNSWDistanceFunction;
 use ordered_float::OrderedFloat;
 use std::cmp::Reverse;
 use tracing::{debug, error, instrument, warn};
@@ -556,7 +554,7 @@ impl HNSWIndex {
 
         // L2 decomposition optimization: pre-compute query norm once
         let use_l2_decomposition =
-            self.supports_l2_decomposition() && D::as_enum() == HNSWDistanceFunction::L2;
+            self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
         let query_norm = if use_l2_decomposition {
             norm_squared(query)
         } else {
@@ -741,7 +739,7 @@ impl HNSWIndex {
         // L2 decomposition optimization: pre-compute query norm once
         // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ (~7% faster for L2)
         let use_l2_decomposition =
-            self.supports_l2_decomposition() && D::as_enum() == HNSWDistanceFunction::L2;
+            self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
         let query_norm = if use_l2_decomposition {
             norm_squared(query)
         } else {

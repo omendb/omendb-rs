@@ -428,7 +428,7 @@ impl HNSWIndex {
         }
         // Fallback to full precision with static dispatch
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
-        Ok(D::compare(query, vec))
+        Ok(D::distance(query, vec))
     }
 
     /// Distance from query to node using full precision (f32-to-f32)
