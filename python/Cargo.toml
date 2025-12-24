@@ -2,6 +2,7 @@
 name = "omendb-python"
 version = "0.0.15"
 edition = "2021"
+readme = "../README.md"
 
 # Exclude from parent workspace
 [workspace]
