@@ -687,8 +687,9 @@ impl HNSWIndex {
     /// close together in memory. Should be called after index construction
     /// and before querying for best performance.
     ///
-    /// Returns the number of nodes reordered.
-    pub fn optimize_cache_locality(&mut self) -> Result<usize> {
+    /// Returns the old-to-new node ID mapping. Callers must use this to update
+    /// any external state (like VectorStore's id mappings).
+    pub fn optimize_cache_locality(&mut self) -> Result<Vec<u32>> {
         self.index
             .optimize_cache_locality()
             .map_err(|e| anyhow::anyhow!("Optimization failed: {e}"))
