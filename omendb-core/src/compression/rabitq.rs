@@ -33,6 +33,8 @@ const MAX_CODES: usize = 16;
 /// Number of bits per dimension for quantization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QuantizationBits {
+    /// 1 bit per dimension (32x compression) - Binary/BBQ
+    Bits1,
     /// 2 bits per dimension (16x compression)
     Bits2,
     /// 3 bits per dimension (~10x compression)
@@ -52,6 +54,7 @@ impl QuantizationBits {
     #[must_use]
     pub fn to_u8(self) -> u8 {
         match self {
+            QuantizationBits::Bits1 => 1,
             QuantizationBits::Bits2 => 2,
             QuantizationBits::Bits3 => 3,
             QuantizationBits::Bits4 => 4,

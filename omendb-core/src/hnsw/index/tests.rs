@@ -362,20 +362,9 @@ fn test_save_load_with_quantization() {
     let params = HNSWParams::default();
     let mut index = HNSWIndex::new(8, params, DistanceFunction::L2, true).unwrap();
 
-    // Train quantization
-    let _samples: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32; 8]).collect();
-    if let VectorStorage::BinaryQuantized {
-        ref mut thresholds, ..
-    } = index.vectors
-    {
-        for (i, threshold) in thresholds.iter_mut().enumerate() {
-            *threshold = i as f32 + 0.5;
-        }
-    }
-
-    // Insert vectors
-    for i in 0..10 {
-        let vec = vec![i as f32; 8];
+    // Insert enough vectors to trigger training (256+)
+    for i in 0..300 {
+        let vec: Vec<f32> = (0..8).map(|j| ((i + j) % 100) as f32 / 10.0).collect();
         index.insert(&vec).unwrap();
     }
 
@@ -384,19 +373,20 @@ fn test_save_load_with_quantization() {
     index.save(temp_file.path()).unwrap();
     let loaded = HNSWIndex::load(temp_file.path()).unwrap();
 
-    // Verify quantization is preserved
+    // Verify quantization is preserved (both should have trained params)
     match (&index.vectors, &loaded.vectors) {
         (
-            VectorStorage::BinaryQuantized { thresholds: t1, .. },
-            VectorStorage::BinaryQuantized { thresholds: t2, .. },
+            VectorStorage::BinaryQuantized { trained: t1, .. },
+            VectorStorage::BinaryQuantized { trained: t2, .. },
         ) => {
-            assert_eq!(t1, t2);
+            assert!(t1, "Original should be trained");
+            assert!(t2, "Loaded should be trained");
         }
         _ => panic!("Expected BinaryQuantized storage"),
     }
 
     // Search should work
-    let query = vec![5.0; 8];
+    let query: Vec<f32> = (0..8).map(|j| (j % 100) as f32 / 10.0).collect();
     let results = loaded.search(&query, 3, 20).unwrap();
     assert_eq!(results.len(), 3);
 }

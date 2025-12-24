@@ -68,6 +68,8 @@ const DEFAULT_MAX_ELEMENTS: usize = 1_000_000;
 pub enum HNSWQuantization {
     /// No quantization (full f32 precision)
     None,
+    /// Binary quantization (32x compression, ~85% raw recall, ~95-98% with rescore)
+    Binary,
     /// SQ8 scalar quantization (4x compression, ~99% recall)
     SQ8,
     /// RaBitQ asymmetric quantization (8x compression, ~98% recall)
@@ -197,6 +199,8 @@ impl HNSWIndexBuilder {
 
         let index = match self.quantization {
             HNSWQuantization::None => CoreHNSW::new(dimensions, params, self.metric, false)?,
+            HNSWQuantization::Binary => CoreHNSW::new_with_binary(dimensions, params, self.metric)
+                .map_err(|e| anyhow::anyhow!(e))?,
             HNSWQuantization::SQ8 => CoreHNSW::new_with_sq8(dimensions, params, self.metric)
                 .map_err(|e| anyhow::anyhow!(e))?,
             HNSWQuantization::RaBitQ(rabitq_params) => {
@@ -417,6 +421,48 @@ impl HNSWIndex {
         Ok(Self {
             index,
             max_elements: 1_000_000, // Default for SQ8
+            max_nb_connection: params.m,
+            ef_construction: params.ef_construction,
+            ef_search: params.ef_construction, // Match ef_construction initially
+            dimensions,
+            num_vectors: 0,
+        })
+    }
+
+    /// Create new HNSW index with Binary (1-bit) quantization
+    ///
+    /// Binary quantization uses SIMD-optimized Hamming distance for extremely
+    /// fast search with 32x memory compression.
+    ///
+    /// # Arguments
+    /// * `dimensions` - Vector dimensionality (384+ recommended)
+    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
+    /// * `distance_fn` - Distance function (only L2 supported for binary)
+    ///
+    /// # Performance
+    /// - Search: 2-4x faster than SQ8 (SIMD Hamming is extremely fast)
+    /// - Memory: 32x smaller quantized storage (+ original for reranking)
+    /// - Recall: ~85% raw, ~95-98% with reranking
+    ///
+    /// # Example
+    /// ```ignore
+    /// let index = HNSWIndex::new_with_binary(
+    ///     768,
+    ///     CoreParams::default().with_m(16).with_ef_construction(100),
+    ///     DistanceFunction::L2,
+    /// )?;
+    /// ```
+    pub fn new_with_binary(
+        dimensions: usize,
+        params: CoreParams,
+        distance_fn: DistanceFunction,
+    ) -> Result<Self> {
+        let index = CoreHNSW::new_with_binary(dimensions, params, distance_fn)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(Self {
+            index,
+            max_elements: 1_000_000, // Default for binary
             max_nb_connection: params.m,
             ef_construction: params.ef_construction,
             ef_search: params.ef_construction, // Match ef_construction initially

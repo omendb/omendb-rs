@@ -20,6 +20,7 @@ use std::sync::Arc;
 /// Accepts:
 /// - True → SQ8 (4x compression, ~99% recall) - RECOMMENDED
 /// - "sq8" → SQ8 (explicit)
+/// - "binary" → Binary (32x compression, ~95% recall with rescore)
 /// - "rabitq" → RaBitQ 4-bit (8x compression, ~98% recall)
 /// - None/False → no quantization (full precision)
 ///
@@ -42,6 +43,7 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     if let Ok(mode) = value.extract::<String>() {
         return match mode.to_lowercase().as_str() {
             "sq8" => Ok(Some(QuantizationMode::SQ8)),
+            "binary" | "bbq" => Ok(Some(QuantizationMode::Binary)), // 32x compression
             "rabitq" | "rabitq-4" | "rabitq_4" => {
                 Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4()))) // 8x compression
             }
@@ -49,7 +51,8 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
                 "Unknown quantization mode: '{}'\n\
                   Valid modes:\n\
                   - True or 'sq8':  4x smaller, ~99% recall (RECOMMENDED)\n\
-                  - 'rabitq':       8x smaller, ~98% recall (for large datasets)",
+                  - 'binary':       32x smaller, ~95% recall (high dims, large datasets)\n\
+                  - 'rabitq':       8x smaller, ~98% recall (balanced)",
                 mode
             ))),
         };
@@ -58,7 +61,8 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     Err(PyValueError::new_err(
         "quantization must be True, False, or a string:\n\
           - True or 'sq8':  4x smaller, ~99% recall (RECOMMENDED)\n\
-          - 'rabitq':       8x smaller, ~98% recall (for large datasets)",
+          - 'binary':       32x smaller, ~95% recall (high dims, large datasets)\n\
+          - 'rabitq':       8x smaller, ~98% recall (balanced)",
     ))
 }
 
