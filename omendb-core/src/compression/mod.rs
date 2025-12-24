@@ -1,13 +1,15 @@
 //! Vector compression for `OmenDB` storage
 //!
 //! Provides multiple compression methods:
-//! - Scalar (SQ8): 4x compression, ~98% recall
-//! - Binary (RaBitQ): 32x compression, ~95% recall
-//! - Product (PQ): 64x compression, ~90% recall
+//! - Binary (BBQ): 32x compression, ~85% raw recall (~95% with rescore)
+//! - Scalar (SQ8): 4x compression, ~99% recall
+//! - RaBitQ: 8x compression, ~98% recall
 
+pub mod binary;
 pub mod rabitq;
 pub mod scalar;
 
+pub use binary::{hamming_distance, BinaryParams};
 pub use rabitq::{
     ADCTable, QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams, TrainedParams,
 };

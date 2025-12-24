@@ -100,6 +100,7 @@ mod tests;
 /// Compute optimal oversample factor based on quantization mode.
 ///
 /// Different quantization modes have different baseline recall:
+/// - Binary: ~85% accurate, needs higher oversampling (5.0x)
 /// - SQ8: ~99% accurate, needs minimal oversampling (2.0x)
 /// - RaBitQ 2-bit: ~93% accurate, needs more candidates (4.0x)
 /// - RaBitQ 4-bit: ~96% accurate, moderate oversampling (3.0x)
@@ -108,6 +109,7 @@ mod tests;
 fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
     match mode {
         None => 1.0,
+        Some(QuantizationMode::Binary) => 5.0, // ~85% recall baseline
         Some(QuantizationMode::SQ8) => 2.0,
         Some(QuantizationMode::RaBitQ(params)) => match params.bits_per_dim.to_u8() {
             2 => 4.0, // ~93% recall baseline
@@ -119,7 +121,7 @@ fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
 
 /// Convert stored quantization mode ID to QuantizationMode.
 ///
-/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8, 5=binary
 fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
     match mode_id {
         1 => Some(QuantizationMode::SQ8),
@@ -135,6 +137,7 @@ fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
             bits_per_dim: QuantizationBits::Bits8,
             ..RaBitQParams::default()
         })),
+        5 => Some(QuantizationMode::Binary),
         _ => None, // 0 and unknown values
     }
 }
@@ -160,6 +163,7 @@ fn create_hnsw_index(
 
     // Convert QuantizationMode to HNSWQuantization
     let quantization = match quantization_mode {
+        Some(QuantizationMode::Binary) => HNSWQuantization::Binary,
         Some(QuantizationMode::SQ8) => HNSWQuantization::SQ8,
         Some(QuantizationMode::RaBitQ(params)) => HNSWQuantization::RaBitQ(params.clone()),
         None => HNSWQuantization::None,
@@ -772,6 +776,7 @@ impl VectorStore {
 
                 // Save quantization mode to storage for persistence
                 let quant_mode_id = match &quant_mode {
+                    QuantizationMode::Binary => 5u64,
                     QuantizationMode::SQ8 => 1u64,
                     QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
                         2 => 3u64,
@@ -784,6 +789,15 @@ impl VectorStore {
                 }
 
                 let index = match quant_mode {
+                    QuantizationMode::Binary => {
+                        let mut idx = HNSWIndex::new_with_binary(
+                            dimensions,
+                            hnsw_params,
+                            self.distance_metric.to_hnsw(),
+                        )?;
+                        idx.train_quantizer(std::slice::from_ref(&vector.data))?;
+                        idx
+                    }
                     QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
                         dimensions,
                         hnsw_params,
@@ -935,6 +949,7 @@ impl VectorStore {
                         .with_ef_search(self.hnsw_ef_search);
 
                     let quant_mode_id = match &quant_mode {
+                        QuantizationMode::Binary => 5u64,
                         QuantizationMode::SQ8 => 1u64,
                         QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
                             2 => 3u64,
@@ -947,6 +962,17 @@ impl VectorStore {
                     }
 
                     let index = match quant_mode {
+                        QuantizationMode::Binary => {
+                            let mut idx = HNSWIndex::new_with_binary(
+                                dimensions,
+                                hnsw_params,
+                                self.distance_metric.to_hnsw(),
+                            )?;
+                            let training_vectors: Vec<Vec<f32>> =
+                                inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
+                            idx.train_quantizer(&training_vectors)?;
+                            idx
+                        }
                         QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
                             dimensions,
                             hnsw_params,
@@ -1686,6 +1712,17 @@ impl VectorStore {
                     .with_ef_search(self.hnsw_ef_search);
 
                 let index = match quant_mode {
+                    QuantizationMode::Binary => {
+                        let mut idx = HNSWIndex::new_with_binary(
+                            self.dimensions,
+                            hnsw_params,
+                            self.distance_metric.to_hnsw(),
+                        )?;
+                        let training_vectors: Vec<Vec<f32>> =
+                            vectors.iter().map(|v| v.data.clone()).collect();
+                        idx.train_quantizer(&training_vectors)?;
+                        idx
+                    }
                     QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
                         self.dimensions,
                         hnsw_params,

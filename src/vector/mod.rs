@@ -16,6 +16,12 @@ pub use types::Vector;
 /// Controls how vectors are compressed for memory/disk efficiency.
 #[derive(Debug, Clone)]
 pub enum QuantizationMode {
+    /// Binary Quantization (BBQ): f32 → 1 bit
+    /// - 32x compression
+    /// - 2-4x faster than SQ8 (SIMD Hamming)
+    /// - ~85% raw recall, ~95-98% with rescore
+    Binary,
+
     /// Scalar Quantization (SQ8): f32 → u8
     /// - 4x compression
     /// - ~2x faster than f32 (direct SIMD)
@@ -30,6 +36,12 @@ pub enum QuantizationMode {
 }
 
 impl QuantizationMode {
+    /// Create Binary quantization mode (32x compression)
+    #[must_use]
+    pub fn binary() -> Self {
+        Self::Binary
+    }
+
     /// Create SQ8 quantization mode (4x compression, fastest)
     #[must_use]
     pub fn sq8() -> Self {
@@ -52,6 +64,12 @@ impl QuantizationMode {
     #[must_use]
     pub fn rabitq_8bit() -> Self {
         Self::RaBitQ(RaBitQParams::bits8())
+    }
+
+    /// Check if this is Binary mode
+    #[must_use]
+    pub fn is_binary(&self) -> bool {
+        matches!(self, Self::Binary)
     }
 
     /// Check if this is SQ8 mode
