@@ -6,17 +6,15 @@
 #   ./scripts/sync-version.sh 0.0.10       # Bump to specific version
 #   ./scripts/sync-version.sh --check      # Verify all versions match (no changes)
 #
-# Version Locations (10 files):
+# Version Locations (8 files):
 #   1. VERSION                    - Source of truth
 #   2. Cargo.toml                 - Main Rust crate (version)
-#   3. Cargo.toml                 - omendb-core dependency version
-#   4. omendb-core/Cargo.toml     - Core algorithms crate
-#   5. python/Cargo.toml          - Python bindings crate
-#   6. python/omendb/__init__.py  - Python __version__
-#   7. src/ffi.rs                 - C FFI version string
-#   8. node/Cargo.toml            - Node bindings crate
-#   9. node/package.json          - npm @omendb/omendb package
-#  10. node/wrapper/package.json  - npm omendb wrapper (version + dep)
+#   3. python/Cargo.toml          - Python bindings crate
+#   4. python/omendb/__init__.py  - Python __version__
+#   5. src/ffi.rs                 - C FFI version string
+#   6. node/Cargo.toml            - Node bindings crate
+#   7. node/package.json          - npm @omendb/omendb package
+#   8. node/wrapper/package.json  - npm omendb wrapper (version + dep)
 
 set -e
 
@@ -76,21 +74,7 @@ if [ "$CHECK_ONLY" = false ] && [ "$CARGO_V" != "$VERSION" ]; then
 fi
 check_or_update "Cargo.toml (version)" "$CARGO_V"
 
-# 3. Cargo.toml (omendb-core dependency version)
-CORE_DEP_V=$(grep 'omendb-core.*version' Cargo.toml | sed 's/.*version = "\([^"]*\)".*/\1/' || echo "")
-if [ "$CHECK_ONLY" = false ] && [ "$CORE_DEP_V" != "$VERSION" ]; then
-    sed -i '' "s/omendb-core = { path = \"omendb-core\", version = \"[^\"]*\" }/omendb-core = { path = \"omendb-core\", version = \"$VERSION\" }/" Cargo.toml
-fi
-check_or_update "Cargo.toml (omendb-core dep)" "$CORE_DEP_V"
-
-# 4. omendb-core/Cargo.toml
-CORE_V=$(grep '^version = ' omendb-core/Cargo.toml | head -1 | cut -d'"' -f2)
-if [ "$CHECK_ONLY" = false ] && [ "$CORE_V" != "$VERSION" ]; then
-    sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" omendb-core/Cargo.toml
-fi
-check_or_update "omendb-core/Cargo.toml" "$CORE_V"
-
-# 4. python/Cargo.toml
+# 3. python/Cargo.toml
 PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
 if [ "$CHECK_ONLY" = false ] && [ "$PYTHON_V" != "$VERSION" ]; then
     sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" python/Cargo.toml
@@ -164,7 +148,7 @@ if [ "$ERRORS" -gt 0 ]; then
 fi
 
 if [ "$CHECK_ONLY" = true ]; then
-    echo "All 10 version locations match: $VERSION"
+    echo "All 8 version locations match: $VERSION"
 else
     echo "All files synced to version $VERSION"
     echo ""
