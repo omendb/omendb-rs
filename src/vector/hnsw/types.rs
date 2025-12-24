@@ -262,9 +262,83 @@ impl DistanceFunction {
 // Re-export SIMD distance functions (single source of truth)
 pub use crate::distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
 
-// Re-export Distance trait and implementations (single source of truth)
-// Enables monomorphization for ~10-15% faster search via static dispatch
-pub use crate::hnsw::{Cosine, Distance, NegDot, L2};
+// Distance trait for monomorphization (~10-15% faster search via static dispatch)
+// Each implementation computes distance differently but all enable compile-time specialization.
+
+/// Trait for distance computation with compile-time dispatch
+pub trait Distance: Copy + Clone + Send + Sync + 'static {
+    /// Compute distance between two vectors (for comparisons, may skip sqrt for L2)
+    fn distance(a: &[f32], b: &[f32]) -> f32;
+
+    /// Convert comparison distance to actual distance (applies sqrt for L2)
+    fn to_actual(d: f32) -> f32;
+
+    /// Get the enum variant for runtime dispatch when needed
+    fn as_enum() -> DistanceFunction;
+}
+
+/// L2 (Euclidean) distance
+#[derive(Copy, Clone, Debug)]
+pub struct L2;
+
+impl Distance for L2 {
+    #[inline(always)]
+    fn distance(a: &[f32], b: &[f32]) -> f32 {
+        l2_distance_squared(a, b)
+    }
+
+    #[inline(always)]
+    fn to_actual(d: f32) -> f32 {
+        d.sqrt()
+    }
+
+    #[inline(always)]
+    fn as_enum() -> DistanceFunction {
+        DistanceFunction::L2
+    }
+}
+
+/// Cosine distance (1 - cosine similarity)
+#[derive(Copy, Clone, Debug)]
+pub struct Cosine;
+
+impl Distance for Cosine {
+    #[inline(always)]
+    fn distance(a: &[f32], b: &[f32]) -> f32 {
+        cosine_distance(a, b)
+    }
+
+    #[inline(always)]
+    fn to_actual(d: f32) -> f32 {
+        d
+    }
+
+    #[inline(always)]
+    fn as_enum() -> DistanceFunction {
+        DistanceFunction::Cosine
+    }
+}
+
+/// Negative dot product (for maximum inner product search)
+#[derive(Copy, Clone, Debug)]
+pub struct NegDot;
+
+impl Distance for NegDot {
+    #[inline(always)]
+    fn distance(a: &[f32], b: &[f32]) -> f32 {
+        -dot_product(a, b)
+    }
+
+    #[inline(always)]
+    fn to_actual(d: f32) -> f32 {
+        d
+    }
+
+    #[inline(always)]
+    fn as_enum() -> DistanceFunction {
+        DistanceFunction::NegativeDotProduct
+    }
+}
 
 /// Candidate during search (node ID + distance)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

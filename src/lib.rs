@@ -90,7 +90,6 @@
 pub mod compression;
 pub mod config;
 pub mod distance;
-pub mod hnsw;
 pub mod omen;
 pub mod text;
 pub mod types;
@@ -102,7 +101,6 @@ pub mod ffi;
 // Re-export core types
 pub use compression::{ADCTable, QuantizedVector, RaBitQ, RaBitQParams};
 pub use distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
-pub use hnsw::{HNSWIndex, HNSWParams};
 pub use types::{
     CompactionStats, CompressionTier, DistanceMetric, OmenDBError, Result, SearchResult,
     StorageTier, VectorID,
