@@ -14,6 +14,7 @@ mod index;
 mod layered_storage;
 mod merge;
 mod node_storage;
+mod prefetch;
 mod query_buffers;
 mod storage;
 mod storage_integration_tests;
@@ -21,7 +22,9 @@ mod storage_tiering;
 mod types;
 
 // Public API exports
-pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
+pub use types::{
+    Candidate, Cosine, Distance, DistanceFunction, HNSWNode, HNSWParams, NegDot, SearchResult, L2,
+};
 
 // Re-export SIMD-enabled distance functions (single source of truth)
 pub use crate::distance::{cosine_distance, dot_product, l2_distance};
@@ -47,3 +50,6 @@ pub use error::{HNSWError, Result};
 
 // Re-export graph merging
 pub use merge::{GraphMerger, MergeConfig, MergeStats};
+
+// Re-export prefetch configuration
+pub use prefetch::PrefetchConfig;
