@@ -146,7 +146,7 @@ results = db.search_hybrid(query_vec, "query text", k=10, subscores=True)
 
 ## Performance
 
-**10K vectors, Apple M3 Max** (m=16, ef=100):
+**10K vectors, Apple M3 Max** (m=16, ef=100, k=10):
 
 | Dimension | Single QPS | Batch QPS | Speedup |
 | --------- | ---------- | --------- | ------- |
@@ -154,14 +154,12 @@ results = db.search_hybrid(query_vec, "query text", k=10, subscores=True)
 | 768D      | 3,800+     | 20,500+   | 5.4x    |
 | 1536D     | 1,600+     | 6,200+    | 3.8x    |
 
-**SIFT-1M** (1M vectors, 128D, k=10):
+**SIFT-1M** (1M vectors, 128D, m=16, ef=100, k=10):
 
-| Machine      | ef  | QPS   | Recall |
-| ------------ | --- | ----- | ------ |
-| i9-13900KF   | 100 | 4,591 | 98.6%  |
-| i9-13900KF   | 200 | 2,523 | 99.6%  |
-| Apple M3 Max | 100 | 3,216 | 98.4%  |
-| Apple M3 Max | 200 | 1,788 | 99.6%  |
+| Machine      | QPS   | Recall |
+| ------------ | ----- | ------ |
+| i9-13900KF   | 4,591 | 98.6%  |
+| Apple M3 Max | 3,216 | 98.4%  |
 
 **Quantization** reduces memory with minimal recall loss:
 
