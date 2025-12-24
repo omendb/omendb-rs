@@ -91,6 +91,27 @@ impl HNSWParams {
         }
         Ok(())
     }
+
+    /// Builder: set M parameter (neighbors per node)
+    #[must_use]
+    pub fn with_m(mut self, m: usize) -> Self {
+        self.m = m;
+        self.ml = 1.0 / (m as f32).ln();
+        self
+    }
+
+    /// Builder: set ef_construction parameter (build quality)
+    #[must_use]
+    pub fn with_ef_construction(mut self, ef: usize) -> Self {
+        self.ef_construction = ef;
+        self
+    }
+
+    /// Builder: set ef_search parameter (no-op, ef_search is runtime-only)
+    #[must_use]
+    pub fn with_ef_search(self, _ef: usize) -> Self {
+        self
+    }
 }
 
 /// HNSW node with cache-optimized layout
