@@ -171,6 +171,7 @@ fn hamming_distance_scalar(a: &[u8], b: &[u8]) -> u32 {
 /// AVX2 Hamming distance with manual popcnt
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+#[allow(clippy::cast_ptr_alignment)] // loadu handles unaligned loads
 unsafe fn hamming_distance_avx2(a: &[u8], b: &[u8]) -> u32 {
     let mut count = 0u32;
     let mut i = 0;
@@ -201,6 +202,7 @@ unsafe fn hamming_distance_avx2(a: &[u8], b: &[u8]) -> u32 {
 /// x86_64 popcnt-based Hamming distance (8 bytes at a time)
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "popcnt")]
+#[allow(clippy::cast_possible_wrap)] // intentional reinterpret for popcnt
 unsafe fn hamming_distance_popcnt(a: &[u8], b: &[u8]) -> u32 {
     let mut count = 0u64;
     let mut i = 0;
