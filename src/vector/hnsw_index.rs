@@ -10,8 +10,8 @@
 //! - Optional binary quantization (32x memory reduction)
 
 use super::hnsw::{DistanceFunction, HNSWIndex as CoreHNSW, HNSWParams as CoreParams};
+use crate::compression::RaBitQParams;
 use anyhow::Result;
-use omendb_core::compression::RaBitQParams;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

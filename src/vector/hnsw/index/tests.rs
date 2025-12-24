@@ -1059,7 +1059,7 @@ fn profile_persistence_impl(_n: usize) {
 
 #[test]
 fn test_asymmetric_hnsw_search() {
-    use omendb_core::compression::RaBitQParams;
+    use crate::compression::RaBitQParams;
 
     let params = HNSWParams::default();
     let rabitq = RaBitQParams::bits4();
@@ -1101,7 +1101,7 @@ fn test_asymmetric_hnsw_search() {
 
 #[test]
 fn test_asymmetric_only_supports_l2() {
-    use omendb_core::compression::RaBitQParams;
+    use crate::compression::RaBitQParams;
 
     let params = HNSWParams::default();
     let rabitq = RaBitQParams::bits4();

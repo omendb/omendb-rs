@@ -1839,7 +1839,7 @@ impl HNSWIndex {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use omendb_core::hnsw::*;
+    /// # use omendb::hnsw::*;
     /// # fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     /// # let mut index = HNSWIndex::new(128, HNSWParams::default(), DistanceFunction::L2, false)?;
     /// // After building index...

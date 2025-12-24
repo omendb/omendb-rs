@@ -117,8 +117,8 @@ fn test_rebuild_index() {
 
 #[test]
 fn test_quantization_insert() {
+    use crate::compression::RaBitQParams;
     use crate::vector::QuantizationMode;
-    use omendb_core::compression::RaBitQParams;
 
     // Create store with 4-bit RaBitQ quantization
     let params = RaBitQParams::bits4();
@@ -139,8 +139,8 @@ fn test_quantization_insert() {
 
 #[test]
 fn test_quantization_search_accuracy() {
+    use crate::compression::RaBitQParams;
     use crate::vector::QuantizationMode;
-    use omendb_core::compression::RaBitQParams;
 
     // Create store with 4-bit RaBitQ quantization
     let params = RaBitQParams::bits4();
@@ -166,8 +166,8 @@ fn test_quantization_search_accuracy() {
 
 #[test]
 fn test_quantization_batch_insert() {
+    use crate::compression::RaBitQParams;
     use crate::vector::QuantizationMode;
-    use omendb_core::compression::RaBitQParams;
 
     // Create store with 4-bit RaBitQ quantization
     let params = RaBitQParams::bits4();

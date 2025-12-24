@@ -755,7 +755,6 @@ dependencies = [
  "lru",
  "memmap2",
  "multiversion",
- "omendb-core",
  "once_cell",
  "ordered-float",
  "parking_lot",
@@ -772,29 +771,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "omendb-core"
-version = "0.0.15"
-dependencies = [
- "anyhow",
- "arc-swap",
- "bincode",
- "bytes",
- "fixedbitset",
- "lru",
- "memmap2",
- "multiversion",
- "ordered-float",
- "parking_lot",
- "rand",
- "rand_distr",
- "rayon",
- "serde",
- "smallvec",
- "thiserror 1.0.69",
- "tracing",
 ]
 
 [[package]]

@@ -13,10 +13,10 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use omendb_core::compression::{
+use crate::compression::{
     ADCTable, QuantizedVector, RaBitQ, RaBitQParams, SQ8ADCTable, ScalarParams,
 };
-use omendb_core::distance::dot_product;
+use crate::distance::dot_product;
 
 /// Empty neighbor list constant (avoid allocation for empty results)
 static EMPTY_NEIGHBORS: &[u32] = &[];

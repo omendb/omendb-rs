@@ -17,6 +17,8 @@ use super::hnsw::HNSWParams;
 use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
 use super::QuantizationMode;
+use crate::compression::{QuantizationBits, RaBitQParams};
+use crate::distance::l2_distance;
 use crate::omen::DistanceFunction;
 use crate::omen::{MetadataIndex, OmenFile};
 use crate::text::{
@@ -24,9 +26,6 @@ use crate::text::{
     TextIndex, TextSearchConfig, DEFAULT_RRF_K,
 };
 use anyhow::Result;
-use omendb_core::compression::QuantizationBits;
-use omendb_core::distance::l2_distance;
-use omendb_core::RaBitQParams;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
