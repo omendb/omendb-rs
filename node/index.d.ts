@@ -15,10 +15,9 @@ export declare class VectorDatabase {
    * @param ef - Optional search width override
    * @param filter - Optional metadata filter (e.g., {category: "foo"} or {price: {$gt: 10}})
    * @param maxDistance - Optional max distance threshold (filter out distant results)
-   * @param validAt - Optional timestamp for temporal queries (filters by valid_from/valid_to metadata)
    * @returns Array of {id, distance, metadata}
    */
-  search(query: Array<number> | Float32Array, k: number, ef?: number | undefined | null, filter?: Record<string, unknown> | undefined, maxDistance?: number | undefined | null, validAt?: number | undefined | null): Array<SearchResult>
+  search(query: Array<number> | Float32Array, k: number, ef?: number | undefined | null, filter?: Record<string, unknown> | undefined, maxDistance?: number | undefined | null): Array<SearchResult>
   /**
    * Batch search with parallel execution (async).
    *
