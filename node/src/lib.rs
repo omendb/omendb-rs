@@ -248,7 +248,6 @@ impl VectorDatabase {
     /// @param ef - Optional search width override
     /// @param filter - Optional metadata filter (e.g., {category: "foo"} or {price: {$gt: 10}})
     /// @param maxDistance - Optional max distance threshold (filter out distant results)
-    /// @param validAt - Optional timestamp for temporal queries (filters by valid_from/valid_to metadata)
     /// @returns Array of {id, distance, metadata}
     #[napi]
     pub fn search(
@@ -258,11 +257,16 @@ impl VectorDatabase {
         ef: Option<u32>,
         #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
         max_distance: Option<f64>,
-        valid_at: Option<i64>,
     ) -> Result<Vec<SearchResult>> {
         let query_vec = Vector::new(extract_query_vector(query));
         let ef_usize = ef.map(|e| e as usize);
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
+
+        if let Some(max_dist) = max_distance {
+            if max_dist < 0.0 {
+                return Err(Error::from_reason("max_distance must be non-negative"));
+            }
+        }
         let max_dist_f32 = max_distance.map(|d| d as f32);
 
         // Fast path: read lock when cache is valid
@@ -277,7 +281,6 @@ impl VectorDatabase {
                         metadata_filter.as_ref(),
                         ef_usize,
                         max_dist_f32,
-                        valid_at,
                     )
                     .map_err(convert_error)?;
 
@@ -321,7 +324,6 @@ impl VectorDatabase {
                 metadata_filter.as_ref(),
                 ef_usize,
                 max_dist_f32,
-                valid_at,
             )
             .map_err(convert_error)?;
 

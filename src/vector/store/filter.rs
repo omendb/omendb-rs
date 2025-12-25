@@ -33,34 +33,6 @@ pub enum MetadataFilter {
 }
 
 impl MetadataFilter {
-    /// Create a temporal validity filter for bi-temporal queries.
-    ///
-    /// Matches documents where:
-    /// - `valid_from <= timestamp` (document was valid by this time)
-    /// - AND (`valid_to >= timestamp` OR `valid_to` is null) (document hasn't been invalidated)
-    ///
-    /// This enables point-in-time queries for facts that change over time.
-    ///
-    /// # Example metadata pattern:
-    /// ```json
-    /// {
-    ///     "valid_from": 1703433600,
-    ///     "valid_to": null,
-    ///     "observed_at": 1703520000
-    /// }
-    /// ```
-    #[must_use]
-    pub fn temporal(timestamp: i64) -> Self {
-        let ts = timestamp as f64;
-        MetadataFilter::And(vec![
-            MetadataFilter::Lte("valid_from".to_string(), ts),
-            MetadataFilter::Or(vec![
-                MetadataFilter::Gte("valid_to".to_string(), ts),
-                MetadataFilter::Eq("valid_to".to_string(), JsonValue::Null),
-            ]),
-        ])
-    }
-
     /// Combine this filter with another using AND
     #[must_use]
     pub fn and(self, other: MetadataFilter) -> Self {

@@ -75,7 +75,6 @@ for item in db: ...                     # Iterate all items (lazy)
 db.search(query, k)                     # Vector search
 db.search(query, k, filter={...})       # Filtered search
 db.search(query, k, max_distance=0.5)   # Only results with distance <= 0.5
-db.search(query, k, valid_at=timestamp) # Temporal query (see below)
 db.search_batch(queries, k)             # Batch search (parallel)
 
 # Hybrid search (requires text field in vectors)
@@ -124,34 +123,6 @@ This ensures your RAG pipeline only receives highly relevant context, avoiding d
 {"$and": [{...}, {...}]}                # AND
 {"$or": [{...}, {...}]}                 # OR
 ```
-
-## Time-Based Filtering
-
-For data that changes over time, use `valid_at` to query "what was true at time X":
-
-```python
-# Store facts with validity periods
-db.set([
-    {"id": "ceo_current", "vector": [...], "metadata": {
-        "name": "Tim Cook",
-        "valid_from": 1314057600,  # Aug 2011
-        "valid_to": None,         # Still valid
-    }},
-    {"id": "ceo_previous", "vector": [...], "metadata": {
-        "name": "Steve Jobs",
-        "valid_from": 946684800,   # Jan 2000
-        "valid_to": 1314057600,    # Ended Aug 2011
-    }},
-])
-
-# "Who was CEO in 2010?" → Returns Steve Jobs
-results = db.search(query, k=5, valid_at=1262304000)
-
-# "Who is CEO now?" → Returns Tim Cook
-results = db.search(query, k=5, valid_at=int(time.time()))
-```
-
-Filters to: `valid_from <= timestamp` AND (`valid_to >= timestamp` OR `valid_to` is null).
 
 ## Configuration
 

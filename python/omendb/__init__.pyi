@@ -164,6 +164,7 @@ class VectorDatabase:
         k: int,
         ef: int | None = None,
         filter: MetadataFilter | None = None,
+        max_distance: float | None = None,
     ) -> list[SearchResult]:
         """Search for k nearest neighbors.
 
@@ -172,6 +173,7 @@ class VectorDatabase:
             k: Number of nearest neighbors to return.
             ef: Search width override (default: auto-tuned).
             filter: MongoDB-style metadata filter.
+            max_distance: Maximum distance threshold (filters out distant results).
 
         Returns:
             List of results with id, distance, metadata.
@@ -179,6 +181,7 @@ class VectorDatabase:
         Examples:
             >>> results = db.search([0.1, 0.2, 0.3], k=5)
             >>> results = db.search([...], k=10, filter={"category": "A"})
+            >>> results = db.search([...], k=10, max_distance=0.5)
         """
         ...
 

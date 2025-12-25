@@ -2122,7 +2122,7 @@ impl VectorStore {
         k: usize,
         filter: Option<&MetadataFilter>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.search_with_options(query, k, filter, None, None, None)
+        self.search_with_options(query, k, filter, None, None)
     }
 
     /// Search with optional filter and ef override
@@ -2133,10 +2133,10 @@ impl VectorStore {
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.search_with_options(query, k, filter, ef, None, None)
+        self.search_with_options(query, k, filter, ef, None)
     }
 
-    /// Search with all options: filter, ef override, max_distance, and valid_at
+    /// Search with all options: filter, ef override, and max_distance
     pub fn search_with_options(
         &mut self,
         query: &Vector,
@@ -2144,10 +2144,9 @@ impl VectorStore {
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
         max_distance: Option<f32>,
-        valid_at: Option<i64>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
         self.ensure_index_ready()?;
-        self.search_with_options_readonly(query, k, filter, ef, max_distance, valid_at)
+        self.search_with_options_readonly(query, k, filter, ef, max_distance)
     }
 
     /// Read-only search with optional filter (for parallel execution)
@@ -2158,7 +2157,7 @@ impl VectorStore {
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.search_with_options_readonly(query, k, filter, ef, None, None)
+        self.search_with_options_readonly(query, k, filter, ef, None)
     }
 
     /// Read-only search with all options (for parallel execution)
@@ -2169,18 +2168,8 @@ impl VectorStore {
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
         max_distance: Option<f32>,
-        valid_at: Option<i64>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        // Build combined filter if valid_at is specified
-        let temporal_filter = valid_at.map(MetadataFilter::temporal);
-        let combined_filter = match (filter, &temporal_filter) {
-            (Some(f), Some(t)) => Some(f.clone().and(t.clone())),
-            (Some(f), None) => Some(f.clone()),
-            (None, Some(t)) => Some(t.clone()),
-            (None, None) => None,
-        };
-
-        let mut results = if let Some(ref f) = combined_filter {
+        let mut results = if let Some(f) = filter {
             self.knn_search_with_filter_ef_readonly(query, k, f, ef)?
         } else {
             let results = self.knn_search_readonly(query, k, ef)?;
@@ -2200,7 +2189,6 @@ impl VectorStore {
                 .collect();
 
             // Fall back to brute force if HNSW results were all deleted
-            // This handles orphaned nodes after heavy deletions
             if filtered.is_empty() && self.has_live_vectors() {
                 self.knn_search_brute_force_with_metadata(query, k)?
             } else {
@@ -2208,7 +2196,6 @@ impl VectorStore {
             }
         };
 
-        // Apply max_distance filter if specified
         if let Some(max_dist) = max_distance {
             results.retain(|(_, distance, _)| *distance <= max_dist);
         }
