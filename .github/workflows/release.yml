@@ -321,7 +321,14 @@ jobs:
         run: cargo publish -p omendb --token ${{ steps.crates-io-auth.outputs.token }}
 
   publish-pypi:
-    needs: [verify, publish-crates]
+    needs:
+      [
+        verify,
+        build-python-linux,
+        build-python-macos,
+        build-python-windows,
+        build-python-sdist,
+      ]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
@@ -343,7 +350,7 @@ jobs:
           args: --non-interactive --skip-existing dist/*
 
   publish-npm:
-    needs: [verify, publish-pypi]
+    needs: [verify, build-node]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
