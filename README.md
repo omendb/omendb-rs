@@ -74,6 +74,8 @@ for item in db: ...                     # Iterate all items (lazy)
 # Search
 db.search(query, k)                     # Vector search
 db.search(query, k, filter={...})       # Filtered search
+db.search(query, k, max_distance=0.5)   # Only results with distance <= 0.5
+db.search(query, k, valid_at=timestamp) # Temporal query (see below)
 db.search_batch(queries, k)             # Batch search (parallel)
 
 # Hybrid search (requires text field in vectors)
@@ -85,6 +87,20 @@ db.search_text(query_text, k)           # Text-only BM25
 # Persistence
 db.flush()                              # Flush to disk
 ```
+
+## Distance Filtering
+
+Use `max_distance` to filter out low-relevance results (prevents "context rot" in RAG):
+
+```python
+# Only return results with distance <= 0.5
+results = db.search(query, k=10, max_distance=0.5)
+
+# Combine with metadata filter
+results = db.search(query, k=10, filter={"type": "doc"}, max_distance=0.5)
+```
+
+This ensures your RAG pipeline only receives highly relevant context, avoiding distractors that can hurt LLM performance.
 
 ## Filters
 
@@ -107,6 +123,74 @@ db.flush()                              # Flush to disk
 # Logical
 {"$and": [{...}, {...}]}                # AND
 {"$or": [{...}, {...}]}                 # OR
+```
+
+## Temporal Queries
+
+For data that changes over time (prices, company info, etc.), use bi-temporal metadata:
+
+```python
+# Insert with temporal metadata
+db.set([
+    {"id": "apple_ceo_current", "vector": [...], "metadata": {
+        "company": "Apple",
+        "role": "CEO",
+        "name": "Tim Cook",
+        "valid_from": 1314057600,  # Aug 2011
+        "valid_to": None,         # Still valid
+    }},
+    {"id": "apple_ceo_previous", "vector": [...], "metadata": {
+        "company": "Apple",
+        "role": "CEO",
+        "name": "Steve Jobs",
+        "valid_from": 946684800,   # Jan 2000
+        "valid_to": 1314057600,    # Aug 2011
+    }},
+])
+
+# Query "Who was Apple's CEO in 2010?"
+results = db.search(query, k=5, valid_at=1262304000)  # Jan 2010
+# Returns Steve Jobs (valid_from <= 2010 AND valid_to >= 2010)
+
+# Query "Who is Apple's CEO now?"
+import time
+results = db.search(query, k=5, valid_at=int(time.time()))
+# Returns Tim Cook (valid_from <= now AND valid_to is None)
+```
+
+The `valid_at` parameter filters results where:
+
+- `valid_from <= timestamp` (document was valid by this time)
+- `valid_to >= timestamp` OR `valid_to` is null (document hasn't been invalidated)
+
+## Graph Patterns
+
+For RAG with document chunks, use metadata to track relationships:
+
+```python
+# Store chunks with graph relationships
+db.set([
+    {"id": "chunk_1", "vector": [...], "metadata": {
+        "document_id": "doc_1",
+        "chunk_index": 0,
+        "next_chunk_id": "chunk_2",      # Lexical graph
+        "entities": ["Apple", "iPhone"],  # Entity extraction
+    }},
+    {"id": "chunk_2", "vector": [...], "metadata": {
+        "document_id": "doc_1",
+        "chunk_index": 1,
+        "prev_chunk_id": "chunk_1",
+        "next_chunk_id": "chunk_3",
+        "entities": ["Tim Cook"],
+    }},
+])
+
+# After search, expand context using the graph
+results = db.search(query, k=5)
+for r in results:
+    next_id = r["metadata"].get("next_chunk_id")
+    if next_id:
+        next_chunk = db.get(next_id)  # Get adjacent context
 ```
 
 ## Configuration

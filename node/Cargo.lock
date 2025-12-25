@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "omendb"
-version = "0.0.11"
+version = "0.0.16"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -840,7 +840,6 @@ dependencies = [
  "lru",
  "memmap2",
  "multiversion",
- "omendb-core",
  "once_cell",
  "ordered-float",
  "parking_lot",
@@ -860,31 +859,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "omendb-core"
-version = "0.0.11"
-dependencies = [
- "anyhow",
- "arc-swap",
- "bincode",
- "bytes",
- "fixedbitset",
- "lru",
- "memmap2",
- "multiversion",
- "ordered-float",
- "parking_lot",
- "rand",
- "rand_distr",
- "rayon",
- "serde",
- "smallvec",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
 name = "omendb-node"
-version = "0.0.11"
+version = "0.0.16"
 dependencies = [
  "anyhow",
  "napi",

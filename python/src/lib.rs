@@ -465,7 +465,13 @@ impl VectorDatabase {
     ///
     ///     With filter:
     ///     >>> db.search([...], k=10, filter={"category": "A"})
-    #[pyo3(name = "search", signature = (query, k, ef=None, filter=None))]
+    ///
+    ///     With max_distance (filter out distant results):
+    ///     >>> db.search([...], k=10, max_distance=0.5)
+    ///
+    ///     With valid_at (temporal query for bi-temporal data):
+    ///     >>> db.search([...], k=10, valid_at=1703500000)
+    #[pyo3(name = "search", signature = (query, k, ef=None, filter=None, max_distance=None, valid_at=None))]
     fn search(
         &self,
         py: Python<'_>,
@@ -473,6 +479,8 @@ impl VectorDatabase {
         k: usize,
         ef: Option<usize>,
         filter: Option<&Bound<'_, PyDict>>,
+        max_distance: Option<f32>,
+        valid_at: Option<i64>,
     ) -> PyResult<Vec<Py<PyDict>>> {
         if k == 0 {
             return Err(PyValueError::new_err("k must be greater than 0"));
@@ -495,7 +503,14 @@ impl VectorDatabase {
             if inner.cache_valid && !inner.store.needs_index_rebuild() {
                 let results = inner
                     .store
-                    .search_with_ef_readonly(&query_vec, k, rust_filter.as_ref(), ef)
+                    .search_with_options_readonly(
+                        &query_vec,
+                        k,
+                        rust_filter.as_ref(),
+                        ef,
+                        max_distance,
+                        valid_at,
+                    )
                     .map_err(convert_error)?;
                 return results_to_py(py, &results, &inner.index_to_id_cache);
             }
@@ -516,7 +531,14 @@ impl VectorDatabase {
 
         let results = inner
             .store
-            .search_with_ef_readonly(&query_vec, k, rust_filter.as_ref(), ef)
+            .search_with_options_readonly(
+                &query_vec,
+                k,
+                rust_filter.as_ref(),
+                ef,
+                max_distance,
+                valid_at,
+            )
             .map_err(convert_error)?;
         results_to_py(py, &results, &inner.index_to_id_cache)
     }
