@@ -80,6 +80,12 @@ export declare class VectorDatabase {
   update(id: string, vector: Array<number> | Float32Array, metadata?: Record<string, unknown> | undefined): void
   /** Get number of vectors in database. */
   get length(): number
+  /** Get vector dimensions of this database. */
+  get dimensions(): number
+  /** Check if database is empty. */
+  isEmpty(): boolean
+  /** Get database statistics. */
+  stats(): StatsResult
   /** Get current ef_search value. */
   get efSearch(): number
   /** Set ef_search value. */
@@ -129,15 +135,25 @@ export declare class VectorDatabase {
    * @param filter - Optional metadata filter
    * @param alpha - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
    * @param rrfK - RRF constant (default=60, higher reduces rank influence)
-   * @returns Array of {id, score, metadata}
+   * @param subscores - Return separate keyword_score and semantic_score (default: false)
+   * @returns Array of {id, score, metadata, keyword_score?, semantic_score?}
    */
-  hybridSearch(queryVector: Array<number> | Float32Array, queryText: string, k: number, filter?: Record<string, unknown> | undefined, alpha?: number | undefined | null, rrfK?: number | undefined | null): Array<TextSearchResult>
+  hybridSearch(queryVector: Array<number> | Float32Array, queryText: string, k: number, filter?: Record<string, unknown> | undefined, alpha?: number | undefined | null, rrfK?: number | undefined | null, subscores?: boolean | undefined | null): Array<HybridSearchResult>
   /**
    * Flush pending changes to disk.
    *
    * For hybrid search, this commits text index changes.
    */
   flush(): void
+  /**
+   * Optimize index for cache-efficient search.
+   *
+   * Reorders nodes for better memory locality, improving search performance by 6-40%.
+   * Call after inserting a large batch of vectors.
+   *
+   * @returns Number of nodes reordered
+   */
+  optimize(): number
   /** Merge another database into this one. */
   mergeFrom(other: VectorDatabase): number
   /**
@@ -176,6 +192,16 @@ export interface GetResult {
   id: string
   vector: Array<number>
   metadata: Record<string, unknown>
+}
+
+export interface HybridSearchResult {
+  id: string
+  score: number
+  metadata: Record<string, unknown>
+  /** BM25 keyword matching score (null if document only matched vector search) */
+  keywordScore?: number
+  /** Vector similarity score (null if document only matched text search) */
+  semanticScore?: number
 }
 
 /**
@@ -238,10 +264,13 @@ export interface OpenOptions {
   /** HNSW ef_search: search quality/speed tradeoff (default: 100) */
   efSearch?: number
   /**
-   * RaBitQ quantization bits: 2, 4, or 8 (default: null = no quantization)
-   * Enables 4-16x memory compression with ~1-2% recall loss
+   * Quantization mode (default: null = no quantization)
+   * - true or "sq8": SQ8 4x compression, ~99% recall (RECOMMENDED)
+   * - "rabitq": RaBitQ 8x compression, ~98% recall
+   * - "binary": Binary 32x compression, ~95% recall
+   * - 2, 4, 8: RaBitQ with specific bits (legacy)
    */
-  quantization?: number
+  quantization?: boolean | string | number | null | undefined
   /**
    * Rescore candidates with exact distance (default: true when quantization enabled)
    * Set to false for maximum speed at the cost of ~20% recall
@@ -261,6 +290,12 @@ export interface SearchResult {
   distance: number
   /** Metadata as JSON (using serde-json feature) */
   metadata: Record<string, unknown>
+}
+
+export interface StatsResult {
+  dimensions: number
+  count: number
+  path: string
 }
 
 export interface TextSearchResult {

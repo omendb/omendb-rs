@@ -4,7 +4,9 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use omendb::vector::{MetadataFilter, RaBitQParams, Vector, VectorStore, VectorStoreOptions};
+use omendb::vector::{
+    MetadataFilter, QuantizationMode, RaBitQParams, Vector, VectorStore, VectorStoreOptions,
+};
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -19,6 +21,51 @@ fn extract_query_vector(query: Either<Vec<f64>, Float32Array>) -> Vec<f32> {
     match query {
         Either::A(arr) => arr.into_iter().map(|x| x as f32).collect(),
         Either::B(typed) => typed.to_vec(),
+    }
+}
+
+/// Parse quantization option from JS value (bool, string, or number)
+fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMode>> {
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Bool(true) => Ok(Some(QuantizationMode::SQ8)),
+        serde_json::Value::Bool(false) => Ok(None),
+        serde_json::Value::String(s) => match s.to_lowercase().as_str() {
+            "sq8" => Ok(Some(QuantizationMode::SQ8)),
+            "rabitq" | "rabitq-4" | "rabitq_4" => {
+                Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4())))
+            }
+            "binary" | "bbq" => Ok(Some(QuantizationMode::Binary)),
+            _ => Err(Error::new(
+                Status::InvalidArg,
+                format!(
+                    "Unknown quantization mode: '{}'\n\
+                     Valid modes:\n\
+                     - true or 'sq8': 4x smaller, ~99% recall (RECOMMENDED)\n\
+                     - 'rabitq': 8x smaller, ~98% recall\n\
+                     - 'binary': 32x smaller, ~95% recall",
+                    s
+                ),
+            )),
+        },
+        serde_json::Value::Number(n) => {
+            let bits = n.as_u64().ok_or_else(|| {
+                Error::new(Status::InvalidArg, "quantization bits must be a positive integer")
+            })? as u8;
+            match bits {
+                2 => Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits2()))),
+                4 => Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4()))),
+                8 => Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits8()))),
+                _ => Err(Error::new(
+                    Status::InvalidArg,
+                    format!("quantization bits must be 2, 4, or 8, got {}", bits),
+                )),
+            }
+        }
+        _ => Err(Error::new(
+            Status::InvalidArg,
+            "quantization must be true, false, a string ('sq8', 'rabitq', 'binary'), or a number (2, 4, 8)",
+        )),
     }
 }
 
@@ -81,6 +128,8 @@ fn parse_filter(filter: &JsonValue) -> Result<MetadataFilter> {
             // Operator object: {"field": {"$gt": 5}}
             for (op, op_value) in op_obj {
                 let filter = match op.as_str() {
+                    "$eq" => MetadataFilter::Eq(key.clone(), op_value.clone()),
+                    "$ne" => MetadataFilter::Ne(key.clone(), op_value.clone()),
                     "$gt" | "$gte" | "$lt" | "$lte" => parse_numeric_op(op, key, op_value)?,
                     "$in" => {
                         let arr = op_value.as_array().ok_or_else(|| {
@@ -182,6 +231,34 @@ pub struct TextSearchResult {
     pub score: f64,
     #[napi(ts_type = "Record<string, unknown>")]
     pub metadata: JsonValue,
+}
+
+// ============================================================================
+// Hybrid Search Result with Subscores - returned from hybridSearch(subscores=true)
+// ============================================================================
+
+#[napi(object)]
+#[derive(Clone)]
+pub struct HybridSearchResult {
+    pub id: String,
+    pub score: f64,
+    #[napi(ts_type = "Record<string, unknown>")]
+    pub metadata: JsonValue,
+    /// BM25 keyword matching score (null if document only matched vector search)
+    pub keyword_score: Option<f64>,
+    /// Vector similarity score (null if document only matched text search)
+    pub semantic_score: Option<f64>,
+}
+
+// ============================================================================
+// Stats Result - returned from stats()
+// ============================================================================
+
+#[napi(object)]
+pub struct StatsResult {
+    pub dimensions: u32,
+    pub count: u32,
+    pub path: String,
 }
 
 // ============================================================================
@@ -551,6 +628,30 @@ impl VectorDatabase {
         inner.store.len() as u32
     }
 
+    /// Get vector dimensions of this database.
+    #[napi(getter)]
+    pub fn dimensions(&self) -> u32 {
+        self.dimensions
+    }
+
+    /// Check if database is empty.
+    #[napi]
+    pub fn is_empty(&self) -> bool {
+        let inner = self.inner.read();
+        inner.store.len() == 0
+    }
+
+    /// Get database statistics.
+    #[napi]
+    pub fn stats(&self) -> StatsResult {
+        let inner = self.inner.read();
+        StatsResult {
+            dimensions: self.dimensions,
+            count: inner.store.len() as u32,
+            path: self.path.clone(),
+        }
+    }
+
     /// Get current ef_search value.
     #[napi(getter, js_name = "efSearch")]
     pub fn get_ef_search(&self) -> u32 {
@@ -842,7 +943,8 @@ impl VectorDatabase {
     /// @param filter - Optional metadata filter
     /// @param alpha - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
     /// @param rrfK - RRF constant (default=60, higher reduces rank influence)
-    /// @returns Array of {id, score, metadata}
+    /// @param subscores - Return separate keyword_score and semantic_score (default: false)
+    /// @returns Array of {id, score, metadata, keyword_score?, semantic_score?}
     #[napi]
     pub fn hybrid_search(
         &self,
@@ -852,7 +954,8 @@ impl VectorDatabase {
         #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
         alpha: Option<f64>,
         rrf_k: Option<u32>,
-    ) -> Result<Vec<TextSearchResult>> {
+        subscores: Option<bool>,
+    ) -> Result<Vec<HybridSearchResult>> {
         if k == 0 {
             return Err(Error::from_reason("k must be greater than 0"));
         }
@@ -877,6 +980,40 @@ impl VectorDatabase {
 
         let mut inner = self.inner.write();
 
+        // Use subscores path when requested
+        if subscores.unwrap_or(false) {
+            let results = if let Some(f) = metadata_filter {
+                inner
+                    .store
+                    .hybrid_search_with_filter_subscores(
+                        &query_vec,
+                        &query_text,
+                        k as usize,
+                        &f,
+                        alpha_f32,
+                        rrf_k_usize,
+                    )
+                    .map_err(convert_error)?
+            } else {
+                inner
+                    .store
+                    .hybrid_search_with_subscores(&query_vec, &query_text, k as usize, alpha_f32, rrf_k_usize)
+                    .map_err(convert_error)?
+            };
+
+            return Ok(results
+                .into_iter()
+                .map(|(hybrid_result, metadata)| HybridSearchResult {
+                    id: hybrid_result.id,
+                    score: hybrid_result.score as f64,
+                    metadata,
+                    keyword_score: hybrid_result.keyword_score.map(|s| s as f64),
+                    semantic_score: hybrid_result.semantic_score.map(|s| s as f64),
+                })
+                .collect());
+        }
+
+        // Standard path without subscores
         let results = if let Some(f) = metadata_filter {
             inner
                 .store
@@ -898,10 +1035,12 @@ impl VectorDatabase {
 
         Ok(results
             .into_iter()
-            .map(|(id, score, metadata)| TextSearchResult {
+            .map(|(id, score, metadata)| HybridSearchResult {
                 id,
                 score: score as f64,
                 metadata,
+                keyword_score: None,
+                semantic_score: None,
             })
             .collect())
     }
@@ -913,6 +1052,20 @@ impl VectorDatabase {
     pub fn flush(&self) -> Result<()> {
         let mut inner = self.inner.write();
         inner.store.flush().map_err(convert_error)
+    }
+
+    /// Optimize index for cache-efficient search.
+    ///
+    /// Reorders nodes for better memory locality, improving search performance by 6-40%.
+    /// Call after inserting a large batch of vectors.
+    ///
+    /// @returns Number of nodes reordered
+    #[napi]
+    pub fn optimize(&self) -> Result<u32> {
+        let mut inner = self.inner.write();
+        let result = inner.store.optimize().map_err(convert_error)?;
+        inner.cache_valid = false;
+        Ok(result as u32)
     }
 
     // =========================================================================
@@ -1023,9 +1176,13 @@ pub struct OpenOptions {
     pub ef_construction: Option<u32>,
     /// HNSW ef_search: search quality/speed tradeoff (default: 100)
     pub ef_search: Option<u32>,
-    /// RaBitQ quantization bits: 2, 4, or 8 (default: null = no quantization)
-    /// Enables 4-16x memory compression with ~1-2% recall loss
-    pub quantization: Option<u8>,
+    /// Quantization mode (default: null = no quantization)
+    /// - true or "sq8": SQ8 4x compression, ~99% recall (RECOMMENDED)
+    /// - "rabitq": RaBitQ 8x compression, ~98% recall
+    /// - "binary": Binary 32x compression, ~95% recall
+    /// - 2, 4, 8: RaBitQ with specific bits (legacy)
+    #[napi(ts_type = "boolean | string | number | null | undefined")]
+    pub quantization: Option<serde_json::Value>,
     /// Rescore candidates with exact distance (default: true when quantization enabled)
     /// Set to false for maximum speed at the cost of ~20% recall
     pub rescore: Option<bool>,
@@ -1090,9 +1247,16 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let m = opts.m.map(|v| v as usize);
     let ef_construction = opts.ef_construction.map(|v| v as usize);
     let ef_search = opts.ef_search.map(|v| v as usize);
-    let quantization = opts.quantization;
     let rescore = opts.rescore;
     let oversample = opts.oversample;
+
+    // Parse quantization (handles true, "sq8", "rabitq", "binary", or numbers)
+    let quant_mode = opts
+        .quantization
+        .as_ref()
+        .map(parse_quantization)
+        .transpose()?
+        .flatten();
 
     // Validate parameters
     if dimensions == 0 {
@@ -1116,15 +1280,6 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
             return Err(Error::new(
                 Status::InvalidArg,
                 format!("ef_construction ({}) must be >= m ({})", ef_val, m_val),
-            ));
-        }
-    }
-
-    if let Some(bits) = quantization {
-        if !matches!(bits, 2 | 4 | 8) {
-            return Err(Error::new(
-                Status::InvalidArg,
-                format!("quantization must be 2, 4, or 8, got {}", bits),
             ));
         }
     }
@@ -1163,14 +1318,8 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     if let Some(ef_s) = ef_search {
         store_options = store_options.ef_search(ef_s);
     }
-    if let Some(bits) = quantization {
-        let params = match bits {
-            2 => RaBitQParams::bits2(),
-            4 => RaBitQParams::bits4(),
-            8 => RaBitQParams::bits8(),
-            _ => unreachable!(),
-        };
-        store_options = store_options.quantization_rabitq_params(params);
+    if let Some(ref mode) = quant_mode {
+        store_options = store_options.quantization(mode.clone());
     }
     if let Some(rescore_val) = rescore {
         store_options = store_options.rescore(rescore_val);
@@ -1205,7 +1354,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
 
     // Check if enabling quantization on existing non-empty database
     let db_path = std::path::Path::new(&path);
-    if db_path.exists() && quantization.is_some() {
+    if db_path.exists() && quant_mode.is_some() {
         let existing = VectorStore::open(&path).map_err(convert_error)?;
         if existing.len() > 0 {
             return Err(Error::new(

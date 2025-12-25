@@ -128,6 +128,46 @@ fn convert_error(err: anyhow::Error) -> PyErr {
     }
 }
 
+/// Build VectorStoreOptions from open() parameters
+fn build_store_options(
+    dimensions: usize,
+    m: Option<usize>,
+    ef_construction: Option<usize>,
+    ef_search: Option<usize>,
+    quant_mode: Option<QuantizationMode>,
+    rescore: Option<bool>,
+    oversample: Option<f32>,
+    metric: Option<&str>,
+) -> PyResult<VectorStoreOptions> {
+    let mut options = VectorStoreOptions::default().dimensions(dimensions);
+
+    if let Some(m_val) = m {
+        options = options.m(m_val);
+    }
+    if let Some(ef_con) = ef_construction {
+        options = options.ef_construction(ef_con);
+    }
+    if let Some(ef_s) = ef_search {
+        options = options.ef_search(ef_s);
+    }
+    if let Some(mode) = quant_mode {
+        options = options.quantization(mode);
+    }
+    if let Some(rescore_val) = rescore {
+        options = options.rescore(rescore_val);
+    }
+    if let Some(oversample_val) = oversample {
+        options = options.oversample(oversample_val);
+    }
+    if let Some(metric_str) = metric {
+        options = options
+            .metric(metric_str)
+            .map_err(|e| PyValueError::new_err(e))?;
+    }
+
+    Ok(options)
+}
+
 /// Internal state for VectorDatabase
 struct VectorDatabaseInner {
     store: VectorStore,
@@ -1721,31 +1761,16 @@ fn open(
 
     // Handle :memory: for in-memory database (must check BEFORE path existence checks)
     if path == ":memory:" {
-        let mut options = VectorStoreOptions::default().dimensions(effective_dims);
-
-        if let Some(m_val) = m {
-            options = options.m(m_val);
-        }
-        if let Some(ef_con) = ef_construction {
-            options = options.ef_construction(ef_con);
-        }
-        if let Some(ef_s) = ef_search {
-            options = options.ef_search(ef_s);
-        }
-        if let Some(mode) = quant_mode.clone() {
-            options = options.quantization(mode);
-        }
-        if let Some(rescore_val) = rescore {
-            options = options.rescore(rescore_val);
-        }
-        if let Some(oversample_val) = oversample {
-            options = options.oversample(oversample_val);
-        }
-        if let Some(ref metric_str) = metric {
-            options = options
-                .metric(metric_str)
-                .map_err(|e| PyValueError::new_err(e))?;
-        }
+        let options = build_store_options(
+            effective_dims,
+            m,
+            ef_construction,
+            ef_search,
+            quant_mode.clone(),
+            rescore,
+            oversample,
+            metric.as_deref(),
+        )?;
 
         let store = options
             .build()
@@ -1776,32 +1801,16 @@ fn open(
 
     // Check if this is a directory (persistent storage) or .omen file exists
     if db_path.is_dir() || omen_path.exists() || !db_path.exists() {
-        // Build options from parameters
-        let mut options = VectorStoreOptions::default().dimensions(effective_dims);
-
-        if let Some(m_val) = m {
-            options = options.m(m_val);
-        }
-        if let Some(ef_con) = ef_construction {
-            options = options.ef_construction(ef_con);
-        }
-        if let Some(ef_s) = ef_search {
-            options = options.ef_search(ef_s);
-        }
-        if let Some(mode) = quant_mode.clone() {
-            options = options.quantization(mode);
-        }
-        if let Some(rescore_val) = rescore {
-            options = options.rescore(rescore_val);
-        }
-        if let Some(oversample_val) = oversample {
-            options = options.oversample(oversample_val);
-        }
-        if let Some(ref metric_str) = metric {
-            options = options
-                .metric(metric_str)
-                .map_err(|e| PyValueError::new_err(e))?;
-        }
+        let mut options = build_store_options(
+            effective_dims,
+            m,
+            ef_construction,
+            ef_search,
+            quant_mode.clone(),
+            rescore,
+            oversample,
+            metric.as_deref(),
+        )?;
 
         // Handle config dict for backward compatibility
         if let Some(cfg) = config {
@@ -1854,26 +1863,17 @@ fn open(
         });
     }
 
-    // Create new in-memory database with configuration
-    let mut options = VectorStoreOptions::default().dimensions(effective_dims);
-
-    if let Some(m_val) = m {
-        options = options.m(m_val);
-    }
-    if let Some(ef_con) = ef_construction {
-        options = options.ef_construction(ef_con);
-    }
-    if let Some(ef_s) = ef_search {
-        options = options.ef_search(ef_s);
-    }
-    if let Some(mode) = quant_mode.clone() {
-        options = options.quantization(mode);
-    }
-    if let Some(ref metric_str) = metric {
-        options = options
-            .metric(metric_str)
-            .map_err(|e| PyValueError::new_err(e))?;
-    }
+    // Fallback: create new in-memory database with configuration
+    let options = build_store_options(
+        effective_dims,
+        m,
+        ef_construction,
+        ef_search,
+        quant_mode,
+        rescore,
+        oversample,
+        metric.as_deref(),
+    )?;
 
     let store = options
         .build()
@@ -2067,19 +2067,15 @@ fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<Parsed
     Ok(batch)
 }
 
-// Helper: Parse batch items (backwards compatible, no text)
-fn parse_batch_items(items: &Bound<'_, PyList>) -> PyResult<Vec<(String, Vector, JsonValue)>> {
-    parse_batch_items_with_text(items).map(|items| {
-        items
-            .into_iter()
-            .map(|item| (item.id, item.vector, item.metadata))
-            .collect()
-    })
-}
-
 /// Helper: Convert Python object to serde_json::Value
 fn pyobject_to_json(obj: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
-    if let Ok(s) = obj.extract::<String>() {
+    // Check None first (fast path)
+    if obj.is_none() {
+        Ok(JsonValue::Null)
+    // Check bool BEFORE int/float - Python bool is subclass of int (True == 1, False == 0)
+    } else if let Ok(b) = obj.extract::<bool>() {
+        Ok(JsonValue::Bool(b))
+    } else if let Ok(s) = obj.extract::<String>() {
         Ok(JsonValue::String(s))
     } else if let Ok(i) = obj.extract::<i64>() {
         Ok(JsonValue::Number(i.into()))
@@ -2087,10 +2083,6 @@ fn pyobject_to_json(obj: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
         Ok(serde_json::Number::from_f64(f)
             .map(JsonValue::Number)
             .unwrap_or(JsonValue::Null))
-    } else if let Ok(b) = obj.extract::<bool>() {
-        Ok(JsonValue::Bool(b))
-    } else if obj.is_none() {
-        Ok(JsonValue::Null)
     } else if let Ok(dict) = obj.cast::<PyDict>() {
         let mut map = serde_json::Map::new();
         for (key, value) in dict.iter() {

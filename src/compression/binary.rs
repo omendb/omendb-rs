@@ -284,7 +284,7 @@ mod tests {
         // Packed: bit0=1, bit1=0, bit2=1, bit3=0, bit4=0, bit5=1, bit6=0, bit7=1
         // = 0b10100101 = 165
         assert_eq!(quantized.len(), 1);
-        assert_eq!(quantized[0], 0b10100101);
+        assert_eq!(quantized[0], 0b1010_0101);
     }
 
     #[test]
@@ -302,8 +302,8 @@ mod tests {
 
     #[test]
     fn test_hamming_distance_identical() {
-        let a = vec![0b10101010, 0b11110000, 0b00001111];
-        let b = vec![0b10101010, 0b11110000, 0b00001111];
+        let a = vec![0b1010_1010, 0b1111_0000, 0b0000_1111];
+        let b = vec![0b1010_1010, 0b1111_0000, 0b0000_1111];
 
         let dist = hamming_distance(&a, &b);
         assert_eq!(dist, 0);
