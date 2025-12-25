@@ -365,6 +365,18 @@ impl VectorDatabase {
         k: u32,
         ef: Option<u32>,
     ) -> Result<Vec<Vec<SearchResult>>> {
+        if k == 0 {
+            return Err(Error::from_reason("k must be greater than 0"));
+        }
+        if let Some(ef_val) = ef {
+            if ef_val < k {
+                return Err(Error::from_reason(format!(
+                    "ef ({}) must be >= k ({})",
+                    ef_val, k
+                )));
+            }
+        }
+
         let query_vecs: Vec<Vector> = queries
             .into_iter()
             .map(|q| Vector::new(extract_query_vector(q)))
@@ -792,6 +804,10 @@ impl VectorDatabase {
     /// @returns Array of {id, score, metadata}
     #[napi]
     pub fn text_search(&self, query: String, k: u32) -> Result<Vec<TextSearchResult>> {
+        if k == 0 {
+            return Err(Error::from_reason("k must be greater than 0"));
+        }
+
         let inner = self.inner.read();
 
         let results = inner
@@ -837,6 +853,23 @@ impl VectorDatabase {
         alpha: Option<f64>,
         rrf_k: Option<u32>,
     ) -> Result<Vec<TextSearchResult>> {
+        if k == 0 {
+            return Err(Error::from_reason("k must be greater than 0"));
+        }
+        if let Some(a) = alpha {
+            if !(0.0..=1.0).contains(&a) {
+                return Err(Error::from_reason(format!(
+                    "alpha must be between 0.0 and 1.0, got {}",
+                    a
+                )));
+            }
+        }
+        if let Some(rrf) = rrf_k {
+            if rrf == 0 {
+                return Err(Error::from_reason("rrf_k must be greater than 0"));
+            }
+        }
+
         let query_vec = Vector::new(extract_query_vector(query_vector));
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
         let alpha_f32 = alpha.map(|a| a as f32);
@@ -1062,6 +1095,13 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let oversample = opts.oversample;
 
     // Validate parameters
+    if dimensions == 0 {
+        return Err(Error::new(
+            Status::InvalidArg,
+            "dimensions must be greater than 0",
+        ));
+    }
+
     if let Some(m_val) = m {
         if !(4..=64).contains(&m_val) {
             return Err(Error::new(
