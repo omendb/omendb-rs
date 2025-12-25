@@ -258,15 +258,26 @@ impl VectorDatabase {
         #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
         max_distance: Option<f64>,
     ) -> Result<Vec<SearchResult>> {
-        let query_vec = Vector::new(extract_query_vector(query));
-        let ef_usize = ef.map(|e| e as usize);
-        let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
-
+        if k == 0 {
+            return Err(Error::from_reason("k must be greater than 0"));
+        }
+        if let Some(ef_val) = ef {
+            if ef_val < k {
+                return Err(Error::from_reason(format!(
+                    "ef ({}) must be >= k ({})",
+                    ef_val, k
+                )));
+            }
+        }
         if let Some(max_dist) = max_distance {
             if max_dist < 0.0 {
                 return Err(Error::from_reason("max_distance must be non-negative"));
             }
         }
+
+        let query_vec = Vector::new(extract_query_vector(query));
+        let ef_usize = ef.map(|e| e as usize);
+        let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
         let max_dist_f32 = max_distance.map(|d| d as f32);
 
         // Fast path: read lock when cache is valid
