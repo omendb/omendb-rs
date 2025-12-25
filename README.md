@@ -125,73 +125,33 @@ This ensures your RAG pipeline only receives highly relevant context, avoiding d
 {"$or": [{...}, {...}]}                 # OR
 ```
 
-## Temporal Queries
+## Time-Based Filtering
 
-For data that changes over time (prices, company info, etc.), use bi-temporal metadata:
+For data that changes over time, use `valid_at` to query "what was true at time X":
 
 ```python
-# Insert with temporal metadata
+# Store facts with validity periods
 db.set([
-    {"id": "apple_ceo_current", "vector": [...], "metadata": {
-        "company": "Apple",
-        "role": "CEO",
+    {"id": "ceo_current", "vector": [...], "metadata": {
         "name": "Tim Cook",
         "valid_from": 1314057600,  # Aug 2011
         "valid_to": None,         # Still valid
     }},
-    {"id": "apple_ceo_previous", "vector": [...], "metadata": {
-        "company": "Apple",
-        "role": "CEO",
+    {"id": "ceo_previous", "vector": [...], "metadata": {
         "name": "Steve Jobs",
         "valid_from": 946684800,   # Jan 2000
-        "valid_to": 1314057600,    # Aug 2011
+        "valid_to": 1314057600,    # Ended Aug 2011
     }},
 ])
 
-# Query "Who was Apple's CEO in 2010?"
-results = db.search(query, k=5, valid_at=1262304000)  # Jan 2010
-# Returns Steve Jobs (valid_from <= 2010 AND valid_to >= 2010)
+# "Who was CEO in 2010?" → Returns Steve Jobs
+results = db.search(query, k=5, valid_at=1262304000)
 
-# Query "Who is Apple's CEO now?"
-import time
+# "Who is CEO now?" → Returns Tim Cook
 results = db.search(query, k=5, valid_at=int(time.time()))
-# Returns Tim Cook (valid_from <= now AND valid_to is None)
 ```
 
-The `valid_at` parameter filters results where:
-
-- `valid_from <= timestamp` (document was valid by this time)
-- `valid_to >= timestamp` OR `valid_to` is null (document hasn't been invalidated)
-
-## Graph Patterns
-
-For RAG with document chunks, use metadata to track relationships:
-
-```python
-# Store chunks with graph relationships
-db.set([
-    {"id": "chunk_1", "vector": [...], "metadata": {
-        "document_id": "doc_1",
-        "chunk_index": 0,
-        "next_chunk_id": "chunk_2",      # Lexical graph
-        "entities": ["Apple", "iPhone"],  # Entity extraction
-    }},
-    {"id": "chunk_2", "vector": [...], "metadata": {
-        "document_id": "doc_1",
-        "chunk_index": 1,
-        "prev_chunk_id": "chunk_1",
-        "next_chunk_id": "chunk_3",
-        "entities": ["Tim Cook"],
-    }},
-])
-
-# After search, expand context using the graph
-results = db.search(query, k=5)
-for r in results:
-    next_id = r["metadata"].get("next_chunk_id")
-    if next_id:
-        next_chunk = db.get(next_id)  # Get adjacent context
-```
+Filters to: `valid_from <= timestamp` AND (`valid_to >= timestamp` OR `valid_to` is null).
 
 ## Configuration
 
