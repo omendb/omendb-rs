@@ -66,7 +66,7 @@ def main():
     db.set(items)
     print(f"Indexed {len(db)} documents\n")
 
-    # Query
+    # Query with max_distance to filter low-relevance results (prevents context rot)
     queries = [
         "How do I install OmenDB?",
         "How do I search for vectors?",
@@ -75,7 +75,9 @@ def main():
 
     for q in queries:
         print(f"Q: {q}")
-        results = db.search(query=embed(q), k=2)
+        # max_distance filters out results that are too far from the query
+        # (for normalized vectors, L2 distance ranges 0-2; 1.5 is a reasonable threshold)
+        results = db.search(query=embed(q), k=2, max_distance=1.5)
         for r in results:
             print(f"  [{r['metadata']['source']}] {r['metadata']['text'][:60]}...")
         print()
