@@ -47,15 +47,18 @@ impl BinaryParams {
         }
     }
 
-    /// Train thresholds from sample vectors using median per dimension
-    #[must_use]
-    pub fn train(vectors: &[&[f32]]) -> Self {
-        assert!(!vectors.is_empty(), "Need at least one vector to train");
+    /// Train thresholds from sample vectors using median per dimension.
+    ///
+    /// # Errors
+    /// Returns error if vectors is empty or vectors have inconsistent dimensions.
+    pub fn train(vectors: &[&[f32]]) -> Result<Self, &'static str> {
+        if vectors.is_empty() {
+            return Err("Need at least one vector to train");
+        }
         let dimensions = vectors[0].len();
-        assert!(
-            vectors.iter().all(|v| v.len() == dimensions),
-            "All vectors must have same dimensions"
-        );
+        if !vectors.iter().all(|v| v.len() == dimensions) {
+            return Err("All vectors must have same dimensions");
+        }
 
         let n = vectors.len();
         let mut thresholds = Vec::with_capacity(dimensions);
@@ -79,16 +82,16 @@ impl BinaryParams {
             thresholds.push(median);
         }
 
-        Self {
+        Ok(Self {
             thresholds,
             dimensions,
-        }
+        })
     }
 
     /// Quantize f32 vector to packed binary
     #[must_use]
     pub fn quantize(&self, vector: &[f32]) -> Vec<u8> {
-        assert_eq!(vector.len(), self.dimensions);
+        debug_assert_eq!(vector.len(), self.dimensions);
 
         let num_bytes = self.dimensions.div_ceil(8);
         let mut quantized = vec![0u8; num_bytes];
@@ -106,9 +109,9 @@ impl BinaryParams {
 
     /// Quantize into pre-allocated buffer
     pub fn quantize_into(&self, vector: &[f32], output: &mut [u8]) {
-        assert_eq!(vector.len(), self.dimensions);
+        debug_assert_eq!(vector.len(), self.dimensions);
         let num_bytes = self.dimensions.div_ceil(8);
-        assert!(output.len() >= num_bytes);
+        debug_assert!(output.len() >= num_bytes);
 
         // Clear output first
         for byte in output.iter_mut().take(num_bytes) {
@@ -294,7 +297,7 @@ mod tests {
         let v3 = vec![3.0, 7.0, 2.0, 4.0];
         let vectors: Vec<&[f32]> = vec![v1.as_slice(), v2.as_slice(), v3.as_slice()];
 
-        let params = BinaryParams::train(&vectors);
+        let params = BinaryParams::train(&vectors).unwrap();
 
         // Median: [2.0, 6.0, 1.0, 3.0]
         assert_eq!(params.thresholds, vec![2.0, 6.0, 1.0, 3.0]);

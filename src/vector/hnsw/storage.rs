@@ -869,7 +869,8 @@ impl VectorStorage {
                         let training_refs: Vec<&[f32]> = (0..256)
                             .map(|i| &training_buffer[i * dim..(i + 1) * dim])
                             .collect();
-                        *params = ScalarParams::train(&training_refs);
+                        *params =
+                            ScalarParams::train(&training_refs).map_err(ToString::to_string)?;
                         *trained = true;
 
                         // Quantize all buffered vectors
@@ -1389,7 +1390,7 @@ impl VectorStorage {
                 }
                 // Train quantizer from sample vectors
                 let q = quantizer.get_or_insert_with(|| RaBitQ::new(params.clone()));
-                q.train_owned(sample_vectors);
+                q.train_owned(sample_vectors).map_err(ToString::to_string)?;
                 Ok(())
             }
             Self::ScalarQuantized {
@@ -1407,7 +1408,7 @@ impl VectorStorage {
                 // Train params from sample vectors
                 let refs: Vec<&[f32]> =
                     sample_vectors.iter().map(std::vec::Vec::as_slice).collect();
-                *params = ScalarParams::train(&refs);
+                *params = ScalarParams::train(&refs).map_err(ToString::to_string)?;
                 *trained = true;
 
                 // If there are vectors in training buffer, quantize them now

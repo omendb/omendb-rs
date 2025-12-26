@@ -61,24 +61,29 @@ impl ScalarParams {
     /// Train scalar quantization from sample vectors
     ///
     /// Uses 1st and 99th percentiles to handle outliers.
-    #[must_use]
-    pub fn train(vectors: &[&[f32]]) -> Self {
+    ///
+    /// # Errors
+    /// Returns error if vectors is empty or vectors have inconsistent dimensions.
+    pub fn train(vectors: &[&[f32]]) -> Result<Self, &'static str> {
         Self::train_with_percentiles(vectors, 0.01, 0.99)
     }
 
     /// Train with custom percentile bounds
-    #[must_use]
+    ///
+    /// # Errors
+    /// Returns error if vectors is empty or vectors have inconsistent dimensions.
     pub fn train_with_percentiles(
         vectors: &[&[f32]],
         lower_percentile: f32,
         upper_percentile: f32,
-    ) -> Self {
-        assert!(!vectors.is_empty(), "Need at least one vector to train");
+    ) -> Result<Self, &'static str> {
+        if vectors.is_empty() {
+            return Err("Need at least one vector to train");
+        }
         let dimensions = vectors[0].len();
-        assert!(
-            vectors.iter().all(|v| v.len() == dimensions),
-            "All vectors must have same dimensions"
-        );
+        if !vectors.iter().all(|v| v.len() == dimensions) {
+            return Err("All vectors must have same dimensions");
+        }
 
         let n = vectors.len();
         let lower_idx = ((n as f32 * lower_percentile) as usize).min(n - 1);
@@ -110,17 +115,17 @@ impl ScalarParams {
             scales.push(scale);
         }
 
-        Self {
+        Ok(Self {
             mins,
             scales,
             dimensions,
-        }
+        })
     }
 
     /// Quantize a single f32 vector to u8
     #[must_use]
     pub fn quantize(&self, vector: &[f32]) -> Vec<u8> {
-        assert_eq!(vector.len(), self.dimensions);
+        debug_assert_eq!(vector.len(), self.dimensions);
 
         vector
             .iter()
@@ -549,7 +554,7 @@ mod tests {
         ];
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
-        let params = ScalarParams::train(&refs);
+        let params = ScalarParams::train(&refs).unwrap();
 
         // Quantize and dequantize
         let quantized = params.quantize(&vectors[0]);
@@ -570,7 +575,7 @@ mod tests {
         ];
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
-        let params = ScalarParams::train(&refs);
+        let params = ScalarParams::train(&refs).unwrap();
         let quantized = params.quantize(&vectors[1]);
 
         // Distance from [0,0,0,0] to [1,1,1,1] should be ~4.0
@@ -611,7 +616,7 @@ mod tests {
         ];
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
-        let params = ScalarParams::train(&refs);
+        let params = ScalarParams::train(&refs).unwrap();
 
         // Quantize target vector
         let quantized = params.quantize(&vectors[1]);

@@ -130,10 +130,9 @@ impl TrainedParams {
     /// # Arguments
     /// * `vectors` - Sample vectors to train from (should be representative)
     ///
-    /// # Panics
-    /// Panics if vectors is empty or vectors have inconsistent dimensions.
-    #[must_use]
-    pub fn train(vectors: &[&[f32]]) -> Self {
+    /// # Errors
+    /// Returns error if vectors is empty or vectors have inconsistent dimensions.
+    pub fn train(vectors: &[&[f32]]) -> Result<Self, &'static str> {
         Self::train_with_percentiles(vectors, 0.01, 0.99)
     }
 
@@ -143,18 +142,21 @@ impl TrainedParams {
     /// * `vectors` - Sample vectors to train from
     /// * `lower_percentile` - Lower bound percentile (e.g., 0.01 for 1st percentile)
     /// * `upper_percentile` - Upper bound percentile (e.g., 0.99 for 99th percentile)
-    #[must_use]
+    ///
+    /// # Errors
+    /// Returns error if vectors is empty or vectors have inconsistent dimensions.
     pub fn train_with_percentiles(
         vectors: &[&[f32]],
         lower_percentile: f32,
         upper_percentile: f32,
-    ) -> Self {
-        assert!(!vectors.is_empty(), "Need at least one vector to train");
+    ) -> Result<Self, &'static str> {
+        if vectors.is_empty() {
+            return Err("Need at least one vector to train");
+        }
         let dimensions = vectors[0].len();
-        assert!(
-            vectors.iter().all(|v| v.len() == dimensions),
-            "All vectors must have same dimensions"
-        );
+        if !vectors.iter().all(|v| v.len() == dimensions) {
+            return Err("All vectors must have same dimensions");
+        }
 
         let n = vectors.len();
         let lower_idx = ((n as f32 * lower_percentile) as usize).min(n - 1);
@@ -186,11 +188,11 @@ impl TrainedParams {
             }
         }
 
-        Self {
+        Ok(Self {
             mins,
             maxs,
             dimensions,
-        }
+        })
     }
 
     /// Quantize a single value using trained parameters for given dimension
@@ -909,14 +911,21 @@ impl RaBitQ {
     ///
     /// # Arguments
     /// * `vectors` - Representative sample of vectors to train from
-    pub fn train(&mut self, vectors: &[&[f32]]) {
-        self.trained = Some(TrainedParams::train(vectors));
+    ///
+    /// # Errors
+    /// Returns error if vectors is empty or have inconsistent dimensions.
+    pub fn train(&mut self, vectors: &[&[f32]]) -> Result<(), &'static str> {
+        self.trained = Some(TrainedParams::train(vectors)?);
+        Ok(())
     }
 
     /// Train with owned vectors (convenience method)
-    pub fn train_owned(&mut self, vectors: &[Vec<f32>]) {
+    ///
+    /// # Errors
+    /// Returns error if vectors is empty or have inconsistent dimensions.
+    pub fn train_owned(&mut self, vectors: &[Vec<f32>]) -> Result<(), &'static str> {
         let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-        self.train(&refs);
+        self.train(&refs)
     }
 
     /// Quantize a vector using trained parameters
