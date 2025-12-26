@@ -435,7 +435,8 @@ impl VectorDatabase {
 
     /// Batch search with parallel execution (async).
     ///
-    /// Runs searches in parallel using rayon, returns Promise.
+    /// Runs searches in parallel using rayon on a blocking thread pool,
+    /// keeping the Node.js event loop free.
     #[napi]
     pub async fn search_batch(
         &self,
@@ -455,12 +456,13 @@ impl VectorDatabase {
             }
         }
 
+        // Extract query vectors upfront (cheap)
         let query_vecs: Vec<Vector> = queries
             .into_iter()
             .map(|q| Vector::new(extract_query_vector(q)))
             .collect();
 
-        // Ensure index and cache are ready
+        // Ensure index and cache are ready (may block briefly)
         {
             let mut inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
@@ -475,36 +477,45 @@ impl VectorDatabase {
             }
         }
 
-        // Run parallel search
-        let inner = self.inner.read();
-        let all_results = inner.store.batch_search_parallel_with_metadata(
-            &query_vecs,
-            k as usize,
-            ef.map(|e| e as usize),
-        );
+        // Clone Arc for spawn_blocking
+        let inner_arc = Arc::clone(&self.inner);
+        let k_usize = k as usize;
+        let ef_usize = ef.map(|e| e as usize);
 
-        // Convert results
-        let mut output = Vec::with_capacity(all_results.len());
-        for result in all_results {
-            let results = result.map_err(convert_error)?;
-            output.push(
-                results
-                    .into_iter()
-                    .map(|(idx, dist, meta)| {
-                        let id = inner
-                            .index_to_id_cache
-                            .get(&idx)
-                            .cloned()
-                            .unwrap_or_else(|| idx.to_string());
-                        SearchResult {
-                            id,
-                            distance: dist as f64,
-                            metadata: meta,
-                        }
-                    })
-                    .collect(),
-            );
-        }
+        // Run CPU-intensive search on blocking thread pool
+        let output = tokio::task::spawn_blocking(move || {
+            let inner = inner_arc.read();
+            let all_results = inner
+                .store
+                .batch_search_parallel_with_metadata(&query_vecs, k_usize, ef_usize);
+
+            // Convert results
+            let mut output = Vec::with_capacity(all_results.len());
+            for result in all_results {
+                let results = result?;
+                output.push(
+                    results
+                        .into_iter()
+                        .map(|(idx, dist, meta)| {
+                            let id = inner
+                                .index_to_id_cache
+                                .get(&idx)
+                                .cloned()
+                                .unwrap_or_else(|| idx.to_string());
+                            SearchResult {
+                                id,
+                                distance: dist as f64,
+                                metadata: meta,
+                            }
+                        })
+                        .collect(),
+                );
+            }
+            Ok::<_, anyhow::Error>(output)
+        })
+        .await
+        .map_err(|e| Error::from_reason(format!("Task join error: {e}")))?
+        .map_err(convert_error)?;
 
         Ok(output)
     }
