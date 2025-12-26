@@ -59,7 +59,9 @@ pub fn l2_squared_decomposed(a: &[f32], b: &[f32], a_norm_sq: f32, b_norm_sq: f3
 pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
 
-    l2_squared_simd::<8>(a, b)
+    // Try 16-lane (512-bit) first for AVX-512, then 8-lane (256-bit) for AVX2
+    l2_squared_simd::<16>(a, b)
+        .or_else(|| l2_squared_simd::<8>(a, b))
         .or_else(|| l2_squared_simd::<4>(a, b))
         .unwrap_or_else(|| l2_squared_scalar(a, b))
 }
@@ -77,7 +79,9 @@ pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
 
-    dot_simd::<8>(a, b)
+    // Try 16-lane (512-bit) first for AVX-512, then 8-lane (256-bit) for AVX2
+    dot_simd::<16>(a, b)
+        .or_else(|| dot_simd::<8>(a, b))
         .or_else(|| dot_simd::<4>(a, b))
         .unwrap_or_else(|| dot_scalar(a, b))
 }

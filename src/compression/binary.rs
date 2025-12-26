@@ -171,12 +171,22 @@ fn hamming_distance_scalar(a: &[u8], b: &[u8]) -> u32 {
         .sum()
 }
 
-/// AVX2 Hamming distance with manual popcnt
+/// AVX2 Hamming distance with PSHUFB popcount lookup table
+///
+/// Uses nibble-based lookup instead of scalar popcnt for full SIMD throughput.
+/// Technique: split each byte into two 4-bit nibbles, use shuffle as LUT.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(clippy::cast_ptr_alignment)] // loadu handles unaligned loads
 unsafe fn hamming_distance_avx2(a: &[u8], b: &[u8]) -> u32 {
-    let mut count = 0u32;
+    // Popcount lookup table for 4-bit values: [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4]
+    let lookup = _mm256_setr_epi8(
+        0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, // low 128 bits
+        0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, // high 128 bits
+    );
+    let low_mask = _mm256_set1_epi8(0x0f); // mask for low nibble
+
+    let mut total = _mm256_setzero_si256();
     let mut i = 0;
 
     // Process 32 bytes at a time
@@ -185,21 +195,35 @@ unsafe fn hamming_distance_avx2(a: &[u8], b: &[u8]) -> u32 {
         let vb = _mm256_loadu_si256(b.as_ptr().add(i).cast::<__m256i>());
         let xor = _mm256_xor_si256(va, vb);
 
-        // Extract and count (AVX2 lacks native vector popcnt)
-        let bytes: [u8; 32] = std::mem::transmute(xor);
-        for &byte in &bytes {
-            count += byte.count_ones();
-        }
+        // Split into nibbles and lookup popcount
+        let lo = _mm256_and_si256(xor, low_mask);
+        let hi = _mm256_and_si256(_mm256_srli_epi16(xor, 4), low_mask);
+
+        let cnt_lo = _mm256_shuffle_epi8(lookup, lo);
+        let cnt_hi = _mm256_shuffle_epi8(lookup, hi);
+
+        // Add nibble counts (each byte now has popcount of original byte)
+        let cnt = _mm256_add_epi8(cnt_lo, cnt_hi);
+
+        // Accumulate using sad_epu8 against zero for horizontal sum
+        total = _mm256_add_epi64(total, _mm256_sad_epu8(cnt, _mm256_setzero_si256()));
 
         i += 32;
     }
 
-    // Handle remaining bytes
+    // Horizontal sum of 4 x u64 accumulators
+    let lo = _mm256_castsi256_si128(total);
+    let hi = _mm256_extracti128_si256(total, 1);
+    let sum128 = _mm_add_epi64(lo, hi);
+    let count = (_mm_extract_epi64(sum128, 0) + _mm_extract_epi64(sum128, 1)) as u32;
+
+    // Handle remaining bytes with scalar
+    let mut remainder = 0u32;
     for j in i..a.len() {
-        count += (a[j] ^ b[j]).count_ones();
+        remainder += (a[j] ^ b[j]).count_ones();
     }
 
-    count
+    count + remainder
 }
 
 /// x86_64 popcnt-based Hamming distance (8 bytes at a time)
