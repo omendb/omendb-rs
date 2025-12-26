@@ -302,39 +302,42 @@ impl MetadataIndex {
         Self::default()
     }
 
-    /// Create or get a keyword index for a field
-    pub fn keyword_index(&mut self, field: &str) -> &mut KeywordIndex {
+    /// Create or get a keyword index for a field.
+    /// Returns None if the field exists with a different type.
+    pub fn keyword_index(&mut self, field: &str) -> Option<&mut KeywordIndex> {
         let index = self
             .fields
             .entry(field.to_string())
             .or_insert_with(FieldIndex::keyword);
         match index {
-            FieldIndex::Keyword(idx) => idx,
-            _ => panic!("Field type mismatch"),
+            FieldIndex::Keyword(idx) => Some(idx),
+            _ => None, // Field exists with different type
         }
     }
 
-    /// Create or get a boolean index for a field
-    pub fn boolean_index(&mut self, field: &str) -> &mut BooleanIndex {
+    /// Create or get a boolean index for a field.
+    /// Returns None if the field exists with a different type.
+    pub fn boolean_index(&mut self, field: &str) -> Option<&mut BooleanIndex> {
         let index = self
             .fields
             .entry(field.to_string())
             .or_insert_with(FieldIndex::boolean);
         match index {
-            FieldIndex::Boolean(idx) => idx,
-            _ => panic!("Field type mismatch"),
+            FieldIndex::Boolean(idx) => Some(idx),
+            _ => None, // Field exists with different type
         }
     }
 
-    /// Create or get a numeric index for a field
-    pub fn numeric_index(&mut self, field: &str) -> &mut NumericIndex {
+    /// Create or get a numeric index for a field.
+    /// Returns None if the field exists with a different type.
+    pub fn numeric_index(&mut self, field: &str) -> Option<&mut NumericIndex> {
         let index = self
             .fields
             .entry(field.to_string())
             .or_insert_with(FieldIndex::numeric);
         match index {
-            FieldIndex::Numeric(idx) => idx,
-            _ => panic!("Field type mismatch"),
+            FieldIndex::Numeric(idx) => Some(idx),
+            _ => None, // Field exists with different type
         }
     }
 
@@ -344,23 +347,30 @@ impl MetadataIndex {
         self.fields.get(field)
     }
 
-    /// Index a JSON metadata object
+    /// Index a JSON metadata object.
+    /// Silently skips fields with inconsistent types across documents.
     pub fn index_json(&mut self, doc_id: u32, metadata: &serde_json::Value) {
         if let serde_json::Value::Object(map) = metadata {
             for (key, value) in map {
                 match value {
                     serde_json::Value::String(s) => {
-                        self.keyword_index(key).insert(doc_id, s);
+                        if let Some(idx) = self.keyword_index(key) {
+                            idx.insert(doc_id, s);
+                        }
                     }
                     serde_json::Value::Bool(b) => {
-                        self.boolean_index(key).insert(doc_id, *b);
+                        if let Some(idx) = self.boolean_index(key) {
+                            idx.insert(doc_id, *b);
+                        }
                     }
                     serde_json::Value::Number(n) => {
                         if let Some(f) = n.as_f64() {
-                            self.numeric_index(key).insert(doc_id, f);
+                            if let Some(idx) = self.numeric_index(key) {
+                                idx.insert(doc_id, f);
+                            }
                         }
                     }
-                    _ => {} // Skip arrays and nested objects for now
+                    _ => {} // Skip arrays and nested objects
                 }
             }
         }
