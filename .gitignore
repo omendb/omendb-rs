@@ -30,3 +30,13 @@ benchmarks/history.jsonl
 # Proptest regression files
 proptest-regressions/
 .hhg
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
