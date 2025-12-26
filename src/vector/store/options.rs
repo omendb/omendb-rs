@@ -4,7 +4,7 @@
 
 use super::VectorStore;
 use crate::compression::RaBitQParams;
-use crate::omen::DistanceFunction;
+use crate::omen::Metric;
 use crate::text::TextSearchConfig;
 use crate::vector::QuantizationMode;
 use anyhow::Result;
@@ -65,7 +65,7 @@ pub struct VectorStoreOptions {
     pub(super) oversample: Option<f32>,
 
     /// Distance metric for similarity search (default: L2)
-    pub(super) metric: Option<DistanceFunction>,
+    pub(super) metric: Option<Metric>,
 
     /// Text search configuration (None = disabled)
     pub(super) text_search_config: Option<TextSearchConfig>,
@@ -208,13 +208,13 @@ impl VectorStoreOptions {
     ///     .open("./vectors")?;
     /// ```
     pub fn metric(mut self, m: &str) -> Result<Self, String> {
-        self.metric = Some(DistanceFunction::parse(m)?);
+        self.metric = Some(Metric::parse(m)?);
         Ok(self)
     }
 
     /// Set distance metric directly (no parsing).
     #[must_use]
-    pub fn metric_fn(mut self, m: DistanceFunction) -> Self {
+    pub fn metric_fn(mut self, m: Metric) -> Self {
         self.metric = Some(m);
         self
     }

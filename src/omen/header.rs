@@ -16,39 +16,98 @@ pub const HEADER_SIZE: usize = 4096;
 /// Maximum number of sections
 pub const MAX_SECTIONS: usize = 8;
 
-/// Quantization mode
+/// Quantization code for file format serialization.
+///
+/// This is a compact `repr(u8)` representation for storing in the .omen header.
+/// For runtime API, use `crate::vector::QuantizationMode` instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum QuantizationMode {
+pub enum QuantizationCode {
     F32 = 0,
     Sq8 = 1,
     RabitQ4 = 2,
     RabitQ2 = 3,
     RabitQ8 = 4,
+    Binary = 5,
 }
 
-impl From<u8> for QuantizationMode {
+impl From<u8> for QuantizationCode {
     fn from(v: u8) -> Self {
         match v {
             1 => Self::Sq8,
             2 => Self::RabitQ4,
             3 => Self::RabitQ2,
             4 => Self::RabitQ8,
+            5 => Self::Binary,
             _ => Self::F32,
         }
     }
 }
 
-/// Distance function
+impl From<&crate::vector::QuantizationMode> for QuantizationCode {
+    fn from(mode: &crate::vector::QuantizationMode) -> Self {
+        use crate::compression::QuantizationBits;
+        match mode {
+            crate::vector::QuantizationMode::Binary => Self::Binary,
+            crate::vector::QuantizationMode::SQ8 => Self::Sq8,
+            crate::vector::QuantizationMode::RaBitQ(params) => match params.bits_per_dim {
+                QuantizationBits::Bits1 => Self::Binary,
+                QuantizationBits::Bits2 => Self::RabitQ2,
+                QuantizationBits::Bits3 | QuantizationBits::Bits4 => Self::RabitQ4,
+                QuantizationBits::Bits5 | QuantizationBits::Bits7 | QuantizationBits::Bits8 => {
+                    Self::RabitQ8
+                }
+            },
+        }
+    }
+}
+
+impl From<crate::vector::QuantizationMode> for QuantizationCode {
+    fn from(mode: crate::vector::QuantizationMode) -> Self {
+        Self::from(&mode)
+    }
+}
+
+impl QuantizationCode {
+    /// Convert to runtime `QuantizationMode`.
+    ///
+    /// Returns `None` for `F32` (no quantization).
+    #[must_use]
+    pub fn to_runtime(self) -> Option<crate::vector::QuantizationMode> {
+        use crate::compression::RaBitQParams;
+        match self {
+            Self::F32 => None,
+            Self::Sq8 => Some(crate::vector::QuantizationMode::SQ8),
+            Self::Binary => Some(crate::vector::QuantizationMode::Binary),
+            Self::RabitQ2 => Some(crate::vector::QuantizationMode::RaBitQ(
+                RaBitQParams::bits2(),
+            )),
+            Self::RabitQ4 => Some(crate::vector::QuantizationMode::RaBitQ(
+                RaBitQParams::bits4(),
+            )),
+            Self::RabitQ8 => Some(crate::vector::QuantizationMode::RaBitQ(
+                RaBitQParams::bits8(),
+            )),
+        }
+    }
+}
+
+/// Distance metric for similarity search (user-facing API type).
+///
+/// This is the serialization/API type stored in .omen file headers.
+/// For runtime distance computation, see `crate::vector::hnsw::DistanceFunction`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum DistanceFunction {
+pub enum Metric {
+    /// L2 / Euclidean distance
     L2 = 0,
+    /// Cosine distance (1 - cosine similarity)
     Cosine = 1,
+    /// Dot product / inner product (for MIPS)
     Dot = 2,
 }
 
-impl From<u8> for DistanceFunction {
+impl From<u8> for Metric {
     fn from(v: u8) -> Self {
         match v {
             1 => Self::Cosine,
@@ -58,7 +117,27 @@ impl From<u8> for DistanceFunction {
     }
 }
 
-impl DistanceFunction {
+impl From<Metric> for crate::vector::hnsw::DistanceFunction {
+    fn from(m: Metric) -> Self {
+        match m {
+            Metric::L2 => Self::L2,
+            Metric::Cosine => Self::Cosine,
+            Metric::Dot => Self::NegativeDotProduct,
+        }
+    }
+}
+
+impl From<crate::vector::hnsw::DistanceFunction> for Metric {
+    fn from(d: crate::vector::hnsw::DistanceFunction) -> Self {
+        match d {
+            crate::vector::hnsw::DistanceFunction::L2 => Self::L2,
+            crate::vector::hnsw::DistanceFunction::Cosine => Self::Cosine,
+            crate::vector::hnsw::DistanceFunction::NegativeDotProduct => Self::Dot,
+        }
+    }
+}
+
+impl Metric {
     /// Parse from string (case-insensitive, with aliases).
     ///
     /// # Supported values
@@ -73,16 +152,6 @@ impl DistanceFunction {
             _ => Err(format!(
                 "Unknown metric: '{s}'. Valid: l2, euclidean, cosine, dot, ip"
             )),
-        }
-    }
-
-    /// Convert to HNSW's DistanceFunction.
-    #[must_use]
-    pub fn to_hnsw(&self) -> crate::vector::hnsw::DistanceFunction {
-        match self {
-            Self::L2 => crate::vector::hnsw::DistanceFunction::L2,
-            Self::Cosine => crate::vector::hnsw::DistanceFunction::Cosine,
-            Self::Dot => crate::vector::hnsw::DistanceFunction::NegativeDotProduct,
         }
     }
 
@@ -108,8 +177,8 @@ pub struct OmenHeader {
     // Database info (32 bytes)
     pub dimensions: u32,
     pub count: u64,
-    pub quantization: QuantizationMode,
-    pub distance_fn: DistanceFunction,
+    pub quantization: QuantizationCode,
+    pub distance_fn: Metric,
 
     // HNSW params (16 bytes)
     pub m: u16,
@@ -134,8 +203,8 @@ impl Default for OmenHeader {
             flags: 0,
             dimensions: 0,
             count: 0,
-            quantization: QuantizationMode::F32,
-            distance_fn: DistanceFunction::L2,
+            quantization: QuantizationCode::F32,
+            distance_fn: Metric::L2,
             m: 16,
             ef_construction: 100,
             ef_search: 100,
@@ -261,9 +330,9 @@ impl OmenHeader {
         cursor.read_exact(&mut u64_buf)?;
         let count = u64::from_le_bytes(u64_buf);
         cursor.read_exact(&mut u8_buf)?;
-        let quantization = QuantizationMode::from(u8_buf[0]);
+        let quantization = QuantizationCode::from(u8_buf[0]);
         cursor.read_exact(&mut u8_buf)?;
-        let distance_fn = DistanceFunction::from(u8_buf[0]);
+        let distance_fn = Metric::from(u8_buf[0]);
 
         // Skip reserved
         let mut reserved = [0u8; 14];

@@ -189,7 +189,7 @@ fn test_quantization_batch_insert() {
 #[test]
 fn test_new_with_params_functional() {
     // Verify new_with_params works functionally
-    let mut store = VectorStore::new_with_params(128, 16, 100, 100, DistanceFunction::L2).unwrap();
+    let mut store = VectorStore::new_with_params(128, 16, 100, 100, Metric::L2).unwrap();
 
     // Insert vectors
     for i in 0..100 {
