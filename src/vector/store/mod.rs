@@ -1563,10 +1563,14 @@ impl VectorStore {
         // Persist deletions and clean up mappings
         for (id, &node_id) in valid_ids.iter().zip(node_ids.iter()) {
             if let Some(ref mut storage) = self.storage {
-                let _ = storage.delete(id);
+                if let Err(e) = storage.delete(id) {
+                    tracing::warn!(id = %id, error = ?e, "Failed to persist deletion to storage");
+                }
             }
             if let Some(ref mut text_index) = self.text_index {
-                let _ = text_index.delete_document(id);
+                if let Err(e) = text_index.delete_document(id) {
+                    tracing::warn!(id = %id, error = ?e, "Failed to delete from text index");
+                }
             }
             self.id_to_index.remove(id);
             self.index_to_id.remove(&(node_id as usize));
