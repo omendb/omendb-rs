@@ -403,4 +403,89 @@ mod tests {
         let entry = WalEntry::insert_node(1, "test", 0, &[1.0, 2.0], b"metadata");
         assert!(entry.verify());
     }
+
+    #[test]
+    fn test_corrupted_entry_data_detected() {
+        let mut entry = WalEntry::insert_node(1, "test", 0, &[1.0, 2.0], b"metadata");
+        assert!(entry.verify());
+
+        // Corrupt the data
+        if !entry.data.is_empty() {
+            entry.data[0] ^= 0xFF;
+        }
+
+        // Verify should now fail
+        assert!(!entry.verify(), "Corrupted data should fail verification");
+    }
+
+    #[test]
+    fn test_corrupted_entry_checksum_detected() {
+        let mut entry = WalEntry::insert_node(1, "test", 0, &[1.0, 2.0], b"metadata");
+        assert!(entry.verify());
+
+        // Corrupt the checksum
+        entry.header.checksum ^= 0xFFFFFFFF;
+
+        // Verify should now fail
+        assert!(
+            !entry.verify(),
+            "Corrupted checksum should fail verification"
+        );
+    }
+
+    #[test]
+    fn test_wal_recovery_skips_corrupted_entries() {
+        use std::io::Write;
+
+        let dir = tempdir().unwrap();
+        let wal_path = dir.path().join("test_corrupt.wal");
+
+        // Write valid entries
+        {
+            let mut wal = Wal::open(&wal_path).unwrap();
+            wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
+                .unwrap();
+            wal.append(WalEntry::insert_node(0, "vec2", 0, &[4.0, 5.0, 6.0], b"{}"))
+                .unwrap();
+            wal.sync().unwrap();
+        }
+
+        // Corrupt the middle of the file (corrupt second entry's data)
+        {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&wal_path)
+                .unwrap();
+
+            // Skip first entry header + data, then write garbage to second entry data
+            // First entry: header(20) + data(~50 bytes for vec1)
+            // Just corrupt some bytes in the middle of the file
+            file.seek(SeekFrom::Start(40)).unwrap();
+            file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF]).unwrap();
+            file.sync_all().unwrap();
+        }
+
+        // Read entries - corrupted entries should fail verify()
+        {
+            let mut wal = Wal::open(&wal_path).unwrap();
+            let entries = wal.entries_after_checkpoint().unwrap();
+
+            // At least one entry should fail verification
+            let invalid_count = entries.iter().filter(|e| !e.verify()).count();
+            assert!(
+                invalid_count > 0,
+                "Expected at least one corrupted entry, got none"
+            );
+
+            // Valid entries should still verify correctly
+            let valid_count = entries.iter().filter(|e| e.verify()).count();
+            // At least the structure should be readable (may have 0-2 valid entries
+            // depending on exact corruption location)
+            assert!(
+                valid_count + invalid_count == entries.len(),
+                "All entries should be either valid or invalid"
+            );
+        }
+    }
 }

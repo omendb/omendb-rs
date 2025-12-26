@@ -54,6 +54,102 @@ fn test_hnsw_index_dimension_validation() {
 }
 
 #[test]
+fn test_hnsw_index_insert_nan_rejected() {
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+
+    // NaN should be rejected
+    let vec_nan = vec![1.0, f32::NAN, 3.0];
+    let result = index.insert(&vec_nan);
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), HNSWError::InvalidVector));
+}
+
+#[test]
+fn test_hnsw_index_insert_infinity_rejected() {
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+
+    // Positive infinity should be rejected
+    let vec_inf = vec![1.0, f32::INFINITY, 3.0];
+    let result = index.insert(&vec_inf);
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), HNSWError::InvalidVector));
+
+    // Negative infinity should be rejected
+    let vec_neg_inf = vec![1.0, f32::NEG_INFINITY, 3.0];
+    let result = index.insert(&vec_neg_inf);
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), HNSWError::InvalidVector));
+}
+
+#[test]
+fn test_hnsw_index_search_nan_rejected() {
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+
+    // Insert a valid vector first
+    index.insert(&[1.0, 2.0, 3.0]).unwrap();
+
+    // Search with NaN should be rejected
+    let query_nan = vec![1.0, f32::NAN, 3.0];
+    let result = index.search(&query_nan, 5, 100);
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), HNSWError::InvalidVector));
+}
+
+#[test]
+fn test_hnsw_index_search_infinity_rejected() {
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+
+    // Insert a valid vector first
+    index.insert(&[1.0, 2.0, 3.0]).unwrap();
+
+    // Search with infinity should be rejected
+    let query_inf = vec![1.0, f32::INFINITY, 3.0];
+    let result = index.search(&query_inf, 5, 100);
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), HNSWError::InvalidVector));
+}
+
+#[test]
+fn test_hnsw_index_search_invalid_params_ef_less_than_k() {
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+
+    // Insert vectors
+    index.insert(&[1.0, 2.0, 3.0]).unwrap();
+    index.insert(&[4.0, 5.0, 6.0]).unwrap();
+
+    // Search with ef < k should fail
+    let query = vec![1.0, 2.0, 3.0];
+    let result = index.search(&query, 10, 5); // k=10, ef=5
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        HNSWError::InvalidSearchParams { k: 10, ef: 5 }
+    ));
+}
+
+#[test]
+fn test_hnsw_index_search_invalid_params_ef_zero() {
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+
+    index.insert(&[1.0, 2.0, 3.0]).unwrap();
+
+    // Search with ef=0 should fail
+    let query = vec![1.0, 2.0, 3.0];
+    let result = index.search(&query, 1, 0); // k=1, ef=0
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        HNSWError::InvalidSearchParams { k: 1, ef: 0 }
+    ));
+}
+
+#[test]
 fn test_hnsw_index_search_empty() {
     let params = HNSWParams::default();
     let index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();

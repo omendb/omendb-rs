@@ -1733,4 +1733,42 @@ mod tests {
         assert_eq!(qv.unwrap().dimensions, 4);
         assert_eq!(qv.unwrap().bits, 4); // 4-bit quantization
     }
+
+    #[test]
+    fn test_binary_quantized_train_empty_sample_rejected() {
+        let mut storage = VectorStorage::new_binary_quantized(4, true);
+        let empty_samples: Vec<Vec<f32>> = vec![];
+        let result = storage.train_quantization(&empty_samples);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty sample"));
+    }
+
+    #[test]
+    fn test_binary_quantized_train_dimension_mismatch_rejected() {
+        let mut storage = VectorStorage::new_binary_quantized(4, true);
+        // Storage expects 4 dimensions, but sample has 2
+        let samples = vec![vec![1.0, 2.0]];
+        let result = storage.train_quantization(&samples);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("dimension mismatch"));
+    }
+
+    #[test]
+    fn test_rabitq_train_empty_sample_rejected() {
+        let params = RaBitQParams::bits4();
+        let mut storage = VectorStorage::new_rabitq_quantized(4, params);
+        let empty_samples: Vec<Vec<f32>> = vec![];
+        let result = storage.train_quantization(&empty_samples);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty sample"));
+    }
+
+    #[test]
+    fn test_sq8_train_empty_sample_rejected() {
+        let mut storage = VectorStorage::new_sq8_quantized(4);
+        let empty_samples: Vec<Vec<f32>> = vec![];
+        let result = storage.train_quantization(&empty_samples);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty sample"));
+    }
 }
