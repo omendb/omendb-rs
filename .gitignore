@@ -29,3 +29,4 @@ benchmarks/history.jsonl
 
 # Proptest regression files
 proptest-regressions/
+.hhg
