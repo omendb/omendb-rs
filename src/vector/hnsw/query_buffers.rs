@@ -180,7 +180,8 @@ thread_local! {
 
 /// Use thread-local buffers for a query
 ///
-/// Automatically clears buffers before and after use.
+/// Clears buffers before use. Buffers retain capacity across queries
+/// for amortized allocation.
 pub fn with_buffers<F, R>(f: F) -> R
 where
     F: FnOnce(&mut QueryBuffers) -> R,
@@ -188,9 +189,7 @@ where
     QUERY_BUFFERS.with(|buffers| {
         let mut buffers = buffers.borrow_mut();
         buffers.clear();
-        let result = f(&mut buffers);
-        buffers.clear(); // Clear again to release memory
-        result
+        f(&mut buffers)
     })
 }
 
