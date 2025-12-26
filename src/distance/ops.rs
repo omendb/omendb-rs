@@ -59,11 +59,26 @@ pub fn l2_squared_decomposed(a: &[f32], b: &[f32], a_norm_sq: f32, b_norm_sq: f3
 pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
 
-    // Try 16-lane (512-bit) first for AVX-512, then 8-lane (256-bit) for AVX2
-    l2_squared_simd::<16>(a, b)
-        .or_else(|| l2_squared_simd::<8>(a, b))
-        .or_else(|| l2_squared_simd::<4>(a, b))
-        .unwrap_or_else(|| l2_squared_scalar(a, b))
+    // x86_64: Try 16-lane (512-bit) for AVX-512, fall back to 8-lane (256-bit)
+    #[cfg(target_arch = "x86_64")]
+    {
+        l2_squared_simd::<16>(a, b)
+            .or_else(|| l2_squared_simd::<8>(a, b))
+            .or_else(|| l2_squared_simd::<4>(a, b))
+            .unwrap_or_else(|| l2_squared_scalar(a, b))
+    }
+
+    // ARM: 128-bit NEON, use 4-lane directly (8-lane works but 4 is native width)
+    #[cfg(target_arch = "aarch64")]
+    {
+        l2_squared_simd::<4>(a, b).unwrap_or_else(|| l2_squared_scalar(a, b))
+    }
+
+    // Other architectures: scalar fallback
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        l2_squared_scalar(a, b)
+    }
 }
 
 /// Dot product with SIMD acceleration.
@@ -79,11 +94,26 @@ pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
 
-    // Try 16-lane (512-bit) first for AVX-512, then 8-lane (256-bit) for AVX2
-    dot_simd::<16>(a, b)
-        .or_else(|| dot_simd::<8>(a, b))
-        .or_else(|| dot_simd::<4>(a, b))
-        .unwrap_or_else(|| dot_scalar(a, b))
+    // x86_64: Try 16-lane (512-bit) for AVX-512, fall back to 8-lane (256-bit)
+    #[cfg(target_arch = "x86_64")]
+    {
+        dot_simd::<16>(a, b)
+            .or_else(|| dot_simd::<8>(a, b))
+            .or_else(|| dot_simd::<4>(a, b))
+            .unwrap_or_else(|| dot_scalar(a, b))
+    }
+
+    // ARM: 128-bit NEON, use 4-lane directly
+    #[cfg(target_arch = "aarch64")]
+    {
+        dot_simd::<4>(a, b).unwrap_or_else(|| dot_scalar(a, b))
+    }
+
+    // Other architectures: scalar fallback
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        dot_scalar(a, b)
+    }
 }
 
 /// Cosine distance: `1 - cos(a, b)`.

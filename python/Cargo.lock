@@ -762,6 +762,7 @@ dependencies = [
  "rand_distr",
  "rayon",
  "roaring",
+ "rustc-hash",
  "serde",
  "serde_json",
  "smallvec",
