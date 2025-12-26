@@ -2,6 +2,18 @@
 
 All notable changes to OmenDB are documented here.
 
+## [0.0.19] - 2025-12-26
+
+### Added
+
+- CHANGELOG.md for tracking releases
+- Pre-release checklist in RELEASING.md
+
+### Developer
+
+- Fixed all clippy warnings across lib, Python, and Node bindings
+- Updated RELEASING.md with git tagging workflow
+
 ## [0.0.18] - 2025-12-25
 
 ### Changed
