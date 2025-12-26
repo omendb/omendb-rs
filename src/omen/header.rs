@@ -1,7 +1,7 @@
 //! .omen file header (4KB)
 
 use crate::omen::section::{SectionEntry, SectionType};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 
 /// Magic bytes: "OMEN"
 pub const MAGIC: [u8; 4] = *b"OMEN";
@@ -231,45 +231,58 @@ impl OmenHeader {
     #[must_use]
     pub fn to_bytes(&self) -> [u8; HEADER_SIZE] {
         let mut buf = [0u8; HEADER_SIZE];
-        let mut cursor = io::Cursor::new(&mut buf[..]);
+        let mut offset = 0;
 
         // Magic (4 bytes)
-        cursor.write_all(&MAGIC).unwrap();
+        buf[offset..offset + 4].copy_from_slice(&MAGIC);
+        offset += 4;
 
         // Version (4 bytes)
-        cursor.write_all(&self.version_major.to_le_bytes()).unwrap();
-        cursor.write_all(&self.version_minor.to_le_bytes()).unwrap();
+        buf[offset..offset + 2].copy_from_slice(&self.version_major.to_le_bytes());
+        offset += 2;
+        buf[offset..offset + 2].copy_from_slice(&self.version_minor.to_le_bytes());
+        offset += 2;
 
         // Flags (8 bytes)
-        cursor.write_all(&self.flags.to_le_bytes()).unwrap();
+        buf[offset..offset + 8].copy_from_slice(&self.flags.to_le_bytes());
+        offset += 8;
 
         // Database info (32 bytes)
-        cursor.write_all(&self.dimensions.to_le_bytes()).unwrap();
-        cursor.write_all(&self.count.to_le_bytes()).unwrap();
-        cursor.write_all(&[self.quantization as u8]).unwrap();
-        cursor.write_all(&[self.distance_fn as u8]).unwrap();
-        cursor.write_all(&[0u8; 14]).unwrap(); // reserved
+        buf[offset..offset + 4].copy_from_slice(&self.dimensions.to_le_bytes());
+        offset += 4;
+        buf[offset..offset + 8].copy_from_slice(&self.count.to_le_bytes());
+        offset += 8;
+        buf[offset] = self.quantization as u8;
+        offset += 1;
+        buf[offset] = self.distance_fn as u8;
+        offset += 1;
+        // 14 bytes reserved (already zeroed)
+        offset += 14;
 
         // HNSW params (16 bytes)
-        cursor.write_all(&self.m.to_le_bytes()).unwrap();
-        cursor
-            .write_all(&self.ef_construction.to_le_bytes())
-            .unwrap();
-        cursor.write_all(&self.ef_search.to_le_bytes()).unwrap();
-        cursor.write_all(&[self.max_level]).unwrap();
-        cursor.write_all(&self.entry_point.to_le_bytes()).unwrap();
-        cursor.write_all(&[0u8; 3]).unwrap(); // reserved
+        buf[offset..offset + 2].copy_from_slice(&self.m.to_le_bytes());
+        offset += 2;
+        buf[offset..offset + 2].copy_from_slice(&self.ef_construction.to_le_bytes());
+        offset += 2;
+        buf[offset..offset + 2].copy_from_slice(&self.ef_search.to_le_bytes());
+        offset += 2;
+        buf[offset] = self.max_level;
+        offset += 1;
+        buf[offset..offset + 4].copy_from_slice(&self.entry_point.to_le_bytes());
+        offset += 4;
+        // 3 bytes reserved (already zeroed)
+        offset += 3;
 
         // Sections (8 * 24 bytes = 192 bytes)
         for section in &self.sections {
-            cursor.write_all(&section.to_bytes()).unwrap();
+            buf[offset..offset + 24].copy_from_slice(&section.to_bytes());
+            offset += 24;
         }
 
         // Checksums (8 bytes)
-        cursor
-            .write_all(&self.header_checksum.to_le_bytes())
-            .unwrap();
-        cursor.write_all(&self.data_checksum.to_le_bytes()).unwrap();
+        buf[offset..offset + 4].copy_from_slice(&self.header_checksum.to_le_bytes());
+        offset += 4;
+        buf[offset..offset + 4].copy_from_slice(&self.data_checksum.to_le_bytes());
 
         // Calculate and write header checksum
         let checksum = crc32fast::hash(&buf[..HEADER_SIZE - 8]);
@@ -288,9 +301,13 @@ impl OmenHeader {
             ));
         }
 
-        // Verify checksum
-        let stored_checksum =
-            u32::from_le_bytes(buf[HEADER_SIZE - 8..HEADER_SIZE - 4].try_into().unwrap());
+        // Verify checksum - direct array indexing for fixed-size buffer
+        let stored_checksum = u32::from_le_bytes([
+            buf[HEADER_SIZE - 8],
+            buf[HEADER_SIZE - 7],
+            buf[HEADER_SIZE - 6],
+            buf[HEADER_SIZE - 5],
+        ]);
         let computed_checksum = crc32fast::hash(&buf[..HEADER_SIZE - 8]);
         if stored_checksum != computed_checksum {
             return Err(io::Error::new(

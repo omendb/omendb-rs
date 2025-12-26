@@ -72,11 +72,14 @@ impl WalEntryHeader {
     }
 
     pub fn from_bytes(buf: &[u8; Self::SIZE]) -> Self {
+        // Direct array indexing - infallible for fixed-size input buffer
         Self {
             entry_type: WalEntryType::from(buf[0]),
-            timestamp: u64::from_le_bytes(buf[4..12].try_into().unwrap()),
-            data_len: u32::from_le_bytes(buf[12..16].try_into().unwrap()),
-            checksum: u32::from_le_bytes(buf[16..20].try_into().unwrap()),
+            timestamp: u64::from_le_bytes([
+                buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
+            ]),
+            data_len: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
+            checksum: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
         }
     }
 }

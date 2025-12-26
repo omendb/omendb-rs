@@ -66,11 +66,16 @@ impl SectionEntry {
     /// Parse from bytes
     #[must_use]
     pub fn from_bytes(buf: &[u8; 24]) -> Self {
+        // Direct array indexing - infallible for fixed-size input buffer
         Self {
-            section_type: SectionType::from(u16::from_le_bytes(buf[0..2].try_into().unwrap())),
-            flags: u16::from_le_bytes(buf[2..4].try_into().unwrap()),
-            offset: u64::from_le_bytes(buf[8..16].try_into().unwrap()),
-            length: u64::from_le_bytes(buf[16..24].try_into().unwrap()),
+            section_type: SectionType::from(u16::from_le_bytes([buf[0], buf[1]])),
+            flags: u16::from_le_bytes([buf[2], buf[3]]),
+            offset: u64::from_le_bytes([
+                buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+            ]),
+            length: u64::from_le_bytes([
+                buf[16], buf[17], buf[18], buf[19], buf[20], buf[21], buf[22], buf[23],
+            ]),
         }
     }
 
