@@ -9,7 +9,8 @@ import pytest
 @pytest.fixture
 def temp_db_path():
     """Provide a temporary database path"""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Use ignore_cleanup_errors to handle tantivy's async cleanup
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         yield os.path.join(tmpdir, "test.db")
 
 
@@ -22,6 +23,11 @@ def db(temp_db_path):
 
     database = omendb.open(temp_db_path, dimensions=128)
     yield database
+    # Flush to commit any pending text index changes before cleanup
+    try:
+        database.flush()
+    except Exception:
+        pass
     # Explicitly drop database and force GC to release file handles before temp dir cleanup
     del database
     gc.collect()
@@ -49,6 +55,11 @@ def db_with_vectors(temp_db_path):
     assert len(database) == 5, f"Expected 5 vectors, got {len(database)}"
 
     yield database
+    # Flush to commit any pending text index changes before cleanup
+    try:
+        database.flush()
+    except Exception:
+        pass
     # Explicitly drop database and force GC to release file handles before temp dir cleanup
     del database
     gc.collect()
