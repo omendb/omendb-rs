@@ -3,36 +3,47 @@
 ## Quick Release
 
 ```bash
-# 1. Update VERSION file to new version
-echo "0.0.10" > VERSION
+# 1. Update CHANGELOG.md with release notes
+# 2. Update VERSION file to new version
+echo "0.0.19" > VERSION
 
-# 2. Sync all version locations
+# 3. Sync all version locations
 ./scripts/sync-version.sh
 
-# 3. Review and commit
+# 4. Review and commit
 git diff
-git add -A && git commit -m "chore: Bump to 0.0.10"
+git add -A && git commit -m "chore: Bump to 0.0.19"
 git push
 
-# 4. Trigger release (GitHub UI or CLI)
+# 5. Trigger release (GitHub UI or CLI)
 gh workflow run release.yml
+
+# 6. After successful release, tag the commit
+git tag v0.0.19
+git push origin v0.0.19
 ```
+
+## Pre-Release Checklist
+
+- [ ] All tests pass (`cargo test --lib`)
+- [ ] Clippy clean (`cargo clippy --lib -- -D warnings`)
+- [ ] CHANGELOG.md updated with release notes
+- [ ] Version synced across all locations
 
 ## Version Locations
 
-All 9 locations must match the VERSION file:
+All 8 locations must match the VERSION file:
 
-| # | File | What |
-|---|------|------|
-| 1 | `VERSION` | Source of truth |
-| 2 | `Cargo.toml` | Main Rust crate |
-| 3 | `omendb-core/Cargo.toml` | Core algorithms crate |
-| 4 | `python/Cargo.toml` | Python bindings |
-| 5 | `node/Cargo.toml` | Node bindings |
-| 6 | `node/package.json` | npm package version |
-| 7 | `node/package.json` | optionalDependencies (4 platform packages) |
-| 8 | `node/wrapper/package.json` | npm wrapper version + @omendb dep |
-| 9 | `README.md` | Version banner |
+| #   | File                        | What                               |
+| --- | --------------------------- | ---------------------------------- |
+| 1   | `VERSION`                   | Source of truth                    |
+| 2   | `Cargo.toml`                | Main Rust crate                    |
+| 3   | `python/Cargo.toml`         | Python bindings                    |
+| 4   | `python/omendb/__init__.py` | Python package version             |
+| 5   | `src/ffi.rs`                | FFI version constant               |
+| 6   | `node/Cargo.toml`           | Node bindings                      |
+| 7   | `node/package.json`         | npm package version + optionalDeps |
+| 8   | `node/wrapper/package.json` | npm wrapper version + @omendb dep  |
 
 ## Scripts
 
