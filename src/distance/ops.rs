@@ -12,7 +12,7 @@
 //! - 10-40% faster than naive SIMD at high dimensions
 
 use multiversion::multiversion;
-use std::simd::{num::SimdFloat, LaneCount, Simd, SupportedLaneCount};
+use std::simd::{num::SimdFloat, LaneCount, Simd, StdFloat, SupportedLaneCount};
 
 /// L2 (Euclidean) distance with SIMD acceleration.
 #[inline]
@@ -127,16 +127,16 @@ where
         let d2 = Simd::from_array(a_chunks[i + 2]) - Simd::from_array(b_chunks[i + 2]);
         let d3 = Simd::from_array(a_chunks[i + 3]) - Simd::from_array(b_chunks[i + 3]);
 
-        acc0 += d0 * d0;
-        acc1 += d1 * d1;
-        acc2 += d2 * d2;
-        acc3 += d3 * d3;
+        acc0 = d0.mul_add(d0, acc0);
+        acc1 = d1.mul_add(d1, acc1);
+        acc2 = d2.mul_add(d2, acc2);
+        acc3 = d3.mul_add(d3, acc3);
         i += 4;
     }
 
     while i < n_chunks {
         let d = Simd::from_array(a_chunks[i]) - Simd::from_array(b_chunks[i]);
-        acc0 += d * d;
+        acc0 = d.mul_add(d, acc0);
         i += 1;
     }
 
@@ -144,7 +144,7 @@ where
 
     for (&av, &bv) in a_rem.iter().zip(b_rem.iter()) {
         let d = av - bv;
-        sum += d * d;
+        sum = d.mul_add(d, sum);
     }
 
     Some(sum)
@@ -169,22 +169,36 @@ where
     let unroll_end = n_chunks - (n_chunks % 4);
     let mut i = 0;
     while i < unroll_end {
-        acc0 += Simd::from_array(a_chunks[i]) * Simd::from_array(b_chunks[i]);
-        acc1 += Simd::from_array(a_chunks[i + 1]) * Simd::from_array(b_chunks[i + 1]);
-        acc2 += Simd::from_array(a_chunks[i + 2]) * Simd::from_array(b_chunks[i + 2]);
-        acc3 += Simd::from_array(a_chunks[i + 3]) * Simd::from_array(b_chunks[i + 3]);
+        let (a0, b0) = (Simd::from_array(a_chunks[i]), Simd::from_array(b_chunks[i]));
+        let (a1, b1) = (
+            Simd::from_array(a_chunks[i + 1]),
+            Simd::from_array(b_chunks[i + 1]),
+        );
+        let (a2, b2) = (
+            Simd::from_array(a_chunks[i + 2]),
+            Simd::from_array(b_chunks[i + 2]),
+        );
+        let (a3, b3) = (
+            Simd::from_array(a_chunks[i + 3]),
+            Simd::from_array(b_chunks[i + 3]),
+        );
+        acc0 = a0.mul_add(b0, acc0);
+        acc1 = a1.mul_add(b1, acc1);
+        acc2 = a2.mul_add(b2, acc2);
+        acc3 = a3.mul_add(b3, acc3);
         i += 4;
     }
 
     while i < n_chunks {
-        acc0 += Simd::from_array(a_chunks[i]) * Simd::from_array(b_chunks[i]);
+        let (a0, b0) = (Simd::from_array(a_chunks[i]), Simd::from_array(b_chunks[i]));
+        acc0 = a0.mul_add(b0, acc0);
         i += 1;
     }
 
     let mut sum = (acc0 + acc1 + acc2 + acc3).reduce_sum();
 
     for (&av, &bv) in a_rem.iter().zip(b_rem.iter()) {
-        sum += av * bv;
+        sum = av.mul_add(bv, sum);
     }
 
     Some(sum)

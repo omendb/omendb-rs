@@ -27,6 +27,7 @@ use crate::text::{
 };
 use anyhow::Result;
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -61,8 +62,8 @@ fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> usize 
 /// Verifies that id_to_index and index_to_id are inverse mappings.
 #[cfg(debug_assertions)]
 fn debug_assert_mapping_consistency(
-    id_to_index: &HashMap<String, usize>,
-    index_to_id: &HashMap<usize, String>,
+    id_to_index: &FxHashMap<String, usize>,
+    index_to_id: &FxHashMap<usize, String>,
 ) {
     // Both maps must have same size
     debug_assert_eq!(
@@ -87,8 +88,8 @@ fn debug_assert_mapping_consistency(
 #[cfg(not(debug_assertions))]
 #[inline]
 fn debug_assert_mapping_consistency(
-    _id_to_index: &HashMap<String, usize>,
-    _index_to_id: &HashMap<usize, String>,
+    _id_to_index: &FxHashMap<String, usize>,
+    _index_to_id: &FxHashMap<usize, String>,
 ) {
     // No-op in release builds
 }
@@ -201,10 +202,10 @@ pub struct VectorStore {
     metadata: HashMap<usize, JsonValue>,
 
     /// Map from string IDs to internal indices (public for Python bindings)
-    pub id_to_index: HashMap<String, usize>,
+    pub id_to_index: FxHashMap<String, usize>,
 
     /// Reverse map from internal indices to string IDs (O(1) lookup for search results)
-    index_to_id: HashMap<usize, String>,
+    index_to_id: FxHashMap<usize, String>,
 
     /// Deleted vector IDs (tombstones for MVCC)
     deleted: HashMap<usize, bool>,
@@ -254,8 +255,8 @@ impl VectorStore {
             rescore_enabled: false,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata: HashMap::new(),
-            id_to_index: HashMap::new(),
-            index_to_id: HashMap::new(),
+            id_to_index: FxHashMap::default(),
+            index_to_id: FxHashMap::default(),
             deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: None,
@@ -283,8 +284,8 @@ impl VectorStore {
             rescore_enabled: true,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata: HashMap::new(),
-            id_to_index: HashMap::new(),
-            index_to_id: HashMap::new(),
+            id_to_index: FxHashMap::default(),
+            index_to_id: FxHashMap::default(),
             deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: None,
@@ -324,8 +325,8 @@ impl VectorStore {
             rescore_enabled: false,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata: HashMap::new(),
-            id_to_index: HashMap::new(),
-            index_to_id: HashMap::new(),
+            id_to_index: FxHashMap::default(),
+            index_to_id: FxHashMap::default(),
             deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: None,
@@ -375,7 +376,8 @@ impl VectorStore {
 
         // Load metadata and mappings (always needed)
         let metadata = storage.load_all_metadata()?;
-        let id_to_index = storage.load_all_id_mappings()?;
+        let id_to_index: FxHashMap<String, usize> =
+            storage.load_all_id_mappings()?.into_iter().collect();
         let deleted = storage.load_all_deleted()?;
 
         // Get dimensions from config
@@ -500,7 +502,7 @@ impl VectorStore {
         };
 
         // Build reverse map for O(1) index→id lookup
-        let index_to_id: HashMap<usize, String> = id_to_index
+        let index_to_id: FxHashMap<usize, String> = id_to_index
             .iter()
             .map(|(id, &idx)| (idx, id.clone()))
             .collect();
@@ -653,8 +655,8 @@ impl VectorStore {
             rescore_enabled,
             oversample_factor,
             metadata: HashMap::new(),
-            id_to_index: HashMap::new(),
-            index_to_id: HashMap::new(),
+            id_to_index: FxHashMap::default(),
+            index_to_id: FxHashMap::default(),
             deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: Some(storage),
@@ -725,8 +727,8 @@ impl VectorStore {
             rescore_enabled,
             oversample_factor,
             metadata: HashMap::new(),
-            id_to_index: HashMap::new(),
-            index_to_id: HashMap::new(),
+            id_to_index: FxHashMap::default(),
+            index_to_id: FxHashMap::default(),
             deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: None,
@@ -2375,8 +2377,10 @@ impl VectorStore {
         }
 
         // Update ID mappings: id_to_index and index_to_id
-        let mut new_id_to_index = HashMap::with_capacity(self.id_to_index.len());
-        let mut new_index_to_id = HashMap::with_capacity(self.index_to_id.len());
+        let mut new_id_to_index: FxHashMap<String, usize> =
+            FxHashMap::with_capacity_and_hasher(self.id_to_index.len(), rustc_hash::FxBuildHasher);
+        let mut new_index_to_id: FxHashMap<usize, String> =
+            FxHashMap::with_capacity_and_hasher(self.index_to_id.len(), rustc_hash::FxBuildHasher);
 
         for (string_id, &old_idx) in &self.id_to_index {
             if old_idx < old_to_new.len() {

@@ -101,7 +101,158 @@ if (!nativeBinding) {
 	throw new Error(`Failed to load native binding`);
 }
 
-const { VectorDatabase, open } = nativeBinding;
+// Convert array to Float32Array if needed
+function toFloat32Array(arr) {
+	if (arr instanceof Float32Array) {
+		return arr;
+	}
+	return new Float32Array(arr);
+}
+
+// Convert VectorItem to use Float32Array
+function convertVectorItem(item) {
+	return {
+		...item,
+		vector: toFloat32Array(item.vector),
+	};
+}
+
+// Wrap VectorDatabase to handle array conversion
+const NativeVectorDatabase = nativeBinding.VectorDatabase;
+
+class VectorDatabase {
+	constructor(nativeDb) {
+		this._native = nativeDb;
+	}
+
+	set(items) {
+		return this._native.set(items.map(convertVectorItem));
+	}
+
+	search(query, k, ef, filter, maxDistance) {
+		return this._native.search(query, k, ef, filter, maxDistance);
+	}
+
+	searchBatch(queries, k, ef) {
+		return this._native.searchBatch(queries, k, ef);
+	}
+
+	get(id) {
+		return this._native.get(id);
+	}
+
+	delete(ids) {
+		return this._native.delete(ids);
+	}
+
+	deleteWhere(filter) {
+		return this._native.deleteWhere(filter);
+	}
+
+	count(filter) {
+		return this._native.count(filter);
+	}
+
+	update(id, vector, metadata) {
+		return this._native.update(id, vector, metadata);
+	}
+
+	get length() {
+		return this._native.length;
+	}
+
+	get dimensions() {
+		return this._native.dimensions;
+	}
+
+	isEmpty() {
+		return this._native.isEmpty();
+	}
+
+	stats() {
+		return this._native.stats();
+	}
+
+	get efSearch() {
+		return this._native.efSearch;
+	}
+
+	set efSearch(value) {
+		this._native.efSearch = value;
+	}
+
+	collection(name) {
+		return new VectorDatabase(this._native.collection(name));
+	}
+
+	collections() {
+		return this._native.collections();
+	}
+
+	deleteCollection(name) {
+		return this._native.deleteCollection(name);
+	}
+
+	enableTextSearch() {
+		return this._native.enableTextSearch();
+	}
+
+	get hasTextSearch() {
+		return this._native.hasTextSearch;
+	}
+
+	setWithText(items) {
+		return this._native.setWithText(items.map(convertVectorItem));
+	}
+
+	textSearch(query, k) {
+		return this._native.textSearch(query, k);
+	}
+
+	hybridSearch(queryVector, queryText, k, filter, alpha, rrfK, subscores) {
+		return this._native.hybridSearch(
+			queryVector,
+			queryText,
+			k,
+			filter,
+			alpha,
+			rrfK,
+			subscores,
+		);
+	}
+
+	flush() {
+		return this._native.flush();
+	}
+
+	optimize() {
+		return this._native.optimize();
+	}
+
+	mergeFrom(other) {
+		return this._native.mergeFrom(other._native);
+	}
+
+	ids() {
+		return this._native.ids();
+	}
+
+	items() {
+		return this._native.items();
+	}
+
+	exists(id) {
+		return this._native.exists(id);
+	}
+
+	getMany(ids) {
+		return this._native.getMany(ids);
+	}
+}
+
+function open(path, options) {
+	return new VectorDatabase(nativeBinding.open(path, options));
+}
 
 module.exports.VectorDatabase = VectorDatabase;
 module.exports.open = open;

@@ -188,8 +188,8 @@ pub struct SearchResult {
 #[napi(object)]
 pub struct VectorItem {
     pub id: String,
-    /// Vector data as array of numbers
-    pub vector: Vec<f64>,
+    /// Vector data as Float32Array
+    pub vector: Float32Array,
     /// Optional metadata
     #[napi(ts_type = "Record<string, unknown> | undefined")]
     pub metadata: Option<JsonValue>,
@@ -204,7 +204,7 @@ pub struct VectorItem {
 #[napi(object)]
 pub struct GetResult {
     pub id: String,
-    pub vector: Vec<f64>,
+    pub vector: Float32Array,
     #[napi(ts_type = "Record<string, unknown>")]
     pub metadata: JsonValue,
 }
@@ -216,7 +216,7 @@ pub struct GetResult {
 #[napi(object)]
 pub struct VectorItemWithText {
     pub id: String,
-    pub vector: Vec<f64>,
+    pub vector: Float32Array,
     pub text: String,
     #[napi(ts_type = "Record<string, unknown> | undefined")]
     pub metadata: Option<JsonValue>,
@@ -308,8 +308,7 @@ impl VectorDatabase {
                     }
                 }
 
-                let vector_data: Vec<f32> = item.vector.into_iter().map(|x| x as f32).collect();
-                (item.id, Vector::new(vector_data), metadata)
+                (item.id, Vector::new(item.vector.to_vec()), metadata)
             })
             .collect();
 
@@ -517,7 +516,7 @@ impl VectorDatabase {
 
         inner.store.get_by_id(&id).map(|(vec, metadata)| GetResult {
             id,
-            vector: vec.data.into_iter().map(|x| x as f64).collect(),
+            vector: Float32Array::new(vec.data),
             metadata,
         })
     }
@@ -885,12 +884,11 @@ impl VectorDatabase {
         let mut results = Vec::with_capacity(items.len());
 
         for item in items {
-            let vector_data: Vec<f32> = item.vector.into_iter().map(|x| x as f32).collect();
             let metadata = item.metadata.unwrap_or(serde_json::json!({}));
 
             let index = inner
                 .store
-                .set_with_text(item.id, Vector::new(vector_data), &item.text, metadata)
+                .set_with_text(item.id, Vector::new(item.vector.to_vec()), &item.text, metadata)
                 .map_err(convert_error)?;
 
             results.push(index as u32);
@@ -1116,7 +1114,7 @@ impl VectorDatabase {
             .into_iter()
             .map(|(id, vector, metadata)| GetResult {
                 id,
-                vector: vector.into_iter().map(|x| x as f64).collect(),
+                vector: Float32Array::new(vector),
                 metadata,
             })
             .collect()
@@ -1145,7 +1143,7 @@ impl VectorDatabase {
             .map(|id| {
                 inner.store.get_by_id(id).map(|(vec, metadata)| GetResult {
                     id: id.clone(),
-                    vector: vec.data.into_iter().map(|x| x as f64).collect(),
+                    vector: Float32Array::new(vec.data),
                     metadata,
                 })
             })

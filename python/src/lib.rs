@@ -489,6 +489,8 @@ impl VectorDatabase {
 
     /// Search for k nearest neighbors (single query).
     ///
+    /// Releases the GIL during search for better concurrency with Python threads.
+    ///
     /// Args:
     ///     query: Query vector (list of floats or 1D numpy array)
     ///     k (int): Number of nearest neighbors to return
@@ -535,44 +537,52 @@ impl VectorDatabase {
             }
         }
 
+        // Extract Python objects before releasing GIL
         let query_vec = Vector::new(extract_query_vector(query)?);
         let rust_filter = filter.map(parse_filter).transpose()?;
 
-        // Fast path: read lock when cache is valid
+        // Ensure index and cache are ready before releasing GIL
         {
-            let inner = self.inner.read();
-            if inner.cache_valid && !inner.store.needs_index_rebuild() {
-                let results = inner
-                    .store
-                    .search_with_options_readonly(
-                        &query_vec,
-                        k,
-                        rust_filter.as_ref(),
-                        ef,
-                        max_distance,
-                    )
-                    .map_err(convert_error)?;
-                return results_to_py(py, &results, &inner.index_to_id_cache);
+            let needs_rebuild = {
+                let inner = self.inner.read();
+                !inner.cache_valid || inner.store.needs_index_rebuild()
+            };
+
+            if needs_rebuild {
+                let mut inner = self.inner.write();
+                inner.store.ensure_index_ready().map_err(convert_error)?;
+                if !inner.cache_valid {
+                    inner.index_to_id_cache = inner
+                        .store
+                        .id_to_index
+                        .iter()
+                        .map(|(id, &idx)| (idx, id.clone()))
+                        .collect();
+                    inner.cache_valid = true;
+                }
             }
         }
 
-        // Slow path: rebuild cache if needed
-        let mut inner = self.inner.write();
-        inner.store.ensure_index_ready().map_err(convert_error)?;
-        if !inner.cache_valid {
-            inner.index_to_id_cache = inner
-                .store
-                .id_to_index
-                .iter()
-                .map(|(id, &idx)| (idx, id.clone()))
-                .collect();
-            inner.cache_valid = true;
-        }
+        // Clone Arc for use inside allow_threads
+        let inner_arc = Arc::clone(&self.inner);
 
-        let results = inner
-            .store
-            .search_with_options_readonly(&query_vec, k, rust_filter.as_ref(), ef, max_distance)
-            .map_err(convert_error)?;
+        // Release GIL during compute-intensive search
+        #[allow(deprecated)]
+        let results = py.allow_threads(|| {
+            let inner = inner_arc.read();
+            inner.store.search_with_options_readonly(
+                &query_vec,
+                k,
+                rust_filter.as_ref(),
+                ef,
+                max_distance,
+            )
+        });
+
+        let results = results.map_err(convert_error)?;
+
+        // Convert to Python (needs GIL)
+        let inner = self.inner.read();
         results_to_py(py, &results, &inner.index_to_id_cache)
     }
 
