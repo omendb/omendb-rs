@@ -1,3 +1,7 @@
+// Allow these lints - they're structural API design choices that work correctly
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
+
 extern crate omendb as omendb_core;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
@@ -119,9 +123,7 @@ fn extract_batch_queries(ob: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f32>>> {
 fn convert_error(err: anyhow::Error) -> PyErr {
     let msg = err.to_string();
     // Map to appropriate Python exception types
-    if msg.contains("dimension") {
-        PyValueError::new_err(msg)
-    } else if msg.contains("not found") || msg.contains("does not exist") {
+    if msg.contains("dimension") || msg.contains("not found") || msg.contains("does not exist") {
         PyValueError::new_err(msg)
     } else {
         PyRuntimeError::new_err(msg)
@@ -160,9 +162,7 @@ fn build_store_options(
         options = options.oversample(oversample_val);
     }
     if let Some(metric_str) = metric {
-        options = options
-            .metric(metric_str)
-            .map_err(|e| PyValueError::new_err(e))?;
+        options = options.metric(metric_str).map_err(PyValueError::new_err)?;
     }
 
     Ok(options)
@@ -276,7 +276,7 @@ impl VectorDatabaseIterator {
                 );
                 result.insert(
                     "vector".to_string(),
-                    vec.data.clone().into_pyobject(py).unwrap().unbind().into(),
+                    vec.data.clone().into_pyobject(py).unwrap().unbind(),
                 );
                 result.insert("metadata".to_string(), json_to_pyobject(py, &meta)?);
                 return Ok(Some(result));
@@ -876,13 +876,7 @@ impl VectorDatabase {
             );
             result.insert(
                 "vector".to_string(),
-                vector
-                    .data
-                    .clone()
-                    .into_pyobject(py)
-                    .unwrap()
-                    .unbind()
-                    .into(),
+                vector.data.clone().into_pyobject(py).unwrap().unbind(),
             );
 
             let metadata_dict = json_to_pyobject(py, &metadata)?;
@@ -928,13 +922,7 @@ impl VectorDatabase {
                     );
                     result.insert(
                         "vector".to_string(),
-                        vector
-                            .data
-                            .clone()
-                            .into_pyobject(py)
-                            .unwrap()
-                            .unbind()
-                            .into(),
+                        vector.data.clone().into_pyobject(py).unwrap().unbind(),
                     );
                     result.insert("metadata".to_string(), json_to_pyobject(py, &metadata)?);
                     Ok(Some(result))
@@ -1114,7 +1102,7 @@ impl VectorDatabase {
                 );
                 result.insert(
                     "vector".to_string(),
-                    vector.into_pyobject(py).unwrap().unbind().into(),
+                    vector.into_pyobject(py).unwrap().unbind(),
                 );
                 result.insert("metadata".to_string(), json_to_pyobject(py, &metadata)?);
                 Ok(result)
@@ -1840,7 +1828,7 @@ fn open(
         // Check if enabling quantization on existing non-empty database
         if db_path.exists() && quant_mode.is_some() {
             let existing = VectorStore::open(&path).map_err(convert_error)?;
-            if existing.len() > 0 {
+            if !existing.is_empty() {
                 return Err(PyValueError::new_err(
                     "Cannot enable quantization on existing database. Create a new database with quantization.",
                 ));
@@ -1906,7 +1894,7 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
             let sub_dict = item
                 .cast::<PyDict>()
                 .map_err(|_| PyValueError::new_err("Each $and element must be a dict"))?;
-            sub_filters.push(parse_filter(&sub_dict)?);
+            sub_filters.push(parse_filter(sub_dict)?);
         }
 
         return Ok(MetadataFilter::And(sub_filters));
@@ -1923,7 +1911,7 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
             let sub_dict = item
                 .cast::<PyDict>()
                 .map_err(|_| PyValueError::new_err("Each $or element must be a dict"))?;
-            sub_filters.push(parse_filter(&sub_dict)?);
+            sub_filters.push(parse_filter(sub_dict)?);
         }
 
         return Ok(MetadataFilter::Or(sub_filters));
@@ -1996,7 +1984,7 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
     }
 }
 
-//// Parsed batch item with optional text for hybrid search
+/// Parsed batch item with optional text for hybrid search
 struct ParsedItem {
     id: String,
     vector: Vector,
@@ -2107,9 +2095,10 @@ fn pyobject_to_json(obj: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
 }
 
 /// Helper: Convert serde_json::Value to Python object
+#[allow(clippy::useless_conversion)]
 fn json_to_pyobject(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
     match value {
-        JsonValue::Null => Ok(py.None().into()),
+        JsonValue::Null => Ok(py.None()),
         JsonValue::Bool(b) => Ok((*b).into_pyobject(py).unwrap().to_owned().unbind().into()),
         JsonValue::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -2117,7 +2106,7 @@ fn json_to_pyobject(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
             } else if let Some(f) = n.as_f64() {
                 Ok(f.into_pyobject(py).unwrap().unbind().into())
             } else {
-                Ok(py.None().into())
+                Ok(py.None())
             }
         }
         JsonValue::String(s) => Ok(s.clone().into_pyobject(py).unwrap().unbind().into()),

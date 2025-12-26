@@ -2,6 +2,10 @@
 //!
 //! Fast embedded vector database with HNSW indexing.
 
+// Allow these lints - they're structural API design choices that work correctly
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::collapsible_if)]
+
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use omendb::vector::{
@@ -74,8 +78,6 @@ fn convert_error(err: anyhow::Error) -> Error {
     let msg = err.to_string();
     if msg.contains("dimension") {
         Error::new(Status::InvalidArg, msg)
-    } else if msg.contains("not found") || msg.contains("does not exist") {
-        Error::new(Status::GenericFailure, msg)
     } else {
         Error::new(Status::GenericFailure, msg)
     }
@@ -1356,7 +1358,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let db_path = std::path::Path::new(&path);
     if db_path.exists() && quant_mode.is_some() {
         let existing = VectorStore::open(&path).map_err(convert_error)?;
-        if existing.len() > 0 {
+        if !existing.is_empty() {
             return Err(Error::new(
                 Status::InvalidArg,
                 "Cannot enable quantization on existing database. Create a new database with quantization.",
