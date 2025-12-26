@@ -196,6 +196,7 @@ impl HNSWIndex {
             let candidates = &mut buffers.candidates;
             let working = &mut buffers.working;
             let unvisited = &mut buffers.unvisited;
+            let results_buf = &mut buffers.results;
 
             for &ep in entry_points {
                 let dist = self.distance_with_adc(query, ep, adc_table)?;
@@ -264,9 +265,12 @@ impl HNSWIndex {
             }
 
             // Return (id, distance) tuples sorted by distance
-            let mut results: Vec<_> = working.drain().map(|c| (c.node_id, c.distance.0)).collect();
-            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            Ok(results)
+            // Use pre-allocated buffer to avoid per-search allocation
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance);
+            let mut output = Vec::with_capacity(results_buf.len());
+            output.extend(results_buf.iter().map(|c| (c.node_id, c.distance.0)));
+            Ok(output)
         })
     }
 
