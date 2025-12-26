@@ -258,7 +258,12 @@ def save_run(
     """Save benchmark run to JSONL file."""
     results_dict = {}
     for r in results:
-        entry = {"s": r.single_qps, "b": r.batch_qps}
+        entry = {
+            "s": r.single_qps,
+            "b": r.batch_qps,
+            "s_ms": r.single_latency_ms,
+            "b_ms": r.batch_latency_ms,
+        }
         if r.recall_at_10 is not None:
             entry["r"] = r.recall_at_10
         results_dict[r.name] = entry
@@ -411,7 +416,12 @@ def main():
     # Build run record
     results_dict = {}
     for r in results:
-        entry = {"s": r.single_qps, "b": r.batch_qps}
+        entry = {
+            "s": r.single_qps,
+            "b": r.batch_qps,
+            "s_ms": r.single_latency_ms,
+            "b_ms": r.batch_latency_ms,
+        }
         if r.recall_at_10 is not None:
             entry["r"] = r.recall_at_10
         results_dict[r.name] = entry
