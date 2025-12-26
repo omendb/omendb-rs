@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Run with: cargo test --release -p omendb-core -- --ignored l2_decomposed_speed
+    #[ignore = "benchmark test, run with: cargo test --release -- --ignored l2_decomposed_speed"]
     fn test_l2_decomposed_speed() {
         use std::time::Instant;
 
@@ -390,7 +390,7 @@ mod tests {
             }
         }
         let direct_time = start.elapsed();
-        eprintln!("Direct L2²: {:?} (checksum={:.2})", direct_time, sum);
+        eprintln!("Direct L2²: {direct_time:?} (checksum={sum:.2})");
 
         // Benchmark decomposed L2²
         let start = Instant::now();
@@ -402,13 +402,10 @@ mod tests {
             }
         }
         let decomposed_time = start.elapsed();
-        eprintln!(
-            "Decomposed L2²: {:?} (checksum={:.2})",
-            decomposed_time, sum
-        );
+        eprintln!("Decomposed L2²: {decomposed_time:?} (checksum={sum:.2})");
 
         let speedup = direct_time.as_secs_f64() / decomposed_time.as_secs_f64();
-        eprintln!("\nSpeedup: {:.2}x", speedup);
+        eprintln!("\nSpeedup: {speedup:.2}x");
 
         // Print analysis
         if speedup > 1.05 {

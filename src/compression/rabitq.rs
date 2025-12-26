@@ -447,8 +447,11 @@ impl ADCTable {
     /// # Returns
     ///
     /// An `ADCTable` that can compute distances via `distance()` method
+    ///
+    /// # Note
+    /// Prefer `ADCTable::new_trained()` with `TrainedParams` for correct ADC distances.
+    /// This method uses per-vector scale which gives lower accuracy.
     #[must_use]
-    #[deprecated(note = "Use ADCTable::new_trained() with TrainedParams for correct ADC distances")]
     pub fn new(query: &[f32], scale: f32, params: &RaBitQParams) -> Self {
         let bits = params.bits_per_dim.to_u8();
         let num_codes = params.bits_per_dim.levels();
@@ -1364,12 +1367,12 @@ impl RaBitQ {
             .map(|trained| ADCTable::new_trained(query, trained, &self.params))
     }
 
-    /// Build ADC table with explicit scale (DEPRECATED)
+    /// Build ADC table with explicit scale
     ///
-    /// Use `build_adc_table()` on a trained quantizer instead.
+    /// # Note
+    /// Prefer `build_adc_table()` on a trained quantizer for correct ADC distances.
+    /// This method uses per-vector scale which gives lower accuracy.
     #[must_use]
-    #[deprecated(note = "Use build_adc_table() on a trained quantizer")]
-    #[allow(deprecated)]
     pub fn build_adc_table_with_scale(&self, query: &[f32], scale: f32) -> ADCTable {
         ADCTable::new(query, scale, &self.params)
     }

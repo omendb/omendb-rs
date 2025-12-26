@@ -314,8 +314,8 @@ mod tests {
 
     #[test]
     fn test_hamming_distance_all_different() {
-        let a = vec![0b00000000];
-        let b = vec![0b11111111];
+        let a = vec![0b0000_0000];
+        let b = vec![0b1111_1111];
 
         let dist = hamming_distance(&a, &b);
         assert_eq!(dist, 8); // All 8 bits different
@@ -323,8 +323,8 @@ mod tests {
 
     #[test]
     fn test_hamming_distance_partial() {
-        let a = vec![0b10101010];
-        let b = vec![0b01010101];
+        let a = vec![0b1010_1010];
+        let b = vec![0b0101_0101];
 
         let dist = hamming_distance(&a, &b);
         assert_eq!(dist, 8); // All bits flipped
@@ -333,8 +333,8 @@ mod tests {
     #[test]
     fn test_hamming_distance_large() {
         // 768 dimensions = 96 bytes
-        let a: Vec<u8> = vec![0b10101010; 96];
-        let b: Vec<u8> = vec![0b01010101; 96];
+        let a: Vec<u8> = vec![0b1010_1010; 96];
+        let b: Vec<u8> = vec![0b0101_0101; 96];
 
         let dist = hamming_distance(&a, &b);
         assert_eq!(dist, 96 * 8); // All 8 bits different in all 96 bytes

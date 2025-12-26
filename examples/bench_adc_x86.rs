@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run --release --example bench_adc_x86
 
-use omendb_core::compression::scalar::ScalarParams;
+use omendb::compression::scalar::ScalarParams;
 use std::time::Instant;
 
 fn benchmark_dimension(dimensions: usize, num_vectors: usize, num_queries: usize) -> (f64, f64) {
@@ -24,7 +24,8 @@ fn benchmark_dimension(dimensions: usize, num_vectors: usize, num_queries: usize
             .map(|v| v.as_slice())
             .collect::<Vec<_>>()
             .as_slice(),
-    );
+    )
+    .unwrap();
 
     // Generate and quantize target vectors
     let vectors: Vec<Vec<f32>> = (0..num_vectors)

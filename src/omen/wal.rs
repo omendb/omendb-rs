@@ -424,7 +424,7 @@ mod tests {
         assert!(entry.verify());
 
         // Corrupt the checksum
-        entry.header.checksum ^= 0xFFFFFFFF;
+        entry.header.checksum ^= 0xFFFF_FFFF;
 
         // Verify should now fail
         assert!(

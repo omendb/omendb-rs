@@ -487,7 +487,7 @@ mod small_graph_tests {
         println!("Graph structure:");
         for node_id in 0..5u32 {
             let neighbors = index.neighbors.get_neighbors(node_id, 0);
-            println!("  Node {node_id} -> {:?}", neighbors);
+            println!("  Node {node_id} -> {neighbors:?}");
         }
 
         let (reachable, orphans) = index.validate_connectivity();
@@ -510,7 +510,7 @@ mod small_graph_tests {
         println!("Graph structure:");
         for node_id in 0..5u32 {
             let neighbors = index.neighbors.get_neighbors(node_id, 0);
-            println!("  Node {node_id} -> {:?}", neighbors);
+            println!("  Node {node_id} -> {neighbors:?}");
         }
 
         println!("Connectivity check:");
@@ -529,7 +529,7 @@ mod small_graph_tests {
 
         // Check that node 0 is NOT in results
         let has_node_0 = results.iter().any(|r| r.id == 0);
-        println!("\nNode 0 in results: {}", has_node_0);
+        println!("\nNode 0 in results: {has_node_0}");
 
         // The test passes if we get SOME results (even if node 0 is there, filtering
         // happens at VectorStore level)

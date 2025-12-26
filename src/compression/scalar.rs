@@ -552,7 +552,7 @@ mod tests {
             vec![0.1, 0.6, 0.9],
             vec![0.2, 0.4, 0.8],
         ];
-        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
 
         let params = ScalarParams::train(&refs).unwrap();
 
@@ -573,7 +573,7 @@ mod tests {
             vec![1.0, 1.0, 1.0, 1.0],
             vec![0.5, 0.5, 0.5, 0.5],
         ];
-        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
 
         let params = ScalarParams::train(&refs).unwrap();
         let quantized = params.quantize(&vectors[1]);
@@ -614,7 +614,7 @@ mod tests {
             vec![1.0, 1.0, 1.0, 1.0],
             vec![0.5, 0.5, 0.5, 0.5],
         ];
-        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
 
         let params = ScalarParams::train(&refs).unwrap();
 
