@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "omendb"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "omendb-python"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "numpy",
