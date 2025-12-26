@@ -1972,19 +1972,24 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
+        // Rescore candidates with exact L2 distance
+        // Avoid cloning: compute distance inline using references where possible
         let mut rescored: Vec<(usize, f32)> = candidates
             .iter()
             .filter_map(|&(id, _quantized_dist)| {
-                let vec_data = if let Some(ref storage) = self.storage {
-                    storage.get_vector(id).ok().flatten()
+                // Storage path: get_vector returns owned Vec
+                // Memory path: compute distance directly from reference (no clone)
+                if let Some(ref storage) = self.storage {
+                    storage
+                        .get_vector(id)
+                        .ok()
+                        .flatten()
+                        .map(|data| (id, l2_distance(&query.data, &data)))
                 } else {
-                    self.vectors.get(id).map(|v| v.data.clone())
-                };
-
-                vec_data.map(|data| {
-                    let dist = l2_distance(&query.data, &data);
-                    (id, dist)
-                })
+                    self.vectors
+                        .get(id)
+                        .map(|v| (id, l2_distance(&query.data, &v.data)))
+                }
             })
             .collect();
 
