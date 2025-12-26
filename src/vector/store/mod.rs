@@ -2361,8 +2361,9 @@ impl VectorStore {
             new_vectors.resize_with(old_vectors.len(), || Vector::new(Vec::new()));
 
             for (old_idx, &new_idx) in old_to_new.iter().enumerate() {
-                if old_idx < old_vectors.len() {
-                    new_vectors[new_idx as usize] = old_vectors[old_idx].clone();
+                let new_idx = new_idx as usize;
+                if old_idx < old_vectors.len() && new_idx < new_vectors.len() {
+                    new_vectors[new_idx] = old_vectors[old_idx].clone();
                 }
             }
             self.vectors = new_vectors;
