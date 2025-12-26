@@ -1,5 +1,6 @@
 """Pytest configuration and shared fixtures for OmenDB tests"""
 
+import contextlib
 import os
 import tempfile
 
@@ -24,10 +25,8 @@ def db(temp_db_path):
     database = omendb.open(temp_db_path, dimensions=128)
     yield database
     # Flush to commit any pending text index changes before cleanup
-    try:
+    with contextlib.suppress(Exception):
         database.flush()
-    except Exception:
-        pass
     # Explicitly drop database and force GC to release file handles before temp dir cleanup
     del database
     gc.collect()
@@ -56,10 +55,8 @@ def db_with_vectors(temp_db_path):
 
     yield database
     # Flush to commit any pending text index changes before cleanup
-    try:
+    with contextlib.suppress(Exception):
         database.flush()
-    except Exception:
-        pass
     # Explicitly drop database and force GC to release file handles before temp dir cleanup
     del database
     gc.collect()
