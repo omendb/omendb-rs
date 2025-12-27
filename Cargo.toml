@@ -106,3 +106,7 @@ harness = false
 [[bench]]
 name = "hybrid_bench"
 harness = false
+
+[[bench]]
+name = "fastscan_bench"
+harness = false
