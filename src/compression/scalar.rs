@@ -188,11 +188,12 @@ impl ScalarParams {
     /// Compute dot product between query (f32) and dequantized vector (u8)
     ///
     /// Used for L2 decomposition: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
+    #[inline(always)]
     #[must_use]
     #[allow(clippy::needless_return)]
     pub fn asymmetric_dot_product(&self, query: &[f32], quantized: &[u8]) -> f32 {
-        assert_eq!(query.len(), self.dimensions);
-        assert_eq!(quantized.len(), self.dimensions);
+        debug_assert_eq!(query.len(), self.dimensions);
+        debug_assert_eq!(quantized.len(), self.dimensions);
 
         #[cfg(target_arch = "x86_64")]
         {
@@ -262,7 +263,10 @@ impl ScalarParams {
         result
     }
 
+    /// NEON SIMD implementation for aarch64
+    /// Note: NEON is baseline on aarch64, no #[target_feature] needed
     #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
     unsafe fn asymmetric_dot_product_neon(&self, query: &[f32], quantized: &[u8]) -> f32 {
         let mut sum0 = vdupq_n_f32(0.0);
         let mut sum1 = vdupq_n_f32(0.0);
@@ -310,6 +314,8 @@ impl ScalarParams {
     /// Compute L2 distance using decomposition: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
     ///
     /// This is faster than direct asymmetric distance when the candidate norm is precomputed.
+    /// Uses the multiversion dot product for better cdylib compatibility.
+    #[inline(always)]
     #[must_use]
     pub fn asymmetric_l2_decomposed(
         &self,
@@ -318,18 +324,21 @@ impl ScalarParams {
         quantized: &[u8],
         candidate_norm: f32,
     ) -> f32 {
-        let dot = self.asymmetric_dot_product(query, quantized);
+        // Use multiversion dot product for cdylib compatibility
+        let dot =
+            crate::distance::sq8_asymmetric_dot_product(query, quantized, &self.scales, &self.mins);
         query_norm + candidate_norm - 2.0 * dot
     }
 
     /// Compute approximate L2 distance between query (f32) and quantized vector (u8)
     ///
     /// Uses asymmetric distance: query stays f32, candidate is dequantized on-the-fly.
+    #[inline(always)]
     #[must_use]
-    #[allow(clippy::needless_return)] // returns needed for cfg-conditional control flow
+    #[allow(clippy::needless_return)]
     pub fn asymmetric_l2_squared(&self, query: &[f32], quantized: &[u8]) -> f32 {
-        assert_eq!(query.len(), self.dimensions);
-        assert_eq!(quantized.len(), self.dimensions);
+        debug_assert_eq!(query.len(), self.dimensions);
+        debug_assert_eq!(quantized.len(), self.dimensions);
 
         #[cfg(target_arch = "x86_64")]
         {
@@ -411,7 +420,10 @@ impl ScalarParams {
         result
     }
 
+    /// NEON SIMD implementation for aarch64
+    /// Note: NEON is baseline on aarch64, no #[target_feature] needed
     #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
     unsafe fn asymmetric_l2_squared_neon(&self, query: &[f32], quantized: &[u8]) -> f32 {
         let mut sum0 = vdupq_n_f32(0.0);
         let mut sum1 = vdupq_n_f32(0.0);
@@ -472,10 +484,11 @@ impl ScalarParams {
         let sum = vaddq_f32(sum0, sum1);
         let mut result = vaddvq_f32(sum);
 
-        // Handle remaining elements
+        // Handle remaining elements (unchecked for performance)
         for j in i..self.dimensions {
-            let dequant = f32::from(quantized[j]) * self.scales[j] + self.mins[j];
-            let diff = query[j] - dequant;
+            let dequant = f32::from(*quantized.get_unchecked(j)) * self.scales.get_unchecked(j)
+                + self.mins.get_unchecked(j);
+            let diff = *query.get_unchecked(j) - dequant;
             result += diff * diff;
         }
 

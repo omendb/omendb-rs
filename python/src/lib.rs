@@ -18,6 +18,7 @@ use pyo3::Py;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Parse quantization parameter and return QuantizationMode if enabled
 ///
@@ -584,6 +585,110 @@ impl VectorDatabase {
         // Convert to Python (needs GIL)
         let inner = self.inner.read();
         results_to_py(py, &results, &inner.index_to_id_cache)
+    }
+
+    /// Debug timing search - returns timing breakdown in microseconds
+    #[pyo3(name = "_debug_search_timing", signature = (query, k, n_iterations=100))]
+    fn debug_search_timing(
+        &self,
+        py: Python<'_>,
+        query: &Bound<'_, PyAny>,
+        k: usize,
+        n_iterations: usize,
+    ) -> PyResult<HashMap<String, f64>> {
+        let query_vec = Vector::new(extract_query_vector(query)?);
+
+        // Ensure index ready (not timed - one-time cost)
+        {
+            let mut inner = self.inner.write();
+            inner.store.ensure_index_ready().map_err(convert_error)?;
+            if !inner.cache_valid {
+                inner.index_to_id_cache = inner
+                    .store
+                    .id_to_index
+                    .iter()
+                    .map(|(id, &idx)| (idx, id.clone()))
+                    .collect();
+                inner.cache_valid = true;
+            }
+        }
+
+        let inner_arc = Arc::clone(&self.inner);
+
+        // Time just the Rust search (no result conversion)
+        let t0 = Instant::now();
+        #[allow(deprecated)]
+        for _ in 0..n_iterations {
+            py.allow_threads(|| {
+                let inner = inner_arc.read();
+                let _ = inner
+                    .store
+                    .search_with_options_readonly(&query_vec, k, None, None, None);
+            });
+        }
+        let t_search_total = t0.elapsed().as_micros() as f64;
+
+        // Time knn_search_ef directly (bypass VectorStore wrapper)
+        let t0 = Instant::now();
+        #[allow(deprecated)]
+        for _ in 0..n_iterations {
+            py.allow_threads(|| {
+                let inner = inner_arc.read();
+                if let Some(ref idx) = inner.store.hnsw_index {
+                    let _ = idx.search_ef(&query_vec.data, k, 100);
+                }
+            });
+        }
+        let t_hnsw_total = t0.elapsed().as_micros() as f64;
+
+        // Time HNSW search in tight Rust loop (no GIL release per iteration)
+        let t0 = Instant::now();
+        #[allow(deprecated)]
+        py.allow_threads(|| {
+            let inner = inner_arc.read();
+            if let Some(ref idx) = inner.store.hnsw_index {
+                for _ in 0..n_iterations {
+                    let _ = idx.search_ef(&query_vec.data, k, 100);
+                }
+            }
+        });
+        let t_hnsw_tight_total = t0.elapsed().as_micros() as f64;
+
+        // Check storage properties
+        let is_sq8 = {
+            let inner = inner_arc.read();
+            if let Some(ref idx) = inner.store.hnsw_index {
+                idx.is_sq8()
+            } else {
+                false
+            }
+        };
+
+        let mut result = HashMap::new();
+        result.insert(
+            "search_per_call_us".to_string(),
+            t_search_total / n_iterations as f64,
+        );
+        result.insert(
+            "hnsw_per_call_us".to_string(),
+            t_hnsw_total / n_iterations as f64,
+        );
+        result.insert(
+            "hnsw_tight_per_call_us".to_string(),
+            t_hnsw_tight_total / n_iterations as f64,
+        );
+        result.insert(
+            "overhead_per_call_us".to_string(),
+            (t_search_total - t_hnsw_total) / n_iterations as f64,
+        );
+        result.insert(
+            "gil_overhead_per_call_us".to_string(),
+            (t_hnsw_total - t_hnsw_tight_total) / n_iterations as f64,
+        );
+        result.insert("n_iterations".to_string(), n_iterations as f64);
+        result.insert("is_sq8".to_string(), if is_sq8 { 1.0 } else { 0.0 });
+
+        Ok(result)
     }
 
     /// Batch search multiple queries with parallel execution.
@@ -2139,9 +2244,357 @@ fn json_to_pyobject(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
     }
 }
 
+/// Benchmark raw SQ8 distance computation (for debugging cdylib performance)
+#[pyfunction]
+#[pyo3(name = "_bench_sq8_distance")]
+fn bench_sq8_distance(
+    py: Python<'_>,
+    dim: usize,
+    n_vectors: usize,
+    n_iterations: usize,
+) -> PyResult<f64> {
+    use omendb_core::ScalarParams;
+    use rand::Rng;
+    use std::hint::black_box;
+
+    let elapsed_ns = py.allow_threads(|| {
+        let mut rng = ::rand::thread_rng();
+
+        // Create random vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+            .collect();
+
+        // Train ScalarParams
+        let refs: Vec<&[f32]> = vectors.iter().map(|v: &Vec<f32>| v.as_slice()).collect();
+        let params = ScalarParams::train(&refs).unwrap();
+
+        // Quantize vectors
+        let quantized: Vec<Vec<u8>> = vectors.iter().map(|v| params.quantize(v)).collect();
+
+        // Query
+        let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
+
+        // Warmup
+        for q in &quantized {
+            black_box(params.asymmetric_l2_squared(&query, q));
+        }
+
+        // Benchmark - use black_box to prevent dead code elimination
+        let start = Instant::now();
+        let mut total = 0.0f32;
+        for _ in 0..n_iterations {
+            for q in &quantized {
+                total += black_box(params.asymmetric_l2_squared(&query, q));
+            }
+        }
+        let elapsed_ns = start.elapsed().as_nanos() as f64 / (n_iterations * n_vectors) as f64;
+
+        // Ensure total is used
+        black_box(total);
+        elapsed_ns
+    });
+    Ok(elapsed_ns)
+}
+
+/// Benchmark SQ8 distance via VectorStorage (to test enum matching overhead)
+#[pyfunction]
+#[pyo3(name = "_bench_sq8_via_storage")]
+fn bench_sq8_via_storage(
+    py: Python<'_>,
+    dim: usize,
+    n_vectors: usize,
+    n_iterations: usize,
+) -> PyResult<f64> {
+    use omendb_core::vector::hnsw::VectorStorage;
+    use rand::Rng;
+    use std::hint::black_box;
+
+    let elapsed_ns = py.allow_threads(|| {
+        let mut rng = ::rand::thread_rng();
+
+        // Create VectorStorage with SQ8
+        let mut storage = VectorStorage::new_sq8_quantized(dim);
+
+        // Insert vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+            .collect();
+
+        for v in &vectors {
+            storage.insert(v.clone()).unwrap();
+        }
+
+        // Query
+        let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
+
+        // Warmup
+        for id in 0..n_vectors.min(100) {
+            black_box(storage.distance_asymmetric_l2(&query, id as u32));
+        }
+
+        // Benchmark - use black_box to prevent dead code elimination
+        let start = Instant::now();
+        let mut total = 0.0f32;
+        for _ in 0..n_iterations {
+            for id in 0..n_vectors {
+                if let Some(d) = storage.distance_asymmetric_l2(&query, id as u32) {
+                    total += black_box(d);
+                }
+            }
+        }
+        let elapsed_ns = start.elapsed().as_nanos() as f64 / (n_iterations * n_vectors) as f64;
+
+        // Ensure total is used
+        black_box(total);
+        elapsed_ns
+    });
+    Ok(elapsed_ns)
+}
+
+/// Benchmark SQ8 L2 decomposed distance (the actual path used in search)
+#[pyfunction]
+#[pyo3(name = "_bench_sq8_decomposed")]
+fn bench_sq8_decomposed(
+    py: Python<'_>,
+    dim: usize,
+    n_vectors: usize,
+    n_iterations: usize,
+) -> PyResult<f64> {
+    use omendb_core::distance::norm_squared;
+    use omendb_core::vector::hnsw::VectorStorage;
+    use rand::Rng;
+    use std::hint::black_box;
+
+    let elapsed_ns = py.allow_threads(|| {
+        let mut rng = ::rand::thread_rng();
+
+        // Create VectorStorage with SQ8
+        let mut storage = VectorStorage::new_sq8_quantized(dim);
+
+        // Insert vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+            .collect();
+
+        for v in &vectors {
+            storage.insert(v.clone()).unwrap();
+        }
+
+        // Query
+        let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
+        let query_norm = norm_squared(&query);
+
+        // Warmup
+        for id in 0..n_vectors.min(100) {
+            black_box(storage.distance_l2_decomposed(&query, query_norm, id as u32));
+        }
+
+        // Benchmark L2 decomposed path
+        let start = Instant::now();
+        let mut total = 0.0f32;
+        for _ in 0..n_iterations {
+            for id in 0..n_vectors {
+                if let Some(d) = storage.distance_l2_decomposed(&query, query_norm, id as u32) {
+                    total += black_box(d);
+                }
+            }
+        }
+        let elapsed_ns = start.elapsed().as_nanos() as f64 / (n_iterations * n_vectors) as f64;
+
+        // Ensure total is used
+        black_box(total);
+        elapsed_ns
+    });
+    Ok(elapsed_ns)
+}
+
+/// Benchmark SQ8 distance through a closure (simulates HNSW search pattern)
+#[pyfunction]
+#[pyo3(name = "_bench_sq8_via_closure")]
+fn bench_sq8_via_closure(
+    py: Python<'_>,
+    dim: usize,
+    n_vectors: usize,
+    n_iterations: usize,
+) -> PyResult<f64> {
+    use omendb_core::distance::norm_squared;
+    use omendb_core::vector::hnsw::VectorStorage;
+    use rand::Rng;
+    use std::hint::black_box;
+
+    let elapsed_ns = py.allow_threads(|| {
+        let mut rng = ::rand::thread_rng();
+
+        // Create SQ8 storage
+        let mut storage = VectorStorage::new_sq8_quantized(dim);
+
+        // Insert vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+            .collect();
+
+        for v in vectors {
+            storage.insert(v).unwrap();
+        }
+
+        // Query
+        let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
+        let query_norm = norm_squared(&query);
+
+        // Warmup
+        for id in 0..n_vectors.min(100) {
+            black_box(storage.distance_l2_decomposed(&query, query_norm, id as u32));
+        }
+
+        // Benchmark - call through closure like HNSW search does
+        let storage_ref = &storage;
+        let query_ref = &query;
+        let distance_fn = |id: u32| -> Option<f32> {
+            storage_ref.distance_l2_decomposed(query_ref, query_norm, id)
+        };
+
+        let start = Instant::now();
+        let mut total = 0.0f32;
+        for _ in 0..n_iterations {
+            for id in 0..n_vectors {
+                if let Some(d) = distance_fn(id as u32) {
+                    total += black_box(d);
+                }
+            }
+        }
+        let elapsed_ns = start.elapsed().as_nanos() as f64 / (n_iterations * n_vectors) as f64;
+
+        black_box(total);
+        elapsed_ns
+    });
+    Ok(elapsed_ns)
+}
+
+/// Benchmark SQ8 via SQ8Accessor (the actual path used in search_layer_mono)
+#[pyfunction]
+#[pyo3(name = "_bench_sq8_via_accessor")]
+fn bench_sq8_via_accessor(
+    py: Python<'_>,
+    dim: usize,
+    n_vectors: usize,
+    n_iterations: usize,
+) -> PyResult<f64> {
+    use omendb_core::distance::norm_squared;
+    use omendb_core::vector::hnsw::VectorStorage;
+    use rand::Rng;
+    use std::hint::black_box;
+
+    let elapsed_ns = py.allow_threads(|| {
+        let mut rng = ::rand::thread_rng();
+
+        // Create SQ8 storage
+        let mut storage = VectorStorage::new_sq8_quantized(dim);
+
+        // Insert vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+            .collect();
+
+        for v in vectors {
+            storage.insert(v).unwrap();
+        }
+
+        // Query
+        let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
+        let query_norm = norm_squared(&query);
+
+        // Get SQ8Accessor (this is what search_layer_mono does)
+        let accessor = storage.sq8_accessor().expect("should have sq8 accessor");
+
+        // Warmup
+        for id in 0..n_vectors.min(100) {
+            black_box(accessor.distance_l2_decomposed(&query, query_norm, id as u32));
+        }
+
+        // Benchmark using accessor (like search does)
+        let start = Instant::now();
+        let mut total = 0.0f32;
+        for _ in 0..n_iterations {
+            for id in 0..n_vectors {
+                let d = accessor.distance_l2_decomposed(&query, query_norm, id as u32);
+                total += black_box(d);
+            }
+        }
+        let elapsed_ns = start.elapsed().as_nanos() as f64 / (n_iterations * n_vectors) as f64;
+
+        black_box(total);
+        elapsed_ns
+    });
+    Ok(elapsed_ns)
+}
+
+/// Benchmark FP32 L2 decomposed distance for comparison
+#[pyfunction]
+#[pyo3(name = "_bench_fp32_decomposed")]
+fn bench_fp32_decomposed(
+    py: Python<'_>,
+    dim: usize,
+    n_vectors: usize,
+    n_iterations: usize,
+) -> PyResult<f64> {
+    use omendb_core::distance::norm_squared;
+    use omendb_core::vector::hnsw::VectorStorage;
+    use rand::Rng;
+    use std::hint::black_box;
+
+    let elapsed_ns = py.allow_threads(|| {
+        let mut rng = ::rand::thread_rng();
+
+        // Create VectorStorage with FP32
+        let mut storage = VectorStorage::new_full_precision(dim);
+
+        // Insert vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+            .collect();
+
+        for v in &vectors {
+            storage.insert(v.clone()).unwrap();
+        }
+
+        // Query
+        let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
+        let query_norm = norm_squared(&query);
+
+        // Warmup
+        for id in 0..n_vectors.min(100) {
+            black_box(storage.distance_l2_decomposed(&query, query_norm, id as u32));
+        }
+
+        // Benchmark L2 decomposed path
+        let start = Instant::now();
+        let mut total = 0.0f32;
+        for _ in 0..n_iterations {
+            for id in 0..n_vectors {
+                if let Some(d) = storage.distance_l2_decomposed(&query, query_norm, id as u32) {
+                    total += black_box(d);
+                }
+            }
+        }
+        let elapsed_ns = start.elapsed().as_nanos() as f64 / (n_iterations * n_vectors) as f64;
+
+        // Ensure total is used
+        black_box(total);
+        elapsed_ns
+    });
+    Ok(elapsed_ns)
+}
+
 #[pymodule]
 fn omendb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open, m)?)?;
+    m.add_function(wrap_pyfunction!(bench_sq8_distance, m)?)?;
+    m.add_function(wrap_pyfunction!(bench_sq8_via_storage, m)?)?;
+    m.add_function(wrap_pyfunction!(bench_sq8_decomposed, m)?)?;
+    m.add_function(wrap_pyfunction!(bench_sq8_via_closure, m)?)?;
+    m.add_function(wrap_pyfunction!(bench_sq8_via_accessor, m)?)?;
+    m.add_function(wrap_pyfunction!(bench_fp32_decomposed, m)?)?;
     m.add_class::<VectorDatabase>()?;
     m.add_class::<VectorDatabaseIdIterator>()?;
     Ok(())

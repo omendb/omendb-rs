@@ -239,6 +239,161 @@ where
 }
 
 // ============================================================================
+// SQ8 Asymmetric Dot Product (query f32, quantized u8)
+// ============================================================================
+
+/// SQ8 asymmetric dot product: query (f32) · dequantized(quantized)
+///
+/// Dequantization: value = quantized[i] * scales[i] + mins[i]
+///
+/// Uses direct NEON intrinsics on aarch64 (baseline, no runtime dispatch needed).
+#[inline(always)]
+#[must_use]
+pub fn sq8_asymmetric_dot_product(
+    query: &[f32],
+    quantized: &[u8],
+    scales: &[f32],
+    mins: &[f32],
+) -> f32 {
+    debug_assert_eq!(query.len(), quantized.len());
+    debug_assert_eq!(query.len(), scales.len());
+    debug_assert_eq!(query.len(), mins.len());
+
+    // Direct NEON intrinsics - NEON is baseline on aarch64, no multiversion needed
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::{
+            vaddq_f32, vaddvq_f32, vcvtq_f32_u32, vdupq_n_f32, vfmaq_f32, vget_high_u16,
+            vget_low_u16, vld1_u8, vld1q_f32, vmovl_u16, vmovl_u8,
+        };
+
+        let len = query.len();
+        let mut sum0 = unsafe { vdupq_n_f32(0.0) };
+        let mut sum1 = unsafe { vdupq_n_f32(0.0) };
+        let mut i = 0;
+
+        while i + 8 <= len {
+            unsafe {
+                // Load 8 u8 values and convert to f32 via SIMD widening
+                let u8x8 = vld1_u8(quantized.as_ptr().add(i));
+                let u16x8 = vmovl_u8(u8x8);
+                let u32x4_lo = vmovl_u16(vget_low_u16(u16x8));
+                let u32x4_hi = vmovl_u16(vget_high_u16(u16x8));
+                let f32x4_lo = vcvtq_f32_u32(u32x4_lo);
+                let f32x4_hi = vcvtq_f32_u32(u32x4_hi);
+
+                // Load scales and mins
+                let scales_lo = vld1q_f32(scales.as_ptr().add(i));
+                let scales_hi = vld1q_f32(scales.as_ptr().add(i + 4));
+                let mins_lo = vld1q_f32(mins.as_ptr().add(i));
+                let mins_hi = vld1q_f32(mins.as_ptr().add(i + 4));
+
+                // Dequantize: q * scale + min
+                let dequant_lo = vfmaq_f32(mins_lo, f32x4_lo, scales_lo);
+                let dequant_hi = vfmaq_f32(mins_hi, f32x4_hi, scales_hi);
+
+                // Load query and accumulate dot product
+                let query_lo = vld1q_f32(query.as_ptr().add(i));
+                let query_hi = vld1q_f32(query.as_ptr().add(i + 4));
+                sum0 = vfmaq_f32(sum0, query_lo, dequant_lo);
+                sum1 = vfmaq_f32(sum1, query_hi, dequant_hi);
+            }
+            i += 8;
+        }
+
+        let mut result = unsafe { vaddvq_f32(vaddq_f32(sum0, sum1)) };
+
+        // Handle remaining elements
+        while i < len {
+            let dequant = f32::from(quantized[i]) * scales[i] + mins[i];
+            result += query[i] * dequant;
+            i += 1;
+        }
+
+        result
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        sq8_dot_product_scalar(query, quantized, scales, mins)
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        sq8_dot_product_scalar(query, quantized, scales, mins)
+    }
+}
+
+/// NEON-accelerated SQ8 dot product
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn sq8_dot_product_neon(
+    query: &[f32],
+    quantized: &[u8],
+    scales: &[f32],
+    mins: &[f32],
+) -> f32 {
+    use std::arch::aarch64::{
+        vaddq_f32, vaddvq_f32, vcvtq_f32_u32, vdupq_n_f32, vfmaq_f32, vget_high_u16, vget_low_u16,
+        vld1_u8, vld1q_f32, vmovl_u16, vmovl_u8,
+    };
+
+    let len = query.len();
+    let mut sum0 = vdupq_n_f32(0.0);
+    let mut sum1 = vdupq_n_f32(0.0);
+    let mut i = 0;
+
+    while i + 8 <= len {
+        // Load 8 u8 values and convert to f32 via SIMD widening
+        let u8x8 = vld1_u8(quantized.as_ptr().add(i));
+        let u16x8 = vmovl_u8(u8x8);
+        let u32x4_lo = vmovl_u16(vget_low_u16(u16x8));
+        let u32x4_hi = vmovl_u16(vget_high_u16(u16x8));
+        let f32x4_lo = vcvtq_f32_u32(u32x4_lo);
+        let f32x4_hi = vcvtq_f32_u32(u32x4_hi);
+
+        // Load scales and mins
+        let scales_lo = vld1q_f32(scales.as_ptr().add(i));
+        let scales_hi = vld1q_f32(scales.as_ptr().add(i + 4));
+        let mins_lo = vld1q_f32(mins.as_ptr().add(i));
+        let mins_hi = vld1q_f32(mins.as_ptr().add(i + 4));
+
+        // Dequantize: q * scale + min
+        let dequant_lo = vfmaq_f32(mins_lo, f32x4_lo, scales_lo);
+        let dequant_hi = vfmaq_f32(mins_hi, f32x4_hi, scales_hi);
+
+        // Load query and accumulate dot product
+        let query_lo = vld1q_f32(query.as_ptr().add(i));
+        let query_hi = vld1q_f32(query.as_ptr().add(i + 4));
+        sum0 = vfmaq_f32(sum0, query_lo, dequant_lo);
+        sum1 = vfmaq_f32(sum1, query_hi, dequant_hi);
+
+        i += 8;
+    }
+
+    let mut result = vaddvq_f32(vaddq_f32(sum0, sum1));
+
+    // Handle remaining elements
+    while i < len {
+        let dequant = f32::from(quantized[i]) * scales[i] + mins[i];
+        result += query[i] * dequant;
+        i += 1;
+    }
+
+    result
+}
+
+#[inline]
+fn sq8_dot_product_scalar(query: &[f32], quantized: &[u8], scales: &[f32], mins: &[f32]) -> f32 {
+    let mut sum = 0.0f32;
+    for i in 0..query.len() {
+        let dequant = f32::from(quantized[i]) * scales[i] + mins[i];
+        sum += query[i] * dequant;
+    }
+    sum
+}
+
+// ============================================================================
 // Scalar Fallbacks
 // ============================================================================
 

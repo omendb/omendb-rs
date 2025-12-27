@@ -33,3 +33,22 @@ parking_lot = "0.12"
 
 # NumPy support for zero-copy array access
 numpy = "0.27"
+
+# Random number generation for benchmarks
+rand = "0.8"
+
+[profile.release]
+debug = true
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+
+# Apply settings to all dependencies including path dependencies
+[profile.release.package."*"]
+codegen-units = 1
+opt-level = 3
+
+# Ensure the main omendb crate gets full optimizations
+[profile.release.package.omendb]
+codegen-units = 1
+opt-level = 3

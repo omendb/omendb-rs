@@ -783,6 +783,7 @@ dependencies = [
  "omendb",
  "parking_lot",
  "pyo3",
+ "rand",
  "rayon",
  "serde_json",
 ]

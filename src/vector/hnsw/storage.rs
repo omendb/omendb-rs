@@ -18,6 +18,39 @@ use crate::compression::{
 };
 use crate::distance::dot_product;
 
+/// Fast accessor for SQ8 distance calculations (no enum match per-call)
+///
+/// Extract this once before a hot loop to avoid repeated enum matching.
+pub struct SQ8Accessor<'a> {
+    quantized: &'a [u8],
+    norms: &'a [f32],
+    scales: &'a [f32],
+    mins: &'a [f32],
+    count: usize,
+    dimensions: usize,
+}
+
+impl<'a> SQ8Accessor<'a> {
+    /// Compute L2 decomposed distance to a vector
+    #[inline(always)]
+    pub fn distance_l2_decomposed(&self, query: &[f32], query_norm: f32, id: u32) -> f32 {
+        let idx = id as usize;
+        debug_assert!(idx < self.count);
+        let start = idx * self.dimensions;
+        let end = start + self.dimensions;
+        let vec_norm = self.norms[idx];
+
+        let quantized_slice = &self.quantized[start..end];
+        let dot = crate::distance::sq8_asymmetric_dot_product(
+            query,
+            quantized_slice,
+            self.scales,
+            self.mins,
+        );
+        query_norm + vec_norm - 2.0 * dot
+    }
+}
+
 /// Empty neighbor list constant (avoid allocation for empty results)
 static EMPTY_NEIGHBORS: &[u32] = &[];
 
@@ -1325,7 +1358,7 @@ impl VectorStorage {
     /// # Performance (Apple Silicon M3 Max, 768D)
     /// - SQ8: Similar speed to full precision (1.07x)
     /// - RaBitQ: ~0.5x speed (ADC + interleaving overhead)
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub fn distance_asymmetric_l2(&self, query: &[f32], id: u32) -> Option<f32> {
         match self {
@@ -1402,7 +1435,10 @@ impl VectorStorage {
     ///
     /// Returns true for:
     /// - FullPrecision storage (always has pre-computed norms)
-    /// - ScalarQuantized storage when trained (has pre-computed dequantized norms)
+    /// - ScalarQuantized storage when trained (uses multiversion dot_product)
+    ///
+    /// The decomposition path uses `dot_product` with `#[multiversion]` which
+    /// provides better cross-compilation compatibility than raw NEON intrinsics.
     #[inline]
     #[must_use]
     pub fn supports_l2_decomposition(&self) -> bool {
@@ -1467,13 +1503,47 @@ impl VectorStorage {
                 let vec_norm = norms[idx];
 
                 // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
-                // Uses SIMD-accelerated asymmetric dot product
-                Some(params.asymmetric_l2_decomposed(
+                // Inline SQ8 dot product for better cdylib optimization
+                let quantized_slice = &quantized[start..end];
+                let dot = crate::distance::sq8_asymmetric_dot_product(
                     query,
-                    query_norm,
-                    &quantized[start..end],
-                    vec_norm,
-                ))
+                    quantized_slice,
+                    &params.scales,
+                    &params.mins,
+                );
+                Some(query_norm + vec_norm - 2.0 * dot)
+            }
+            _ => None,
+        }
+    }
+
+    /// Get an SQ8 accessor for fast distance calculations.
+    ///
+    /// Returns None if storage is not SQ8 or not trained.
+    /// The accessor provides fast distance calculation without enum matching overhead.
+    #[inline]
+    pub fn sq8_accessor(&self) -> Option<SQ8Accessor<'_>> {
+        match self {
+            Self::ScalarQuantized {
+                params,
+                quantized,
+                norms,
+                count,
+                dimensions,
+                trained,
+                ..
+            } => {
+                if !*trained {
+                    return None;
+                }
+                Some(SQ8Accessor {
+                    quantized,
+                    norms,
+                    scales: &params.scales,
+                    mins: &params.mins,
+                    count: *count,
+                    dimensions: *dimensions,
+                })
             }
             _ => None,
         }

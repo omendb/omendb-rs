@@ -739,6 +739,7 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<u32>> {
         use super::super::query_buffers;
+        use super::super::storage::SQ8Accessor;
 
         // L2 decomposition optimization: pre-compute query norm once
         // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ (~7% faster for L2)
@@ -750,6 +751,13 @@ impl HNSWIndex {
             0.0 // unused
         };
 
+        // Cache reference to storage to avoid repeated field access
+        let vectors = &self.vectors;
+        let neighbors = &self.neighbors;
+
+        // For SQ8, extract accessor once to avoid enum match per-distance
+        let sq8_accessor: Option<SQ8Accessor<'_>> = vectors.sq8_accessor();
+
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
             let candidates = &mut buffers.candidates;
@@ -759,8 +767,11 @@ impl HNSWIndex {
 
             // Initialize with entry points
             for &ep in entry_points {
-                let dist = if use_l2_decomposition {
-                    self.distance_l2_decomposed(query, query_norm, ep)
+                let dist = if let Some(ref accessor) = sq8_accessor {
+                    accessor.distance_l2_decomposed(query, query_norm, ep)
+                } else if use_l2_decomposition {
+                    vectors
+                        .distance_l2_decomposed(query, query_norm, ep)
                         .ok_or(HNSWError::VectorNotFound(ep))?
                 } else {
                     self.distance_cmp_mono::<D>(query, ep)?
@@ -783,14 +794,13 @@ impl HNSWIndex {
 
                 // Collect unvisited neighbors into pre-allocated buffer (no allocation!)
                 unvisited.clear();
-                self.neighbors
-                    .with_neighbors(current.node_id, level, |neighbors| {
-                        for &id in neighbors {
-                            if !visited.contains(id) {
-                                unvisited.push(id);
-                            }
+                neighbors.with_neighbors(current.node_id, level, |neighbor_list| {
+                    for &id in neighbor_list {
+                        if !visited.contains(id) {
+                            unvisited.push(id);
                         }
-                    });
+                    }
+                });
 
                 // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
                 // enabled on x86/ARM servers where it provides 8-50% gains
@@ -804,8 +814,8 @@ impl HNSWIndex {
                 // Prefetch both vectors AND neighbor lists for upcoming nodes
                 if PREFETCH_ENABLED {
                     for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                        self.vectors.prefetch(id);
-                        self.neighbors.prefetch(id, level); // Graph-aware prefetch
+                        vectors.prefetch(id);
+                        neighbors.prefetch(id, level); // Graph-aware prefetch
                     }
                 }
 
@@ -813,16 +823,19 @@ impl HNSWIndex {
                     // Stride prefetch: vectors and neighbor lists
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
                         let prefetch_id = unvisited_slice[i + PREFETCH_DISTANCE];
-                        self.vectors.prefetch(prefetch_id);
-                        self.neighbors.prefetch(prefetch_id, level); // Graph-aware prefetch
+                        vectors.prefetch(prefetch_id);
+                        neighbors.prefetch(prefetch_id, level); // Graph-aware prefetch
                     }
 
                     visited.insert(neighbor_id);
 
                     // Use L2 decomposition when available (~7% faster for L2)
-                    // Otherwise use monomorphized distance (static dispatch)
-                    let dist = if use_l2_decomposition {
-                        self.distance_l2_decomposed(query, query_norm, neighbor_id)
+                    // For SQ8: use cached accessor to avoid enum match per-distance
+                    let dist = if let Some(ref accessor) = sq8_accessor {
+                        accessor.distance_l2_decomposed(query, query_norm, neighbor_id)
+                    } else if use_l2_decomposition {
+                        vectors
+                            .distance_l2_decomposed(query, query_norm, neighbor_id)
                             .ok_or(HNSWError::VectorNotFound(neighbor_id))?
                     } else {
                         self.distance_cmp_mono::<D>(query, neighbor_id)?
