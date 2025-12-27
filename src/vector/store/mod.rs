@@ -2229,7 +2229,7 @@ impl VectorStore {
             || self
                 .hnsw_index
                 .as_ref()
-                .is_some_and(HNSWIndex::is_asymmetric)
+                .is_some_and(|idx| idx.is_asymmetric() || idx.is_sq8())
     }
 
     /// Brute-force search with metadata (fallback for orphaned nodes)

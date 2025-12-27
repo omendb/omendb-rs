@@ -982,13 +982,20 @@ impl VectorStorage {
         }
     }
 
-    /// Check if this storage uses asymmetric search (`RaBitQ` or `SQ8`)
+    /// Check if this storage uses asymmetric search (RaBitQ only)
+    ///
+    /// SQ8 is NOT included here because:
+    /// - SQ8 doesn't use ADC tables (build_adc_table returns None)
+    /// - The asymmetric search path has overhead from ADC/FastScan setup
+    /// - SQ8 gets better performance using the regular search_layer_mono path
+    ///   which directly calls distance_asymmetric_l2 via distance_cmp_mono
+    ///
+    /// Performance (10K vectors, 768D, Python bindings):
+    /// - With SQ8 in asymmetric path: 860us per query
+    /// - With SQ8 in regular path: ~290us per query (matches Rust)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
-        matches!(
-            self,
-            Self::RaBitQQuantized { .. } | Self::ScalarQuantized { .. }
-        )
+        matches!(self, Self::RaBitQQuantized { .. })
     }
 
     /// Check if this storage uses SQ8 quantization

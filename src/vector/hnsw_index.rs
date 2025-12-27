@@ -968,7 +968,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(index.is_asymmetric());
+        // SQ8 is NOT in the asymmetric path - it uses regular search_layer_mono
+        // for better FFI performance (see storage.rs::is_asymmetric comment)
+        assert!(!index.is_asymmetric());
         assert!(index.is_sq8());
     }
 
@@ -1004,7 +1006,9 @@ mod tests {
             .build_with_training(&training_data)
             .unwrap();
 
-        assert!(index.is_asymmetric());
+        // SQ8 is quantized but NOT asymmetric (uses regular search path)
+        assert!(!index.is_asymmetric());
+        assert!(index.is_sq8());
         assert_eq!(index.dimensions(), 64);
     }
 
