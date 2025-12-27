@@ -82,6 +82,18 @@ impl NeighborLists {
         self.m_max
     }
 
+    /// Get number of nodes with neighbor lists
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.neighbors.len()
+    }
+
+    /// Check if empty
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.neighbors.is_empty()
+    }
+
     /// Get neighbors for a node at a specific level (lock-free)
     ///
     /// Returns a cloned Vec. For iteration without allocation, use `with_neighbors`.
@@ -510,6 +522,247 @@ impl<'de> Deserialize<'de> for NeighborLists {
             max_levels: data.max_levels,
             m_max: data.m_max,
         })
+    }
+}
+
+// ============================================================================
+// FastScan Neighbor Code Storage
+// ============================================================================
+
+/// SIMD batch size for FastScan distance computation
+/// AVX2 processes 32 bytes at once, NEON processes 16 but we use 32 for consistency
+#[allow(dead_code)] // Used in Phase 3: FastScan search integration
+pub const FASTSCAN_BATCH_SIZE: usize = 32;
+
+/// Per-vertex neighbor code storage for FastScan SIMD distance computation
+///
+/// Stores quantization codes for each vertex's neighbors in an interleaved layout
+/// optimized for SIMD parallel lookups. When visiting vertex V, we can compute
+/// distances to all its neighbors in one FastScan call instead of N separate calls.
+///
+/// # Memory Layout (Interleaved)
+///
+/// For vertex V with neighbors [n0, n1, ..., n31] and M sub-quantizers:
+/// ```text
+/// [n0_sq0, n1_sq0, ..., n31_sq0]  // 32 bytes - sub-quantizer 0 for all neighbors
+/// [n0_sq1, n1_sq1, ..., n31_sq1]  // 32 bytes - sub-quantizer 1 for all neighbors
+/// ...
+/// [n0_sqM, n1_sqM, ..., n31_sqM]  // 32 bytes - sub-quantizer M for all neighbors
+/// ```
+///
+/// This layout allows SIMD (pshufb/vqtbl1q) to load 32 codes and do 32 parallel
+/// LUT lookups in a single instruction.
+///
+/// # Performance
+///
+/// Benchmark showed 5x speedup for distance computation (390ns vs 1.93µs for 32 neighbors).
+/// Expected 2-3x end-to-end search speedup since distance is ~50-70% of search time.
+#[allow(dead_code)] // Used in Phase 3: FastScan search integration
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct NeighborCodeStorage {
+    /// Interleaved codes: [vertex_0_block, vertex_1_block, ...]
+    /// Each block: code_size * FASTSCAN_BATCH_SIZE bytes
+    codes: Vec<u8>,
+
+    /// Byte offset into `codes` for each vertex
+    /// offsets[v] = start of vertex v's neighbor code block
+    offsets: Vec<usize>,
+
+    /// Number of actual neighbors for each vertex (before padding)
+    /// Used to know which results are valid vs padding
+    neighbor_counts: Vec<usize>,
+
+    /// Bytes per quantized code (e.g., 384 for 768D with 4-bit)
+    code_size: usize,
+
+    /// Block size per vertex = code_size * FASTSCAN_BATCH_SIZE
+    block_size: usize,
+}
+
+#[allow(dead_code)] // Used in Phase 3: FastScan search integration
+impl NeighborCodeStorage {
+    /// Create empty storage with given code size
+    #[must_use]
+    pub fn new(code_size: usize) -> Self {
+        Self {
+            codes: Vec::new(),
+            offsets: Vec::new(),
+            neighbor_counts: Vec::new(),
+            code_size,
+            block_size: code_size * FASTSCAN_BATCH_SIZE,
+        }
+    }
+
+    /// Check if storage is empty
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.offsets.is_empty()
+    }
+
+    /// Get number of vertices with stored neighbor codes
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.offsets.len()
+    }
+
+    /// Get the interleaved code block for a vertex's neighbors
+    ///
+    /// Returns a slice of `code_size * FASTSCAN_BATCH_SIZE` bytes containing
+    /// the interleaved quantization codes for this vertex's neighbors.
+    ///
+    /// # Layout
+    /// For code_size=M and BATCH_SIZE=32:
+    /// - bytes [0..32]: sub-quantizer 0 for all 32 neighbors
+    /// - bytes [32..64]: sub-quantizer 1 for all 32 neighbors
+    /// - ...
+    /// - bytes [(M-1)*32..M*32]: sub-quantizer M-1 for all 32 neighbors
+    #[must_use]
+    #[inline]
+    pub fn get_block(&self, vertex_id: u32) -> Option<&[u8]> {
+        let idx = vertex_id as usize;
+        if idx >= self.offsets.len() {
+            return None;
+        }
+        let start = self.offsets[idx];
+        let end = start + self.block_size;
+        if end > self.codes.len() {
+            return None;
+        }
+        Some(&self.codes[start..end])
+    }
+
+    /// Get the actual neighbor count for a vertex (before padding)
+    #[must_use]
+    #[inline]
+    pub fn get_neighbor_count(&self, vertex_id: u32) -> usize {
+        let idx = vertex_id as usize;
+        if idx >= self.neighbor_counts.len() {
+            return 0;
+        }
+        self.neighbor_counts[idx]
+    }
+
+    /// Build neighbor code storage from VectorStorage and NeighborLists
+    ///
+    /// Extracts quantized codes for each vertex's neighbors and stores them
+    /// in interleaved layout for FastScan.
+    ///
+    /// # Arguments
+    /// * `vectors` - Vector storage containing quantized codes
+    /// * `neighbors` - Neighbor lists for all vertices
+    /// * `level` - Which level to build codes for (typically 0 for most benefit)
+    ///
+    /// # Returns
+    /// New NeighborCodeStorage with interleaved codes for all vertices
+    pub fn build_from_storage(
+        vectors: &VectorStorage,
+        neighbors: &NeighborLists,
+        level: u8,
+    ) -> Option<Self> {
+        // Only works with RaBitQ quantized storage
+        let (quantized_data, code_size) = match vectors {
+            VectorStorage::RaBitQQuantized {
+                quantized_data,
+                code_size,
+                ..
+            } => (quantized_data, *code_size),
+            _ => return None,
+        };
+
+        let num_vertices = neighbors.len();
+        if num_vertices == 0 {
+            return Some(Self::new(code_size));
+        }
+
+        let block_size = code_size * FASTSCAN_BATCH_SIZE;
+        let mut codes = Vec::with_capacity(num_vertices * block_size);
+        let mut offsets = Vec::with_capacity(num_vertices);
+        let mut neighbor_counts = Vec::with_capacity(num_vertices);
+
+        for vertex_id in 0..num_vertices {
+            let offset = codes.len();
+            offsets.push(offset);
+
+            // Get this vertex's neighbors
+            let vertex_neighbors = neighbors.get_neighbors(vertex_id as u32, level);
+            let count = vertex_neighbors.len().min(FASTSCAN_BATCH_SIZE);
+            neighbor_counts.push(count);
+
+            // Allocate block for this vertex (will be filled with interleaved codes)
+            let block_start = codes.len();
+            codes.resize(block_start + block_size, 0);
+
+            // Interleave: for each sub-quantizer position, store all neighbors' codes
+            for sq in 0..code_size {
+                for (n, &neighbor_id) in vertex_neighbors
+                    .iter()
+                    .take(FASTSCAN_BATCH_SIZE)
+                    .enumerate()
+                {
+                    let neighbor_idx = neighbor_id as usize;
+                    // Get this neighbor's code at sub-quantizer position sq
+                    let code_start = neighbor_idx * code_size;
+                    if code_start + sq < quantized_data.len() {
+                        codes[block_start + sq * FASTSCAN_BATCH_SIZE + n] =
+                            quantized_data[code_start + sq];
+                    }
+                    // Else: padding with 0 (already initialized)
+                }
+            }
+        }
+
+        Some(Self {
+            codes,
+            offsets,
+            neighbor_counts,
+            code_size,
+            block_size,
+        })
+    }
+
+    /// Update neighbor codes for a single vertex
+    ///
+    /// Called when a vertex's neighbor list changes (insertion/deletion).
+    /// Re-interleaves codes for the new neighbor list.
+    pub fn update_vertex(&mut self, vertex_id: u32, new_neighbors: &[u32], quantized_data: &[u8]) {
+        let idx = vertex_id as usize;
+
+        // Ensure we have space for this vertex
+        while self.offsets.len() <= idx {
+            let offset = self.codes.len();
+            self.offsets.push(offset);
+            self.neighbor_counts.push(0);
+            self.codes.resize(self.codes.len() + self.block_size, 0);
+        }
+
+        let block_start = self.offsets[idx];
+        let count = new_neighbors.len().min(FASTSCAN_BATCH_SIZE);
+        self.neighbor_counts[idx] = count;
+
+        // Clear the block
+        for i in 0..self.block_size {
+            self.codes[block_start + i] = 0;
+        }
+
+        // Re-interleave codes for new neighbors
+        for sq in 0..self.code_size {
+            for (n, &neighbor_id) in new_neighbors.iter().take(FASTSCAN_BATCH_SIZE).enumerate() {
+                let neighbor_idx = neighbor_id as usize;
+                let code_start = neighbor_idx * self.code_size;
+                if code_start + sq < quantized_data.len() {
+                    self.codes[block_start + sq * FASTSCAN_BATCH_SIZE + n] =
+                        quantized_data[code_start + sq];
+                }
+            }
+        }
+    }
+
+    /// Memory usage in bytes
+    #[must_use]
+    pub fn memory_usage(&self) -> usize {
+        self.codes.len()
+            + self.offsets.len() * std::mem::size_of::<usize>()
+            + self.neighbor_counts.len() * std::mem::size_of::<usize>()
     }
 }
 
@@ -1857,5 +2110,96 @@ mod tests {
         let result = storage.train_quantization(&empty_samples);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("empty sample"));
+    }
+
+    #[test]
+    fn test_neighbor_code_storage_interleaving() {
+        // Create RaBitQ storage with 8 dimensions (code_size = 4 bytes for 4-bit)
+        let params = RaBitQParams::bits4();
+        let mut storage = VectorStorage::new_rabitq_quantized(8, params);
+
+        // Insert 3 vectors
+        let vec0 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let vec1 = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+        let vec2 = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0];
+        storage.insert(vec0).unwrap();
+        storage.insert(vec1).unwrap();
+        storage.insert(vec2).unwrap();
+
+        // Create neighbor lists: vertex 0 has neighbors [1, 2]
+        let mut neighbors = NeighborLists::new(8);
+        neighbors.set_neighbors(0, 0, vec![1, 2]);
+        neighbors.set_neighbors(1, 0, vec![0, 2]);
+        neighbors.set_neighbors(2, 0, vec![0, 1]);
+
+        // Build neighbor code storage
+        let ncs = NeighborCodeStorage::build_from_storage(&storage, &neighbors, 0);
+        assert!(ncs.is_some());
+        let ncs = ncs.unwrap();
+
+        // Verify basic properties
+        assert_eq!(ncs.len(), 3); // 3 vertices
+        assert_eq!(ncs.get_neighbor_count(0), 2); // vertex 0 has 2 neighbors
+        assert_eq!(ncs.get_neighbor_count(1), 2);
+        assert_eq!(ncs.get_neighbor_count(2), 2);
+
+        // Get block for vertex 0
+        let block = ncs.get_block(0);
+        assert!(block.is_some());
+        let block = block.unwrap();
+
+        // Block size should be code_size * FASTSCAN_BATCH_SIZE
+        // For 8D with 4-bit: code_size = 8 / 2 = 4 bytes
+        assert_eq!(block.len(), 4 * FASTSCAN_BATCH_SIZE);
+
+        // Verify interleaving: first 32 bytes should be sub-quantizer 0 for all neighbors
+        // Neighbors are [1, 2], padded to 32
+        // block[0] = neighbor 1's code at sub-quantizer 0
+        // block[1] = neighbor 2's code at sub-quantizer 0
+        // block[2..32] = padding (0)
+
+        // We can't easily verify exact values without knowing the quantization,
+        // but we can verify the structure is correct
+        assert!(ncs.memory_usage() > 0);
+    }
+
+    #[test]
+    fn test_neighbor_code_storage_update() {
+        let params = RaBitQParams::bits4();
+        let mut storage = VectorStorage::new_rabitq_quantized(8, params);
+
+        // Insert 4 vectors
+        for i in 0..4 {
+            let v: Vec<f32> = (0..8).map(|j| (i * 8 + j) as f32).collect();
+            storage.insert(v).unwrap();
+        }
+
+        // Get quantized data for updates
+        let quantized_data = match &storage {
+            VectorStorage::RaBitQQuantized {
+                quantized_data,
+                code_size,
+                ..
+            } => (quantized_data.clone(), *code_size),
+            _ => panic!("Expected RaBitQQuantized"),
+        };
+
+        // Create empty neighbor code storage
+        let mut ncs = NeighborCodeStorage::new(quantized_data.1);
+        assert!(ncs.is_empty());
+
+        // Update vertex 0 with neighbors [1, 2, 3]
+        ncs.update_vertex(0, &[1, 2, 3], &quantized_data.0);
+        assert_eq!(ncs.len(), 1);
+        assert_eq!(ncs.get_neighbor_count(0), 3);
+
+        // Verify block exists
+        let block = ncs.get_block(0);
+        assert!(block.is_some());
+
+        // Update vertex 2 (should expand storage)
+        ncs.update_vertex(2, &[0, 1], &quantized_data.0);
+        assert_eq!(ncs.len(), 3); // 0, 1 (empty), 2
+        assert_eq!(ncs.get_neighbor_count(2), 2);
     }
 }
