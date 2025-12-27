@@ -90,16 +90,17 @@ impl FastScanLUT {
             }
         }
 
+        // Calculate safe max per nibble to prevent u16 overflow
+        // Max accumulation = num_sq * 2 * max_per_nibble <= 65535
+        // Formula: max_per_nibble = floor(65535 / (num_sq * 2))
+        // Examples: 128D->127, 512D->127, 768D->85, 1536D->42
+        let safe_max_per_nibble = (65535.0 / (num_sq * 2) as f32).floor().min(127.0);
+
         // Each sub-quantizer contributes to the sum, so scale per-sq contributions
-        // to fit in u8 (0-255) such that the total sum fits in u16
+        // to fit in u8 such that the total sum fits in u16
         let range = global_max - global_min;
         let scale_factor = if range > 1e-7 {
-            // Max contribution per sq is 255+255=510 for lo+hi
-            // With num_sq sub-quantizers, max sum = num_sq * 510
-            // This fits in u16 (65535) for up to 128 sub-quantizers
-            // For 768D (384 sq), we need to scale down more aggressively
-            let max_per_sq = 127.0; // Use 127 max per dimension to leave headroom
-            max_per_sq / (range / 2.0) // Divide range by 2 since lo+hi both contribute
+            safe_max_per_nibble / (range / 2.0) // Divide range by 2 since lo+hi both contribute
         } else {
             1.0
         };
@@ -121,7 +122,7 @@ impl FastScanLUT {
                 // Subtract per-dimension share of offset, then scale
                 *entry = ((dist - offset / 2.0) * scale_factor)
                     .round()
-                    .clamp(0.0, 127.0) as u8;
+                    .clamp(0.0, safe_max_per_nibble) as u8;
             }
 
             // Hi nibble LUT (odd dimension)
@@ -130,7 +131,7 @@ impl FastScanLUT {
                 let dist = adc.get(dim_hi, code);
                 *entry = ((dist - offset / 2.0) * scale_factor)
                     .round()
-                    .clamp(0.0, 127.0) as u8;
+                    .clamp(0.0, safe_max_per_nibble) as u8;
             }
 
             luts_lo.push(lut_lo);
