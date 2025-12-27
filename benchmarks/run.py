@@ -11,6 +11,8 @@ Usage:
     python benchmarks/run.py --history              # Show history
     python benchmarks/run.py --compare              # Compare last 2 runs
     python benchmarks/run.py --notes "text"         # Add notes to run
+    python benchmarks/run.py -q sq8                 # Test SQ8 quantization
+    python benchmarks/run.py --all-modes            # Test fp32, SQ8, RaBitQ
 
 Save to cloud/ for canonical history:
     python benchmarks/run.py --output ../../cloud/benchmarks/history.jsonl
@@ -47,6 +49,7 @@ class BenchmarkConfig:
     ef: Optional[int] = None
     m: int = 16
     ef_construction: int = 200
+    quantization: Optional[str] = None  # None, "sq8", or "rabitq"
 
 
 @dataclass
@@ -172,7 +175,11 @@ def run_benchmark(
         ground_truth = [brute_force_knn(q, vectors, config.k) for q in queries]
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        db = omendb.open(f"{tmpdir}/bench", dimensions=config.dimensions)
+        db = omendb.open(
+            f"{tmpdir}/bench",
+            dimensions=config.dimensions,
+            quantization=config.quantization,
+        )
 
         # Insert vectors
         items = [{"id": f"d{i}", "vector": v.tolist()} for i, v in enumerate(vectors)]
@@ -218,8 +225,15 @@ def run_benchmark(
         batch_qps = config.n_queries / batch_time
         batch_latency_ms = (batch_time / config.n_queries) * 1000
 
+    # Build name with quantization mode
+    quant_suffix = ""
+    if config.quantization == "sq8":
+        quant_suffix = "_sq8"
+    elif config.quantization == "rabitq":
+        quant_suffix = "_rabitq"
+
     return BenchmarkResult(
-        name=f"{config.dimensions}D",
+        name=f"{config.dimensions}D{quant_suffix}",
         config=asdict(config),
         single_qps=round(single_qps),
         batch_qps=round(batch_qps),
@@ -230,17 +244,37 @@ def run_benchmark(
     )
 
 
-def run_all_benchmarks(quick: bool = False) -> list[BenchmarkResult]:
-    """Run the standard benchmark suite with recall measurement."""
-    configs = [
-        BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=128, k=10),
-        BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=768, k=10),
-        BenchmarkConfig(n_vectors=10_000, n_queries=100, dimensions=1536, k=10),
+def run_all_benchmarks(
+    quick: bool = False, quantization: Optional[str] = None, all_modes: bool = False
+) -> list[BenchmarkResult]:
+    """Run the standard benchmark suite with recall measurement.
+
+    Args:
+        quick: Use fewer iterations for faster runs
+        quantization: Specific mode to test (None, "sq8", "rabitq")
+        all_modes: Run all quantization modes (fp32, SQ8, RaBitQ)
+    """
+    base_configs = [
+        {"n_vectors": 10_000, "n_queries": 100, "dimensions": 128, "k": 10},
+        {"n_vectors": 10_000, "n_queries": 100, "dimensions": 768, "k": 10},
+        {"n_vectors": 10_000, "n_queries": 100, "dimensions": 1536, "k": 10},
     ]
+
+    # Determine which quantization modes to run
+    if all_modes:
+        quant_modes = [None, "sq8", "rabitq"]
+    else:
+        quant_modes = [quantization]
+
+    configs = []
+    for base in base_configs:
+        for qmode in quant_modes:
+            configs.append(BenchmarkConfig(**base, quantization=qmode))
 
     results = []
     for config in configs:
-        print(f"Running {config.dimensions}D...", file=sys.stderr)
+        mode_str = config.quantization or "fp32"
+        print(f"Running {config.dimensions}D ({mode_str})...", file=sys.stderr)
         result = run_benchmark(config, quick=quick, measure_recall=True)
         print(
             f"  {result.single_qps:,} / {result.batch_qps:,} QPS, "
@@ -394,6 +428,17 @@ def main():
     parser.add_argument("--history", action="store_true", help="Show history")
     parser.add_argument("--compare", action="store_true", help="Compare last 2 runs")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument(
+        "--quantization",
+        "-q",
+        choices=["sq8", "rabitq"],
+        help="Test specific quantization mode",
+    )
+    parser.add_argument(
+        "--all-modes",
+        action="store_true",
+        help="Run all quantization modes (fp32, SQ8, RaBitQ)",
+    )
     args = parser.parse_args()
 
     history_file = Path(args.output) if args.output else DEFAULT_HISTORY_FILE
@@ -411,7 +456,11 @@ def main():
         return
 
     # Run benchmarks (always includes recall)
-    results = run_all_benchmarks(quick=args.quick)
+    results = run_all_benchmarks(
+        quick=args.quick,
+        quantization=args.quantization,
+        all_modes=args.all_modes,
+    )
 
     # Build run record
     results_dict = {}

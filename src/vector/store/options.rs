@@ -119,8 +119,8 @@ impl VectorStoreOptions {
     /// Enable quantization for memory-efficient storage.
     ///
     /// # Modes
-    /// - `QuantizationMode::SQ8`: 4x compression, ~2x faster search, ~99% recall (default)
-    /// - `QuantizationMode::RaBitQ(params)`: 4-16x compression, ~0.5x slower, 93-99% recall
+    /// - `QuantizationMode::SQ8`: 4x compression, similar speed, ~99% recall (default)
+    /// - `QuantizationMode::RaBitQ(params)`: 8x compression, ~0.5x speed, 93-99% recall
     ///
     /// # Example
     /// ```ignore
@@ -142,7 +142,7 @@ impl VectorStoreOptions {
         self
     }
 
-    /// Enable SQ8 quantization (4x compression, ~2x faster)
+    /// Enable SQ8 quantization (4x compression, similar speed, ~99% recall)
     ///
     /// Convenience method for the most common quantization mode.
     #[must_use]

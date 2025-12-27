@@ -1301,9 +1301,9 @@ impl VectorStorage {
     /// `ScalarQuantized` storage. Returns None if storage is not quantized, not trained,
     /// or if id is out of bounds.
     ///
-    /// # Performance
-    /// - SQ8: ~2x faster than full precision (SIMD u8 operations)
-    /// - `RaBitQ`: 2-3x faster than full precision (ADC lookup tables)
+    /// # Performance (Apple Silicon M3 Max, 768D)
+    /// - SQ8: Similar speed to full precision (1.07x)
+    /// - RaBitQ: ~0.5x speed (ADC + interleaving overhead)
     #[inline]
     #[must_use]
     pub fn distance_asymmetric_l2(&self, query: &[f32], id: u32) -> Option<f32> {

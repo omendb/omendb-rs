@@ -1673,7 +1673,7 @@ impl VectorDatabase {
 ///     # Simple usage with defaults
 ///     >>> db = omendb.open("./my_vectors", dimensions=768)
 ///
-///     # With SQ8 quantization (4x smaller, 2x faster, ~99% recall) - RECOMMENDED
+///     # With SQ8 quantization (4x smaller, similar speed, ~99% recall)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization="sq8")
 ///
