@@ -2,7 +2,7 @@
 
 [package]
 name = "omendb-node"
-version = "0.0.19"
+version = "0.0.20"
 edition = "2024"
 license-file = "../LICENSE"
 repository = "https://github.com/omendb/omendb"

@@ -1,6 +1,6 @@
 {
   "name": "@omendb/omendb",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "Fast embedded vector database with HNSW + ACORN-1 filtered search",
   "main": "index.js",
   "types": "index.d.ts",
@@ -50,10 +50,10 @@
     "omendb.node"
   ],
   "optionalDependencies": {
-    "@omendb/omendb-darwin-x64": "0.0.19",
-    "@omendb/omendb-darwin-arm64": "0.0.19",
-    "@omendb/omendb-linux-x64-gnu": "0.0.19",
-    "@omendb/omendb-linux-arm64-gnu": "0.0.19",
-    "@omendb/omendb-win32-x64-msvc": "0.0.19"
+    "@omendb/omendb-darwin-x64": "0.0.20",
+    "@omendb/omendb-darwin-arm64": "0.0.20",
+    "@omendb/omendb-linux-x64-gnu": "0.0.20",
+    "@omendb/omendb-linux-arm64-gnu": "0.0.20",
+    "@omendb/omendb-win32-x64-msvc": "0.0.20"
   }
 }
