@@ -884,6 +884,11 @@ pub enum VectorStorage {
         /// Access: quantized[id * dimensions..(id + 1) * dimensions]
         quantized: Vec<u8>,
 
+        /// Pre-computed squared norms of dequantized vectors for L2 decomposition
+        /// ||dequant(q)||^2 = sum((code[d] * scale[d] + min[d])^2)
+        /// Enables fast distance: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
+        norms: Vec<f32>,
+
         /// Buffer for training vectors (cleared after training)
         /// During training phase, stores f32 vectors until we have enough to train
         training_buffer: Vec<f32>,
@@ -975,6 +980,7 @@ impl VectorStorage {
         Self::ScalarQuantized {
             params: ScalarParams::uninitialized(dimensions),
             quantized: Vec::new(),
+            norms: Vec::new(),
             training_buffer: Vec::new(),
             count: 0,
             dimensions,
@@ -1117,6 +1123,7 @@ impl VectorStorage {
             Self::ScalarQuantized {
                 params,
                 quantized,
+                norms,
                 training_buffer,
                 count,
                 dimensions,
@@ -1136,6 +1143,9 @@ impl VectorStorage {
                 if *trained {
                     // Already trained - quantize directly, don't store original
                     let quant = params.quantize(&vector);
+                    // Compute norm of dequantized vector for L2 decomposition
+                    let norm_sq = params.dequantized_norm_squared(&quant);
+                    norms.push(norm_sq);
                     quantized.extend(quant);
                     *count += 1;
                 } else {
@@ -1152,11 +1162,14 @@ impl VectorStorage {
                             ScalarParams::train(&training_refs).map_err(ToString::to_string)?;
                         *trained = true;
 
-                        // Quantize all buffered vectors
+                        // Quantize all buffered vectors and compute norms
                         quantized.reserve(*count * dim);
+                        norms.reserve(*count);
                         for i in 0..*count {
                             let vec_slice = &training_buffer[i * dim..(i + 1) * dim];
                             let quant = params.quantize(vec_slice);
+                            let norm_sq = params.dequantized_norm_squared(&quant);
+                            norms.push(norm_sq);
                             quantized.extend(quant);
                         }
 
@@ -1281,6 +1294,7 @@ impl VectorStorage {
                 count,
                 dimensions,
                 trained,
+                ..
             } => {
                 let idx = id as usize;
                 if idx >= *count {
@@ -1386,21 +1400,28 @@ impl VectorStorage {
 
     /// Check if L2 decomposition is available for this storage
     ///
-    /// Returns true only for FullPrecision storage which stores pre-computed norms.
+    /// Returns true for:
+    /// - FullPrecision storage (always has pre-computed norms)
+    /// - ScalarQuantized storage when trained (has pre-computed dequantized norms)
     #[inline]
     #[must_use]
     pub fn supports_l2_decomposition(&self) -> bool {
-        matches!(self, Self::FullPrecision { .. })
+        match self {
+            Self::FullPrecision { .. } => true,
+            Self::ScalarQuantized { trained, .. } => *trained,
+            _ => false,
+        }
     }
 
     /// Compute L2 squared distance using decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
     ///
-    /// This is ~7% faster than direct L2 computation because:
+    /// This is ~7-15% faster than direct L2/asymmetric computation because:
     /// - Vector norms are pre-computed during insert
     /// - Query norm is computed once per search (passed in)
     /// - Only dot product is computed per-vector (2N FLOPs vs 3N)
     ///
-    /// Returns None if decomposition is not available (non-FullPrecision storage).
+    /// Works for both FullPrecision and trained ScalarQuantized storage.
+    /// Returns None if decomposition is not available.
     #[inline(always)]
     #[must_use]
     pub fn distance_l2_decomposed(&self, query: &[f32], query_norm: f32, id: u32) -> Option<f32> {
@@ -1424,6 +1445,35 @@ impl VectorStorage {
                 // Uses SIMD-accelerated dot product for performance
                 let dot = dot_product(query, vec);
                 Some(query_norm + vec_norm - 2.0 * dot)
+            }
+            Self::ScalarQuantized {
+                params,
+                quantized,
+                norms,
+                count,
+                dimensions,
+                trained,
+                ..
+            } => {
+                if !*trained {
+                    return None;
+                }
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                let vec_norm = norms[idx];
+
+                // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+                // Uses SIMD-accelerated asymmetric dot product
+                Some(params.asymmetric_l2_decomposed(
+                    query,
+                    query_norm,
+                    &quantized[start..end],
+                    vec_norm,
+                ))
             }
             _ => None,
         }
@@ -1825,6 +1875,7 @@ impl VectorStorage {
             Self::ScalarQuantized {
                 params,
                 quantized,
+                norms,
                 training_buffer,
                 count,
                 dimensions,
@@ -1844,9 +1895,12 @@ impl VectorStorage {
                 if *count > 0 && quantized.is_empty() && !training_buffer.is_empty() {
                     let dim = *dimensions;
                     quantized.reserve(*count * dim);
+                    norms.reserve(*count);
                     for i in 0..*count {
                         let vec_slice = &training_buffer[i * dim..(i + 1) * dim];
                         let quant = params.quantize(vec_slice);
+                        let norm_sq = params.dequantized_norm_squared(&quant);
+                        norms.push(norm_sq);
                         quantized.extend(quant);
                     }
                     // Clear training buffer to free memory
@@ -1895,16 +1949,18 @@ impl VectorStorage {
             }
             Self::ScalarQuantized {
                 quantized,
+                norms,
                 training_buffer,
                 params,
                 ..
             } => {
-                // Quantized u8 vectors + training buffer (usually empty after training) + params
+                // Quantized u8 vectors + norms + training buffer (usually empty after training) + params
                 let quantized_size = quantized.len();
+                let norms_size = norms.len() * std::mem::size_of::<f32>();
                 let buffer_size = training_buffer.len() * std::mem::size_of::<f32>();
                 let params_size =
                     (params.mins.len() + params.scales.len()) * std::mem::size_of::<f32>();
-                quantized_size + buffer_size + params_size
+                quantized_size + norms_size + buffer_size + params_size
             }
         }
     }
@@ -2000,6 +2056,7 @@ impl VectorStorage {
             }
             Self::ScalarQuantized {
                 quantized,
+                norms,
                 count,
                 dimensions,
                 ..
@@ -2007,17 +2064,22 @@ impl VectorStorage {
                 let dim = *dimensions;
                 let n = *count;
 
-                // Reorder quantized vectors only (no originals stored)
+                // Reorder quantized vectors and norms
                 let mut new_quantized = vec![0u8; quantized.len()];
+                let mut new_norms = vec![0.0f32; norms.len()];
                 for (old_id, &new_id) in old_to_new.iter().enumerate() {
                     if old_id < n {
                         let old_start = old_id * dim;
                         let new_start = new_id as usize * dim;
                         new_quantized[new_start..new_start + dim]
                             .copy_from_slice(&quantized[old_start..old_start + dim]);
+                        if old_id < norms.len() {
+                            new_norms[new_id as usize] = norms[old_id];
+                        }
                     }
                 }
                 *quantized = new_quantized;
+                *norms = new_norms;
             }
         }
     }

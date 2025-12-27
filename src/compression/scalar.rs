@@ -170,6 +170,158 @@ impl ScalarParams {
         }
     }
 
+    /// Compute squared norm of dequantized vector: ||dequant(q)||^2
+    ///
+    /// Used for L2 decomposition: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
+    #[must_use]
+    pub fn dequantized_norm_squared(&self, quantized: &[u8]) -> f32 {
+        assert_eq!(quantized.len(), self.dimensions);
+
+        let mut sum = 0.0f32;
+        for (i, &q) in quantized.iter().enumerate() {
+            let dequant = f32::from(q) * self.scales[i] + self.mins[i];
+            sum += dequant * dequant;
+        }
+        sum
+    }
+
+    /// Compute dot product between query (f32) and dequantized vector (u8)
+    ///
+    /// Used for L2 decomposition: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
+    #[must_use]
+    #[allow(clippy::needless_return)]
+    pub fn asymmetric_dot_product(&self, query: &[f32], quantized: &[u8]) -> f32 {
+        assert_eq!(query.len(), self.dimensions);
+        assert_eq!(quantized.len(), self.dimensions);
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("avx2") {
+                return unsafe { self.asymmetric_dot_product_avx2(query, quantized) };
+            }
+            return self.asymmetric_dot_product_scalar(query, quantized);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            unsafe { self.asymmetric_dot_product_neon(query, quantized) }
+        }
+
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        self.asymmetric_dot_product_scalar(query, quantized)
+    }
+
+    #[allow(dead_code)]
+    fn asymmetric_dot_product_scalar(&self, query: &[f32], quantized: &[u8]) -> f32 {
+        let mut sum = 0.0f32;
+        for i in 0..self.dimensions {
+            let dequant = f32::from(quantized[i]) * self.scales[i] + self.mins[i];
+            sum += query[i] * dequant;
+        }
+        sum
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn asymmetric_dot_product_avx2(&self, query: &[f32], quantized: &[u8]) -> f32 {
+        let mut sum = _mm256_setzero_ps();
+        let mut i = 0;
+
+        while i + 8 <= self.dimensions {
+            // Load and convert 8 u8 to f32 using SIMD
+            let bytes = _mm_loadl_epi64(quantized.as_ptr().add(i).cast());
+            let u32s = _mm256_cvtepu8_epi32(bytes);
+            let q0 = _mm256_cvtepi32_ps(u32s);
+
+            // Load scales and mins
+            let scales = _mm256_loadu_ps(self.scales.as_ptr().add(i));
+            let mins = _mm256_loadu_ps(self.mins.as_ptr().add(i));
+
+            // Dequantize: q * scale + min
+            let dequant = _mm256_fmadd_ps(q0, scales, mins);
+
+            // Load query and accumulate dot product
+            let query_vec = _mm256_loadu_ps(query.as_ptr().add(i));
+            sum = _mm256_fmadd_ps(query_vec, dequant, sum);
+
+            i += 8;
+        }
+
+        // Horizontal sum
+        let sum128 = _mm_add_ps(_mm256_extractf128_ps(sum, 0), _mm256_extractf128_ps(sum, 1));
+        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        let mut result = _mm_cvtss_f32(sum32);
+
+        // Handle remaining elements
+        for j in i..self.dimensions {
+            let dequant = f32::from(quantized[j]) * self.scales[j] + self.mins[j];
+            result += query[j] * dequant;
+        }
+
+        result
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe fn asymmetric_dot_product_neon(&self, query: &[f32], quantized: &[u8]) -> f32 {
+        let mut sum0 = vdupq_n_f32(0.0);
+        let mut sum1 = vdupq_n_f32(0.0);
+        let mut i = 0;
+
+        while i + 8 <= self.dimensions {
+            // Load 8 u8 values and convert to f32
+            let u8x8 = vld1_u8(quantized.as_ptr().add(i));
+            let u16x8 = vmovl_u8(u8x8);
+            let u32x4_lo = vmovl_u16(vget_low_u16(u16x8));
+            let u32x4_hi = vmovl_u16(vget_high_u16(u16x8));
+            let f32x4_lo = vcvtq_f32_u32(u32x4_lo);
+            let f32x4_hi = vcvtq_f32_u32(u32x4_hi);
+
+            // Load scales and mins
+            let scales_lo = vld1q_f32(self.scales.as_ptr().add(i));
+            let scales_hi = vld1q_f32(self.scales.as_ptr().add(i + 4));
+            let mins_lo = vld1q_f32(self.mins.as_ptr().add(i));
+            let mins_hi = vld1q_f32(self.mins.as_ptr().add(i + 4));
+
+            // Dequantize: q * scale + min
+            let dequant_lo = vfmaq_f32(mins_lo, f32x4_lo, scales_lo);
+            let dequant_hi = vfmaq_f32(mins_hi, f32x4_hi, scales_hi);
+
+            // Load query and accumulate dot product
+            let query_lo = vld1q_f32(query.as_ptr().add(i));
+            let query_hi = vld1q_f32(query.as_ptr().add(i + 4));
+            sum0 = vfmaq_f32(sum0, query_lo, dequant_lo);
+            sum1 = vfmaq_f32(sum1, query_hi, dequant_hi);
+
+            i += 8;
+        }
+
+        let mut result = vaddvq_f32(vaddq_f32(sum0, sum1));
+
+        // Handle remaining elements
+        for j in i..self.dimensions {
+            let dequant = f32::from(quantized[j]) * self.scales[j] + self.mins[j];
+            result += query[j] * dequant;
+        }
+
+        result
+    }
+
+    /// Compute L2 distance using decomposition: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
+    ///
+    /// This is faster than direct asymmetric distance when the candidate norm is precomputed.
+    #[must_use]
+    pub fn asymmetric_l2_decomposed(
+        &self,
+        query: &[f32],
+        query_norm: f32,
+        quantized: &[u8],
+        candidate_norm: f32,
+    ) -> f32 {
+        let dot = self.asymmetric_dot_product(query, quantized);
+        query_norm + candidate_norm - 2.0 * dot
+    }
+
     /// Compute approximate L2 distance between query (f32) and quantized vector (u8)
     ///
     /// Uses asymmetric distance: query stays f32, candidate is dequantized on-the-fly.
@@ -216,18 +368,13 @@ impl ScalarParams {
 
         // Process 8 elements at a time
         while i + 8 <= self.dimensions {
-            // Load 8 u8 values and convert to f32
-            let q_bytes = std::slice::from_raw_parts(quantized.as_ptr().add(i), 8);
-            let q0 = _mm256_set_ps(
-                f32::from(q_bytes[7]),
-                f32::from(q_bytes[6]),
-                f32::from(q_bytes[5]),
-                f32::from(q_bytes[4]),
-                f32::from(q_bytes[3]),
-                f32::from(q_bytes[2]),
-                f32::from(q_bytes[1]),
-                f32::from(q_bytes[0]),
-            );
+            // Load 8 u8 values and convert to f32 using SIMD (3 instructions vs 15+ scalar)
+            // _mm_loadl_epi64: load 8 bytes into lower 64 bits of 128-bit register
+            // _mm256_cvtepu8_epi32: zero-extend 8 u8 values to 8 i32 values
+            // _mm256_cvtepi32_ps: convert 8 i32 values to 8 f32 values
+            let bytes = _mm_loadl_epi64(quantized.as_ptr().add(i).cast());
+            let u32s = _mm256_cvtepu8_epi32(bytes);
+            let q0 = _mm256_cvtepi32_ps(u32s);
 
             // Load scales and mins
             let scales = _mm256_loadu_ps(self.scales.as_ptr().add(i));
