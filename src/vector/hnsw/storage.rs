@@ -1657,6 +1657,89 @@ impl VectorStorage {
         }
     }
 
+    /// Get RaBitQ code_size (bytes per quantized vector)
+    ///
+    /// Returns None if not using RaBitQ quantization.
+    #[must_use]
+    pub fn rabitq_code_size(&self) -> Option<usize> {
+        match self {
+            Self::RaBitQQuantized { code_size, .. } => Some(*code_size),
+            _ => None,
+        }
+    }
+
+    /// Get quantized code for a vector (RaBitQ only)
+    ///
+    /// Returns a slice of the quantized code bytes for the given vector ID.
+    /// Returns None if vector doesn't exist or not using RaBitQ.
+    #[must_use]
+    pub fn get_rabitq_code(&self, id: u32) -> Option<&[u8]> {
+        match self {
+            Self::RaBitQQuantized {
+                quantized_data,
+                code_size,
+                original_count,
+                ..
+            } => {
+                let idx = id as usize;
+                if idx >= *original_count {
+                    return None;
+                }
+                let start = idx * code_size;
+                let end = start + code_size;
+                if end <= quantized_data.len() {
+                    Some(&quantized_data[start..end])
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Build interleaved codes for FastScan from a batch of neighbor IDs
+    ///
+    /// For 32 neighbors with code_size bytes each, produces:
+    /// - 32 bytes for sub-quantizer 0 (one byte from each neighbor)
+    /// - 32 bytes for sub-quantizer 1
+    /// - ... etc
+    ///
+    /// Total output size: code_size * 32 bytes
+    ///
+    /// # Arguments
+    /// * `neighbors` - Up to 32 neighbor IDs to interleave
+    /// * `output` - Pre-allocated buffer of size code_size * 32
+    ///
+    /// Returns number of valid neighbors (rest are zero-padded)
+    pub fn build_interleaved_codes(&self, neighbors: &[u32], output: &mut [u8]) -> usize {
+        let code_size = match self.rabitq_code_size() {
+            Some(cs) => cs,
+            None => return 0,
+        };
+
+        let batch_size = 32;
+        let expected_len = code_size * batch_size;
+        if output.len() < expected_len {
+            return 0;
+        }
+
+        // Zero the output buffer
+        output[..expected_len].fill(0);
+
+        let valid_count = neighbors.len().min(batch_size);
+
+        // Interleave codes: for each sub-quantizer position, gather that byte from all neighbors
+        for (n, &neighbor_id) in neighbors.iter().take(valid_count).enumerate() {
+            if let Some(code) = self.get_rabitq_code(neighbor_id) {
+                for sq in 0..code_size {
+                    output[sq * batch_size + n] = code[sq];
+                }
+            }
+        }
+
+        valid_count
+    }
+
     /// Binary quantize a vector
     ///
     /// Each dimension is quantized to 1 bit based on threshold:

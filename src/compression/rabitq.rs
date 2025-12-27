@@ -853,6 +853,30 @@ impl ADCTable {
         result
     }
 
+    /// Get bits per dimension
+    #[must_use]
+    pub fn bits(&self) -> u8 {
+        self.bits
+    }
+
+    /// Get number of dimensions
+    #[must_use]
+    pub fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    /// Get partial distance for a dimension and code
+    ///
+    /// Returns 0.0 if indices are out of bounds.
+    #[must_use]
+    pub fn get(&self, dim: usize, code: usize) -> f32 {
+        self.table
+            .get(dim)
+            .and_then(|t| t.get(code))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
     /// Get memory usage in bytes
     #[must_use]
     pub fn memory_bytes(&self) -> usize {

@@ -12,7 +12,9 @@ pub mod rabitq;
 pub mod scalar;
 
 pub use binary::{hamming_distance, BinaryParams};
-pub use fastscan::{fastscan_batch, FastScanLUT, BATCH_SIZE as FASTSCAN_BATCH_SIZE};
+pub use fastscan::{
+    fastscan_batch, fastscan_batch_with_lut, FastScanLUT, BATCH_SIZE as FASTSCAN_BATCH_SIZE,
+};
 pub use rabitq::{
     ADCTable, QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams, TrainedParams,
 };
