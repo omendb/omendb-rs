@@ -1467,10 +1467,13 @@ impl VectorStorage {
 
     /// Build ADC lookup table for a query
     ///
-    /// Only used for `RaBitQ` storage where sub-tables fit in cache.
-    /// SQ8 uses asymmetric SIMD which is faster on modern CPUs.
+    /// Only used for RaBitQ (4-bit). SQ8 uses asymmetric SIMD instead.
+    /// SQ8 ADC is slower on Apple Silicon because:
+    /// - ADC has scattered memory access (d×256+code stride)
+    /// - Asymmetric SIMD is pure compute (dequantize + L2)
+    /// - Apple Silicon's high SIMD throughput makes compute faster
     ///
-    /// Returns None if storage is not `RaBitQ` quantized or not yet trained.
+    /// Returns None for full-precision, SQ8, or not yet trained.
     #[must_use]
     pub fn build_adc_table(&self, query: &[f32]) -> Option<UnifiedADC> {
         match self {
@@ -1478,8 +1481,6 @@ impl VectorStorage {
                 let q = quantizer.as_ref()?;
                 Some(UnifiedADC::RaBitQ(q.build_adc_table(query)?))
             }
-            // SQ8 uses asymmetric SIMD (3x faster than ADC on Apple Silicon)
-            // because the 768KB ADC table has poor cache locality
             _ => None,
         }
     }
