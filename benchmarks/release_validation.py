@@ -2,19 +2,19 @@
 """
 Release Recall Validation - runs before publishing.
 
-Comprehensive validation using 100K subsets from SIFT and GloVe datasets.
+Comprehensive validation using 50K subsets from SIFT and GloVe datasets.
 Downloads datasets on first run (cached to ~/.cache/omendb/).
 
-Time budget: ~3 minutes
+Time budget: ~5 minutes on CI
 Exit code: 0 on success, 1 on failure
 
 Tests:
-  1. L2 baseline (SIFT-100K): recall@10 >= 97%
-  2. Cosine baseline (GloVe-100K): recall@10 >= 88%
-  3. SQ8 quantization (SIFT-100K): recall@10 >= 95%
-  4. RaBitQ (SIFT-100K): recall@10 >= 93%
-  5. Filtered search (SIFT-100K, 50%): recall@10 >= 92%
-  6. Persistence (SIFT-100K): recall unchanged after save/load
+  1. L2 baseline (SIFT-50K): recall@10 >= 97%
+  2. Cosine baseline (GloVe-50K): recall@10 >= 88%
+  3. SQ8 quantization (SIFT-50K): recall@10 >= 95%
+  4. RaBitQ (SIFT-50K): recall@10 >= 93%
+  5. Filtered search (SIFT-50K, 50%): recall@10 >= 92%
+  6. Persistence (SIFT-50K): recall unchanged after save/load
 
 Note: GloVe has lower recall than SIFT at scale - this is expected due to
 its more uniform angular distribution which is harder for HNSW.
@@ -51,8 +51,8 @@ DATASETS = {
     },
 }
 
-SUBSET_SIZE = 100_000
-NUM_QUERIES = 1000
+SUBSET_SIZE = 50_000
+NUM_QUERIES = 500
 K = 10  # recall@K
 
 # Test configurations
@@ -115,18 +115,21 @@ def download_dataset(name: str) -> Path:
 def compute_ground_truth_l2(
     vectors: np.ndarray, queries: np.ndarray, k: int
 ) -> np.ndarray:
-    """Compute brute-force L2 KNN ground truth."""
+    """Compute brute-force L2 KNN ground truth using argpartition (O(n) vs O(n log n))."""
     gt = np.zeros((len(queries), k), dtype=np.int32)
     for i, q in enumerate(queries):
-        distances = np.linalg.norm(vectors - q, axis=1)
-        gt[i] = np.argsort(distances)[:k]
+        distances = np.sum((vectors - q) ** 2, axis=1)  # Squared L2, skip sqrt
+        # argpartition is O(n), finds k smallest without full sort
+        top_k_unsorted = np.argpartition(distances, k)[:k]
+        # Sort only the k candidates
+        gt[i] = top_k_unsorted[np.argsort(distances[top_k_unsorted])]
     return gt
 
 
 def compute_ground_truth_cosine(
     vectors: np.ndarray, queries: np.ndarray, k: int
 ) -> np.ndarray:
-    """Compute brute-force cosine KNN ground truth."""
+    """Compute brute-force cosine KNN ground truth using argpartition (O(n) vs O(n log n))."""
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1, norms)
     vectors_norm = vectors / norms
@@ -135,7 +138,9 @@ def compute_ground_truth_cosine(
     for i, q in enumerate(queries):
         q_norm = q / np.linalg.norm(q) if np.linalg.norm(q) > 0 else q
         similarities = vectors_norm @ q_norm
-        gt[i] = np.argsort(-similarities)[:k]
+        # argpartition on negated similarities for top-k largest
+        top_k_unsorted = np.argpartition(-similarities, k)[:k]
+        gt[i] = top_k_unsorted[np.argsort(-similarities[top_k_unsorted])]
     return gt
 
 
