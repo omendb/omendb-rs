@@ -998,15 +998,45 @@ impl HNSWIndex {
 
         let adc_table = self.vectors.build_adc_table(query);
 
-        // Try to build FastScan LUT for SIMD acceleration
-        let fastscan_lut = adc_table.as_ref().and_then(|adc| match adc {
-            UnifiedADC::RaBitQ(table) => FastScanLUT::from_adc_table(table),
-            UnifiedADC::SQ8(_) => None, // SQ8 uses different distance path
-        });
+        // FastScan is disabled on Apple Silicon where:
+        // 1. DMP (Data Memory-dependent Prefetcher) handles cache efficiently
+        // 2. SQ8 asymmetric SIMD is already faster than RaBitQ+FastScan
+        // 3. The overhead of build_interleaved_codes exceeds SIMD benefit
+        #[cfg(target_arch = "aarch64")]
+        let use_fastscan = false;
 
-        // Get code_size for interleaved buffer allocation
+        #[cfg(not(target_arch = "aarch64"))]
+        let use_fastscan = {
+            // Try to build FastScan LUT for SIMD acceleration
+            let fastscan_lut = adc_table.as_ref().and_then(|adc| match adc {
+                UnifiedADC::RaBitQ(table) => FastScanLUT::from_adc_table(table),
+                UnifiedADC::SQ8(_) => None, // SQ8 uses different distance path
+            });
+
+            // Get code_size for interleaved buffer allocation
+            let code_size = self.vectors.rabitq_code_size().unwrap_or(0);
+            fastscan_lut.is_some() && code_size > 0
+        };
+
+        // Minimum batch size to justify FastScan overhead
+        // Below this threshold, per-neighbor ADC is faster
+        const FASTSCAN_MIN_BATCH: usize = 8;
+
+        // Only build LUT if we'll use FastScan
+        #[cfg(not(target_arch = "aarch64"))]
+        let fastscan_lut = if use_fastscan {
+            adc_table.as_ref().and_then(|adc| match adc {
+                UnifiedADC::RaBitQ(table) => FastScanLUT::from_adc_table(table),
+                UnifiedADC::SQ8(_) => None,
+            })
+        } else {
+            None
+        };
+
+        #[cfg(target_arch = "aarch64")]
+        let fastscan_lut: Option<FastScanLUT> = None;
+
         let code_size = self.vectors.rabitq_code_size().unwrap_or(0);
-        let use_fastscan = fastscan_lut.is_some() && code_size > 0;
 
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
@@ -1054,14 +1084,15 @@ impl HNSWIndex {
                 let unvisited_slice = unvisited.as_slice();
 
                 // FastScan path: batch compute distances using SIMD
+                // Only use FastScan if batch is large enough to justify overhead
                 if let Some(ref lut) = fastscan_lut {
-                    if !unvisited_slice.is_empty() {
+                    if unvisited_slice.len() >= FASTSCAN_MIN_BATCH {
                         // Build interleaved codes for this batch
                         let valid_count = self
                             .vectors
                             .build_interleaved_codes(unvisited_slice, &mut interleaved_codes);
 
-                        if valid_count > 0 {
+                        if valid_count >= FASTSCAN_MIN_BATCH {
                             // Compute distances for all neighbors at once
                             let distances = fastscan_batch_with_lut(lut, &interleaved_codes);
 
