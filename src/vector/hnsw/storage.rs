@@ -589,8 +589,17 @@ pub enum VectorStorage {
         /// `RaBitQ` parameters (for serialization)
         params: RaBitQParams,
 
-        /// Quantized vectors (`RaBitQ` format)
-        quantized: Vec<QuantizedVector>,
+        /// Quantized codes - flat contiguous array for cache efficiency
+        /// Access: quantized_data[id * code_size..(id + 1) * code_size]
+        quantized_data: Vec<u8>,
+
+        /// Per-vector rescaling factors - contiguous for cache efficiency
+        /// Access: quantized_scales[id]
+        quantized_scales: Vec<f32>,
+
+        /// Bytes per quantized vector (computed from dimensions and bits)
+        /// For 4-bit: code_size = dimensions / 2
+        code_size: usize,
 
         /// Original vectors for reranking (required for final accuracy)
         /// Stored as flat contiguous array for cache efficiency.
@@ -677,10 +686,17 @@ impl VectorStorage {
     /// - Recall: 98%+ with reranking
     #[must_use]
     pub fn new_rabitq_quantized(dimensions: usize, params: RaBitQParams) -> Self {
+        // Compute code size: bytes needed per vector
+        // For 4-bit: 2 values per byte, so code_size = dimensions / 2
+        let values_per_byte = params.bits_per_dim.values_per_byte();
+        let code_size = dimensions.div_ceil(values_per_byte);
+
         Self::RaBitQQuantized {
             quantizer: Some(RaBitQ::new(params.clone())),
             params,
-            quantized: Vec::new(),
+            quantized_data: Vec::new(),
+            quantized_scales: Vec::new(),
+            code_size,
             original: Vec::new(),
             original_count: 0,
             dimensions,
@@ -808,10 +824,12 @@ impl VectorStorage {
             Self::RaBitQQuantized {
                 quantizer,
                 params,
-                quantized,
+                quantized_data,
+                quantized_scales,
                 original,
                 original_count,
                 dimensions,
+                ..
             } => {
                 if vector.len() != *dimensions {
                     return Err(format!(
@@ -824,10 +842,11 @@ impl VectorStorage {
                 // Lazily initialize quantizer if needed (after deserialization)
                 let q = quantizer.get_or_insert_with(|| RaBitQ::new(params.clone()));
 
-                // Quantize and store
+                // Quantize and store in flat arrays (cache-friendly layout)
                 let quant = q.quantize(&vector);
                 let id = *original_count as u32;
-                quantized.push(quant);
+                quantized_data.extend(&quant.data);
+                quantized_scales.push(quant.scale);
 
                 // Store original for reranking (flat contiguous)
                 original.extend(vector);
@@ -1038,18 +1057,27 @@ impl VectorStorage {
         match self {
             Self::RaBitQQuantized {
                 quantizer,
-                quantized,
+                quantized_data,
+                quantized_scales,
+                code_size,
+                original_count,
                 ..
             } => {
                 let idx = id as usize;
-                if idx >= quantized.len() {
+                if idx >= *original_count {
                     return None;
                 }
 
                 // Get quantizer (should always be Some after first insert)
                 let q = quantizer.as_ref()?;
 
-                Some(q.distance_asymmetric_l2(query, &quantized[idx]))
+                // Access flat storage (cache-friendly layout)
+                let start = idx * code_size;
+                let end = start + code_size;
+                let data = &quantized_data[start..end];
+                let scale = quantized_scales[idx];
+
+                Some(q.distance_asymmetric_l2_flat(query, data, scale))
             }
             Self::ScalarQuantized {
                 params,
@@ -1141,12 +1169,36 @@ impl VectorStorage {
         }
     }
 
-    /// Get the quantized vector for a given ID (for asymmetric distance in external code)
+    /// Get the quantized vector for a given ID (reconstructed from flat storage)
+    ///
+    /// Note: Returns an owned `QuantizedVector` reconstructed from flat storage.
+    /// Prefer using `distance_adc` or `distance_asymmetric_l2` for distance computation.
     #[inline]
     #[must_use]
-    pub fn get_quantized(&self, id: u32) -> Option<&QuantizedVector> {
+    pub fn get_quantized(&self, id: u32) -> Option<QuantizedVector> {
         match self {
-            Self::RaBitQQuantized { quantized, .. } => quantized.get(id as usize),
+            Self::RaBitQQuantized {
+                quantized_data,
+                quantized_scales,
+                code_size,
+                original_count,
+                dimensions,
+                params,
+                ..
+            } => {
+                let idx = id as usize;
+                if idx >= *original_count {
+                    return None;
+                }
+                let start = idx * code_size;
+                let end = start + code_size;
+                Some(QuantizedVector::new(
+                    quantized_data[start..end].to_vec(),
+                    quantized_scales[idx],
+                    params.bits_per_dim.to_u8(),
+                    *dimensions,
+                ))
+            }
             _ => None,
         }
     }
@@ -1184,9 +1236,23 @@ impl VectorStorage {
     #[must_use]
     pub fn distance_adc(&self, adc: &UnifiedADC, id: u32) -> Option<f32> {
         match (self, adc) {
-            (Self::RaBitQQuantized { quantized, .. }, UnifiedADC::RaBitQ(table)) => {
-                let qv = quantized.get(id as usize)?;
-                Some(table.distance(&qv.data))
+            (
+                Self::RaBitQQuantized {
+                    quantized_data,
+                    code_size,
+                    original_count,
+                    ..
+                },
+                UnifiedADC::RaBitQ(table),
+            ) => {
+                let idx = id as usize;
+                if idx >= *original_count {
+                    return None;
+                }
+                // Access flat storage directly (cache-friendly)
+                let start = idx * code_size;
+                let end = start + code_size;
+                Some(table.distance(&quantized_data[start..end]))
             }
             (
                 Self::ScalarQuantized {
@@ -1247,9 +1313,20 @@ impl VectorStorage {
             Self::BinaryQuantized { original, .. } => original
                 .as_ref()
                 .and_then(|o| o.get(id as usize).map(|v| v.as_ptr().cast())),
-            Self::RaBitQQuantized { quantized, .. } => {
+            Self::RaBitQQuantized {
+                quantized_data,
+                code_size,
+                original_count,
+                ..
+            } => {
                 // Prefetch quantized data (the hot path for asymmetric search)
-                quantized.get(id as usize).map(|q| q.data.as_ptr())
+                let idx = id as usize;
+                if idx >= *original_count {
+                    None
+                } else {
+                    let start = idx * code_size;
+                    Some(quantized_data[start..].as_ptr())
+                }
             }
             Self::ScalarQuantized {
                 quantized,
@@ -1297,9 +1374,17 @@ impl VectorStorage {
     /// the quantized representation, not the full precision original.
     #[inline]
     pub fn prefetch_quantized(&self, id: u32) {
-        if let Self::RaBitQQuantized { quantized, .. } = self {
-            if let Some(q) = quantized.get(id as usize) {
-                let ptr = q.data.as_ptr();
+        if let Self::RaBitQQuantized {
+            quantized_data,
+            code_size,
+            original_count,
+            ..
+        } = self
+        {
+            let idx = id as usize;
+            if idx < *original_count {
+                let start = idx * code_size;
+                let ptr = quantized_data[start..].as_ptr();
                 #[cfg(target_arch = "x86_64")]
                 unsafe {
                     std::arch::x86_64::_mm_prefetch(
@@ -1452,15 +1537,14 @@ impl VectorStorage {
                 quantized_size + original_size + thresholds_size
             }
             Self::RaBitQQuantized {
-                quantized,
+                quantized_data,
+                quantized_scales,
                 original,
                 ..
             } => {
-                // Quantized vectors: data + scale + bits fields
-                let quantized_size: usize = quantized
-                    .iter()
-                    .map(|q| q.data.len() + std::mem::size_of::<f32>() + 1) // data + scale + bits
-                    .sum();
+                // Flat quantized storage: data + scales
+                let quantized_size =
+                    quantized_data.len() + quantized_scales.len() * std::mem::size_of::<f32>();
                 // Original vectors for reranking (flat contiguous)
                 let original_size = original.len() * std::mem::size_of::<f32>();
                 quantized_size + original_size
@@ -1531,7 +1615,9 @@ impl VectorStorage {
                 }
             }
             Self::RaBitQQuantized {
-                quantized,
+                quantized_data,
+                quantized_scales,
+                code_size,
                 original,
                 original_count,
                 dimensions,
@@ -1539,22 +1625,22 @@ impl VectorStorage {
             } => {
                 let dim = *dimensions;
                 let n = *original_count;
+                let cs = *code_size;
 
-                // Reorder quantized vectors
-                let mut new_quantized: Vec<QuantizedVector> = Vec::with_capacity(quantized.len());
-                for _ in 0..quantized.len() {
-                    // Placeholder - will be replaced
-                    new_quantized.push(QuantizedVector::new(Vec::new(), 1.0, 4, dim));
-                }
+                // Reorder quantized data (flat contiguous)
+                let mut new_data = vec![0u8; quantized_data.len()];
+                let mut new_scales = vec![0.0f32; quantized_scales.len()];
                 for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                    if old_id < quantized.len() {
-                        new_quantized[new_id as usize] = std::mem::replace(
-                            &mut quantized[old_id],
-                            QuantizedVector::new(Vec::new(), 1.0, 4, dim),
-                        );
+                    if old_id < n {
+                        let old_start = old_id * cs;
+                        let new_start = new_id as usize * cs;
+                        new_data[new_start..new_start + cs]
+                            .copy_from_slice(&quantized_data[old_start..old_start + cs]);
+                        new_scales[new_id as usize] = quantized_scales[old_id];
                     }
                 }
-                *quantized = new_quantized;
+                *quantized_data = new_data;
+                *quantized_scales = new_scales;
 
                 // Reorder original vectors (flat contiguous)
                 let mut new_original = vec![0.0f32; original.len()];
@@ -1730,8 +1816,9 @@ mod tests {
 
         let qv = storage.get_quantized(0);
         assert!(qv.is_some());
-        assert_eq!(qv.unwrap().dimensions, 4);
-        assert_eq!(qv.unwrap().bits, 4); // 4-bit quantization
+        let qv = qv.unwrap();
+        assert_eq!(qv.dimensions, 4);
+        assert_eq!(qv.bits, 4); // 4-bit quantization
     }
 
     #[test]

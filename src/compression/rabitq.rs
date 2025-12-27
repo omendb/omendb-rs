@@ -1247,6 +1247,21 @@ impl RaBitQ {
         self.distance_asymmetric_l2_raw(query, &quantized.data, quantized.scale, quantized.bits)
     }
 
+    /// Asymmetric L2 distance from flat storage (no QuantizedVector wrapper)
+    ///
+    /// This is the preferred method for flat contiguous storage layouts.
+    /// When trained: Uses per-dimension min/max (scale ignored).
+    /// When untrained: Falls back to per-vector scale.
+    #[must_use]
+    #[inline]
+    pub fn distance_asymmetric_l2_flat(&self, query: &[f32], data: &[u8], scale: f32) -> f32 {
+        if let Some(trained) = &self.trained {
+            return self.distance_asymmetric_l2_trained(query, data, trained);
+        }
+        // Fallback to per-vector scale (deprecated, only for untrained quantizers)
+        self.distance_asymmetric_l2_raw(query, data, scale, self.params.bits_per_dim.to_u8())
+    }
+
     /// Asymmetric L2 distance using trained per-dimension parameters
     ///
     /// This is the correct distance computation for trained quantizers.
