@@ -17,6 +17,12 @@ impl HNSWIndex {
     /// Search for k nearest neighbors
     ///
     /// Returns up to k nearest neighbors sorted by distance (closest first).
+    ///
+    /// # cdylib Optimization (Dec 27, 2025)
+    /// This function dispatches by storage type ONCE at the top level, then calls
+    /// specialized search functions that work with concrete types. This eliminates
+    /// the 49 function calls per search in cdylib builds caused by VectorStorage
+    /// enum dispatch in the hot loop.
     #[instrument(skip(self, query), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
         // Validate k > 0
@@ -59,7 +65,183 @@ impl HNSWIndex {
         let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
         let entry_level = self.nodes[entry_point as usize].level;
 
-        // Start from entry point, descend to layer 0
+        // CDYLIB OPTIMIZATION: Dispatch ONCE by storage type at the top level.
+        // This eliminates enum matching in the hot loop (49 calls → 1 call).
+        // Each specialized path extracts concrete data and calls specialized functions.
+
+        // Pre-compute query norm for L2 decomposition (used by all paths)
+        let query_norm = norm_squared(query);
+
+        // Try SQ8 specialized path first (most common quantized case)
+        if let Some((quantized, norms, scales, mins, _count, dimensions)) = self.vectors.sq8_data()
+        {
+            // DEBUG: Uncomment to verify specialized path is used
+            // eprintln!("SQ8 specialized path");
+            return self.search_sq8_specialized(
+                query,
+                query_norm,
+                k,
+                ef,
+                entry_point,
+                entry_level,
+                quantized,
+                norms,
+                scales,
+                mins,
+                dimensions,
+            );
+        }
+
+        // Try FP32 specialized path (L2 with decomposition)
+        if let Some((vectors, norms, _count, dimensions)) = self.vectors.fp32_data() {
+            if matches!(self.distance_fn, DistanceFunction::L2) {
+                return self.search_fp32_specialized(
+                    query,
+                    query_norm,
+                    k,
+                    ef,
+                    entry_point,
+                    entry_level,
+                    vectors,
+                    norms,
+                    dimensions,
+                );
+            }
+        }
+
+        // Fallback: RaBitQ or non-L2 distance functions use existing paths
+        self.search_generic(query, k, ef, entry_point, entry_level)
+    }
+
+    /// SQ8 specialized search path (no enum dispatch in hot loop)
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn search_sq8_specialized(
+        &self,
+        query: &[f32],
+        query_norm: f32,
+        k: usize,
+        ef: usize,
+        entry_point: u32,
+        entry_level: u8,
+        quantized: &[u8],
+        norms: &[f32],
+        scales: &[f32],
+        mins: &[f32],
+        dimensions: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let mut nearest = vec![entry_point];
+        let neighbors = &self.neighbors;
+
+        // Greedy search at each layer (find 1 nearest)
+        for level in (1..=entry_level).rev() {
+            nearest = Self::search_layer_sq8_direct(
+                query, query_norm, &nearest, 1, level, quantized, norms, scales, mins, dimensions,
+                neighbors,
+            )?;
+        }
+
+        // Beam search at layer 0 (find ef nearest)
+        let candidates = Self::search_layer_sq8_direct(
+            query,
+            query_norm,
+            &nearest,
+            ef.max(k),
+            0,
+            quantized,
+            norms,
+            scales,
+            mins,
+            dimensions,
+            neighbors,
+        )?;
+
+        // Convert to SearchResult with exact distances
+        let mut results = Vec::with_capacity(candidates.len());
+        for &id in &candidates {
+            let distance = self.distance_exact(query, id)?;
+            results.push(SearchResult::new(id, distance));
+        }
+
+        results.sort_unstable_by_key(|r| OrderedFloat(r.distance));
+        results.truncate(k);
+
+        debug!(
+            num_results = results.len(),
+            closest_distance = results.first().map(|r| r.distance),
+            "SQ8 specialized search completed"
+        );
+
+        Ok(results)
+    }
+
+    /// FP32 specialized search path (no enum dispatch in hot loop)
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn search_fp32_specialized(
+        &self,
+        query: &[f32],
+        query_norm: f32,
+        k: usize,
+        ef: usize,
+        entry_point: u32,
+        entry_level: u8,
+        vectors: &[f32],
+        norms: &[f32],
+        dimensions: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let mut nearest = vec![entry_point];
+        let neighbors = &self.neighbors;
+
+        // Greedy search at each layer (find 1 nearest)
+        for level in (1..=entry_level).rev() {
+            nearest = Self::search_layer_fp32_direct(
+                query, query_norm, &nearest, 1, level, vectors, norms, dimensions, neighbors,
+            )?;
+        }
+
+        // Beam search at layer 0 (find ef nearest)
+        let candidates = Self::search_layer_fp32_direct(
+            query,
+            query_norm,
+            &nearest,
+            ef.max(k),
+            0,
+            vectors,
+            norms,
+            dimensions,
+            neighbors,
+        )?;
+
+        // Convert to SearchResult with exact distances
+        let mut results = Vec::with_capacity(candidates.len());
+        for &id in &candidates {
+            let distance = self.distance_exact(query, id)?;
+            results.push(SearchResult::new(id, distance));
+        }
+
+        results.sort_unstable_by_key(|r| OrderedFloat(r.distance));
+        results.truncate(k);
+
+        debug!(
+            num_results = results.len(),
+            closest_distance = results.first().map(|r| r.distance),
+            "FP32 specialized search completed"
+        );
+
+        Ok(results)
+    }
+
+    /// Generic search path (RaBitQ, non-L2 distance functions, fallback)
+    #[inline(never)]
+    fn search_generic(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        entry_point: u32,
+        entry_level: u8,
+    ) -> Result<Vec<SearchResult>> {
         let mut nearest = vec![entry_point];
 
         // Use asymmetric search for RaBitQ storage (CLOUD MOAT - 2-3x speedup)
@@ -82,23 +264,19 @@ impl HNSWIndex {
         };
 
         // Convert to SearchResult and return k nearest
-        // Pre-allocate with exact capacity to avoid reallocations
         let mut results = Vec::with_capacity(candidates.len());
         for &id in &candidates {
             let distance = self.distance_exact(query, id)?;
             results.push(SearchResult::new(id, distance));
         }
 
-        // Sort by distance (closest first) - unstable is faster
         results.sort_unstable_by_key(|r| OrderedFloat(r.distance));
-
-        // Return top k
         results.truncate(k);
 
         debug!(
             num_results = results.len(),
             closest_distance = results.first().map(|r| r.distance),
-            "Search completed successfully"
+            "Generic search completed"
         );
 
         Ok(results)
@@ -864,6 +1042,332 @@ impl HNSWIndex {
             // Use pre-allocated buffer to avoid per-search allocation
             results_buf.extend(working.drain());
             results_buf.sort_unstable_by_key(|c| c.distance); // unstable is faster
+            let mut output = Vec::with_capacity(results_buf.len());
+            output.extend(results_buf.iter().map(|c| c.node_id));
+            Ok(output)
+        })
+    }
+
+    /// Specialized SQ8 search layer with NO enum dispatch (cdylib optimization)
+    ///
+    /// This function takes SQ8 data directly instead of going through VectorStorage.
+    /// In cdylib builds, this allows full inlining of the distance calculation,
+    /// eliminating the 49 function calls that plague the generic path.
+    ///
+    /// # Performance
+    /// - cdylib: Should achieve same performance as binary (~1.3x FP32)
+    /// - Function size: ~340 bytes (same as binary, vs 12KB in generic path)
+    #[inline(never)] // Prevent inlining dispatcher - we want separate code paths
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn search_layer_sq8_direct(
+        query: &[f32],
+        query_norm: f32,
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+        quantized: &[u8],
+        norms: &[f32],
+        scales: &[f32],
+        mins: &[f32],
+        dimensions: usize,
+        neighbors: &super::super::graph_storage::GraphStorage,
+    ) -> Result<Vec<u32>> {
+        use super::super::query_buffers;
+
+        query_buffers::with_buffers(|buffers| {
+            let visited = &mut buffers.visited;
+            let candidates = &mut buffers.candidates;
+            let working = &mut buffers.working;
+            let unvisited = &mut buffers.unvisited;
+            let results_buf = &mut buffers.results;
+
+            // Initialize with entry points - direct SQ8 distance (no enum match)
+            for &ep in entry_points {
+                let idx = ep as usize;
+                let start = idx * dimensions;
+                let end = start + dimensions;
+                let vec_norm = norms[idx];
+                let quantized_slice = &quantized[start..end];
+                let dot = crate::distance::sq8_asymmetric_dot_product(
+                    query,
+                    quantized_slice,
+                    scales,
+                    mins,
+                );
+                let dist = query_norm + vec_norm - 2.0 * dot;
+                let candidate = Candidate::new(ep, dist);
+
+                candidates.push(Reverse(candidate));
+                working.push(candidate);
+                visited.insert(ep);
+            }
+
+            // Greedy search - all distance calculations use direct SQ8 path
+            while let Some(Reverse(current)) = candidates.pop() {
+                if let Some(&farthest) = working.peek() {
+                    if current.distance > farthest.distance {
+                        break;
+                    }
+                }
+
+                // Collect unvisited neighbors
+                unvisited.clear();
+                neighbors.with_neighbors(current.node_id, level, |neighbor_list| {
+                    for &id in neighbor_list {
+                        if !visited.contains(id) {
+                            unvisited.push(id);
+                        }
+                    }
+                });
+
+                // Platform-aware prefetching
+                use crate::vector::hnsw::prefetch::PrefetchConfig;
+                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
+                let unvisited_slice = unvisited.as_slice();
+
+                if PREFETCH_ENABLED {
+                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                        // Prefetch quantized data directly
+                        let idx = id as usize;
+                        let start = idx * dimensions;
+                        if start < quantized.len() {
+                            let ptr = quantized[start..].as_ptr();
+                            #[cfg(target_arch = "x86_64")]
+                            unsafe {
+                                std::arch::x86_64::_mm_prefetch(
+                                    ptr.cast::<i8>(),
+                                    std::arch::x86_64::_MM_HINT_T0,
+                                );
+                            }
+                            #[cfg(target_arch = "aarch64")]
+                            unsafe {
+                                std::arch::asm!(
+                                    "prfm pldl1keep, [{ptr}]",
+                                    ptr = in(reg) ptr,
+                                    options(nostack, preserves_flags)
+                                );
+                            }
+                        }
+                        neighbors.prefetch(id, level);
+                    }
+                }
+
+                for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
+                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                        let prefetch_id = unvisited_slice[i + PREFETCH_DISTANCE];
+                        let idx = prefetch_id as usize;
+                        let start = idx * dimensions;
+                        if start < quantized.len() {
+                            let ptr = quantized[start..].as_ptr();
+                            #[cfg(target_arch = "x86_64")]
+                            unsafe {
+                                std::arch::x86_64::_mm_prefetch(
+                                    ptr.cast::<i8>(),
+                                    std::arch::x86_64::_MM_HINT_T0,
+                                );
+                            }
+                            #[cfg(target_arch = "aarch64")]
+                            unsafe {
+                                std::arch::asm!(
+                                    "prfm pldl1keep, [{ptr}]",
+                                    ptr = in(reg) ptr,
+                                    options(nostack, preserves_flags)
+                                );
+                            }
+                        }
+                        neighbors.prefetch(prefetch_id, level);
+                    }
+
+                    visited.insert(neighbor_id);
+
+                    // Direct SQ8 L2 decomposed distance - NO enum match
+                    let idx = neighbor_id as usize;
+                    let start = idx * dimensions;
+                    let end = start + dimensions;
+                    let vec_norm = norms[idx];
+                    let quantized_slice = &quantized[start..end];
+                    let dot = crate::distance::sq8_asymmetric_dot_product(
+                        query,
+                        quantized_slice,
+                        scales,
+                        mins,
+                    );
+                    let dist = query_norm + vec_norm - 2.0 * dot;
+                    let neighbor = Candidate::new(neighbor_id, dist);
+
+                    if let Some(&farthest) = working.peek() {
+                        if dist < farthest.distance.0 || working.len() < ef {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+
+                            if working.len() > ef {
+                                working.pop();
+                            }
+                        }
+                    } else {
+                        candidates.push(Reverse(neighbor));
+                        working.push(neighbor);
+                    }
+                }
+            }
+
+            // Return node IDs sorted by distance
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance);
+            let mut output = Vec::with_capacity(results_buf.len());
+            output.extend(results_buf.iter().map(|c| c.node_id));
+            Ok(output)
+        })
+    }
+
+    /// Specialized FP32 search layer with NO enum dispatch (cdylib optimization)
+    ///
+    /// This function takes FP32 data directly instead of going through VectorStorage.
+    /// Provides parity with SQ8 optimization for consistent cdylib performance.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn search_layer_fp32_direct(
+        query: &[f32],
+        query_norm: f32,
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+        vectors: &[f32],
+        norms: &[f32],
+        dimensions: usize,
+        neighbors: &super::super::graph_storage::GraphStorage,
+    ) -> Result<Vec<u32>> {
+        use super::super::query_buffers;
+
+        query_buffers::with_buffers(|buffers| {
+            let visited = &mut buffers.visited;
+            let candidates = &mut buffers.candidates;
+            let working = &mut buffers.working;
+            let unvisited = &mut buffers.unvisited;
+            let results_buf = &mut buffers.results;
+
+            // Initialize with entry points - direct FP32 L2 decomposed distance
+            for &ep in entry_points {
+                let idx = ep as usize;
+                let start = idx * dimensions;
+                let end = start + dimensions;
+                let vec = &vectors[start..end];
+                let vec_norm = norms[idx];
+                let dot = crate::distance::dot_product(query, vec);
+                let dist = query_norm + vec_norm - 2.0 * dot;
+                let candidate = Candidate::new(ep, dist);
+
+                candidates.push(Reverse(candidate));
+                working.push(candidate);
+                visited.insert(ep);
+            }
+
+            while let Some(Reverse(current)) = candidates.pop() {
+                if let Some(&farthest) = working.peek() {
+                    if current.distance > farthest.distance {
+                        break;
+                    }
+                }
+
+                unvisited.clear();
+                neighbors.with_neighbors(current.node_id, level, |neighbor_list| {
+                    for &id in neighbor_list {
+                        if !visited.contains(id) {
+                            unvisited.push(id);
+                        }
+                    }
+                });
+
+                use crate::vector::hnsw::prefetch::PrefetchConfig;
+                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
+                let unvisited_slice = unvisited.as_slice();
+
+                if PREFETCH_ENABLED {
+                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
+                        let idx = id as usize;
+                        let start = idx * dimensions;
+                        if start < vectors.len() {
+                            let ptr = vectors[start..].as_ptr().cast::<u8>();
+                            #[cfg(target_arch = "x86_64")]
+                            unsafe {
+                                std::arch::x86_64::_mm_prefetch(
+                                    ptr.cast::<i8>(),
+                                    std::arch::x86_64::_MM_HINT_T0,
+                                );
+                            }
+                            #[cfg(target_arch = "aarch64")]
+                            unsafe {
+                                std::arch::asm!(
+                                    "prfm pldl1keep, [{ptr}]",
+                                    ptr = in(reg) ptr,
+                                    options(nostack, preserves_flags)
+                                );
+                            }
+                        }
+                        neighbors.prefetch(id, level);
+                    }
+                }
+
+                for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
+                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
+                        let prefetch_id = unvisited_slice[i + PREFETCH_DISTANCE];
+                        let idx = prefetch_id as usize;
+                        let start = idx * dimensions;
+                        if start < vectors.len() {
+                            let ptr = vectors[start..].as_ptr().cast::<u8>();
+                            #[cfg(target_arch = "x86_64")]
+                            unsafe {
+                                std::arch::x86_64::_mm_prefetch(
+                                    ptr.cast::<i8>(),
+                                    std::arch::x86_64::_MM_HINT_T0,
+                                );
+                            }
+                            #[cfg(target_arch = "aarch64")]
+                            unsafe {
+                                std::arch::asm!(
+                                    "prfm pldl1keep, [{ptr}]",
+                                    ptr = in(reg) ptr,
+                                    options(nostack, preserves_flags)
+                                );
+                            }
+                        }
+                        neighbors.prefetch(prefetch_id, level);
+                    }
+
+                    visited.insert(neighbor_id);
+
+                    // Direct FP32 L2 decomposed distance
+                    let idx = neighbor_id as usize;
+                    let start = idx * dimensions;
+                    let end = start + dimensions;
+                    let vec = &vectors[start..end];
+                    let vec_norm = norms[idx];
+                    let dot = crate::distance::dot_product(query, vec);
+                    let dist = query_norm + vec_norm - 2.0 * dot;
+                    let neighbor = Candidate::new(neighbor_id, dist);
+
+                    if let Some(&farthest) = working.peek() {
+                        if dist < farthest.distance.0 || working.len() < ef {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+
+                            if working.len() > ef {
+                                working.pop();
+                            }
+                        }
+                    } else {
+                        candidates.push(Reverse(neighbor));
+                        working.push(neighbor);
+                    }
+                }
+            }
+
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance);
             let mut output = Vec::with_capacity(results_buf.len());
             output.extend(results_buf.iter().map(|c| c.node_id));
             Ok(output)

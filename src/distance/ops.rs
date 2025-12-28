@@ -324,9 +324,10 @@ pub fn sq8_asymmetric_dot_product(
     }
 }
 
-/// NEON-accelerated SQ8 dot product
+/// NEON-accelerated SQ8 dot product (legacy - code inlined in sq8_asymmetric_dot_product)
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
+#[allow(dead_code)]
 unsafe fn sq8_dot_product_neon(
     query: &[f32],
     quantized: &[u8],
@@ -383,7 +384,9 @@ unsafe fn sq8_dot_product_neon(
     result
 }
 
+/// Scalar fallback for SQ8 dot product (used on x86_64 and other non-NEON platforms)
 #[inline]
+#[allow(dead_code)]
 fn sq8_dot_product_scalar(query: &[f32], quantized: &[u8], scales: &[f32], mins: &[f32]) -> f32 {
     let mut sum = 0.0f32;
     for i in 0..query.len() {

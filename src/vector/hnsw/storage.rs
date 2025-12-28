@@ -30,7 +30,7 @@ pub struct SQ8Accessor<'a> {
     dimensions: usize,
 }
 
-impl<'a> SQ8Accessor<'a> {
+impl SQ8Accessor<'_> {
     /// Compute L2 decomposed distance to a vector
     #[inline(always)]
     pub fn distance_l2_decomposed(&self, query: &[f32], query_norm: f32, id: u32) -> f32 {
@@ -1522,6 +1522,7 @@ impl VectorStorage {
     /// Returns None if storage is not SQ8 or not trained.
     /// The accessor provides fast distance calculation without enum matching overhead.
     #[inline]
+    #[must_use]
     pub fn sq8_accessor(&self) -> Option<SQ8Accessor<'_>> {
         match self {
             Self::ScalarQuantized {
@@ -1544,6 +1545,58 @@ impl VectorStorage {
                     count: *count,
                     dimensions: *dimensions,
                 })
+            }
+            _ => None,
+        }
+    }
+
+    /// Get full precision data for specialized search functions.
+    ///
+    /// Returns (vectors, norms, count, dimensions) for FullPrecision storage.
+    /// Used by specialized search functions to bypass enum dispatch per-distance.
+    #[inline]
+    #[must_use]
+    pub fn fp32_data(&self) -> Option<(&[f32], &[f32], usize, usize)> {
+        match self {
+            Self::FullPrecision {
+                vectors,
+                norms,
+                count,
+                dimensions,
+            } => Some((vectors, norms, *count, *dimensions)),
+            _ => None,
+        }
+    }
+
+    /// Get SQ8 data for specialized search functions.
+    ///
+    /// Returns (quantized, norms, scales, mins, count, dimensions) for ScalarQuantized storage.
+    /// Used by specialized search functions to bypass enum dispatch per-distance.
+    #[inline]
+    #[must_use]
+    #[allow(clippy::type_complexity)]
+    pub fn sq8_data(&self) -> Option<(&[u8], &[f32], &[f32], &[f32], usize, usize)> {
+        match self {
+            Self::ScalarQuantized {
+                params,
+                quantized,
+                norms,
+                count,
+                dimensions,
+                trained,
+                ..
+            } => {
+                if !*trained {
+                    return None;
+                }
+                Some((
+                    quantized,
+                    norms,
+                    &params.scales,
+                    &params.mins,
+                    *count,
+                    *dimensions,
+                ))
             }
             _ => None,
         }
