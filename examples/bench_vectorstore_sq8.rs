@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --release --example bench_vectorstore_sq8
 
-use omendb::vector::{QuantizationMode, Vector, VectorStore, VectorStoreOptions};
+use omendb::vector::{QuantizationMode, Vector, VectorStoreOptions};
 use rand::Rng;
 use std::time::Instant;
 
