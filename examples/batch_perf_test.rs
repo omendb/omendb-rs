@@ -30,7 +30,7 @@ fn main() {
     for q in &queries {
         let _ = store.knn_search_readonly(q, k, None);
     }
-    let _ = store.batch_search_parallel(&queries, k, None);
+    let _ = store.search_batch(&queries, k, None);
 
     // Single-query benchmark
     let start = Instant::now();
@@ -47,7 +47,7 @@ fn main() {
     // Batch benchmark
     let start = Instant::now();
     for _ in 0..iters {
-        let _ = store.batch_search_parallel(&queries, k, None);
+        let _ = store.search_batch(&queries, k, None);
     }
     let batch_elapsed = start.elapsed();
     let batch_total = (iters * n_queries) as f64;

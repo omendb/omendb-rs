@@ -145,8 +145,8 @@ class VectorDatabase {
 		return this._native.delete(ids);
 	}
 
-	deleteWhere(filter) {
-		return this._native.deleteWhere(filter);
+	deleteByFilter(filter) {
+		return this._native.deleteByFilter(filter);
 	}
 
 	count(filter) {
@@ -245,8 +245,8 @@ class VectorDatabase {
 		return this._native.exists(id);
 	}
 
-	getMany(ids) {
-		return this._native.getMany(ids);
+	getBatch(ids) {
+		return this._native.getBatch(ids);
 	}
 }
 

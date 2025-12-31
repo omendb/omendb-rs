@@ -369,7 +369,7 @@ describe("VectorDatabase", () => {
 			});
 		});
 
-		describe("getMany", () => {
+		describe("getBatch", () => {
 			beforeEach(() => {
 				db.set([
 					{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } },
@@ -378,7 +378,7 @@ describe("VectorDatabase", () => {
 			});
 
 			it("should return multiple vectors by ID", () => {
-				const results = db.getMany(["a", "b", "c"]); // c doesn't exist
+				const results = db.getBatch(["a", "b", "c"]); // c doesn't exist
 
 				expect(results).toHaveLength(3);
 				expect(results[0]?.id).toBe("a");
@@ -387,22 +387,22 @@ describe("VectorDatabase", () => {
 			});
 
 			it("should preserve input order", () => {
-				const results = db.getMany(["b", "a"]);
+				const results = db.getBatch(["b", "a"]);
 				expect(results[0]?.id).toBe("b");
 				expect(results[1]?.id).toBe("a");
 			});
 
 			it("should return empty array for empty input", () => {
-				expect(db.getMany([])).toEqual([]);
+				expect(db.getBatch([])).toEqual([]);
 			});
 
 			it("should return all null for missing IDs", () => {
-				const results = db.getMany(["x", "y", "z"]);
+				const results = db.getBatch(["x", "y", "z"]);
 				expect(results).toEqual([null, null, null]);
 			});
 		});
 
-		describe("deleteWhere", () => {
+		describe("deleteByFilter", () => {
 			it("should delete by equality filter", () => {
 				db.set([
 					{
@@ -422,7 +422,7 @@ describe("VectorDatabase", () => {
 					},
 				]);
 
-				const count = db.deleteWhere({ status: "archived" });
+				const count = db.deleteByFilter({ status: "archived" });
 				expect(count).toBe(2);
 				expect(new Set(db.ids())).toEqual(new Set(["a"]));
 			});
@@ -434,14 +434,14 @@ describe("VectorDatabase", () => {
 					{ id: "c", vector: Array(128).fill(0.3), metadata: { score: 0.9 } },
 				]);
 
-				const count = db.deleteWhere({ score: { $lt: 0.5 } });
+				const count = db.deleteByFilter({ score: { $lt: 0.5 } });
 				expect(count).toBe(1);
 				expect(new Set(db.ids())).toEqual(new Set(["b", "c"]));
 			});
 
 			it("should return 0 when no match", () => {
 				db.set([{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } }]);
-				const count = db.deleteWhere({ x: 999 });
+				const count = db.deleteByFilter({ x: 999 });
 				expect(count).toBe(0);
 				expect(db.ids()).toEqual(["a"]);
 			});
@@ -465,7 +465,7 @@ describe("VectorDatabase", () => {
 					},
 				]);
 
-				const count = db.deleteWhere({
+				const count = db.deleteByFilter({
 					$and: [{ type: "doc" }, { score: { $lt: 0.8 } }],
 				});
 				expect(count).toBe(1);

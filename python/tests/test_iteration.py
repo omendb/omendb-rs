@@ -1,4 +1,4 @@
-"""Tests for iteration API: ids(), items(), __iter__, get_many(), exists()"""
+"""Tests for iteration API: ids(), items(), __iter__, get_batch(), exists()"""
 
 import omendb
 
@@ -128,8 +128,8 @@ def test_contains():
     assert "b" not in db
 
 
-def test_get_many():
-    """Test get_many() batch retrieval"""
+def test_get_batch():
+    """Test get_batch() batch retrieval"""
     db = omendb.open(":memory:", dimensions=3)
     db.set(
         [
@@ -138,7 +138,7 @@ def test_get_many():
         ]
     )
 
-    results = db.get_many(["a", "b", "c"])  # c doesn't exist
+    results = db.get_batch(["a", "b", "c"])  # c doesn't exist
 
     assert len(results) == 3
     assert results[0]["id"] == "a"
@@ -147,29 +147,29 @@ def test_get_many():
     assert results[2] is None
 
 
-def test_get_many_preserves_order():
-    """Test get_many() preserves input order"""
+def test_get_batch_preserves_order():
+    """Test get_batch() preserves input order"""
     db = omendb.open(":memory:", dimensions=3)
     db.set([{"id": str(i), "vector": [i, i, i]} for i in range(10)])
 
-    results = db.get_many(["5", "2", "8", "1"])
+    results = db.get_batch(["5", "2", "8", "1"])
     assert [r["id"] for r in results] == ["5", "2", "8", "1"]
 
 
-def test_get_many_empty():
-    """Test get_many() with empty list"""
+def test_get_batch_empty():
+    """Test get_batch() with empty list"""
     db = omendb.open(":memory:", dimensions=3)
     db.set([{"id": "a", "vector": [1, 2, 3]}])
 
-    results = db.get_many([])
+    results = db.get_batch([])
     assert results == []
 
 
-def test_get_many_all_missing():
-    """Test get_many() when all IDs are missing"""
+def test_get_batch_all_missing():
+    """Test get_batch() when all IDs are missing"""
     db = omendb.open(":memory:", dimensions=3)
 
-    results = db.get_many(["x", "y", "z"])
+    results = db.get_batch(["x", "y", "z"])
     assert results == [None, None, None]
 
 
@@ -190,8 +190,8 @@ def test_len():
     assert len(db) == 1
 
 
-def test_delete_where_simple():
-    """Test delete_where() with simple equality filter"""
+def test_delete_by_filter_simple():
+    """Test delete_by_filter() with simple equality filter"""
     db = omendb.open(":memory:", dimensions=3)
     db.set(
         [
@@ -201,13 +201,13 @@ def test_delete_where_simple():
         ]
     )
 
-    count = db.delete_where({"status": "archived"})
+    count = db.delete_by_filter({"status": "archived"})
     assert count == 2
     assert set(db.ids()) == {"a"}
 
 
-def test_delete_where_comparison():
-    """Test delete_where() with comparison operators"""
+def test_delete_by_filter_comparison():
+    """Test delete_by_filter() with comparison operators"""
     db = omendb.open(":memory:", dimensions=3)
     db.set(
         [
@@ -218,13 +218,13 @@ def test_delete_where_comparison():
     )
 
     # Delete low scores
-    count = db.delete_where({"score": {"$lt": 0.5}})
+    count = db.delete_by_filter({"score": {"$lt": 0.5}})
     assert count == 1
     assert set(db.ids()) == {"b", "c"}
 
 
-def test_delete_where_complex():
-    """Test delete_where() with complex $and filter"""
+def test_delete_by_filter_complex():
+    """Test delete_by_filter() with complex $and filter"""
     db = omendb.open(":memory:", dimensions=3)
     db.set(
         [
@@ -235,23 +235,23 @@ def test_delete_where_complex():
     )
 
     # Delete docs with low score
-    count = db.delete_where({"$and": [{"type": "doc"}, {"score": {"$lt": 0.8}}]})
+    count = db.delete_by_filter({"$and": [{"type": "doc"}, {"score": {"$lt": 0.8}}]})
     assert count == 1
     assert set(db.ids()) == {"b", "c"}
 
 
-def test_delete_where_no_match():
-    """Test delete_where() when no vectors match"""
+def test_delete_by_filter_no_match():
+    """Test delete_by_filter() when no vectors match"""
     db = omendb.open(":memory:", dimensions=3)
     db.set([{"id": "a", "vector": [1, 2, 3], "metadata": {"x": 1}}])
 
-    count = db.delete_where({"x": 999})
+    count = db.delete_by_filter({"x": 999})
     assert count == 0
     assert list(db.ids()) == ["a"]
 
 
-def test_delete_where_all():
-    """Test delete_where() that matches all vectors"""
+def test_delete_by_filter_all():
+    """Test delete_by_filter() that matches all vectors"""
     db = omendb.open(":memory:", dimensions=3)
     db.set(
         [
@@ -260,7 +260,7 @@ def test_delete_where_all():
         ]
     )
 
-    count = db.delete_where({"active": True})
+    count = db.delete_by_filter({"active": True})
     assert count == 2
     assert list(db.ids()) == []
 
@@ -375,16 +375,16 @@ if __name__ == "__main__":
     test_exists()
     test_exists_deleted()
     test_contains()
-    test_get_many()
-    test_get_many_preserves_order()
-    test_get_many_empty()
-    test_get_many_all_missing()
+    test_get_batch()
+    test_get_batch_preserves_order()
+    test_get_batch_empty()
+    test_get_batch_all_missing()
     test_len()
-    test_delete_where_simple()
-    test_delete_where_comparison()
-    test_delete_where_complex()
-    test_delete_where_no_match()
-    test_delete_where_all()
+    test_delete_by_filter_simple()
+    test_delete_by_filter_comparison()
+    test_delete_by_filter_complex()
+    test_delete_by_filter_no_match()
+    test_delete_by_filter_all()
     test_iteration_is_lazy()
     test_iteration_handles_deletion_during_iteration()
     test_count_no_filter()

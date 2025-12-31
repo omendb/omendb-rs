@@ -133,7 +133,7 @@ fn run_with_sq8(ops: Vec<QuantizedOp>) {
             }
             QuantizedOp::GetById { id } => {
                 // Should not panic, may return None
-                let _ = store.get_by_id(&id);
+                let _ = store.get(&id);
             }
             QuantizedOp::Items => {
                 // Should not panic, should return valid Vec
@@ -151,11 +151,11 @@ fn run_with_sq8(ops: Vec<QuantizedOp>) {
                 sanitize_vector(&mut vector);
                 let v = Vector::new(vector.clone());
                 if store.set(id.clone(), v, json!({})).is_ok() {
-                    // After successful insert, get_by_id MUST return Some
-                    let result = store.get_by_id(&id);
+                    // After successful insert, get() MUST return Some
+                    let result = store.get(&id);
                     assert!(
                         result.is_some(),
-                        "get_by_id returned None after successful insert for id: {}",
+                        "get() returned None after successful insert for id: {}",
                         id
                     );
                 }
@@ -210,7 +210,7 @@ fn run_with_rabitq(ops: Vec<QuantizedOp>) {
                 let _ = store.search(&v, k.min(100), None);
             }
             QuantizedOp::GetById { id } => {
-                let _ = store.get_by_id(&id);
+                let _ = store.get(&id);
             }
             QuantizedOp::Items => {
                 let items = store.items();
@@ -226,10 +226,10 @@ fn run_with_rabitq(ops: Vec<QuantizedOp>) {
                 sanitize_vector(&mut vector);
                 let v = Vector::new(vector.clone());
                 if store.set(id.clone(), v, json!({})).is_ok() {
-                    let result = store.get_by_id(&id);
+                    let result = store.get(&id);
                     assert!(
                         result.is_some(),
-                        "get_by_id returned None after successful insert for id: {}",
+                        "get() returned None after successful insert for id: {}",
                         id
                     );
                 }

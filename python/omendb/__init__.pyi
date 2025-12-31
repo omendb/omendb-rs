@@ -214,7 +214,7 @@ class VectorDatabase:
         """
         ...
 
-    def delete_where(self, filter: MetadataFilter) -> int:
+    def delete_by_filter(self, filter: MetadataFilter) -> int:
         """Delete vectors matching a metadata filter.
 
         Evaluates the filter against all vectors and deletes those that match.
@@ -227,11 +227,11 @@ class VectorDatabase:
             Number of vectors deleted.
 
         Examples:
-            >>> db.delete_where({"status": "archived"})
+            >>> db.delete_by_filter({"status": "archived"})
             5
-            >>> db.delete_where({"score": {"$lt": 0.5}})
+            >>> db.delete_by_filter({"score": {"$lt": 0.5}})
             3
-            >>> db.delete_where({"$and": [{"type": "draft"}, {"age": {"$gt": 30}}]})
+            >>> db.delete_by_filter({"$and": [{"type": "draft"}, {"age": {"$gt": 30}}]})
             2
         """
         ...
@@ -337,7 +337,7 @@ class VectorDatabase:
 
         WARNING: Loads all vectors into memory. For 1M vectors at 768D,
         this uses ~3GB RAM. For large datasets, use `for item in db:` which
-        is lazy, or use `ids()` + `get_many()` with batching.
+        is lazy, or use `ids()` + `get_batch()` with batching.
 
         Returns:
             List of {"id": str, "vector": list[float], "metadata": dict}
@@ -376,7 +376,7 @@ class VectorDatabase:
         """
         ...
 
-    def get_many(self, ids: list[str]) -> list[GetResult | None]:
+    def get_batch(self, ids: list[str]) -> list[GetResult | None]:
         """Get multiple vectors by ID.
 
         Batch version of get(). More efficient than calling get() in a loop.

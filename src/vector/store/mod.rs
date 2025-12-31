@@ -1684,13 +1684,6 @@ impl VectorStore {
         ids.iter().map(|id| self.get(id.as_ref())).collect()
     }
 
-    /// Deprecated: Use `get` instead
-    #[deprecated(since = "0.0.21", note = "Use `get` instead")]
-    #[must_use]
-    pub fn get_by_id(&self, id: &str) -> Option<(Vector, JsonValue)> {
-        self.get(id)
-    }
-
     /// Get metadata by string ID (without loading vector data)
     #[must_use]
     pub fn get_metadata_by_id(&self, id: &str) -> Option<&JsonValue> {
@@ -2288,18 +2281,6 @@ impl VectorStore {
             .collect()
     }
 
-    /// Deprecated: Use `search_batch` instead
-    #[deprecated(since = "0.0.21", note = "Use `search_batch` instead")]
-    #[must_use]
-    pub fn batch_search_parallel(
-        &self,
-        queries: &[Vector],
-        k: usize,
-        ef: Option<usize>,
-    ) -> Vec<Result<Vec<(usize, f32)>>> {
-        self.search_batch(queries, k, ef)
-    }
-
     /// Parallel batch search with metadata
     #[must_use]
     pub fn search_batch_with_metadata(
@@ -2312,18 +2293,6 @@ impl VectorStore {
             .par_iter()
             .map(|q| self.search_with_ef_readonly(q, k, None, ef))
             .collect()
-    }
-
-    /// Deprecated: Use `search_batch_with_metadata` instead
-    #[deprecated(since = "0.0.21", note = "Use `search_batch_with_metadata` instead")]
-    #[must_use]
-    pub fn batch_search_parallel_with_metadata(
-        &self,
-        queries: &[Vector],
-        k: usize,
-        ef: Option<usize>,
-    ) -> Vec<Result<Vec<(usize, f32, JsonValue)>>> {
-        self.search_batch_with_metadata(queries, k, ef)
     }
 
     /// Brute-force K-NN search (fallback)

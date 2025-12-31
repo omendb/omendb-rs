@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
         let store = VectorStore::open(&db_path)?;
         println!("Reopened: {} vectors", store.len());
 
-        if let Some((vec, meta)) = store.get_by_id("a") {
+        if let Some((vec, meta)) = store.get("a") {
             println!("Found 'a': {} dims, name={}", vec.data.len(), meta["name"]);
         }
     }

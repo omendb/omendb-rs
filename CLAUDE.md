@@ -2,6 +2,15 @@
 
 Embedded vector database. Rust core with Python/Node bindings.
 
+## 0.0.x Development Policy
+
+**No backwards compatibility during 0.0.x.** Breaking changes are expected and encouraged.
+
+- **No deprecated aliases** - Remove old code entirely, don't leave deprecated wrappers
+- **No compatibility shims** - Users on 0.0.x accept breakage
+- **Clean refactors only** - Update all code (tests, examples, bindings) to new APIs
+- **Full validation required** - Run all tests, examples, benchmarks before release
+
 ## Quick Reference
 
 ```bash
@@ -86,7 +95,7 @@ node/                   # NAPI-RS bindings
 **Hot path optimizations applied:**
 
 - `knn_search_ef()` avoids Option overhead (~40% faster)
-- `batch_search_parallel()` pre-computes ef once
+- `search_batch()` pre-computes ef once
 - Sequential HNSW insert (parallel degrades recall)
 
 **Benchmarks:**

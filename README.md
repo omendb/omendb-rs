@@ -56,9 +56,9 @@ db = omendb.open(":memory:", dimensions)  # In-memory (ephemeral)
 # CRUD
 db.set(items)                           # Insert/update vectors
 db.get(id)                              # Get by ID
-db.get_many(ids)                        # Batch get by IDs
+db.get_batch(ids)                       # Batch get by IDs
 db.delete(ids)                          # Delete by IDs
-db.delete_where(filter)                 # Delete by metadata filter
+db.delete_by_filter(filter)             # Delete by metadata filter
 db.update(id, metadata)                 # Update metadata only
 
 # Iteration

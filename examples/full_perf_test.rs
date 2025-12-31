@@ -28,7 +28,7 @@ fn bench_dimension(dim: usize) {
     for q in &queries {
         let _ = store.knn_search_readonly(q, k, None);
     }
-    let _ = store.batch_search_parallel(&queries, k, None);
+    let _ = store.search_batch(&queries, k, None);
 
     // Single-query benchmark
     let iters = 5;
@@ -44,7 +44,7 @@ fn bench_dimension(dim: usize) {
     // Batch benchmark
     let start = Instant::now();
     for _ in 0..iters {
-        let _ = store.batch_search_parallel(&queries, k, None);
+        let _ = store.search_batch(&queries, k, None);
     }
     let batch_elapsed = start.elapsed();
     let batch_qps = (iters * n_queries) as f64 / batch_elapsed.as_secs_f64();

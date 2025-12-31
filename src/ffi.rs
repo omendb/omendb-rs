@@ -240,7 +240,7 @@ pub unsafe extern "C" fn omendb_get(
 
     let mut results = Vec::new();
     for id in ids {
-        if let Some((vector, metadata)) = db.store.get_by_id(&id) {
+        if let Some((vector, metadata)) = db.store.get(&id) {
             results.push(json!({
                 "id": id,
                 "vector": vector.data,

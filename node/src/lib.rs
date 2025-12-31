@@ -487,7 +487,7 @@ impl VectorDatabase {
             let inner = inner_arc.read();
             let all_results = inner
                 .store
-                .batch_search_parallel_with_metadata(&query_vecs, k_usize, ef_usize);
+                .search_batch_with_metadata(&query_vecs, k_usize, ef_usize);
 
             // Convert results
             let mut output = Vec::with_capacity(all_results.len());
@@ -525,7 +525,7 @@ impl VectorDatabase {
     pub fn get(&self, id: String) -> Option<GetResult> {
         let inner = self.inner.read();
 
-        inner.store.get_by_id(&id).map(|(vec, metadata)| GetResult {
+        inner.store.get(&id).map(|(vec, metadata)| GetResult {
             id,
             vector: Float32Array::new(vec.data),
             metadata,
@@ -554,16 +554,16 @@ impl VectorDatabase {
     /// @example
     /// ```javascript
     /// // Delete by equality
-    /// db.deleteWhere({ status: "archived" });
+    /// db.deleteByFilter({ status: "archived" });
     ///
     /// // Delete with comparison
-    /// db.deleteWhere({ score: { $lt: 0.5 } });
+    /// db.deleteByFilter({ score: { $lt: 0.5 } });
     ///
     /// // Complex filter
-    /// db.deleteWhere({ $and: [{ type: "draft" }, { age: { $gt: 30 } }] });
+    /// db.deleteByFilter({ $and: [{ type: "draft" }, { age: { $gt: 30 } }] });
     /// ```
     #[napi]
-    pub fn delete_where(
+    pub fn delete_by_filter(
         &self,
         #[napi(ts_arg_type = "Record<string, unknown>")] filter: JsonValue,
     ) -> Result<u32> {
@@ -1148,11 +1148,11 @@ impl VectorDatabase {
     /// @param ids - Array of vector IDs to retrieve
     /// @returns Array of results in same order as input, null for missing IDs
     #[napi]
-    pub fn get_many(&self, ids: Vec<String>) -> Vec<Option<GetResult>> {
+    pub fn get_batch(&self, ids: Vec<String>) -> Vec<Option<GetResult>> {
         let inner = self.inner.read();
         ids.iter()
             .map(|id| {
-                inner.store.get_by_id(id).map(|(vec, metadata)| GetResult {
+                inner.store.get(id).map(|(vec, metadata)| GetResult {
                     id: id.clone(),
                     vector: Float32Array::new(vec.data),
                     metadata,

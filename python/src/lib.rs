@@ -824,13 +824,6 @@ impl VectorDatabase {
         Ok(result)
     }
 
-    /// Deprecated: Use `delete_by_filter` instead.
-    #[pyo3(signature = (filter))]
-    #[deprecated(since = "0.0.21", note = "Use `delete_by_filter` instead")]
-    fn delete_where(&self, filter: &Bound<'_, PyDict>) -> PyResult<usize> {
-        self.delete_by_filter(filter)
-    }
-
     /// Count vectors, optionally filtered by metadata.
     ///
     /// Without a filter, returns total count (same as len(db)).
@@ -1050,16 +1043,6 @@ impl VectorDatabase {
                 }
             })
             .collect()
-    }
-
-    /// Deprecated: Use `get_batch` instead.
-    #[deprecated(since = "0.0.21", note = "Use `get_batch` instead")]
-    fn get_many(
-        &self,
-        py: Python<'_>,
-        ids: Vec<String>,
-    ) -> PyResult<Vec<Option<HashMap<String, Py<PyAny>>>>> {
-        self.get_batch(py, ids)
     }
 
     /// Context manager entry - returns self for `with` statement.
