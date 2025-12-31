@@ -50,7 +50,7 @@
 //! // results: [(0, 0.0), (1, 1.13)] - (index, distance)
 //!
 //! // Get by ID
-//! let (vec, metadata) = store.get_by_id("doc1").unwrap();
+//! let (vec, metadata) = store.get("doc1").unwrap();
 //! ```
 //!
 //! # Filtered Search (ACORN-1)

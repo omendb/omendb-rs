@@ -409,7 +409,7 @@ pub unsafe extern "C" fn omendb_search(
     // Convert results to JSON
     let mut json_results = Vec::new();
     for (idx, distance) in search_results {
-        if let Some(vector) = db.store.get_owned(idx) {
+        if let Some(vector) = db.store.get_by_internal_index_owned(idx) {
             // Find the string ID for this index
             let id = db
                 .store
@@ -418,7 +418,7 @@ pub unsafe extern "C" fn omendb_search(
                 .find(|(_, &i)| i == idx)
                 .map_or_else(|| idx.to_string(), |(id, _)| id.clone());
 
-            let metadata = db.store.get_by_id(&id).map(|(_, m)| m).unwrap_or(json!({}));
+            let metadata = db.store.get(&id).map(|(_, m)| m).unwrap_or(json!({}));
 
             json_results.push(json!({
                 "id": id,

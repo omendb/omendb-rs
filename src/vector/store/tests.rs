@@ -293,8 +293,8 @@ fn test_delete() {
     assert!(store.deleted.contains_key(&0));
     assert!(!store.id_to_index.contains_key("doc1"));
 
-    // get_by_id should return None for deleted
-    assert!(store.get_by_id("doc1").is_none());
+    // get should return None for deleted
+    assert!(store.get("doc1").is_none());
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn test_update() {
         )
         .unwrap();
 
-    let (_, metadata) = store.get_by_id("doc1").unwrap();
+    let (_, metadata) = store.get("doc1").unwrap();
     assert_eq!(metadata.get("title").unwrap(), "Updated");
     assert_eq!(metadata.get("author").unwrap(), "Bob");
 }
@@ -403,7 +403,7 @@ fn test_search_with_filter() {
 }
 
 #[test]
-fn test_get_by_id() {
+fn test_get() {
     let mut store = VectorStore::new(128);
 
     let vector = random_vector(128, 0);
@@ -414,13 +414,13 @@ fn test_get_by_id() {
         .unwrap();
 
     // Get by ID
-    let (retrieved_vector, retrieved_metadata) = store.get_by_id("doc1").unwrap();
+    let (retrieved_vector, retrieved_metadata) = store.get("doc1").unwrap();
 
     assert_eq!(retrieved_vector.data, vector.data);
     assert_eq!(retrieved_metadata, metadata);
 
     // Non-existent ID should return None
-    assert!(store.get_by_id("nonexistent").is_none());
+    assert!(store.get("nonexistent").is_none());
 }
 
 // Tests for persistent storage
@@ -455,7 +455,7 @@ fn test_open_new_database() {
         .unwrap();
 
     assert_eq!(store.len(), 2);
-    assert!(store.get_by_id("doc1").is_some());
+    assert!(store.get("doc1").is_some());
 }
 
 #[test]
@@ -504,18 +504,18 @@ fn test_persistent_roundtrip() {
         assert_eq!(store.len(), 3);
 
         // Verify vec1
-        let (vec1, meta1) = store.get_by_id("vec1").unwrap();
+        let (vec1, meta1) = store.get("vec1").unwrap();
         assert_eq!(vec1.data, random_vector(128, 10).data);
         assert_eq!(meta1["category"], "A");
         assert_eq!(meta1["score"], 0.95);
 
         // Verify vec2
-        let (vec2, meta2) = store.get_by_id("vec2").unwrap();
+        let (vec2, meta2) = store.get("vec2").unwrap();
         assert_eq!(vec2.data, random_vector(128, 20).data);
         assert_eq!(meta2["category"], "B");
 
         // Verify vec3
-        assert!(store.get_by_id("vec3").is_some());
+        assert!(store.get("vec3").is_some());
     }
 }
 
@@ -549,7 +549,7 @@ fn test_persistent_delete() {
 
         // Delete one
         store.delete("delete_me").unwrap();
-        assert!(store.get_by_id("delete_me").is_none());
+        assert!(store.get("delete_me").is_none());
 
         store.flush().unwrap();
     }
@@ -559,8 +559,8 @@ fn test_persistent_delete() {
         let store = VectorStore::open(&db_path).unwrap();
 
         // Only "keep" should be accessible
-        assert!(store.get_by_id("keep").is_some());
-        assert!(store.get_by_id("delete_me").is_none());
+        assert!(store.get("keep").is_some());
+        assert!(store.get("delete_me").is_none());
     }
 }
 

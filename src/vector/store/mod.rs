@@ -1648,7 +1648,7 @@ impl VectorStore {
     ///
     /// Returns owned data since vectors may be loaded from disk for quantized stores.
     #[must_use]
-    pub fn get_by_id(&self, id: &str) -> Option<(Vector, JsonValue)> {
+    pub fn get(&self, id: &str) -> Option<(Vector, JsonValue)> {
         let &index = self.id_to_index.get(id)?;
         if self.deleted.contains_key(&index) {
             return None;
@@ -1673,6 +1673,22 @@ impl VectorStore {
         }
 
         None
+    }
+
+    /// Get multiple vectors by string IDs
+    ///
+    /// Returns a vector of results in the same order as input IDs.
+    /// Missing/deleted IDs return None in their position.
+    #[must_use]
+    pub fn get_batch(&self, ids: &[impl AsRef<str>]) -> Vec<Option<(Vector, JsonValue)>> {
+        ids.iter().map(|id| self.get(id.as_ref())).collect()
+    }
+
+    /// Deprecated: Use `get` instead
+    #[deprecated(since = "0.0.21", note = "Use `get` instead")]
+    #[must_use]
+    pub fn get_by_id(&self, id: &str) -> Option<(Vector, JsonValue)> {
+        self.get(id)
     }
 
     /// Get metadata by string ID (without loading vector data)
@@ -2257,7 +2273,7 @@ impl VectorStore {
 
     /// Parallel batch search for multiple queries
     #[must_use]
-    pub fn batch_search_parallel(
+    pub fn search_batch(
         &self,
         queries: &[Vector],
         k: usize,
@@ -2272,9 +2288,21 @@ impl VectorStore {
             .collect()
     }
 
+    /// Deprecated: Use `search_batch` instead
+    #[deprecated(since = "0.0.21", note = "Use `search_batch` instead")]
+    #[must_use]
+    pub fn batch_search_parallel(
+        &self,
+        queries: &[Vector],
+        k: usize,
+        ef: Option<usize>,
+    ) -> Vec<Result<Vec<(usize, f32)>>> {
+        self.search_batch(queries, k, ef)
+    }
+
     /// Parallel batch search with metadata
     #[must_use]
-    pub fn batch_search_parallel_with_metadata(
+    pub fn search_batch_with_metadata(
         &self,
         queries: &[Vector],
         k: usize,
@@ -2284,6 +2312,18 @@ impl VectorStore {
             .par_iter()
             .map(|q| self.search_with_ef_readonly(q, k, None, ef))
             .collect()
+    }
+
+    /// Deprecated: Use `search_batch_with_metadata` instead
+    #[deprecated(since = "0.0.21", note = "Use `search_batch_with_metadata` instead")]
+    #[must_use]
+    pub fn batch_search_parallel_with_metadata(
+        &self,
+        queries: &[Vector],
+        k: usize,
+        ef: Option<usize>,
+    ) -> Vec<Result<Vec<(usize, f32, JsonValue)>>> {
+        self.search_batch_with_metadata(queries, k, ef)
     }
 
     /// Brute-force K-NN search (fallback)
@@ -2414,21 +2454,23 @@ impl VectorStore {
     // Accessors
     // ============================================================================
 
-    /// Get vector by ID
+    /// Get vector by internal index (used by FFI bindings)
     #[must_use]
-    pub fn get(&self, id: usize) -> Option<&Vector> {
-        self.vectors.get(id)
+    #[allow(dead_code)] // Used by FFI feature
+    pub(crate) fn get_by_internal_index(&self, idx: usize) -> Option<&Vector> {
+        self.vectors.get(idx)
     }
 
-    /// Get vector by ID (owned)
+    /// Get vector by internal index, owned (used by FFI bindings)
     #[must_use]
-    pub fn get_owned(&self, id: usize) -> Option<Vector> {
-        if let Some(v) = self.vectors.get(id) {
+    #[allow(dead_code)] // Used by FFI feature
+    pub(crate) fn get_by_internal_index_owned(&self, idx: usize) -> Option<Vector> {
+        if let Some(v) = self.vectors.get(idx) {
             return Some(v.clone());
         }
 
         if let Some(ref storage) = self.storage {
-            if let Ok(Some(data)) = storage.get_vector(id) {
+            if let Ok(Some(data)) = storage.get_vector(idx) {
                 return Some(Vector::new(data));
             }
         }
@@ -2446,6 +2488,14 @@ impl VectorStore {
             }
         }
         self.vectors.len().saturating_sub(self.deleted.len())
+    }
+
+    /// Count of vectors stored (excluding deleted vectors)
+    ///
+    /// Alias for `len()` - preferred for database-style APIs.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.len()
     }
 
     /// Check if store is empty

@@ -269,7 +269,7 @@ impl VectorDatabaseIterator {
 
             // Fetch item lazily - only loads one vector at a time
             let inner = self.inner.read();
-            if let Some((vec, meta)) = inner.store.get_by_id(id) {
+            if let Some((vec, meta)) = inner.store.get(id) {
                 let mut result = HashMap::new();
                 result.insert(
                     "id".to_string(),
@@ -744,12 +744,9 @@ impl VectorDatabase {
         }
 
         // Release GIL and search in parallel
-        #[allow(deprecated)]
         let all_results: Vec<Result<Vec<(usize, f32, JsonValue)>, _>> = py.allow_threads(|| {
             let inner = self.inner.read();
-            inner
-                .store
-                .batch_search_parallel_with_metadata(&query_vecs, k, ef)
+            inner.store.search_batch_with_metadata(&query_vecs, k, ef)
         });
 
         // Convert to Python
@@ -796,20 +793,20 @@ impl VectorDatabase {
     /// Examples:
     ///     Delete by equality:
     ///
-    ///     >>> db.delete_where({"status": "archived"})
+    ///     >>> db.delete_by_filter({"status": "archived"})
     ///     5
     ///
     ///     Delete with comparison operators:
     ///
-    ///     >>> db.delete_where({"score": {"$lt": 0.5}})
+    ///     >>> db.delete_by_filter({"score": {"$lt": 0.5}})
     ///     3
     ///
     ///     Delete with complex filter:
     ///
-    ///     >>> db.delete_where({"$and": [{"type": "draft"}, {"age": {"$gt": 30}}]})
+    ///     >>> db.delete_by_filter({"$and": [{"type": "draft"}, {"age": {"$gt": 30}}]})
     ///     2
     #[pyo3(signature = (filter))]
-    fn delete_where(&self, filter: &Bound<'_, PyDict>) -> PyResult<usize> {
+    fn delete_by_filter(&self, filter: &Bound<'_, PyDict>) -> PyResult<usize> {
         let parsed_filter = parse_filter(filter)?;
 
         let mut inner = self.inner.write();
@@ -825,6 +822,13 @@ impl VectorDatabase {
         }
 
         Ok(result)
+    }
+
+    /// Deprecated: Use `delete_by_filter` instead.
+    #[pyo3(signature = (filter))]
+    #[deprecated(since = "0.0.21", note = "Use `delete_by_filter` instead")]
+    fn delete_where(&self, filter: &Bound<'_, PyDict>) -> PyResult<usize> {
+        self.delete_by_filter(filter)
     }
 
     /// Count vectors, optionally filtered by metadata.
@@ -911,7 +915,7 @@ impl VectorDatabase {
         // Handle text update - requires re-indexing
         if let Some(ref new_text) = text {
             // Get existing data
-            let (existing_vec, existing_meta) = inner.store.get_by_id(&id).ok_or_else(|| {
+            let (existing_vec, existing_meta) = inner.store.get(&id).ok_or_else(|| {
                 PyRuntimeError::new_err(format!("Vector with ID '{}' not found", id))
             })?;
 
@@ -983,7 +987,7 @@ impl VectorDatabase {
     fn get(&self, py: Python<'_>, id: String) -> PyResult<Option<HashMap<String, Py<PyAny>>>> {
         let inner = self.inner.read();
 
-        if let Some((vector, metadata)) = inner.store.get_by_id(&id) {
+        if let Some((vector, metadata)) = inner.store.get(&id) {
             let mut result = HashMap::new();
             result.insert(
                 "id".to_string(),
@@ -1015,12 +1019,12 @@ impl VectorDatabase {
     ///                        None for IDs that don't exist.
     ///
     /// Examples:
-    ///     >>> results = db.get_many(["doc1", "doc2", "missing"])
+    ///     >>> results = db.get_batch(["doc1", "doc2", "missing"])
     ///     >>> results[0]  # doc1
     ///     {'id': 'doc1', 'vector': [...], 'metadata': {...}}
     ///     >>> results[2]  # missing
     ///     None
-    fn get_many(
+    fn get_batch(
         &self,
         py: Python<'_>,
         ids: Vec<String>,
@@ -1029,7 +1033,7 @@ impl VectorDatabase {
 
         ids.into_iter()
             .map(|id| {
-                if let Some((vector, metadata)) = inner.store.get_by_id(&id) {
+                if let Some((vector, metadata)) = inner.store.get(&id) {
                     let mut result = HashMap::new();
                     result.insert(
                         "id".to_string(),
@@ -1046,6 +1050,16 @@ impl VectorDatabase {
                 }
             })
             .collect()
+    }
+
+    /// Deprecated: Use `get_batch` instead.
+    #[deprecated(since = "0.0.21", note = "Use `get_batch` instead")]
+    fn get_many(
+        &self,
+        py: Python<'_>,
+        ids: Vec<String>,
+    ) -> PyResult<Vec<Option<HashMap<String, Py<PyAny>>>>> {
+        self.get_batch(py, ids)
     }
 
     /// Context manager entry - returns self for `with` statement.
@@ -1502,7 +1516,7 @@ impl VectorDatabase {
             dict.set_item("score", score)?;
 
             // Include metadata for consistency with search_hybrid
-            if let Some((_, meta)) = inner.store.get_by_id(&id) {
+            if let Some((_, meta)) = inner.store.get(&id) {
                 dict.set_item("metadata", json_to_pyobject(py, &meta)?)?;
             } else {
                 dict.set_item("metadata", PyDict::new(py))?;

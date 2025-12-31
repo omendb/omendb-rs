@@ -2,6 +2,32 @@
 
 All notable changes to OmenDB are documented here.
 
+## [0.0.21] - 2025-12-30
+
+### Changed
+
+- **API**: Renamed `get_by_id` to `get` (deprecated alias kept)
+- **API**: Renamed `batch_search_parallel` to `search_batch` (deprecated alias kept)
+- **API**: Added `count()` as alias for `len()` for database-style APIs
+- **Python**: Renamed `get_many` to `get_batch` (deprecated alias kept)
+- **Python**: Renamed `delete_where` to `delete_by_filter` (deprecated alias kept)
+
+### Added
+
+- `get_batch(&[String])` for batch retrieval by IDs
+- `search_batch_with_metadata` for batch search with metadata
+
+### Internal
+
+- Made `get(usize)` and `get_owned(usize)` crate-private (internal index access)
+- API alignment with cloud LSM-VEC for seamless local→production transition
+
+## [0.0.20] - 2025-12-27
+
+### Changed
+
+- Minor stability improvements
+
 ## [0.0.19] - 2025-12-26
 
 ### Added
