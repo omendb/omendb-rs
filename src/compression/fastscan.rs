@@ -261,6 +261,7 @@ pub fn fastscan_batch_neon(
 
 /// Compute batched distances using FastScan AVX2 (x86_64)
 #[cfg(target_arch = "x86_64")]
+#[allow(clippy::cast_ptr_alignment)] // loadu/storeu intrinsics handle unaligned access
 #[must_use]
 pub fn fastscan_batch_avx2(
     luts_lo: &[[u8; 16]],
