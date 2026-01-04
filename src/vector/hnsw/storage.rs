@@ -20,7 +20,13 @@ use crate::distance::dot_product;
 
 /// Fast accessor for SQ8 distance calculations (no enum match per-call)
 ///
-/// Extract this once before a hot loop to avoid repeated enum matching.
+/// NOTE: Currently unused. L2 decomposition (||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩)
+/// causes ~10% recall regression for SQ8 due to numerical precision issues
+/// (catastrophic cancellation). SQ8 uses the asymmetric path via distance_cmp_mono
+/// instead, which computes ||a-b||² directly for 99%+ recall.
+///
+/// Kept for potential future use if numerical precision can be improved.
+#[allow(dead_code)]
 pub struct SQ8Accessor<'a> {
     quantized: &'a [u8],
     norms: &'a [f32],
@@ -30,6 +36,7 @@ pub struct SQ8Accessor<'a> {
     dimensions: usize,
 }
 
+#[allow(dead_code)]
 impl SQ8Accessor<'_> {
     /// Compute L2 decomposed distance to a vector
     #[inline(always)]
@@ -1442,11 +1449,10 @@ impl VectorStorage {
     #[inline]
     #[must_use]
     pub fn supports_l2_decomposition(&self) -> bool {
-        match self {
-            Self::FullPrecision { .. } => true,
-            Self::ScalarQuantized { trained, .. } => *trained,
-            _ => false,
-        }
+        // SQ8 is excluded - L2 decomposition causes ~10% recall regression
+        // due to numerical precision issues (catastrophic cancellation).
+        // SQ8 uses the asymmetric path via distance_asymmetric_l2 for 99%+ recall.
+        matches!(self, Self::FullPrecision { .. })
     }
 
     /// Compute L2 squared distance using decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
@@ -1519,10 +1525,13 @@ impl VectorStorage {
 
     /// Get an SQ8 accessor for fast distance calculations.
     ///
+    /// NOTE: Currently unused - see SQ8Accessor doc comment for explanation.
+    ///
     /// Returns None if storage is not SQ8 or not trained.
     /// The accessor provides fast distance calculation without enum matching overhead.
     #[inline]
     #[must_use]
+    #[allow(dead_code)]
     pub fn sq8_accessor(&self) -> Option<SQ8Accessor<'_>> {
         match self {
             Self::ScalarQuantized {

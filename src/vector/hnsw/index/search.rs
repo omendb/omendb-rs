@@ -739,10 +739,11 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<u32>> {
         use super::super::query_buffers;
-        use super::super::storage::SQ8Accessor;
 
         // L2 decomposition optimization: pre-compute query norm once
         // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ (~7% faster for L2)
+        // Note: Only used for FullPrecision storage. SQ8 uses asymmetric path
+        // for better recall (L2 decomposition has numerical precision issues).
         let use_l2_decomposition =
             self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
         let query_norm = if use_l2_decomposition {
@@ -755,9 +756,6 @@ impl HNSWIndex {
         let vectors = &self.vectors;
         let neighbors = &self.neighbors;
 
-        // For SQ8, extract accessor once to avoid enum match per-distance
-        let sq8_accessor: Option<SQ8Accessor<'_>> = vectors.sq8_accessor();
-
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
             let candidates = &mut buffers.candidates;
@@ -767,9 +765,7 @@ impl HNSWIndex {
 
             // Initialize with entry points
             for &ep in entry_points {
-                let dist = if let Some(ref accessor) = sq8_accessor {
-                    accessor.distance_l2_decomposed(query, query_norm, ep)
-                } else if use_l2_decomposition {
+                let dist = if use_l2_decomposition {
                     vectors
                         .distance_l2_decomposed(query, query_norm, ep)
                         .ok_or(HNSWError::VectorNotFound(ep))?
@@ -830,10 +826,8 @@ impl HNSWIndex {
                     visited.insert(neighbor_id);
 
                     // Use L2 decomposition when available (~7% faster for L2)
-                    // For SQ8: use cached accessor to avoid enum match per-distance
-                    let dist = if let Some(ref accessor) = sq8_accessor {
-                        accessor.distance_l2_decomposed(query, query_norm, neighbor_id)
-                    } else if use_l2_decomposition {
+                    // SQ8 uses distance_cmp_mono → distance_asymmetric_l2 for recall
+                    let dist = if use_l2_decomposition {
                         vectors
                             .distance_l2_decomposed(query, query_norm, neighbor_id)
                             .ok_or(HNSWError::VectorNotFound(neighbor_id))?
