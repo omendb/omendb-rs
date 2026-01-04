@@ -2241,59 +2241,6 @@ fn json_to_pyobject(py: Python<'_>, value: &JsonValue) -> PyResult<Py<PyAny>> {
     }
 }
 
-/// Benchmark raw SQ8 distance computation (for debugging cdylib performance)
-#[pyfunction]
-#[pyo3(name = "_bench_sq8_distance")]
-fn bench_sq8_distance(
-    py: Python<'_>,
-    dim: usize,
-    n_vectors: usize,
-    n_iterations: usize,
-) -> PyResult<f64> {
-    use omendb_core::ScalarParams;
-    use rand::Rng;
-    use std::hint::black_box;
-
-    let elapsed_ns = py.allow_threads(|| {
-        let mut rng = ::rand::thread_rng();
-
-        // Create random vectors
-        let vectors: Vec<Vec<f32>> = (0..n_vectors)
-            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
-            .collect();
-
-        // Train ScalarParams
-        let refs: Vec<&[f32]> = vectors.iter().map(|v: &Vec<f32>| v.as_slice()).collect();
-        let params = ScalarParams::train(&refs).unwrap();
-
-        // Quantize vectors
-        let quantized: Vec<Vec<u8>> = vectors.iter().map(|v| params.quantize(v)).collect();
-
-        // Query
-        let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
-
-        // Warmup
-        for q in &quantized {
-            black_box(params.asymmetric_l2_squared(&query, q));
-        }
-
-        // Benchmark - use black_box to prevent dead code elimination
-        let start = Instant::now();
-        let mut total = 0.0f32;
-        for _ in 0..n_iterations {
-            for q in &quantized {
-                total += black_box(params.asymmetric_l2_squared(&query, q));
-            }
-        }
-        let elapsed_ns = start.elapsed().as_nanos() as f64 / (n_iterations * n_vectors) as f64;
-
-        // Ensure total is used
-        black_box(total);
-        elapsed_ns
-    });
-    Ok(elapsed_ns)
-}
-
 /// Benchmark SQ8 distance via VectorStorage (to test enum matching overhead)
 #[pyfunction]
 #[pyo3(name = "_bench_sq8_via_storage")]
@@ -2468,64 +2415,6 @@ fn bench_sq8_via_closure(
     Ok(elapsed_ns)
 }
 
-/// Benchmark SQ8 via SQ8Accessor (the actual path used in search_layer_mono)
-#[pyfunction]
-#[pyo3(name = "_bench_sq8_via_accessor")]
-fn bench_sq8_via_accessor(
-    py: Python<'_>,
-    dim: usize,
-    n_vectors: usize,
-    n_iterations: usize,
-) -> PyResult<f64> {
-    use omendb_core::distance::norm_squared;
-    use omendb_core::vector::hnsw::VectorStorage;
-    use rand::Rng;
-    use std::hint::black_box;
-
-    let elapsed_ns = py.allow_threads(|| {
-        let mut rng = ::rand::thread_rng();
-
-        // Create SQ8 storage
-        let mut storage = VectorStorage::new_sq8_quantized(dim);
-
-        // Insert vectors
-        let vectors: Vec<Vec<f32>> = (0..n_vectors)
-            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
-            .collect();
-
-        for v in vectors {
-            storage.insert(v).unwrap();
-        }
-
-        // Query
-        let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect();
-        let query_norm = norm_squared(&query);
-
-        // Get SQ8Accessor (this is what search_layer_mono does)
-        let accessor = storage.sq8_accessor().expect("should have sq8 accessor");
-
-        // Warmup
-        for id in 0..n_vectors.min(100) {
-            black_box(accessor.distance_l2_decomposed(&query, query_norm, id as u32));
-        }
-
-        // Benchmark using accessor (like search does)
-        let start = Instant::now();
-        let mut total = 0.0f32;
-        for _ in 0..n_iterations {
-            for id in 0..n_vectors {
-                let d = accessor.distance_l2_decomposed(&query, query_norm, id as u32);
-                total += black_box(d);
-            }
-        }
-        let elapsed_ns = start.elapsed().as_nanos() as f64 / (n_iterations * n_vectors) as f64;
-
-        black_box(total);
-        elapsed_ns
-    });
-    Ok(elapsed_ns)
-}
-
 /// Benchmark FP32 L2 decomposed distance for comparison
 #[pyfunction]
 #[pyo3(name = "_bench_fp32_decomposed")]
@@ -2586,11 +2475,9 @@ fn bench_fp32_decomposed(
 #[pymodule]
 fn omendb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open, m)?)?;
-    m.add_function(wrap_pyfunction!(bench_sq8_distance, m)?)?;
     m.add_function(wrap_pyfunction!(bench_sq8_via_storage, m)?)?;
     m.add_function(wrap_pyfunction!(bench_sq8_decomposed, m)?)?;
     m.add_function(wrap_pyfunction!(bench_sq8_via_closure, m)?)?;
-    m.add_function(wrap_pyfunction!(bench_sq8_via_accessor, m)?)?;
     m.add_function(wrap_pyfunction!(bench_fp32_decomposed, m)?)?;
     m.add_class::<VectorDatabase>()?;
     m.add_class::<VectorDatabaseIdIterator>()?;
