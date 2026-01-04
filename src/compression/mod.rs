@@ -18,4 +18,6 @@ pub use fastscan::{
 pub use rabitq::{
     ADCTable, QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams, TrainedParams,
 };
-pub use scalar::{SQ8ADCTable, ScalarParams};
+pub use scalar::{
+    SQ8ADCTable, ScalarParams, UniformQuantizedVector, UniformQueryPrep, UniformScalarParams,
+};

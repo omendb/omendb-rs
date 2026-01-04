@@ -8,7 +8,7 @@
 //! Run: cargo bench --bench sq8_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omendb::compression::ScalarParams;
+use omendb::compression::{ScalarParams, UniformScalarParams};
 use omendb::distance::{dot_product, l2_distance_squared};
 use rand::Rng;
 
@@ -148,6 +148,36 @@ fn bench_sq8_adc_build(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark Uniform SQ8 with integer SIMD (new fast implementation)
+fn bench_uniform_sq8(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sq8_comparison/uniform_int_simd");
+
+    for dim in [128, 768] {
+        let vectors = generate_random_vectors(1000, dim);
+        let query = generate_random_vectors(1, dim).pop().unwrap();
+
+        // Train uniform quantization
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let params = UniformScalarParams::train(&refs).unwrap();
+
+        // Quantize vectors with precomputed metadata
+        let quantized: Vec<_> = vectors.iter().map(|v| params.quantize(v)).collect();
+
+        // Prepare query once (precomputes norm, sum, quantized values)
+        let query_prep = params.prepare_query(&query);
+
+        group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
+            b.iter(|| {
+                for q in &quantized {
+                    black_box(params.distance_l2_squared(&query_prep, q));
+                }
+            })
+        });
+    }
+
+    group.finish();
+}
+
 /// End-to-end comparison: ADC build + N lookups vs N asymmetric distances
 fn bench_sq8_crossover(c: &mut Criterion) {
     let mut group = c.benchmark_group("sq8_comparison/crossover");
@@ -201,6 +231,7 @@ criterion_group!(
     bench_fp32_l2,
     bench_fp32_l2_decomposed,
     bench_sq8_asymmetric_l2,
+    bench_uniform_sq8,
     bench_sq8_adc,
     bench_sq8_adc_build,
     bench_sq8_crossover
