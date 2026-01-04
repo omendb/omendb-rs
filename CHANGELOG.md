@@ -2,25 +2,33 @@
 
 All notable changes to OmenDB are documented here.
 
-## [0.0.21] - 2025-12-30
+## [0.0.21] - 2025-01-04
 
-### Changed
+### Breaking Changes
 
-- **API**: Renamed `get_by_id` to `get` (deprecated alias kept)
-- **API**: Renamed `batch_search_parallel` to `search_batch` (deprecated alias kept)
-- **API**: Added `count()` as alias for `len()` for database-style APIs
-- **Python**: Renamed `get_many` to `get_batch` (deprecated alias kept)
-- **Python**: Renamed `delete_where` to `delete_by_filter` (deprecated alias kept)
+- **API**: Renamed `get_by_id` → `get` (old method removed)
+- **API**: Renamed `batch_search_parallel` → `search_batch` (old method removed)
+- **Python**: Renamed `get_many` → `get_batch` (old method removed)
+- **Python**: Renamed `delete_where` → `delete_by_filter` (old method removed)
+
+### Performance
+
+- **SQ8**: Switched from per-dimension to uniform quantization
+  - 2-3x faster via integer SIMD (768D: 57µs → 18µs)
+  - ~97% recall (vs ~98% before, acceptable tradeoff for speed)
+- **FastScan**: SIMD-accelerated batched distance computation (internal)
 
 ### Added
 
 - `get_batch(&[String])` for batch retrieval by IDs
 - `search_batch_with_metadata` for batch search with metadata
+- `count()` as alias for `len()` for database-style APIs
 
 ### Internal
 
 - Made `get(usize)` and `get_owned(usize)` crate-private (internal index access)
 - API alignment with cloud LSM-VEC for seamless local→production transition
+- Simplified SQ8 from per-dimension to uniform quantization (1,100 lines removed)
 
 ## [0.0.20] - 2025-12-27
 
