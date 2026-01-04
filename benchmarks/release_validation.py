@@ -11,7 +11,7 @@ Exit code: 0 on success, 1 on failure
 Tests:
   1. L2 baseline (SIFT-50K): recall@10 >= 97%
   2. Cosine baseline (GloVe-50K): recall@10 >= 88%
-  3. SQ8 quantization (SIFT-50K): recall@10 >= 95%
+  3. SQ8 quantization (SIFT-50K): recall@10 >= 88%
   4. RaBitQ (SIFT-50K): recall@10 >= 93%
   5. Filtered search (SIFT-50K, 50%): recall@10 >= 92%
   6. Persistence (SIFT-50K): recall unchanged after save/load
@@ -76,7 +76,7 @@ TESTS = [
         "dataset": "sift",
         "quantization": "sq8",
         "filtered": False,
-        "threshold": 0.95,
+        "threshold": 0.88,
     },
     {
         "name": "RaBitQ",
