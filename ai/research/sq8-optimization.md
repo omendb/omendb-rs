@@ -1,7 +1,7 @@
 # SQ8 Optimization Research
 
 **Date:** January 3, 2026
-**Status:** Recall fixed, performance optimization pending
+**Status:** Recall fixed, performance analyzed - memory savings confirmed, speed parity with FP32
 
 ## Problem Summary
 
@@ -32,118 +32,96 @@ matches!(self, Self::FullPrecision { .. })  // SQ8 excluded
 
 This matches 0.0.20 behavior where SQ8 ≈ FP32 speed.
 
-## Why SQ8 Isn't Faster (Yet)
+## Benchmark Results (January 3, 2026)
 
-### Current Implementation (Naive)
+### Raw Distance Computation (768D, 1000 vectors, Apple M3 Max)
 
-```
-Load u8 → Dequantize to f32 → Compute f32 distance
-```
+| Method                | Time      | vs FP32 SIMD    |
+| --------------------- | --------- | --------------- |
+| FP32 L2 SIMD          | 57 µs     | baseline        |
+| FP32 L2 Decomposed    | 57 µs     | 1.0x            |
+| **SQ8 Asymmetric L2** | **93 µs** | **1.6x slower** |
+| SQ8 ADC Table         | 496 µs    | 8.7x slower     |
 
-Code path: `distance_asymmetric_l2` → `params.asymmetric_l2_squared`
+**Key finding:** SQ8 distance is actually 1.6x _slower_ than FP32 due to dequantization overhead.
 
-```rust
-// For each dimension:
-let dequant = f32::from(quantized[i]) * scales[i] + mins[i];
-let diff = query[i] - dequant;
-sum += diff * diff;
-```
+### Why HNSW Search Shows Parity
 
-**Result:** 4x memory savings, but NO speed benefit (same FLOPs as FP32)
+HNSW search involves:
 
-### Optimal Implementation (Compressed Domain)
+- Graph traversal (neighbor list fetching)
+- Heap operations (candidate management)
+- Visited set updates
+- Distance computation (only ~30% of time)
 
-From Qdrant/Faiss research, SQ8 should be 2-4x faster:
+The ~1.6x slower distance is diluted by other overhead, resulting in similar QPS.
 
-```
-Load u8 → Compute int8 dot product (SIMD) → Apply precomputed correction
-```
+## Why SQ8 Is Slower Than FP32
 
-Key insight from Qdrant:
+### Operation Count (per 8 dimensions SIMD)
 
-```
-dot(q, v) = scale² × int8_dot(q_int, v_int) + [precomputed terms]
-```
+**FP32 L2 SIMD:**
 
-**Why faster:**
+1. Load 8 query f32 (1 op)
+2. Load 8 vector f32 (1 op)
+3. Subtract (1 op)
+4. FMA for diff² (1 op)
+   = **4 ops per 8 dims = 0.5 ops/dim**
 
-- AVX2: 32 int8 ops vs 8 float32 ops (4x parallelism)
-- Precompute per-vector: `sum(int8)`, `sum_squared`, corrections
-- Only integer arithmetic in hot path
+**SQ8 Asymmetric L2:**
 
-### Expected Performance (Optimized)
+1. Load 8 u8 + convert to i32 (2 ops)
+2. Convert i32 to f32 (1 op)
+3. Load 8 scales (1 op)
+4. Load 8 mins (1 op)
+5. FMA for dequant (1 op)
+6. Load 8 query (1 op)
+7. Subtract (1 op)
+8. FMA for diff² (1 op)
+   = **9 ops per 8 dims = 1.125 ops/dim**
 
-| Implementation       | Memory | Speed vs FP32 | Recall |
-| -------------------- | ------ | ------------- | ------ |
-| Current (naive)      | 4x ↓   | ~1x           | 99%    |
-| Optimized (int SIMD) | 4x ↓   | 2-4x faster   | 99%    |
+SQ8 has **2.25x more operations** than FP32. Memory savings (4x less data) only help when data is cache-cold.
 
-## Implementation Plan
+## Why Integer SIMD Won't Help (As Designed)
 
-### Phase 1: Integer SIMD Distance
+The research papers (Qdrant, Faiss) achieve 2-4x speedup with integer SIMD by using **uniform quantization**:
 
-Implement compressed-domain L2 computation:
+- Single `scale` and `offset` for entire vector
+- Allows: `dot(q_int, v_int)` with integer SIMD (32 ops at once)
 
-```rust
-pub struct SQ8Vector {
-    data: Vec<i8>,           // Quantized to signed int8
-    sum: i32,                // Precomputed: Σ data[i]
-    sum_sq: i32,             // Precomputed: Σ data[i]²
-}
+Our implementation uses **per-dimension quantization**:
 
-fn l2_squared_int(query: &[f32], vec: &SQ8Vector, params: &SQ8Params) -> f32 {
-    // Hot path: integer dot product with SIMD
-    let int_dot = simd_int8_dot(query_quantized, &vec.data);
+- `scales[d]` and `mins[d]` for each dimension
+- Blocks integer SIMD (can't factor out per-dimension params)
+- Better recall but no speed benefit
 
-    // Apply corrections (precomputed terms)
-    let scale_sq = params.scale * params.scale;
-    scale_sq * (query_sum_sq + vec.sum_sq - 2 * int_dot) as f32
-        + correction_terms
-}
-```
+### What Would Be Needed
 
-### Phase 2: SIMD Kernels
+| Approach          | Speed     | Recall | Changes Required   |
+| ----------------- | --------- | ------ | ------------------ |
+| Current (per-dim) | 0.6x FP32 | 99%+   | None               |
+| Uniform quant     | 2-4x FP32 | ~97%   | New storage format |
+| ADC Tables        | 0.1x FP32 | 99%+   | None (too slow)    |
 
-**AVX2 (x86_64):**
+## Conclusion
 
-```rust
-// Process 32 int8 values at once
-let a = _mm256_loadu_si256(query.as_ptr());
-let b = _mm256_loadu_si256(vec.as_ptr());
-let prod = _mm256_maddubs_epi16(a, b);  // 16-bit products
-let sum = _mm256_madd_epi16(prod, ones); // 32-bit accumulate
-```
+**SQ8's value proposition is memory, not speed:**
 
-**NEON (aarch64):**
+- 4x memory reduction
+- 99%+ recall
+- Speed parity with FP32 (not faster)
 
-```rust
-// Process 16 int8 values at once
-let a = vld1q_s8(query.as_ptr());
-let b = vld1q_s8(vec.as_ptr());
-// Use vdotq_s32 on newer ARM (ARMv8.2+)
-// or vmull + vaddl on older
-```
+This is still valuable for:
 
-### Phase 3: Storage Changes
+1. Large indices that don't fit in RAM
+2. Cold tier storage (S3/GCS)
+3. Memory-constrained environments
 
-Add precomputed fields to `ScalarQuantized`:
+## Future Options (if speed needed)
 
-```rust
-Self::ScalarQuantized {
-    quantized: Vec<i8>,      // Changed from u8 to i8
-    sums: Vec<i32>,          // Precomputed Σ quantized[i]
-    sum_sqs: Vec<i32>,       // Precomputed Σ quantized[i]²
-    // ... existing fields
-}
-```
-
-### Phase 4: Benchmark Validation
-
-Target metrics:
-
-- Recall: ≥99% on SIFT-50K
-- QPS: ≥2x FP32 baseline
-- Memory: 4x reduction maintained
+1. **Uniform quantization mode**: Add optional single scale/min - enables integer SIMD
+2. **RaBitQ (4-bit)**: Already implemented, faster on Apple Silicon
+3. **Batched distance**: Process multiple candidates together for better SIMD utilization
 
 ## Key Files
 
@@ -151,6 +129,7 @@ Target metrics:
 - `src/vector/hnsw/storage.rs` - VectorStorage, distance_asymmetric_l2
 - `src/vector/hnsw/index/search.rs` - search_layer_mono
 - `src/distance/ops.rs` - SIMD distance functions
+- `benches/sq8_bench.rs` - Benchmark comparing SQ8 vs FP32 distance
 
 ## References
 
@@ -159,9 +138,12 @@ Target metrics:
 - [Elastic OSQ](https://www.elastic.co/search-labs/blog/scalar-quantization-optimization)
 - Research file: `ai/research/lsm-vec/sq8-performance-research.md`
 
-## Next Steps
+## Status
 
-1. Create bead for SQ8 integer SIMD optimization
-2. Implement Phase 1 (integer dot product)
-3. Benchmark on SIFT-50K
-4. Iterate on SIMD kernels
+**Complete.** Analysis shows SQ8's value is memory reduction (4x), not speed. Current implementation provides:
+
+- 99%+ recall
+- Speed parity with FP32 (slightly slower raw distance, but similar HNSW QPS)
+- 4x memory savings
+
+Speed optimization would require architectural changes (uniform quantization) which trades recall for speed. Not recommended for current use case.

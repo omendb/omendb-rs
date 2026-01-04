@@ -110,3 +110,11 @@ harness = false
 [[bench]]
 name = "fastscan_bench"
 harness = false
+
+[[bench]]
+name = "adc_bench"
+harness = false
+
+[[bench]]
+name = "sq8_bench"
+harness = false
