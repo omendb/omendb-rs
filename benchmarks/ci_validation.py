@@ -53,7 +53,7 @@ TESTS = [
         "metric": "l2",
         "quantization": True,
         "filtered": False,
-        "threshold": 0.88,  # Lowered from 0.93 - SQ8 recall varies with dataset
+        "threshold": 0.93,  # SQ8 achieves near-perfect recall via asymmetric search path
     },
     {
         "name": "Filtered search",
