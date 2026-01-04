@@ -1021,21 +1021,14 @@ impl VectorStorage {
         }
     }
 
-    /// Check if this storage uses asymmetric search (RaBitQ only)
+    /// Check if this storage uses asymmetric search (RaBitQ and SQ8)
     ///
-    /// SQ8 is NOT included here because:
-    /// - SQ8 doesn't use ADC tables (build_adc_table returns None)
-    /// - The asymmetric search path has overhead from ADC/FastScan setup
-    /// - SQ8 gets better performance using the regular search_layer_mono path
-    ///   which directly calls distance_asymmetric_l2 via distance_cmp_mono
+    /// Both RaBitQ and SQ8 use direct asymmetric L2 distance for search.
+    /// This gives ~99.9% recall on SIFT-50K.
     ///
-    /// Performance (10K vectors, 768D, Python bindings):
-    /// - With SQ8 in asymmetric path: 860us per query
-    /// - With SQ8 in regular path: ~290us per query (matches Rust)
-    ///
-    /// NOTE: SQ8 is included here for recall. The L2 decomposition path in
-    /// search_layer_mono causes ~10% recall regression on SIFT-50K (88.9% vs 99.9%).
-    /// Investigating root cause, but for now SQ8 uses the asymmetric path.
+    /// The mono path with L2 decomposition has 10% recall regression due to
+    /// floating point ordering differences during HNSW graph traversal.
+    /// Even increasing ef doesn't recover the missing candidates.
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
         matches!(
@@ -1608,6 +1601,11 @@ impl VectorStorage {
     /// - Asymmetric SIMD is pure compute (dequantize + L2)
     /// - Apple Silicon's high SIMD throughput makes compute faster
     ///
+    /// SQ8 does NOT use ADC tables because:
+    /// - 768D ADC table = 768KB (doesn't fit L1 cache)
+    /// - Scattered memory access pattern causes cache misses
+    /// - Direct asymmetric SIMD is 10x faster on Apple Silicon
+    ///
     /// Returns None for full-precision, SQ8, or not yet trained.
     #[must_use]
     pub fn build_adc_table(&self, query: &[f32]) -> Option<UnifiedADC> {
@@ -1616,6 +1614,7 @@ impl VectorStorage {
                 let q = quantizer.as_ref()?;
                 Some(UnifiedADC::RaBitQ(q.build_adc_table(query)?))
             }
+            // SQ8: use direct asymmetric distance (no ADC) for better cache performance
             _ => None,
         }
     }
