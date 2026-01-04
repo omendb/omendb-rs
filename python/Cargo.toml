@@ -13,8 +13,8 @@ name = "omendb"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Parent crate (the Rust library)
-omendb = { path = ".." }
+# Parent crate - aliased to avoid ambiguity with this crate's lib name
+omendb_core = { package = "omendb", path = ".." }
 
 # PyO3 for Python bindings (latest stable)
 pyo3 = { version = "0.27", features = ["extension-module"] }

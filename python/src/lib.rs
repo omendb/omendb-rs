@@ -2,8 +2,6 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::type_complexity)]
 
-extern crate omendb as omendb_core;
-
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use omendb_core::text::TextSearchConfig;
 use omendb_core::vector::{
@@ -564,12 +562,11 @@ impl VectorDatabase {
             }
         }
 
-        // Clone Arc for use inside allow_threads
+        // Clone Arc for use inside detach
         let inner_arc = Arc::clone(&self.inner);
 
         // Release GIL during compute-intensive search
-        #[allow(deprecated)]
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             let inner = inner_arc.read();
             inner.store.search_with_options_readonly(
                 &query_vec,
@@ -617,9 +614,8 @@ impl VectorDatabase {
 
         // Time just the Rust search (no result conversion)
         let t0 = Instant::now();
-        #[allow(deprecated)]
         for _ in 0..n_iterations {
-            py.allow_threads(|| {
+            py.detach(|| {
                 let inner = inner_arc.read();
                 let _ = inner
                     .store
@@ -630,9 +626,8 @@ impl VectorDatabase {
 
         // Time knn_search_ef directly (bypass VectorStore wrapper)
         let t0 = Instant::now();
-        #[allow(deprecated)]
         for _ in 0..n_iterations {
-            py.allow_threads(|| {
+            py.detach(|| {
                 let inner = inner_arc.read();
                 if let Some(ref idx) = inner.store.hnsw_index {
                     let _ = idx.search_ef(&query_vec.data, k, 100);
@@ -643,8 +638,7 @@ impl VectorDatabase {
 
         // Time HNSW search in tight Rust loop (no GIL release per iteration)
         let t0 = Instant::now();
-        #[allow(deprecated)]
-        py.allow_threads(|| {
+        py.detach(|| {
             let inner = inner_arc.read();
             if let Some(ref idx) = inner.store.hnsw_index {
                 for _ in 0..n_iterations {
@@ -744,7 +738,7 @@ impl VectorDatabase {
         }
 
         // Release GIL and search in parallel
-        let all_results: Vec<Result<Vec<(usize, f32, JsonValue)>, _>> = py.allow_threads(|| {
+        let all_results: Vec<Result<Vec<(usize, f32, JsonValue)>, _>> = py.detach(|| {
             let inner = self.inner.read();
             inner.store.search_batch_with_metadata(&query_vecs, k, ef)
         });
@@ -2254,7 +2248,7 @@ fn bench_sq8_via_storage(
     use rand::Rng;
     use std::hint::black_box;
 
-    let elapsed_ns = py.allow_threads(|| {
+    let elapsed_ns = py.detach(|| {
         let mut rng = ::rand::thread_rng();
 
         // Create VectorStorage with SQ8
@@ -2310,7 +2304,7 @@ fn bench_sq8_decomposed(
     use rand::Rng;
     use std::hint::black_box;
 
-    let elapsed_ns = py.allow_threads(|| {
+    let elapsed_ns = py.detach(|| {
         let mut rng = ::rand::thread_rng();
 
         // Create VectorStorage with SQ8
@@ -2367,7 +2361,7 @@ fn bench_sq8_via_closure(
     use rand::Rng;
     use std::hint::black_box;
 
-    let elapsed_ns = py.allow_threads(|| {
+    let elapsed_ns = py.detach(|| {
         let mut rng = ::rand::thread_rng();
 
         // Create SQ8 storage
@@ -2429,7 +2423,7 @@ fn bench_fp32_decomposed(
     use rand::Rng;
     use std::hint::black_box;
 
-    let elapsed_ns = py.allow_threads(|| {
+    let elapsed_ns = py.detach(|| {
         let mut rng = ::rand::thread_rng();
 
         // Create VectorStorage with FP32
