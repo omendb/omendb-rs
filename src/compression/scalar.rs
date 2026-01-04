@@ -811,4 +811,124 @@ mod tests {
         assert_eq!(table.memory_bytes(), dims * 256 * 4);
         assert_eq!(table.memory_bytes(), 786_432); // 768KB
     }
+
+    #[test]
+    fn test_l2_decomposition_equivalence() {
+        // Test that L2 decomposition gives same result as direct L2
+        // ||q - v||² = ||q||² + ||v||² - 2<q, v>
+        use rand::Rng;
+
+        let dim = 128;
+        let n_vectors = 100;
+        let n_queries = 20;
+
+        let mut rng = rand::thread_rng();
+
+        // Generate training vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+            .collect();
+
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let params = ScalarParams::train(&refs).unwrap();
+
+        // Quantize vectors
+        let quantized: Vec<Vec<u8>> = vectors.iter().map(|v| params.quantize(v)).collect();
+
+        // Precompute norms of dequantized vectors
+        let norms: Vec<f32> = quantized
+            .iter()
+            .map(|q| params.dequantized_norm_squared(q))
+            .collect();
+
+        // Test with random queries
+        let queries: Vec<Vec<f32>> = (0..n_queries)
+            .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+            .collect();
+
+        let mut max_abs_diff = 0.0f32;
+        let mut max_rel_diff = 0.0f32;
+
+        for query in &queries {
+            let query_norm: f32 = query.iter().map(|x| x * x).sum();
+
+            for (i, q) in quantized.iter().enumerate() {
+                // Method 1: Direct asymmetric L2
+                let dist_direct = params.asymmetric_l2_squared(query, q);
+
+                // Method 2: L2 decomposition
+                let dot = params.asymmetric_dot_product(query, q);
+                let dist_decomposed = query_norm + norms[i] - 2.0 * dot;
+
+                let abs_diff = (dist_direct - dist_decomposed).abs();
+                let rel_diff = abs_diff / dist_direct.max(1e-10);
+
+                max_abs_diff = max_abs_diff.max(abs_diff);
+                max_rel_diff = max_rel_diff.max(rel_diff);
+            }
+        }
+
+        println!("Max absolute difference: {max_abs_diff}");
+        println!("Max relative difference: {max_rel_diff}");
+
+        // They should be nearly identical (within floating point tolerance)
+        assert!(
+            max_abs_diff < 1e-3,
+            "Absolute diff too large: {max_abs_diff}"
+        );
+        assert!(
+            max_rel_diff < 1e-4,
+            "Relative diff too large: {max_rel_diff}"
+        );
+    }
+
+    #[test]
+    fn test_dot_product_implementations_match() {
+        // Compare ScalarParams::asymmetric_dot_product vs crate::distance::sq8_asymmetric_dot_product
+        use rand::Rng;
+
+        let dim = 128;
+        let n_vectors = 100;
+
+        let mut rng = rand::thread_rng();
+
+        // Generate training vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+            .collect();
+
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let params = ScalarParams::train(&refs).unwrap();
+
+        // Quantize vectors
+        let quantized: Vec<Vec<u8>> = vectors.iter().map(|v| params.quantize(v)).collect();
+
+        // Test with random queries
+        let queries: Vec<Vec<f32>> = (0..20)
+            .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+            .collect();
+
+        let mut max_diff = 0.0f32;
+
+        for query in &queries {
+            for q in &quantized {
+                // Method 1: ScalarParams method
+                let dot1 = params.asymmetric_dot_product(query, q);
+
+                // Method 2: crate::distance function
+                let dot2 = crate::distance::sq8_asymmetric_dot_product(
+                    query,
+                    q,
+                    &params.scales,
+                    &params.mins,
+                );
+
+                let diff = (dot1 - dot2).abs();
+                max_diff = max_diff.max(diff);
+            }
+        }
+
+        println!("Max dot product difference: {max_diff}");
+        assert!(max_diff < 1e-5, "Dot products don't match: {max_diff}");
+    }
 }

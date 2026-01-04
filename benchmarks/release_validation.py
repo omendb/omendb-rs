@@ -76,7 +76,7 @@ TESTS = [
         "dataset": "sift",
         "quantization": "sq8",
         "filtered": False,
-        "threshold": 0.88,
+        "threshold": 0.95,
     },
     {
         "name": "RaBitQ",

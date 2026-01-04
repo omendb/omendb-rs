@@ -1032,9 +1032,16 @@ impl VectorStorage {
     /// Performance (10K vectors, 768D, Python bindings):
     /// - With SQ8 in asymmetric path: 860us per query
     /// - With SQ8 in regular path: ~290us per query (matches Rust)
+    ///
+    /// NOTE: SQ8 is included here for recall. The L2 decomposition path in
+    /// search_layer_mono causes ~10% recall regression on SIFT-50K (88.9% vs 99.9%).
+    /// Investigating root cause, but for now SQ8 uses the asymmetric path.
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
-        matches!(self, Self::RaBitQQuantized { .. })
+        matches!(
+            self,
+            Self::RaBitQQuantized { .. } | Self::ScalarQuantized { .. }
+        )
     }
 
     /// Check if this storage uses SQ8 quantization

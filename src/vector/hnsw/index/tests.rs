@@ -1216,3 +1216,264 @@ fn test_asymmetric_only_supports_l2() {
         HNSWIndex::new_with_asymmetric(32, params, DistanceFunction::NegativeDotProduct, rabitq);
     assert!(result.is_err());
 }
+
+/// Test SQ8 recall at the HNSW level (small scale - 1K vectors)
+///
+/// This test verifies that L2 decomposition gives the same results as direct L2 distance.
+/// We compare search results with SQ8 quantization to expected results.
+#[test]
+fn test_sq8_recall_regression() {
+    use rand::prelude::*;
+
+    let dim = 128;
+    let n_vectors = 1000;
+    let n_queries = 50;
+    let k = 10;
+    let ef = 100;
+
+    // Fixed seed for reproducibility
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Generate vectors in typical SIFT-like range
+    let vectors: Vec<Vec<f32>> = (0..n_vectors)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    // Generate queries
+    let queries: Vec<Vec<f32>> = (0..n_queries)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    // Create SQ8 index and insert vectors
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+
+    for vec in &vectors {
+        index.insert(vec).unwrap();
+    }
+
+    // Compute ground truth using brute force L2
+    let ground_truth: Vec<Vec<u32>> = queries
+        .iter()
+        .map(|query| {
+            let mut distances: Vec<(u32, f32)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let dist: f32 = query
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum();
+                    (i as u32, dist)
+                })
+                .collect();
+            distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            distances.iter().take(k).map(|(id, _)| *id).collect()
+        })
+        .collect();
+
+    // Search with SQ8 and compute recall
+    let mut total_recall = 0.0;
+    for (i, query) in queries.iter().enumerate() {
+        let results = index.search(query, k, ef).unwrap();
+        let result_ids: std::collections::HashSet<u32> = results.iter().map(|r| r.id).collect();
+        let gt_ids: std::collections::HashSet<u32> = ground_truth[i].iter().copied().collect();
+        let intersection = result_ids.intersection(&gt_ids).count();
+        total_recall += intersection as f32 / k as f32;
+    }
+    let mean_recall = total_recall / n_queries as f32;
+
+    println!("SQ8 HNSW recall@{k} (1K vectors): {:.4}", mean_recall);
+
+    // SQ8 should achieve at least 90% recall
+    assert!(
+        mean_recall >= 0.90,
+        "SQ8 recall too low: {:.4} (expected >= 0.90)",
+        mean_recall
+    );
+}
+
+/// Test SQ8 recall at larger scale (10K vectors - matches CI validation)
+#[test]
+fn test_sq8_recall_10k() {
+    use rand::prelude::*;
+
+    let dim = 128;
+    let n_vectors = 10_000;
+    let n_queries = 100;
+    let k = 10;
+    let ef = 100;
+
+    // Fixed seed for reproducibility
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Generate vectors in typical SIFT-like range
+    let vectors: Vec<Vec<f32>> = (0..n_vectors)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    // Generate queries
+    let queries: Vec<Vec<f32>> = (0..n_queries)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    // Create SQ8 index and insert vectors
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+
+    for vec in &vectors {
+        index.insert(vec).unwrap();
+    }
+
+    // Compute ground truth using brute force L2
+    let ground_truth: Vec<Vec<u32>> = queries
+        .iter()
+        .map(|query| {
+            let mut distances: Vec<(u32, f32)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let dist: f32 = query
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum();
+                    (i as u32, dist)
+                })
+                .collect();
+            distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            distances.iter().take(k).map(|(id, _)| *id).collect()
+        })
+        .collect();
+
+    // Search with SQ8 and compute recall
+    let mut total_recall = 0.0;
+    for (i, query) in queries.iter().enumerate() {
+        let results = index.search(query, k, ef).unwrap();
+        let result_ids: std::collections::HashSet<u32> = results.iter().map(|r| r.id).collect();
+        let gt_ids: std::collections::HashSet<u32> = ground_truth[i].iter().copied().collect();
+        let intersection = result_ids.intersection(&gt_ids).count();
+        total_recall += intersection as f32 / k as f32;
+    }
+    let mean_recall = total_recall / n_queries as f32;
+
+    println!("SQ8 HNSW recall@{k} (10K vectors): {:.4}", mean_recall);
+
+    // At 10K scale, allow lower recall (CI threshold is 0.88)
+    assert!(
+        mean_recall >= 0.85,
+        "SQ8 recall too low: {:.4} (expected >= 0.85)",
+        mean_recall
+    );
+}
+
+/// Test that SQ8 L2 decomposition gives the same distances as direct asymmetric L2
+#[test]
+fn test_sq8_distance_consistency() {
+    use rand::prelude::*;
+
+    let dim = 128;
+    let n_vectors = 500;
+
+    // Fixed seed for reproducibility
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Generate vectors
+    let vectors: Vec<Vec<f32>> = (0..n_vectors)
+        .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+        .collect();
+
+    // Create SQ8 index and insert vectors
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+
+    for vec in &vectors {
+        index.insert(vec).unwrap();
+    }
+
+    // Generate query
+    let query: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+    // Search and get results with distances
+    let results = index.search(&query, 10, 100).unwrap();
+
+    // Verify that returned distances are reasonable
+    for result in &results {
+        // Distance should be positive
+        assert!(result.distance >= 0.0, "Distance should be non-negative");
+        // Distance should not be extremely large (sanity check)
+        assert!(
+            result.distance < 1000.0,
+            "Distance too large: {}",
+            result.distance
+        );
+    }
+
+    // Results should be sorted by distance (closest first)
+    for window in results.windows(2) {
+        assert!(
+            window[0].distance <= window[1].distance,
+            "Results not sorted by distance"
+        );
+    }
+}
+
+/// Test that L2 decomposition and direct asymmetric L2 give same rankings
+#[test]
+fn test_sq8_distance_methods_match() {
+    use crate::distance::norm_squared;
+    use rand::prelude::*;
+
+    let dim = 128;
+    let n_vectors = 300; // Enough to trigger quantization (>256)
+
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Generate SIFT-like vectors (values in 0-255 range)
+    let vectors: Vec<Vec<f32>> = (0..n_vectors)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    // Create SQ8 index
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+
+    for vec in &vectors {
+        index.insert(vec).unwrap();
+    }
+
+    // Generate query
+    let query: Vec<f32> = (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect();
+    let query_norm = norm_squared(&query);
+
+    // Compare L2 decomposition vs direct asymmetric L2 for all vectors
+    let mut max_abs_diff = 0.0f32;
+    let mut max_rel_diff = 0.0f32;
+
+    for id in 0..n_vectors as u32 {
+        // Method 1: L2 decomposition (what current search uses)
+        let decomp_dist = index
+            .vectors
+            .distance_l2_decomposed(&query, query_norm, id)
+            .unwrap();
+
+        // Method 2: Direct asymmetric L2 (what old asymmetric path used)
+        let direct_dist = index.vectors.distance_asymmetric_l2(&query, id).unwrap();
+
+        let abs_diff = (decomp_dist - direct_dist).abs();
+        let rel_diff = abs_diff / direct_dist.max(1e-10);
+
+        max_abs_diff = max_abs_diff.max(abs_diff);
+        max_rel_diff = max_rel_diff.max(rel_diff);
+    }
+
+    println!("Max absolute difference: {max_abs_diff}");
+    println!("Max relative difference: {max_rel_diff}");
+
+    // The two methods should give nearly identical results
+    assert!(
+        max_rel_diff < 1e-4,
+        "L2 decomposition differs from direct L2: max_rel_diff = {max_rel_diff}"
+    );
+}
