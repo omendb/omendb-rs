@@ -1,151 +1,98 @@
 # Deferred HNSW Indexing
 
-**Status**: Implemented (pending release)
+**Status**: Planning
 **Priority**: P2
 **Target**: 0.0.22 (current released: 0.0.20, unreleased: 0.0.21)
 **Downstream**: cloud-q0rl (blocked on this)
 
 ## Problem
 
-Single-vector `insert()` is O(log n) per vector due to graph traversal. At scale:
+HNSW insertion is O(n log n) - each insert searches the graph to find neighbors. At scale:
 
-- 100K vectors: 795 vec/sec (incremental insert)
+- 100K vectors: 795 vec/sec
 - 1M vectors: 391 vec/sec (2x slower)
 
 For bulk loads, this is the bottleneck.
 
-## Key Insight
+## Solution
 
-**The existing `batch_insert()` already uses deferred-style internally:**
+Deferred indexing: store vectors first, build graph once at the end.
 
-```rust
-// src/vector/hnsw/index/insert.rs lines 249-510
-pub fn batch_insert(&mut self, vectors: Vec<Vec<f32>>) -> Result<Vec<u32>> {
-    // Phase 1: Store all vectors (sequential, fast)
-    for vector in vectors { ... }
+Competitors doing this:
 
-    // Phase 2: Build graph in parallel (rayon)
-    nodes_to_insert.par_iter().try_for_each(...)
+- **Qdrant**: `m=0` during bulk, re-enable after
+- **Milvus**: Separate insert/index phases
 
-    // Phase 3: Prune over-connected nodes
-    for node_id in 0..max_node_id { ... }
-}
-```
-
-**The problem is API ergonomics**, not algorithm. Users need to:
-
-1. Collect ALL vectors upfront
-2. Call `batch_insert()` once
-
-This doesn't work for streaming inserts where vectors arrive over time.
-
-## Solution: Streaming Deferred API
-
-Add a thin API layer that accumulates vectors, then calls `batch_insert()`:
+## Proposed API
 
 ```rust
-// Builder flag approach
-let mut index = HNSWIndex::builder()
-    .dimensions(128)
-    .deferred(true)  // Enable deferred mode
+// Option A: Builder flag
+let mut index = HNSWBuilder::new(dims)
+    .deferred_indexing(true)
     .build()?;
 
-index.insert(&vec1)?;  // O(1) - just stores in pending
-index.insert(&vec2)?;  // O(1) - just stores in pending
-index.build_index()?;  // Calls batch_insert() internally
+index.insert(&vec)?;      // O(1) - just stores vector
+index.insert(&vec2)?;     // O(1)
+index.build_index()?;     // O(n log n) - builds graph once
+
+// Option B: Separate methods (more explicit)
+index.insert_deferred(&vec)?;  // Store only
+index.build_index()?;          // Build graph
 ```
 
-## Implementation (Minimal)
+## Implementation Plan
 
-### Changes to `src/vector/hnsw_index.rs`
+### Phase 1: Core API
 
-```rust
-pub struct HNSWIndex {
-    // ... existing fields ...
+1. Add `deferred: bool` field to `HNSWIndex`
+2. Add `pending_vectors: Vec<(u32, Vec<f32>)>` for deferred storage
+3. Modify `insert()` to check deferred flag
+4. Add `build_index()` method that:
+   - Takes all pending vectors
+   - Calls existing `batch_insert()` logic
+   - Clears pending queue
 
-    /// Deferred mode: vectors stored but graph not built
-    deferred: bool,
+### Phase 2: Search behavior
 
-    /// Pending vectors awaiting graph construction
-    pending_vectors: Vec<Vec<f32>>,
-}
+- If `deferred && !pending_vectors.is_empty()`:
+  - Option A: Return error "index not built"
+  - Option B: Auto-build on first search (lazy)
+  - Option C: Brute-force search on pending (slow but works)
 
-impl HNSWIndex {
-    /// Insert vector (deferred mode: store only; normal mode: full insert)
-    pub fn insert(&mut self, vector: &[f32]) -> Result<usize> {
-        if self.deferred {
-            self.pending_vectors.push(vector.to_vec());
-            return Ok(self.pending_vectors.len() - 1);
-        }
-        // ... existing insert logic ...
-    }
+Recommend: Option A for clarity, Option B as opt-in.
 
-    /// Build graph for all pending vectors
-    pub fn build_index(&mut self) -> Result<Vec<u32>> {
-        if self.pending_vectors.is_empty() {
-            return Ok(vec![]);
-        }
-        let vectors = std::mem::take(&mut self.pending_vectors);
-        self.index.batch_insert(vectors)
-    }
+### Phase 3: Incremental builds
 
-    /// Check if there are pending vectors
-    pub fn has_pending(&self) -> bool {
-        !self.pending_vectors.is_empty()
-    }
-
-    /// Get count of pending vectors
-    pub fn pending_count(&self) -> usize {
-        self.pending_vectors.len()
-    }
-}
-```
-
-### Builder addition
-
-```rust
-impl HNSWIndexBuilder {
-    /// Enable deferred indexing mode
-    pub fn deferred(mut self, deferred: bool) -> Self {
-        self.deferred = deferred;
-        self
-    }
-}
-```
-
-### Search behavior
-
-```rust
-pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<(usize, f32)>> {
-    if self.has_pending() {
-        anyhow::bail!("Index has {} pending vectors. Call build_index() first.",
-                      self.pending_count());
-    }
-    // ... existing search ...
-}
-```
+- `build_index()` can be called multiple times
+- Each call builds graph for NEW pending vectors only
+- Merges with existing graph
 
 ## Files to Modify
 
-| File                       | Changes                                        |
-| -------------------------- | ---------------------------------------------- |
-| `src/vector/hnsw_index.rs` | Add deferred field, pending vec, build_index() |
-
-**That's it.** No changes to core HNSW algorithms needed.
+| File                              | Changes                                  |
+| --------------------------------- | ---------------------------------------- |
+| `src/vector/hnsw_index.rs`        | Add builder option, deferred field       |
+| `src/vector/hnsw/index/mod.rs`    | Add pending storage                      |
+| `src/vector/hnsw/index/insert.rs` | Add `insert_deferred()`, `build_index()` |
+| `src/vector/hnsw/index/search.rs` | Handle deferred state                    |
 
 ## Testing
 
-1. Deferred insert accumulates vectors without graph construction
-2. `build_index()` processes all pending vectors
-3. Search before build returns error
-4. Multiple build_index() calls work (incremental)
-5. Benchmark: deferred vs incremental at 100K
+1. Unit tests for deferred insert/build cycle
+2. Benchmark: deferred vs regular batch_insert at 100K, 1M
+3. Test search-before-build error handling
+4. Test incremental build_index() calls
 
 ## Expected Results
 
-Same performance as `batch_insert()` (10-50x faster than incremental).
+- Bulk insert: 10-50x faster (matching Qdrant claims)
+- Memory: Similar (still need to store vectors)
+- Search: Same performance after build_index()
+
+## Dependencies
+
+None - self-contained feature in omendb.
 
 ## Downstream
 
-cloud-lsm-vec will use this for L0 flush: accumulate vectors during writes,
-call `build_index()` when flushing to SSTable.
+cloud-lsm-vec (cloud-q0rl) will use this for L0 batch inserts.
