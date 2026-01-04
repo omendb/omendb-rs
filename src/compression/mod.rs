@@ -2,7 +2,7 @@
 //!
 //! Provides multiple compression methods:
 //! - Binary (BBQ): 32x compression, ~85% raw recall (~95% with rescore)
-//! - Scalar (SQ8): 4x compression, ~99% recall
+//! - Scalar (SQ8): 4x compression, ~97% recall, 2-3x faster than FP32
 //! - RaBitQ: 8x compression, ~98% recall
 //! - FastScan: SIMD-accelerated batched distance computation (5x speedup)
 
@@ -18,6 +18,4 @@ pub use fastscan::{
 pub use rabitq::{
     ADCTable, QuantizationBits, QuantizedVector, RaBitQ, RaBitQParams, TrainedParams,
 };
-pub use scalar::{
-    SQ8ADCTable, ScalarParams, UniformQuantizedVector, UniformQueryPrep, UniformScalarParams,
-};
+pub use scalar::{symmetric_l2_squared_u8, QueryPrep, ScalarParams};

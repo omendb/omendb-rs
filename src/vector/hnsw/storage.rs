@@ -13,50 +13,9 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::compression::{
-    ADCTable, QuantizedVector, RaBitQ, RaBitQParams, SQ8ADCTable, ScalarParams,
-};
+use crate::compression::rabitq::QuantizedVector;
+use crate::compression::{ADCTable, RaBitQ, RaBitQParams, ScalarParams};
 use crate::distance::dot_product;
-
-/// Fast accessor for SQ8 distance calculations (no enum match per-call)
-///
-/// NOTE: Currently unused. L2 decomposition (||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩)
-/// causes ~10% recall regression for SQ8 due to numerical precision issues
-/// (catastrophic cancellation). SQ8 uses the asymmetric path via distance_cmp_mono
-/// instead, which computes ||a-b||² directly for 99%+ recall.
-///
-/// Kept for potential future use if numerical precision can be improved.
-#[allow(dead_code)]
-pub struct SQ8Accessor<'a> {
-    quantized: &'a [u8],
-    norms: &'a [f32],
-    scales: &'a [f32],
-    mins: &'a [f32],
-    count: usize,
-    dimensions: usize,
-}
-
-#[allow(dead_code)]
-impl SQ8Accessor<'_> {
-    /// Compute L2 decomposed distance to a vector
-    #[inline(always)]
-    pub fn distance_l2_decomposed(&self, query: &[f32], query_norm: f32, id: u32) -> f32 {
-        let idx = id as usize;
-        debug_assert!(idx < self.count);
-        let start = idx * self.dimensions;
-        let end = start + self.dimensions;
-        let vec_norm = self.norms[idx];
-
-        let quantized_slice = &self.quantized[start..end];
-        let dot = crate::distance::sq8_asymmetric_dot_product(
-            query,
-            quantized_slice,
-            self.scales,
-            self.mins,
-        );
-        query_norm + vec_norm - 2.0 * dot
-    }
-}
 
 /// Empty neighbor list constant (avoid allocation for empty results)
 static EMPTY_NEIGHBORS: &[u32] = &[];
@@ -808,14 +767,13 @@ impl NeighborCodeStorage {
 
 /// Unified ADC (Asymmetric Distance Computation) table
 ///
-/// Supports both `RaBitQ` and SQ8 quantization methods.
+/// Unified ADC table for quantized distance computation.
 /// Built once per query, used for all distance computations.
+/// Note: SQ8 uses integer SIMD distance instead of ADC tables for better performance.
 #[derive(Clone, Debug)]
 pub enum UnifiedADC {
     /// `RaBitQ` ADC table (variable bit width)
     RaBitQ(ADCTable),
-    /// SQ8 ADC table (8-bit scalar quantization)
-    SQ8(SQ8ADCTable),
 }
 
 /// Vector storage (quantized or full precision)
@@ -905,18 +863,18 @@ pub enum VectorStorage {
         dimensions: usize,
     },
 
-    /// Scalar quantized vectors (SQ8) - 4x compression, ~97% recall
+    /// Scalar quantized vectors (SQ8) - 4x compression, ~97% recall, 2-3x faster
     ///
     /// Memory: 1x (quantized only, no originals stored)
     /// Trade-off: 4x RAM savings for ~3% recall loss
     ///
-    /// Uses per-dimension min/max scaling with SIMD distance computation.
+    /// Uses uniform min/max scaling with integer SIMD distance computation.
     /// Lazy training: Buffers first 256 vectors, then trains and quantizes.
     ///
     /// Note: No rescore support - originals not stored to save memory.
     /// Use `RaBitQ` if you need rescore with originals on disk.
     ScalarQuantized {
-        /// Trained quantization parameters (min/scale per dimension)
+        /// Trained quantization parameters (global scale/offset)
         params: ScalarParams,
 
         /// Quantized vectors as flat contiguous u8 array
@@ -925,9 +883,13 @@ pub enum VectorStorage {
         quantized: Vec<u8>,
 
         /// Pre-computed squared norms of dequantized vectors for L2 decomposition
-        /// ||dequant(q)||^2 = sum((code[d] * scale[d] + min[d])^2)
-        /// Enables fast distance: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
+        /// ||dequant(q)||² = Σ(code[d] * scale + offset)²
+        /// Enables fast distance: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
         norms: Vec<f32>,
+
+        /// Pre-computed sums of quantized values for fast integer dot product
+        /// sum = Σ quantized[d]
+        sums: Vec<i32>,
 
         /// Buffer for training vectors (cleared after training)
         /// During training phase, stores f32 vectors until we have enough to train
@@ -1007,7 +969,7 @@ impl VectorStorage {
     /// * `dimensions` - Vector dimensionality
     ///
     /// # Performance
-    /// - Search: ~1x vs f32 (SIMD asymmetric distance)
+    /// - Search: 2-3x faster than f32 (integer SIMD)
     /// - Memory: 4x smaller (quantized only, no originals)
     /// - Recall: ~97% (no rescore support)
     ///
@@ -1021,6 +983,7 @@ impl VectorStorage {
             params: ScalarParams::uninitialized(dimensions),
             quantized: Vec::new(),
             norms: Vec::new(),
+            sums: Vec::new(),
             training_buffer: Vec::new(),
             count: 0,
             dimensions,
@@ -1164,6 +1127,7 @@ impl VectorStorage {
                 params,
                 quantized,
                 norms,
+                sums,
                 training_buffer,
                 count,
                 dimensions,
@@ -1183,10 +1147,9 @@ impl VectorStorage {
                 if *trained {
                     // Already trained - quantize directly, don't store original
                     let quant = params.quantize(&vector);
-                    // Compute norm of dequantized vector for L2 decomposition
-                    let norm_sq = params.dequantized_norm_squared(&quant);
-                    norms.push(norm_sq);
-                    quantized.extend(quant);
+                    norms.push(quant.norm_sq);
+                    sums.push(quant.sum);
+                    quantized.extend(quant.data);
                     *count += 1;
                 } else {
                     // Still in training phase - buffer the vector
@@ -1202,15 +1165,16 @@ impl VectorStorage {
                             ScalarParams::train(&training_refs).map_err(ToString::to_string)?;
                         *trained = true;
 
-                        // Quantize all buffered vectors and compute norms
+                        // Quantize all buffered vectors and store norms/sums
                         quantized.reserve(*count * dim);
                         norms.reserve(*count);
+                        sums.reserve(*count);
                         for i in 0..*count {
                             let vec_slice = &training_buffer[i * dim..(i + 1) * dim];
                             let quant = params.quantize(vec_slice);
-                            let norm_sq = params.dequantized_norm_squared(&quant);
-                            norms.push(norm_sq);
-                            quantized.extend(quant);
+                            norms.push(quant.norm_sq);
+                            sums.push(quant.sum);
+                            quantized.extend(quant.data);
                         }
 
                         // Clear training buffer to free memory
@@ -1396,6 +1360,8 @@ impl VectorStorage {
             Self::ScalarQuantized {
                 params,
                 quantized,
+                norms,
+                sums,
                 count,
                 dimensions,
                 trained,
@@ -1413,7 +1379,13 @@ impl VectorStorage {
 
                 let start = idx * *dimensions;
                 let end = start + *dimensions;
-                Some(params.asymmetric_l2_squared(query, &quantized[start..end]))
+                let query_prep = params.prepare_query(query);
+                Some(params.distance_l2_squared_raw(
+                    &query_prep,
+                    &quantized[start..end],
+                    sums[idx],
+                    norms[idx],
+                ))
             }
             // For non-quantized storage, return None (caller should use regular distance)
             _ => None,
@@ -1492,6 +1464,7 @@ impl VectorStorage {
                 params,
                 quantized,
                 norms,
+                sums,
                 count,
                 dimensions,
                 trained,
@@ -1507,53 +1480,17 @@ impl VectorStorage {
                 let start = idx * *dimensions;
                 let end = start + *dimensions;
                 let vec_norm = norms[idx];
+                let vec_sum = sums[idx];
 
-                // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
-                // Inline SQ8 dot product for better cdylib optimization
+                // Use integer SIMD distance with precomputed sums
+                let query_prep = params.prepare_query(query);
                 let quantized_slice = &quantized[start..end];
-                let dot = crate::distance::sq8_asymmetric_dot_product(
-                    query,
+                Some(params.distance_l2_squared_raw(
+                    &query_prep,
                     quantized_slice,
-                    &params.scales,
-                    &params.mins,
-                );
-                Some(query_norm + vec_norm - 2.0 * dot)
-            }
-            _ => None,
-        }
-    }
-
-    /// Get an SQ8 accessor for fast distance calculations.
-    ///
-    /// NOTE: Currently unused - see SQ8Accessor doc comment for explanation.
-    ///
-    /// Returns None if storage is not SQ8 or not trained.
-    /// The accessor provides fast distance calculation without enum matching overhead.
-    #[inline]
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn sq8_accessor(&self) -> Option<SQ8Accessor<'_>> {
-        match self {
-            Self::ScalarQuantized {
-                params,
-                quantized,
-                norms,
-                count,
-                dimensions,
-                trained,
-                ..
-            } => {
-                if !*trained {
-                    return None;
-                }
-                Some(SQ8Accessor {
-                    quantized,
-                    norms,
-                    scales: &params.scales,
-                    mins: &params.mins,
-                    count: *count,
-                    dimensions: *dimensions,
-                })
+                    vec_sum,
+                    vec_norm,
+                ))
             }
             _ => None,
         }
@@ -1629,6 +1566,8 @@ impl VectorStorage {
     }
 
     /// Compute distance using precomputed ADC table
+    ///
+    /// Note: SQ8 uses integer SIMD distance via `distance_asymmetric_l2` instead of ADC.
     #[inline]
     #[must_use]
     pub fn distance_adc(&self, adc: &UnifiedADC, id: u32) -> Option<f32> {
@@ -1651,28 +1590,7 @@ impl VectorStorage {
                 let end = start + code_size;
                 Some(table.distance(&quantized_data[start..end]))
             }
-            (
-                Self::ScalarQuantized {
-                    quantized,
-                    count,
-                    dimensions,
-                    trained,
-                    ..
-                },
-                UnifiedADC::SQ8(table),
-            ) => {
-                if !*trained {
-                    return None;
-                }
-                let idx = id as usize;
-                if idx >= *count {
-                    return None;
-                }
-                let start = idx * *dimensions;
-                let end = start + *dimensions;
-                Some(table.distance_squared(&quantized[start..end]))
-            }
-            _ => None, // Mismatched storage/ADC types
+            _ => None, // Mismatched storage/ADC types or SQ8 (uses SIMD instead)
         }
     }
 
@@ -1962,6 +1880,7 @@ impl VectorStorage {
                 params,
                 quantized,
                 norms,
+                sums,
                 training_buffer,
                 count,
                 dimensions,
@@ -1982,12 +1901,13 @@ impl VectorStorage {
                     let dim = *dimensions;
                     quantized.reserve(*count * dim);
                     norms.reserve(*count);
+                    sums.reserve(*count);
                     for i in 0..*count {
                         let vec_slice = &training_buffer[i * dim..(i + 1) * dim];
                         let quant = params.quantize(vec_slice);
-                        let norm_sq = params.dequantized_norm_squared(&quant);
-                        norms.push(norm_sq);
-                        quantized.extend(quant);
+                        norms.push(quant.norm_sq);
+                        sums.push(quant.sum);
+                        quantized.extend(quant.data);
                     }
                     // Clear training buffer to free memory
                     training_buffer.clear();
@@ -2036,17 +1956,18 @@ impl VectorStorage {
             Self::ScalarQuantized {
                 quantized,
                 norms,
+                sums,
                 training_buffer,
-                params,
                 ..
             } => {
-                // Quantized u8 vectors + norms + training buffer (usually empty after training) + params
+                // Quantized u8 vectors + norms + sums + training buffer (usually empty after training) + params
                 let quantized_size = quantized.len();
                 let norms_size = norms.len() * std::mem::size_of::<f32>();
+                let sums_size = sums.len() * std::mem::size_of::<i32>();
                 let buffer_size = training_buffer.len() * std::mem::size_of::<f32>();
-                let params_size =
-                    (params.mins.len() + params.scales.len()) * std::mem::size_of::<f32>();
-                quantized_size + norms_size + buffer_size + params_size
+                // Uniform params: scale + offset + dimensions = 2 * f32 + usize
+                let params_size = 2 * std::mem::size_of::<f32>() + std::mem::size_of::<usize>();
+                quantized_size + norms_size + sums_size + buffer_size + params_size
             }
         }
     }
@@ -2143,6 +2064,7 @@ impl VectorStorage {
             Self::ScalarQuantized {
                 quantized,
                 norms,
+                sums,
                 count,
                 dimensions,
                 ..
@@ -2150,9 +2072,10 @@ impl VectorStorage {
                 let dim = *dimensions;
                 let n = *count;
 
-                // Reorder quantized vectors and norms
+                // Reorder quantized vectors, norms, and sums
                 let mut new_quantized = vec![0u8; quantized.len()];
                 let mut new_norms = vec![0.0f32; norms.len()];
+                let mut new_sums = vec![0i32; sums.len()];
                 for (old_id, &new_id) in old_to_new.iter().enumerate() {
                     if old_id < n {
                         let old_start = old_id * dim;
@@ -2162,10 +2085,14 @@ impl VectorStorage {
                         if old_id < norms.len() {
                             new_norms[new_id as usize] = norms[old_id];
                         }
+                        if old_id < sums.len() {
+                            new_sums[new_id as usize] = sums[old_id];
+                        }
                     }
                 }
                 *quantized = new_quantized;
                 *norms = new_norms;
+                *sums = new_sums;
             }
         }
     }
