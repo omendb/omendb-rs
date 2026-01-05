@@ -10,8 +10,8 @@ def test_delete_single_vector(db_with_vectors):
     # len() excludes deleted vectors (returns active count)
     assert len(db_with_vectors) == initial_count - 1
 
-    # Verify vec1 is not in search results
-    results = db_with_vectors.search([0.1] * 128, k=10)
+    # Verify vec1 is not in search results (use high ef for small dataset)
+    results = db_with_vectors.search([0.1] * 128, k=10, ef=100)
     assert len(results) == initial_count - 1
     assert all(r["id"] != "vec1" for r in results)
 
@@ -23,8 +23,8 @@ def test_delete_multiple_vectors(db_with_vectors):
     # len() returns 2 (excludes deleted vectors)
     assert len(db_with_vectors) == 2
 
-    # Search results should only have 2 vectors
-    results = db_with_vectors.search([0.1] * 128, k=10)
+    # Search results should only have remaining vectors (use high ef)
+    results = db_with_vectors.search([0.1] * 128, k=10, ef=100)
     assert len(results) == 2
     deleted_ids = {"vec1", "vec2", "vec3"}
     assert all(r["id"] not in deleted_ids for r in results)
