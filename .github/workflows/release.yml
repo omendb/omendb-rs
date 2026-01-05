@@ -421,7 +421,7 @@ jobs:
   # ============================================================================
 
   create-release:
-    needs: [verify, publish-npm]
+    needs: [verify, publish-crates, publish-pypi, publish-npm]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     steps:
