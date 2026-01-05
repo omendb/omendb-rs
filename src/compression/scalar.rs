@@ -259,6 +259,7 @@ impl ScalarParams {
             if is_x86_feature_detected!("avx2") {
                 return unsafe { self.int_dot_product_avx2(query, vec) };
             }
+            return Self::int_dot_product_scalar(query, vec);
         }
 
         #[cfg(target_arch = "aarch64")]

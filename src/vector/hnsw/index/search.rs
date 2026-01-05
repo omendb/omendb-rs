@@ -1017,7 +1017,6 @@ impl HNSWIndex {
             // Try to build FastScan LUT for SIMD acceleration
             let fastscan_lut = adc_table.as_ref().and_then(|adc| match adc {
                 UnifiedADC::RaBitQ(table) => FastScanLUT::from_adc_table(table),
-                UnifiedADC::SQ8(_) => None, // SQ8 uses different distance path
             });
 
             // Get code_size for interleaved buffer allocation
@@ -1034,7 +1033,6 @@ impl HNSWIndex {
         let fastscan_lut = if use_fastscan {
             adc_table.as_ref().and_then(|adc| match adc {
                 UnifiedADC::RaBitQ(table) => FastScanLUT::from_adc_table(table),
-                UnifiedADC::SQ8(_) => None,
             })
         } else {
             None
