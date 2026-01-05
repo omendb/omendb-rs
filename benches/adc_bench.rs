@@ -8,7 +8,7 @@
 #![allow(deprecated)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omendb::compression::{RaBitQ, RaBitQParams};
+use omendb_core::compression::{RaBitQ, RaBitQParams};
 use rand::Rng;
 
 fn generate_random_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {

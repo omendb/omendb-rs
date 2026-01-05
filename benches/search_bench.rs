@@ -3,7 +3,7 @@
 //! Run: cargo bench --bench search_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omendb::vector::{Vector, VectorStore};
+use omendb_core::vector::{Vector, VectorStore};
 use rand::Rng;
 use serde_json::json;
 

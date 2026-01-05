@@ -3,7 +3,7 @@
 //! Run: cargo bench --bench distance_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omendb::distance::{dot_product, l2_distance_squared};
+use omendb_core::distance::{dot_product, l2_distance_squared};
 use rand::Rng;
 
 fn generate_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {

@@ -1,15 +1,15 @@
 //! Benchmarks for SQ8 (Scalar Quantization 8-bit) distance computation
 //!
 //! Compares:
-//! - Direct asymmetric L2 (current implementation)
-//! - ADC lookup table approach
+//! - SQ8 with integer SIMD (current implementation)
 //! - Full precision L2 (baseline with SIMD)
+//! - Full precision L2 with decomposition
 //!
 //! Run: cargo bench --bench sq8_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omendb::compression::{ScalarParams, UniformScalarParams};
-use omendb::distance::{dot_product, l2_distance_squared};
+use omendb_core::compression::ScalarParams;
+use omendb_core::distance::{dot_product, l2_distance_squared};
 use rand::Rng;
 
 fn generate_random_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
@@ -69,9 +69,9 @@ fn bench_fp32_l2_decomposed(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SQ8 asymmetric L2 (current implementation)
-fn bench_sq8_asymmetric_l2(c: &mut Criterion) {
-    let mut group = c.benchmark_group("sq8_comparison/asymmetric_l2");
+/// Benchmark SQ8 with integer SIMD (current implementation)
+fn bench_sq8_int_simd(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sq8_comparison/int_simd");
 
     for dim in [128, 768] {
         let vectors = generate_random_vectors(1000, dim);
@@ -80,85 +80,6 @@ fn bench_sq8_asymmetric_l2(c: &mut Criterion) {
         // Train quantization
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
         let params = ScalarParams::train(&refs).unwrap();
-
-        // Quantize vectors
-        let quantized: Vec<Vec<u8>> = vectors.iter().map(|v| params.quantize(v)).collect();
-
-        group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
-            b.iter(|| {
-                for q in &quantized {
-                    black_box(params.asymmetric_l2_squared(&query, q));
-                }
-            })
-        });
-    }
-
-    group.finish();
-}
-
-/// Benchmark SQ8 ADC lookup table
-fn bench_sq8_adc(c: &mut Criterion) {
-    let mut group = c.benchmark_group("sq8_comparison/adc_table");
-
-    for dim in [128, 768] {
-        let vectors = generate_random_vectors(1000, dim);
-        let query = generate_random_vectors(1, dim).pop().unwrap();
-
-        // Train quantization
-        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
-        let params = ScalarParams::train(&refs).unwrap();
-
-        // Quantize vectors
-        let quantized: Vec<Vec<u8>> = vectors.iter().map(|v| params.quantize(v)).collect();
-
-        // Build ADC table once per query
-        let adc_table = params.build_adc_table(&query);
-
-        group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
-            b.iter(|| {
-                for q in &quantized {
-                    black_box(adc_table.distance_squared(q));
-                }
-            })
-        });
-    }
-
-    group.finish();
-}
-
-/// Benchmark ADC table build time
-fn bench_sq8_adc_build(c: &mut Criterion) {
-    let mut group = c.benchmark_group("sq8_comparison/adc_build");
-
-    for dim in [128, 768] {
-        let vectors = generate_random_vectors(1000, dim);
-        let query = generate_random_vectors(1, dim).pop().unwrap();
-
-        // Train quantization
-        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
-        let params = ScalarParams::train(&refs).unwrap();
-
-        group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
-            b.iter(|| {
-                black_box(params.build_adc_table(&query));
-            })
-        });
-    }
-
-    group.finish();
-}
-
-/// Benchmark Uniform SQ8 with integer SIMD (new fast implementation)
-fn bench_uniform_sq8(c: &mut Criterion) {
-    let mut group = c.benchmark_group("sq8_comparison/uniform_int_simd");
-
-    for dim in [128, 768] {
-        let vectors = generate_random_vectors(1000, dim);
-        let query = generate_random_vectors(1, dim).pop().unwrap();
-
-        // Train uniform quantization
-        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
-        let params = UniformScalarParams::train(&refs).unwrap();
 
         // Quantize vectors with precomputed metadata
         let quantized: Vec<_> = vectors.iter().map(|v| params.quantize(v)).collect();
@@ -178,45 +99,87 @@ fn bench_uniform_sq8(c: &mut Criterion) {
     group.finish();
 }
 
-/// End-to-end comparison: ADC build + N lookups vs N asymmetric distances
-fn bench_sq8_crossover(c: &mut Criterion) {
-    let mut group = c.benchmark_group("sq8_comparison/crossover");
+/// Benchmark query preparation overhead
+fn bench_sq8_query_prep(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sq8_comparison/query_prep");
+
+    for dim in [128, 768] {
+        let vectors = generate_random_vectors(1000, dim);
+        let query = generate_random_vectors(1, dim).pop().unwrap();
+
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let params = ScalarParams::train(&refs).unwrap();
+
+        group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
+            b.iter(|| {
+                black_box(params.prepare_query(&query));
+            })
+        });
+    }
+
+    group.finish();
+}
+
+/// Benchmark vector quantization overhead
+fn bench_sq8_quantize(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sq8_comparison/quantize");
+
+    for dim in [128, 768] {
+        let vectors = generate_random_vectors(1000, dim);
+
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let params = ScalarParams::train(&refs).unwrap();
+
+        group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, _| {
+            b.iter(|| {
+                for v in &vectors {
+                    black_box(params.quantize(v));
+                }
+            })
+        });
+    }
+
+    group.finish();
+}
+
+/// End-to-end comparison: SQ8 vs FP32 for different candidate counts
+fn bench_sq8_vs_fp32(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sq8_comparison/vs_fp32");
     let dim = 768;
 
     let vectors = generate_random_vectors(1000, dim);
     let query = generate_random_vectors(1, dim).pop().unwrap();
 
-    // Train quantization
+    // Setup SQ8
     let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
     let params = ScalarParams::train(&refs).unwrap();
+    let quantized: Vec<_> = vectors.iter().map(|v| params.quantize(v)).collect();
+    let query_prep = params.prepare_query(&query);
 
-    // Quantize vectors
-    let quantized: Vec<Vec<u8>> = vectors.iter().map(|v| params.quantize(v)).collect();
-
-    // Test different candidate counts to find crossover point
+    // Test different candidate counts
     for n_candidates in [10, 50, 100, 500, 1000] {
-        let candidates = &quantized[..n_candidates];
+        let fp_candidates = &vectors[..n_candidates];
+        let sq_candidates = &quantized[..n_candidates];
 
         group.bench_with_input(
-            BenchmarkId::new("asymmetric", n_candidates),
+            BenchmarkId::new("fp32", n_candidates),
             &n_candidates,
             |b, _| {
                 b.iter(|| {
-                    for q in candidates {
-                        black_box(params.asymmetric_l2_squared(&query, q));
+                    for v in fp_candidates {
+                        black_box(l2_distance_squared(&query, v));
                     }
                 })
             },
         );
 
         group.bench_with_input(
-            BenchmarkId::new("adc_with_build", n_candidates),
+            BenchmarkId::new("sq8", n_candidates),
             &n_candidates,
             |b, _| {
                 b.iter(|| {
-                    let adc_table = params.build_adc_table(&query);
-                    for q in candidates {
-                        black_box(adc_table.distance_squared(q));
+                    for q in sq_candidates {
+                        black_box(params.distance_l2_squared(&query_prep, q));
                     }
                 })
             },
@@ -230,10 +193,9 @@ criterion_group!(
     benches,
     bench_fp32_l2,
     bench_fp32_l2_decomposed,
-    bench_sq8_asymmetric_l2,
-    bench_uniform_sq8,
-    bench_sq8_adc,
-    bench_sq8_adc_build,
-    bench_sq8_crossover
+    bench_sq8_int_simd,
+    bench_sq8_query_prep,
+    bench_sq8_quantize,
+    bench_sq8_vs_fp32
 );
 criterion_main!(benches);

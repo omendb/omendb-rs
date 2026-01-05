@@ -3,8 +3,8 @@
 //! Run: cargo bench --bench hybrid_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omendb::text::TextIndex;
-use omendb::vector::{Vector, VectorStore, VectorStoreOptions};
+use omendb_core::text::TextIndex;
+use omendb_core::vector::{Vector, VectorStore, VectorStoreOptions};
 use rand::Rng;
 use serde_json::json;
 
@@ -192,7 +192,7 @@ fn bench_hybrid_overhead(c: &mut Criterion) {
 
 /// Benchmark RRF fusion overhead (just the fusion, not the searches)
 fn bench_rrf_fusion(c: &mut Criterion) {
-    use omendb::text::{reciprocal_rank_fusion, weighted_reciprocal_rank_fusion};
+    use omendb_core::text::{reciprocal_rank_fusion, weighted_reciprocal_rank_fusion};
 
     let mut group = c.benchmark_group("rrf_fusion");
 
