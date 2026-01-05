@@ -17,7 +17,7 @@ readme = "README.md"
 exclude = [".hhg/", ".claude/", ".github/", "benchmarks/", "scripts/", "*.md", "!README.md"]
 
 [lib]
-name = "omendb"
+name = "omendb_core"
 path = "src/lib.rs"
 crate-type = ["lib", "cdylib", "staticlib"]
 

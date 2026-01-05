@@ -6,6 +6,7 @@ All notable changes to OmenDB are documented here.
 
 ### Breaking Changes
 
+- **Rust**: Library renamed from `omendb` to `omendb_core` (use `omendb_core::*` in imports)
 - **API**: Renamed `get_by_id` → `get` (old method removed)
 - **API**: Renamed `batch_search_parallel` → `search_batch` (old method removed)
 - **Python**: Renamed `get_many` → `get_batch` (old method removed)
