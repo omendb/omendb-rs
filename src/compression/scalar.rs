@@ -259,7 +259,7 @@ impl ScalarParams {
             if is_x86_feature_detected!("avx2") {
                 return unsafe { self.int_dot_product_avx2(query, vec) };
             }
-            return Self::int_dot_product_scalar(query, vec);
+            Self::int_dot_product_scalar(query, vec)
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -285,6 +285,7 @@ impl ScalarParams {
 
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
+    #[allow(clippy::unused_self)]
     unsafe fn int_dot_product_avx2(&self, query: &[u8], vec: &[u8]) -> u32 {
         let mut sum = _mm256_setzero_si256();
         let mut i = 0;
