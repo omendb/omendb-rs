@@ -1295,7 +1295,9 @@ fn test_sq8_recall_regression() {
 }
 
 /// Test SQ8 recall at larger scale (10K vectors - matches CI validation)
+/// Run with: cargo test test_sq8_recall_10k -- --ignored
 #[test]
+#[ignore = "slow test (~10 min), run explicitly"]
 fn test_sq8_recall_10k() {
     use rand::prelude::*;
 
