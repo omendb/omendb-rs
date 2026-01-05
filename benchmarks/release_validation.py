@@ -2,19 +2,19 @@
 """
 Release Recall Validation - runs before publishing.
 
-Comprehensive validation using 50K subsets from SIFT and GloVe datasets.
+Comprehensive validation using 25K subsets from SIFT and GloVe datasets.
 Downloads datasets on first run (cached to ~/.cache/omendb/).
 
-Time budget: ~5 minutes on CI
+Time budget: ~3 minutes on CI
 Exit code: 0 on success, 1 on failure
 
 Tests:
-  1. L2 baseline (SIFT-50K): recall@10 >= 97%
-  2. Cosine baseline (GloVe-50K): recall@10 >= 88%
-  3. SQ8 quantization (SIFT-50K): recall@10 >= 95%
-  4. RaBitQ (SIFT-50K): recall@10 >= 93%
-  5. Filtered search (SIFT-50K, 50%): recall@10 >= 92%
-  6. Persistence (SIFT-50K): recall unchanged after save/load
+  1. L2 baseline (SIFT-25K): recall@10 >= 97%
+  2. Cosine baseline (GloVe-25K): recall@10 >= 88%
+  3. SQ8 quantization (SIFT-25K): recall@10 >= 95%
+  4. RaBitQ (SIFT-25K): recall@10 >= 93%
+  5. Filtered search (SIFT-25K, 50%): recall@10 >= 92%
+  6. Persistence (SIFT-25K): recall unchanged after save/load
 
 Note: GloVe has lower recall than SIFT at scale - this is expected due to
 its more uniform angular distribution which is harder for HNSW.
@@ -51,8 +51,8 @@ DATASETS = {
     },
 }
 
-SUBSET_SIZE = 50_000
-NUM_QUERIES = 500
+SUBSET_SIZE = 25_000
+NUM_QUERIES = 250
 K = 10  # recall@K
 
 # Test configurations

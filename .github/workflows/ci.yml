@@ -94,7 +94,7 @@ jobs:
   proptest:
     name: Property Tests
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [fmt, clippy]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -125,6 +125,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_NIGHTLY }}
+
+      - uses: Swatinem/rust-cache@v2
 
       - uses: actions/setup-python@v5
         with:
