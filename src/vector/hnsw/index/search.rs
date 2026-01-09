@@ -572,6 +572,7 @@ impl HNSWIndex {
             let working = &mut buffers.working;
             let neighbors_to_explore = &mut buffers.unvisited; // Reuse unvisited buffer
             let results_buf = &mut buffers.results;
+            let expanded_neighbors = &mut buffers.expanded_neighbors; // Reuse buffer
 
             // ACORN-1: Initialize with entry points using GET-NEIGHBORS
             // Per-neighbor 2-hop: expand through non-matching nodes to find matching ones
@@ -591,36 +592,46 @@ impl HNSWIndex {
                     working.push(candidate);
                 } else {
                     // Entry point doesn't match - use ACORN-1 GET-NEIGHBORS
-                    // Collect all 1-hop neighbors, expanding to 2-hop for non-matching ones
-                    let neighbors_1hop = self.neighbors.get_neighbors(ep, level);
-                    let mut expanded_neighbors: Vec<u32> = Vec::with_capacity(m * 2);
+                    // Collect matching neighbors with 2-hop expansion (zero-copy)
+                    expanded_neighbors.clear();
 
-                    for &neighbor_id in &neighbors_1hop {
-                        if visited.contains(neighbor_id) {
-                            continue;
-                        }
-                        if filter_fn(neighbor_id) {
-                            // 1-hop neighbor matches - add directly
-                            expanded_neighbors.push(neighbor_id);
-                        } else {
-                            // 1-hop doesn't match - expand to 2-hop (Weaviate optimization)
-                            // Only expand through non-matching nodes
-                            let second_hop = self.neighbors.get_neighbors(neighbor_id, level);
-                            for &second_hop_id in &second_hop {
-                                if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
-                                    expanded_neighbors.push(second_hop_id);
+                    self.neighbors.with_neighbors(ep, level, |neighbors_1hop| {
+                        for &neighbor_id in neighbors_1hop {
+                            if visited.contains(neighbor_id) {
+                                continue;
+                            }
+                            if filter_fn(neighbor_id) {
+                                // 1-hop neighbor matches - add directly
+                                expanded_neighbors.push(neighbor_id);
+                                // Early exit: stop once we have M matches
+                                if expanded_neighbors.len() >= m {
+                                    return;
+                                }
+                            } else {
+                                // 1-hop doesn't match - expand to 2-hop (Weaviate optimization)
+                                self.neighbors
+                                    .with_neighbors(neighbor_id, level, |second_hop| {
+                                        for &second_hop_id in second_hop {
+                                            if !visited.contains(second_hop_id)
+                                                && filter_fn(second_hop_id)
+                                            {
+                                                expanded_neighbors.push(second_hop_id);
+                                                // Early exit: stop once we have M matches
+                                                if expanded_neighbors.len() >= m {
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    });
+                                if expanded_neighbors.len() >= m {
+                                    return;
                                 }
                             }
                         }
-                    }
-
-                    // ACORN-1: Truncate to M to bound computation
-                    if expanded_neighbors.len() > m {
-                        expanded_neighbors.truncate(m);
-                    }
+                    });
 
                     // Add matching neighbors to candidates
-                    for neighbor_id in expanded_neighbors {
+                    for &neighbor_id in expanded_neighbors.iter() {
                         if visited.contains(neighbor_id) {
                             continue;
                         }
@@ -652,34 +663,45 @@ impl HNSWIndex {
                     }
                 }
 
-                // ACORN-1 GET-NEIGHBORS: collect matching neighbors with 2-hop expansion
+                // ACORN-1 GET-NEIGHBORS: collect matching neighbors with 2-hop expansion (zero-copy)
                 neighbors_to_explore.clear();
-                let neighbors_1hop = self.neighbors.get_neighbors(current.node_id, level);
 
-                for &neighbor_id in &neighbors_1hop {
-                    if visited.contains(neighbor_id) {
-                        continue;
-                    }
+                self.neighbors
+                    .with_neighbors(current.node_id, level, |neighbors_1hop| {
+                        for &neighbor_id in neighbors_1hop {
+                            if visited.contains(neighbor_id) {
+                                continue;
+                            }
 
-                    if filter_fn(neighbor_id) {
-                        // 1-hop neighbor matches - add directly
-                        neighbors_to_explore.push(neighbor_id);
-                    } else {
-                        // 1-hop doesn't match - expand to 2-hop (Weaviate optimization)
-                        // Per-neighbor decision: only expand through non-matching nodes
-                        let second_hop = self.neighbors.get_neighbors(neighbor_id, level);
-                        for &second_hop_id in &second_hop {
-                            if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
-                                neighbors_to_explore.push(second_hop_id);
+                            if filter_fn(neighbor_id) {
+                                // 1-hop neighbor matches - add directly
+                                neighbors_to_explore.push(neighbor_id);
+                                // Early exit: stop once we have M matches
+                                if neighbors_to_explore.len() >= m {
+                                    return;
+                                }
+                            } else {
+                                // 1-hop doesn't match - expand to 2-hop (Weaviate optimization)
+                                self.neighbors
+                                    .with_neighbors(neighbor_id, level, |second_hop| {
+                                        for &second_hop_id in second_hop {
+                                            if !visited.contains(second_hop_id)
+                                                && filter_fn(second_hop_id)
+                                            {
+                                                neighbors_to_explore.push(second_hop_id);
+                                                // Early exit: stop once we have M matches
+                                                if neighbors_to_explore.len() >= m {
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    });
+                                if neighbors_to_explore.len() >= m {
+                                    return;
+                                }
                             }
                         }
-                    }
-                }
-
-                // ACORN-1: Truncate to M to bound computation
-                if neighbors_to_explore.len() > m {
-                    neighbors_to_explore.truncate(m);
-                }
+                    });
 
                 // Process matching neighbors with prefetching
                 // Platform-aware prefetching: disabled on Apple Silicon
