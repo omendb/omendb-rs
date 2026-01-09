@@ -533,6 +533,11 @@ impl HNSWIndex {
     }
 
     /// Monomorphized filtered search layer (static dispatch, no match in hot loop)
+    ///
+    /// Implements ACORN-1 algorithm from arXiv:2403.04871 with Weaviate optimization:
+    /// - 2-hop expansion when neighbor doesn't match filter (adaptive, per-neighbor)
+    /// - Truncation to M to bound neighbor list size
+    /// - Distance computation only for matching nodes
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
     pub(super) fn search_layer_with_filter_mono<D: Distance, F>(
@@ -542,20 +547,15 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
         filter_fn: &F,
-        selectivity: f32,
+        _selectivity: f32, // Kept for API compatibility, no longer used
     ) -> Result<Vec<u32>>
     where
         F: Fn(u32) -> bool,
     {
         use super::super::query_buffers;
 
-        // Determine if we need 2-hop exploration (very selective filters)
-        const TWO_HOP_THRESHOLD: f32 = 0.1;
-        let use_two_hop = selectivity < TWO_HOP_THRESHOLD;
-
-        if use_two_hop {
-            debug!(selectivity, "Using 2-hop exploration for sparse filter");
-        }
+        // ACORN-1: M parameter for truncation (from HNSW params)
+        let m = self.params.m;
 
         // L2 decomposition optimization: pre-compute query norm once
         let use_l2_decomposition =
@@ -573,9 +573,8 @@ impl HNSWIndex {
             let neighbors_to_explore = &mut buffers.unvisited; // Reuse unvisited buffer
             let results_buf = &mut buffers.results;
 
-            // ACORN-1: Initialize with entry points
-            // Key insight: Even non-matching entry points must be used for traversal
-            // to maintain graph connectivity and find matching nodes.
+            // ACORN-1: Initialize with entry points using GET-NEIGHBORS
+            // Per-neighbor 2-hop: expand through non-matching nodes to find matching ones
             for &ep in entry_points {
                 visited.insert(ep);
 
@@ -591,48 +590,50 @@ impl HNSWIndex {
                     candidates.push(Reverse(candidate));
                     working.push(candidate);
                 } else {
-                    // Entry point doesn't match - but still explore its neighbors (ACORN-1)
-                    // This is critical: we must traverse THROUGH non-matching nodes
-                    let neighbors = self.neighbors.get_neighbors(ep, level);
-                    for &neighbor_id in &neighbors {
+                    // Entry point doesn't match - use ACORN-1 GET-NEIGHBORS
+                    // Collect all 1-hop neighbors, expanding to 2-hop for non-matching ones
+                    let neighbors_1hop = self.neighbors.get_neighbors(ep, level);
+                    let mut expanded_neighbors: Vec<u32> = Vec::with_capacity(m * 2);
+
+                    for &neighbor_id in &neighbors_1hop {
                         if visited.contains(neighbor_id) {
                             continue;
                         }
                         if filter_fn(neighbor_id) {
-                            // Found matching neighbor via entry point
-                            visited.insert(neighbor_id);
-                            let dist = if use_l2_decomposition {
-                                self.distance_l2_decomposed(query, query_norm, neighbor_id)
-                                    .ok_or(HNSWError::VectorNotFound(neighbor_id))?
-                            } else {
-                                self.distance_cmp_mono::<D>(query, neighbor_id)?
-                            };
-                            let candidate = Candidate::new(neighbor_id, dist);
-                            candidates.push(Reverse(candidate));
-                            working.push(candidate);
-                        } else if use_two_hop {
-                            // 2-hop: explore neighbor's neighbors
-                            visited.insert(neighbor_id);
+                            // 1-hop neighbor matches - add directly
+                            expanded_neighbors.push(neighbor_id);
+                        } else {
+                            // 1-hop doesn't match - expand to 2-hop (Weaviate optimization)
+                            // Only expand through non-matching nodes
                             let second_hop = self.neighbors.get_neighbors(neighbor_id, level);
                             for &second_hop_id in &second_hop {
                                 if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
-                                    visited.insert(second_hop_id);
-                                    let dist = if use_l2_decomposition {
-                                        self.distance_l2_decomposed(
-                                            query,
-                                            query_norm,
-                                            second_hop_id,
-                                        )
-                                        .ok_or(HNSWError::VectorNotFound(second_hop_id))?
-                                    } else {
-                                        self.distance_cmp_mono::<D>(query, second_hop_id)?
-                                    };
-                                    let candidate = Candidate::new(second_hop_id, dist);
-                                    candidates.push(Reverse(candidate));
-                                    working.push(candidate);
+                                    expanded_neighbors.push(second_hop_id);
                                 }
                             }
                         }
+                    }
+
+                    // ACORN-1: Truncate to M to bound computation
+                    if expanded_neighbors.len() > m {
+                        expanded_neighbors.truncate(m);
+                    }
+
+                    // Add matching neighbors to candidates
+                    for neighbor_id in expanded_neighbors {
+                        if visited.contains(neighbor_id) {
+                            continue;
+                        }
+                        visited.insert(neighbor_id);
+                        let dist = if use_l2_decomposition {
+                            self.distance_l2_decomposed(query, query_norm, neighbor_id)
+                                .ok_or(HNSWError::VectorNotFound(neighbor_id))?
+                        } else {
+                            self.distance_cmp_mono::<D>(query, neighbor_id)?
+                        };
+                        let candidate = Candidate::new(neighbor_id, dist);
+                        candidates.push(Reverse(candidate));
+                        working.push(candidate);
                     }
                 }
             }
@@ -642,7 +643,7 @@ impl HNSWIndex {
                 return Ok(Vec::new());
             }
 
-            // Greedy search with filtered distance calculations
+            // Greedy search with ACORN-1 GET-NEIGHBORS
             while let Some(Reverse(current)) = candidates.pop() {
                 // If current is farther than farthest in working set, stop
                 if let Some(&farthest) = working.peek() {
@@ -651,29 +652,36 @@ impl HNSWIndex {
                     }
                 }
 
-                // Collect neighbors into pre-allocated buffer (no allocation!)
+                // ACORN-1 GET-NEIGHBORS: collect matching neighbors with 2-hop expansion
                 neighbors_to_explore.clear();
-                let neighbors = self.neighbors.get_neighbors(current.node_id, level);
+                let neighbors_1hop = self.neighbors.get_neighbors(current.node_id, level);
 
-                for &neighbor_id in &neighbors {
+                for &neighbor_id in &neighbors_1hop {
                     if visited.contains(neighbor_id) {
                         continue;
                     }
 
-                    neighbors_to_explore.push(neighbor_id);
-
-                    // 2-hop exploration: if neighbor doesn't match filter, explore its neighbors
-                    if use_two_hop && !filter_fn(neighbor_id) {
+                    if filter_fn(neighbor_id) {
+                        // 1-hop neighbor matches - add directly
+                        neighbors_to_explore.push(neighbor_id);
+                    } else {
+                        // 1-hop doesn't match - expand to 2-hop (Weaviate optimization)
+                        // Per-neighbor decision: only expand through non-matching nodes
                         let second_hop = self.neighbors.get_neighbors(neighbor_id, level);
                         for &second_hop_id in &second_hop {
-                            if !visited.contains(second_hop_id) {
+                            if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
                                 neighbors_to_explore.push(second_hop_id);
                             }
                         }
                     }
                 }
 
-                // Process all neighbors (1-hop and 2-hop) with prefetching
+                // ACORN-1: Truncate to M to bound computation
+                if neighbors_to_explore.len() > m {
+                    neighbors_to_explore.truncate(m);
+                }
+
+                // Process matching neighbors with prefetching
                 // Platform-aware prefetching: disabled on Apple Silicon
                 use crate::vector::hnsw::prefetch::PrefetchConfig;
                 const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
@@ -685,16 +693,17 @@ impl HNSWIndex {
                 if PREFETCH_ENABLED {
                     for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
                         self.vectors.prefetch(id);
-                        self.neighbors.prefetch(id, level); // Graph-aware prefetch
+                        self.neighbors.prefetch(id, level);
                     }
                 }
 
+                // All neighbors in neighbors_to_explore already match filter (filtered during collection)
                 for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
-                    // Stride prefetch: vectors and neighbor lists
+                    // Stride prefetch
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < neighbors_slice.len() {
                         let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
                         self.vectors.prefetch(prefetch_id);
-                        self.neighbors.prefetch(prefetch_id, level); // Graph-aware prefetch
+                        self.neighbors.prefetch(prefetch_id, level);
                     }
 
                     if visited.contains(neighbor_id) {
@@ -702,11 +711,7 @@ impl HNSWIndex {
                     }
                     visited.insert(neighbor_id);
 
-                    // ACORN-1 key optimization: skip distance calculation if filter doesn't match
-                    if !filter_fn(neighbor_id) {
-                        continue;
-                    }
-
+                    // Compute distance (filter already applied during GET-NEIGHBORS)
                     let dist = if use_l2_decomposition {
                         self.distance_l2_decomposed(query, query_norm, neighbor_id)
                             .ok_or(HNSWError::VectorNotFound(neighbor_id))?
