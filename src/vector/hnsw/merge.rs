@@ -155,13 +155,16 @@ impl GraphMerger {
             "Join set computed"
         );
 
-        // Phase 2: Insert join set vectors
+        // Phase 2: Insert join set vectors and build ID mapping
         let join_insert_start = Instant::now();
-        for &node_id in &join_set {
+        let mut small_to_large: HashMap<u32, u32> = HashMap::with_capacity(join_set.len());
+
+        for &small_id in &join_set {
             let vector = small
-                .get_vector(node_id)
-                .ok_or(HNSWError::VectorNotFound(node_id))?;
-            large.insert(vector)?;
+                .get_vector(small_id)
+                .ok_or(HNSWError::VectorNotFound(small_id))?;
+            let large_id = large.insert(vector)?;
+            small_to_large.insert(small_id, large_id);
         }
         let join_set_insert_duration = join_insert_start.elapsed();
 
@@ -191,11 +194,11 @@ impl GraphMerger {
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
 
             // Find neighbors of this node that are in the join set
+            // Map small graph IDs to large graph IDs
             let small_neighbors = small.get_neighbors_level0(node_id);
             let entry_points: Vec<u32> = small_neighbors
                 .iter()
-                .filter(|&&n| join_set.contains(&n))
-                .copied()
+                .filter_map(|&small_neighbor_id| small_to_large.get(&small_neighbor_id).copied())
                 .collect();
 
             if entry_points.is_empty() {
@@ -203,8 +206,7 @@ impl GraphMerger {
                 large.insert(vector)?;
                 fallback_inserts += 1;
             } else {
-                // Fast path: use join set neighbors as entry points
-                // These vectors were already inserted, so we can find them in large graph
+                // Fast path: use mapped join set neighbors as entry points in large graph
                 large.insert_with_hints(vector, &entry_points, fast_ef)?;
                 fast_path_inserts += 1;
             }

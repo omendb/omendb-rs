@@ -33,6 +33,122 @@ pub enum MetadataFilter {
 }
 
 impl MetadataFilter {
+    /// Parse a metadata filter from JSON (MongoDB-style query syntax)
+    ///
+    /// Supported operators:
+    /// - `{"field": value}` - equality
+    /// - `{"field": {"$eq": value}}` - equality
+    /// - `{"field": {"$ne": value}}` - not equal
+    /// - `{"field": {"$gt": number}}` - greater than
+    /// - `{"field": {"$gte": number}}` - greater than or equal
+    /// - `{"field": {"$lt": number}}` - less than
+    /// - `{"field": {"$lte": number}}` - less than or equal
+    /// - `{"field": {"$in": [values]}}` - in list
+    /// - `{"field": {"$contains": "substring"}}` - contains substring
+    /// - `{"$and": [filters]}` - logical AND
+    /// - `{"$or": [filters]}` - logical OR
+    pub fn from_json(value: &JsonValue) -> Result<Self, String> {
+        let obj = value
+            .as_object()
+            .ok_or_else(|| "Filter must be a JSON object".to_string())?;
+
+        if obj.is_empty() {
+            return Err("Filter cannot be empty".to_string());
+        }
+
+        let mut filters = Vec::new();
+
+        for (key, val) in obj {
+            let filter = if key == "$and" {
+                let arr = val
+                    .as_array()
+                    .ok_or_else(|| "$and must be an array".to_string())?;
+                let sub_filters: Result<Vec<_>, _> =
+                    arr.iter().map(MetadataFilter::from_json).collect();
+                MetadataFilter::And(sub_filters?)
+            } else if key == "$or" {
+                let arr = val
+                    .as_array()
+                    .ok_or_else(|| "$or must be an array".to_string())?;
+                let sub_filters: Result<Vec<_>, _> =
+                    arr.iter().map(MetadataFilter::from_json).collect();
+                MetadataFilter::Or(sub_filters?)
+            } else if let Some(op_obj) = val.as_object() {
+                // Field with operator(s)
+                Self::parse_field_operators(key, op_obj)?
+            } else {
+                // Simple equality: {"field": value}
+                MetadataFilter::Eq(key.clone(), val.clone())
+            };
+            filters.push(filter);
+        }
+
+        if filters.len() == 1 {
+            Ok(filters.remove(0))
+        } else {
+            Ok(MetadataFilter::And(filters))
+        }
+    }
+
+    /// Parse operators for a single field
+    fn parse_field_operators(
+        field: &str,
+        ops: &serde_json::Map<String, JsonValue>,
+    ) -> Result<Self, String> {
+        let mut filters = Vec::new();
+
+        for (op, val) in ops {
+            let filter = match op.as_str() {
+                "$eq" => MetadataFilter::Eq(field.to_string(), val.clone()),
+                "$ne" => MetadataFilter::Ne(field.to_string(), val.clone()),
+                "$gt" => {
+                    let n = val
+                        .as_f64()
+                        .ok_or_else(|| format!("$gt requires a number, got {val}"))?;
+                    MetadataFilter::Gt(field.to_string(), n)
+                }
+                "$gte" => {
+                    let n = val
+                        .as_f64()
+                        .ok_or_else(|| format!("$gte requires a number, got {val}"))?;
+                    MetadataFilter::Gte(field.to_string(), n)
+                }
+                "$lt" => {
+                    let n = val
+                        .as_f64()
+                        .ok_or_else(|| format!("$lt requires a number, got {val}"))?;
+                    MetadataFilter::Lt(field.to_string(), n)
+                }
+                "$lte" => {
+                    let n = val
+                        .as_f64()
+                        .ok_or_else(|| format!("$lte requires a number, got {val}"))?;
+                    MetadataFilter::Lte(field.to_string(), n)
+                }
+                "$in" => {
+                    let arr = val
+                        .as_array()
+                        .ok_or_else(|| "$in requires an array".to_string())?;
+                    MetadataFilter::In(field.to_string(), arr.clone())
+                }
+                "$contains" => {
+                    let s = val
+                        .as_str()
+                        .ok_or_else(|| "$contains requires a string".to_string())?;
+                    MetadataFilter::Contains(field.to_string(), s.to_string())
+                }
+                other => return Err(format!("Unknown operator: {other}")),
+            };
+            filters.push(filter);
+        }
+
+        if filters.len() == 1 {
+            Ok(filters.remove(0))
+        } else {
+            Ok(MetadataFilter::And(filters))
+        }
+    }
+
     /// Combine this filter with another using AND
     #[must_use]
     pub fn and(self, other: MetadataFilter) -> Self {
@@ -179,5 +295,109 @@ impl MetadataFilter {
             // These can't be efficiently evaluated via bitmap
             MetadataFilter::Ne(..) | MetadataFilter::Contains(..) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_from_json_simple_equality() {
+        let filter = MetadataFilter::from_json(&json!({"category": "books"})).unwrap();
+        assert!(filter.matches(&json!({"category": "books"})));
+        assert!(!filter.matches(&json!({"category": "movies"})));
+    }
+
+    #[test]
+    fn test_from_json_eq_operator() {
+        let filter = MetadataFilter::from_json(&json!({"category": {"$eq": "books"}})).unwrap();
+        assert!(filter.matches(&json!({"category": "books"})));
+        assert!(!filter.matches(&json!({"category": "movies"})));
+    }
+
+    #[test]
+    fn test_from_json_ne_operator() {
+        let filter = MetadataFilter::from_json(&json!({"category": {"$ne": "books"}})).unwrap();
+        assert!(!filter.matches(&json!({"category": "books"})));
+        assert!(filter.matches(&json!({"category": "movies"})));
+    }
+
+    #[test]
+    fn test_from_json_numeric_operators() {
+        let gte = MetadataFilter::from_json(&json!({"price": {"$gte": 10.0}})).unwrap();
+        assert!(gte.matches(&json!({"price": 10.0})));
+        assert!(gte.matches(&json!({"price": 15.0})));
+        assert!(!gte.matches(&json!({"price": 5.0})));
+
+        let lt = MetadataFilter::from_json(&json!({"price": {"$lt": 10.0}})).unwrap();
+        assert!(!lt.matches(&json!({"price": 10.0})));
+        assert!(lt.matches(&json!({"price": 5.0})));
+
+        let gt = MetadataFilter::from_json(&json!({"price": {"$gt": 10.0}})).unwrap();
+        assert!(!gt.matches(&json!({"price": 10.0})));
+        assert!(gt.matches(&json!({"price": 15.0})));
+
+        let lte = MetadataFilter::from_json(&json!({"price": {"$lte": 10.0}})).unwrap();
+        assert!(lte.matches(&json!({"price": 10.0})));
+        assert!(lte.matches(&json!({"price": 5.0})));
+        assert!(!lte.matches(&json!({"price": 15.0})));
+    }
+
+    #[test]
+    fn test_from_json_in_operator() {
+        let filter =
+            MetadataFilter::from_json(&json!({"category": {"$in": ["books", "movies"]}})).unwrap();
+        assert!(filter.matches(&json!({"category": "books"})));
+        assert!(filter.matches(&json!({"category": "movies"})));
+        assert!(!filter.matches(&json!({"category": "music"})));
+    }
+
+    #[test]
+    fn test_from_json_contains_operator() {
+        let filter = MetadataFilter::from_json(&json!({"title": {"$contains": "rust"}})).unwrap();
+        assert!(filter.matches(&json!({"title": "learning rust programming"})));
+        assert!(!filter.matches(&json!({"title": "learning python"})));
+    }
+
+    #[test]
+    fn test_from_json_and_operator() {
+        let filter = MetadataFilter::from_json(
+            &json!({"$and": [{"category": "books"}, {"price": {"$lt": 20.0}}]}),
+        )
+        .unwrap();
+        assert!(filter.matches(&json!({"category": "books", "price": 15.0})));
+        assert!(!filter.matches(&json!({"category": "books", "price": 25.0})));
+        assert!(!filter.matches(&json!({"category": "movies", "price": 15.0})));
+    }
+
+    #[test]
+    fn test_from_json_or_operator() {
+        let filter = MetadataFilter::from_json(
+            &json!({"$or": [{"category": "books"}, {"category": "movies"}]}),
+        )
+        .unwrap();
+        assert!(filter.matches(&json!({"category": "books"})));
+        assert!(filter.matches(&json!({"category": "movies"})));
+        assert!(!filter.matches(&json!({"category": "music"})));
+    }
+
+    #[test]
+    fn test_from_json_multiple_fields() {
+        let filter =
+            MetadataFilter::from_json(&json!({"category": "books", "price": {"$gte": 10.0}}))
+                .unwrap();
+        assert!(filter.matches(&json!({"category": "books", "price": 15.0})));
+        assert!(!filter.matches(&json!({"category": "books", "price": 5.0})));
+        assert!(!filter.matches(&json!({"category": "movies", "price": 15.0})));
+    }
+
+    #[test]
+    fn test_from_json_errors() {
+        assert!(MetadataFilter::from_json(&json!([])).is_err());
+        assert!(MetadataFilter::from_json(&json!({})).is_err());
+        assert!(MetadataFilter::from_json(&json!({"price": {"$unknown": 10}})).is_err());
+        assert!(MetadataFilter::from_json(&json!({"price": {"$gt": "not_a_number"}})).is_err());
     }
 }

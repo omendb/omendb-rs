@@ -38,7 +38,7 @@ use std::os::raw::c_char;
 use std::path::Path;
 use std::ptr;
 
-use crate::vector::{MetadataFilter, Vector, VectorStore};
+use crate::vector::{MetadataFilter, Vector, VectorStore, VectorStoreOptions};
 use serde_json::{json, Value as JsonValue};
 
 thread_local! {
@@ -68,6 +68,15 @@ pub struct OmenDB {
 /// * `dimensions` - Vector dimensionality
 /// * `config_json` - Optional JSON config string (NULL for defaults)
 ///
+/// Config JSON format:
+/// ```json
+/// {
+///   "m": 16,                    // Number of neighbors per node (default: 16)
+///   "ef_construction": 100,     // Build quality (default: 100)
+///   "ef_search": 100            // Search quality (default: 100)
+/// }
+/// ```
+///
 /// # Returns
 /// Database handle on success, NULL on failure (check `omendb_last_error`)
 ///
@@ -78,7 +87,7 @@ pub struct OmenDB {
 pub unsafe extern "C" fn omendb_open(
     path: *const c_char,
     dimensions: usize,
-    _config_json: *const c_char,
+    config_json: *const c_char,
 ) -> *mut OmenDB {
     clear_last_error();
 
@@ -95,7 +104,46 @@ pub unsafe extern "C" fn omendb_open(
         }
     };
 
-    match VectorStore::open_with_dimensions(Path::new(path), dimensions) {
+    // Parse config if provided
+    let config: Option<JsonValue> = if config_json.is_null() {
+        None
+    } else {
+        let config_str = match CStr::from_ptr(config_json).to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(format!("Invalid config string: {e}"));
+                return ptr::null_mut();
+            }
+        };
+        match serde_json::from_str(config_str) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                set_last_error(format!("Invalid config JSON: {e}"));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    // Build store with optional config
+    let result = if let Some(cfg) = config {
+        let mut options = VectorStoreOptions::new().dimensions(dimensions);
+
+        if let Some(m) = cfg.get("m").and_then(JsonValue::as_u64) {
+            options = options.m(m as usize);
+        }
+        if let Some(ef_c) = cfg.get("ef_construction").and_then(JsonValue::as_u64) {
+            options = options.ef_construction(ef_c as usize);
+        }
+        if let Some(ef_s) = cfg.get("ef_search").and_then(JsonValue::as_u64) {
+            options = options.ef_search(ef_s as usize);
+        }
+
+        options.open(Path::new(path))
+    } else {
+        VectorStore::open_with_dimensions(Path::new(path), dimensions)
+    };
+
+    match result {
         Ok(store) => Box::into_raw(Box::new(OmenDB { store, dimensions })),
         Err(e) => {
             set_last_error(format!("Failed to open database: {e}"));
@@ -382,50 +430,76 @@ pub unsafe extern "C" fn omendb_search(
                 return -1;
             }
         };
-        // Filter parsing not yet implemented in FFI
-        let _ = filter_str;
-        None
+        match serde_json::from_str::<JsonValue>(filter_str) {
+            Ok(v) => match MetadataFilter::from_json(&v) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    set_last_error(format!("Invalid filter format: {e}"));
+                    return -1;
+                }
+            },
+            Err(e) => {
+                set_last_error(format!("Invalid filter JSON: {e}"));
+                return -1;
+            }
+        }
     };
 
-    let search_results = if filter.is_some() {
-        // Filtered search not yet exposed via FFI (filter ignored)
-        match db.store.knn_search(&query, k) {
+    // Search with or without filter
+    // Note: filtered search returns metadata inline, unfiltered requires lookup
+    let mut json_results = Vec::new();
+
+    if let Some(f) = &filter {
+        let results = match db.store.knn_search_with_filter(&query, k, f) {
             Ok(r) => r,
             Err(e) => {
-                set_last_error(format!("Search failed: {e}"));
+                set_last_error(format!("Filtered search failed: {e}"));
                 return -1;
+            }
+        };
+        for (idx, distance, metadata) in results {
+            if let Some(vector) = db.store.get_by_internal_index_owned(idx) {
+                let id = db
+                    .store
+                    .id_to_index
+                    .iter()
+                    .find(|(_, &i)| i == idx)
+                    .map_or_else(|| idx.to_string(), |(id, _)| id.clone());
+
+                json_results.push(json!({
+                    "id": id,
+                    "distance": distance,
+                    "vector": vector.data,
+                    "metadata": metadata
+                }));
             }
         }
     } else {
-        match db.store.knn_search(&query, k) {
+        let results = match db.store.knn_search(&query, k) {
             Ok(r) => r,
             Err(e) => {
                 set_last_error(format!("Search failed: {e}"));
                 return -1;
             }
-        }
-    };
+        };
+        for (idx, distance) in results {
+            if let Some(vector) = db.store.get_by_internal_index_owned(idx) {
+                let id = db
+                    .store
+                    .id_to_index
+                    .iter()
+                    .find(|(_, &i)| i == idx)
+                    .map_or_else(|| idx.to_string(), |(id, _)| id.clone());
 
-    // Convert results to JSON
-    let mut json_results = Vec::new();
-    for (idx, distance) in search_results {
-        if let Some(vector) = db.store.get_by_internal_index_owned(idx) {
-            // Find the string ID for this index
-            let id = db
-                .store
-                .id_to_index
-                .iter()
-                .find(|(_, &i)| i == idx)
-                .map_or_else(|| idx.to_string(), |(id, _)| id.clone());
+                let metadata = db.store.get(&id).map(|(_, m)| m).unwrap_or(json!({}));
 
-            let metadata = db.store.get(&id).map(|(_, m)| m).unwrap_or(json!({}));
-
-            json_results.push(json!({
-                "id": id,
-                "distance": distance,
-                "vector": vector.data,
-                "metadata": metadata
-            }));
+                json_results.push(json!({
+                    "id": id,
+                    "distance": distance,
+                    "vector": vector.data,
+                    "metadata": metadata
+                }));
+            }
         }
     }
 
@@ -471,10 +545,10 @@ pub unsafe extern "C" fn omendb_count(db: *const OmenDB) -> i64 {
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
 #[no_mangle]
-pub unsafe extern "C" fn omendb_save(db: *const OmenDB) -> i32 {
+pub unsafe extern "C" fn omendb_save(db: *mut OmenDB) -> i32 {
     clear_last_error();
 
-    let Some(db) = db.as_ref() else {
+    let Some(db) = db.as_mut() else {
         set_last_error("Null database handle".to_string());
         return -1;
     };
@@ -560,11 +634,7 @@ pub unsafe extern "C" fn omendb_has_text_search(db: *const OmenDB) -> i32 {
     let Some(db) = db.as_ref() else {
         return -1;
     };
-    if db.store.has_text_search() {
-        1
-    } else {
-        0
-    }
+    i32::from(db.store.has_text_search())
 }
 
 /// Set vectors with text for hybrid search
@@ -806,7 +876,9 @@ pub unsafe extern "C" fn omendb_hybrid_search(
     let rrf_k_opt = if rrf_k == 0 { None } else { Some(rrf_k) };
 
     // Parse optional filter
-    let filter = if !filter_json.is_null() {
+    let filter = if filter_json.is_null() {
+        None
+    } else {
         let filter_str = match CStr::from_ptr(filter_json).to_str() {
             Ok(s) => s,
             Err(e) => {
@@ -827,8 +899,6 @@ pub unsafe extern "C" fn omendb_hybrid_search(
                 return -1;
             }
         }
-    } else {
-        None
     };
 
     let search_results = if let Some(f) = filter {

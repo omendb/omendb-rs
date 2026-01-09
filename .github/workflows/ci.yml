@@ -63,6 +63,12 @@ jobs:
             -D warnings \
             -D clippy::correctness \
             -W clippy::suspicious
+      - name: Clippy (lib + ffi)
+        run: |
+          cargo clippy --lib --features ffi -- \
+            -D warnings \
+            -D clippy::correctness \
+            -W clippy::suspicious
       - name: Clippy (tests)
         run: |
           cargo clippy --tests -- \
