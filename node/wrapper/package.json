@@ -1,6 +1,6 @@
 {
   "name": "omendb",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "description": "Fast embedded vector database with HNSW + ACORN-1 filtered search",
   "main": "index.js",
   "types": "index.d.ts",
@@ -23,6 +23,6 @@
     "node": ">= 18"
   },
   "dependencies": {
-    "@omendb/omendb": "0.0.21"
+    "@omendb/omendb": "0.0.22"
   }
 }
