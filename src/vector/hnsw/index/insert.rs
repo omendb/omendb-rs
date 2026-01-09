@@ -9,12 +9,8 @@ use ordered_float::OrderedFloat;
 use tracing::{debug, error, info, instrument};
 
 impl HNSWIndex {
-    /// Insert a vector into the index
-    ///
-    /// Returns the node ID assigned to this vector.
-    #[instrument(skip(self, vector), fields(dimensions = vector.len(), index_size = self.len()))]
-    pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
-        // Validate dimensions
+    /// Validate vector dimensions and values for insertion
+    fn validate_insert_vector(&self, vector: &[f32]) -> Result<()> {
         if vector.len() != self.dimensions() {
             error!(
                 expected_dim = self.dimensions(),
@@ -27,39 +23,35 @@ impl HNSWIndex {
             });
         }
 
-        // Check for NaN/Inf in vector
         if vector.iter().any(|x| !x.is_finite()) {
             error!("Invalid vector: contains NaN or Inf values");
             return Err(HNSWError::InvalidVector);
         }
 
-        // Store vector and get ID
+        Ok(())
+    }
+
+    /// Store vector and create node, returns (node_id, level)
+    fn store_and_create_node(&mut self, vector: &[f32]) -> Result<(u32, u8)> {
         let node_id = self.vectors.insert(vector.to_owned()).map_err(|e| {
             error!(error = ?e, "Failed to store vector");
             HNSWError::Storage(e.clone())
         })?;
 
-        // Assign random level
         let level = self.random_level();
-
-        // Create node
         let node = HNSWNode::new(node_id, level);
         self.nodes.push(node);
 
-        // If this is the first node, set as entry point
-        if self.entry_point.is_none() {
-            self.entry_point = Some(node_id);
-            return Ok(node_id);
-        }
+        Ok((node_id, level))
+    }
 
-        // Insert into graph
-        self.insert_into_graph(node_id, vector, level)?;
-
-        // Update entry point if this node has higher level than current entry point
+    /// Update entry point if new node has higher level
+    fn maybe_update_entry_point(&mut self, node_id: u32, level: u8) -> Result<()> {
         let entry_point_id = self
             .entry_point
             .ok_or_else(|| HNSWError::internal("Entry point should exist after first insert"))?;
         let entry_level = self.nodes[entry_point_id as usize].level;
+
         if level > entry_level {
             self.entry_point = Some(node_id);
             debug!(
@@ -70,6 +62,26 @@ impl HNSWIndex {
                 "Updated entry point to higher level node"
             );
         }
+
+        Ok(())
+    }
+
+    /// Insert a vector into the index
+    ///
+    /// Returns the node ID assigned to this vector.
+    #[instrument(skip(self, vector), fields(dimensions = vector.len(), index_size = self.len()))]
+    pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
+        self.validate_insert_vector(vector)?;
+        let (node_id, level) = self.store_and_create_node(vector)?;
+
+        // If this is the first node, set as entry point and return
+        if self.entry_point.is_none() {
+            self.entry_point = Some(node_id);
+            return Ok(node_id);
+        }
+
+        self.insert_into_graph(node_id, vector, level)?;
+        self.maybe_update_entry_point(node_id, level)?;
 
         debug!(
             node_id = node_id,
@@ -100,33 +112,10 @@ impl HNSWIndex {
         entry_hints: &[u32],
         ef: usize,
     ) -> Result<u32> {
-        // Validate dimensions
-        if vector.len() != self.dimensions() {
-            return Err(HNSWError::DimensionMismatch {
-                expected: self.dimensions(),
-                actual: vector.len(),
-            });
-        }
+        self.validate_insert_vector(vector)?;
+        let (node_id, level) = self.store_and_create_node(vector)?;
 
-        // Check for NaN/Inf in vector
-        if vector.iter().any(|x| !x.is_finite()) {
-            return Err(HNSWError::InvalidVector);
-        }
-
-        // Store vector and get ID
-        let node_id = self
-            .vectors
-            .insert(vector.to_owned())
-            .map_err(|e| HNSWError::Storage(e.clone()))?;
-
-        // Assign random level
-        let level = self.random_level();
-
-        // Create node
-        let node = HNSWNode::new(node_id, level);
-        self.nodes.push(node);
-
-        // If this is the first node, set as entry point
+        // If this is the first node, set as entry point and return
         if self.entry_point.is_none() {
             self.entry_point = Some(node_id);
             return Ok(node_id);
@@ -148,15 +137,7 @@ impl HNSWIndex {
 
         // Use hints as starting points for graph insertion
         self.insert_into_graph_with_hints(node_id, vector, level, &valid_hints, ef)?;
-
-        // Update entry point if this node has higher level
-        let entry_point_id = self
-            .entry_point
-            .ok_or(HNSWError::internal("Entry point should exist"))?;
-        let entry_level = self.nodes[entry_point_id as usize].level;
-        if level > entry_level {
-            self.entry_point = Some(node_id);
-        }
+        self.maybe_update_entry_point(node_id, level)?;
 
         Ok(node_id)
     }

@@ -101,6 +101,35 @@ impl HNSWIndex {
     // Constructors
     // =========================================================================
 
+    /// Build an HNSWIndex with pre-created vector storage
+    fn build(vectors: VectorStorage, params: HNSWParams, distance_fn: DistanceFunction) -> Self {
+        let neighbors = GraphStorage::new(params.max_level as usize);
+        Self {
+            nodes: Vec::new(),
+            neighbors,
+            vectors,
+            entry_point: None,
+            rng_state: params.seed,
+            params,
+            distance_fn,
+        }
+    }
+
+    /// Validate params and check that distance function is L2 (required for quantized modes)
+    fn validate_l2_required(
+        params: &HNSWParams,
+        distance_fn: DistanceFunction,
+        mode_name: &str,
+    ) -> Result<()> {
+        params.validate().map_err(HNSWError::InvalidParams)?;
+        if !matches!(distance_fn, DistanceFunction::L2) {
+            return Err(HNSWError::InvalidParams(format!(
+                "{mode_name} only supports L2 distance function"
+            )));
+        }
+        Ok(())
+    }
+
     /// Create a new empty HNSW index
     ///
     /// # Arguments
@@ -122,17 +151,7 @@ impl HNSWIndex {
             VectorStorage::new_full_precision(dimensions)
         };
 
-        let neighbors = GraphStorage::new(params.max_level as usize);
-
-        Ok(Self {
-            nodes: Vec::new(),
-            neighbors,
-            vectors,
-            entry_point: None,
-            params,
-            distance_fn,
-            rng_state: params.seed,
-        })
+        Ok(Self::build(vectors, params, distance_fn))
     }
 
     /// Create a new HNSW index with `RaBitQ` asymmetric search (CLOUD MOAT)
@@ -165,27 +184,9 @@ impl HNSWIndex {
         distance_fn: DistanceFunction,
         rabitq_params: RaBitQParams,
     ) -> Result<Self> {
-        params.validate().map_err(HNSWError::InvalidParams)?;
-
-        // RaBitQ asymmetric search only supports L2 distance
-        if !matches!(distance_fn, DistanceFunction::L2) {
-            return Err(HNSWError::InvalidParams(
-                "Asymmetric search only supports L2 distance function".to_string(),
-            ));
-        }
-
+        Self::validate_l2_required(&params, distance_fn, "RaBitQ asymmetric search")?;
         let vectors = VectorStorage::new_rabitq_quantized(dimensions, rabitq_params);
-        let neighbors = GraphStorage::new(params.max_level as usize);
-
-        Ok(Self {
-            nodes: Vec::new(),
-            neighbors,
-            vectors,
-            entry_point: None,
-            params,
-            distance_fn,
-            rng_state: params.seed,
-        })
+        Ok(Self::build(vectors, params, distance_fn))
     }
 
     /// Create new HNSW index with SQ8 (Scalar Quantization)
@@ -208,27 +209,9 @@ impl HNSWIndex {
         params: HNSWParams,
         distance_fn: DistanceFunction,
     ) -> Result<Self> {
-        params.validate().map_err(HNSWError::InvalidParams)?;
-
-        // SQ8 asymmetric search only supports L2 distance
-        if !matches!(distance_fn, DistanceFunction::L2) {
-            return Err(HNSWError::InvalidParams(
-                "SQ8 asymmetric search only supports L2 distance function".to_string(),
-            ));
-        }
-
+        Self::validate_l2_required(&params, distance_fn, "SQ8 quantization")?;
         let vectors = VectorStorage::new_sq8_quantized(dimensions);
-        let neighbors = GraphStorage::new(params.max_level as usize);
-
-        Ok(Self {
-            nodes: Vec::new(),
-            neighbors,
-            vectors,
-            entry_point: None,
-            params,
-            distance_fn,
-            rng_state: params.seed,
-        })
+        Ok(Self::build(vectors, params, distance_fn))
     }
 
     /// Create new HNSW index with binary (1-bit) quantization
@@ -250,27 +233,9 @@ impl HNSWIndex {
         params: HNSWParams,
         distance_fn: DistanceFunction,
     ) -> Result<Self> {
-        params.validate().map_err(HNSWError::InvalidParams)?;
-
-        // Binary quantization only supports L2 distance
-        if !matches!(distance_fn, DistanceFunction::L2) {
-            return Err(HNSWError::InvalidParams(
-                "Binary quantization only supports L2 distance function".to_string(),
-            ));
-        }
-
+        Self::validate_l2_required(&params, distance_fn, "Binary quantization")?;
         let vectors = VectorStorage::new_binary_quantized(dimensions, true);
-        let neighbors = GraphStorage::new(params.max_level as usize);
-
-        Ok(Self {
-            nodes: Vec::new(),
-            neighbors,
-            vectors,
-            entry_point: None,
-            params,
-            distance_fn,
-            rng_state: params.seed,
-        })
+        Ok(Self::build(vectors, params, distance_fn))
     }
 
     // =========================================================================
@@ -454,21 +419,6 @@ impl HNSWIndex {
         }
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance(query, vec))
-    }
-
-    /// Asymmetric distance for `RaBitQ` search (CLOUD MOAT - HOT PATH)
-    ///
-    /// Query stays full precision, candidate uses quantized representation.
-    /// Falls back to regular `distance_cmp` if not using asymmetric storage.
-    #[inline]
-    pub(super) fn distance_asymmetric(&self, query: &[f32], id: u32) -> Result<f32> {
-        // Try asymmetric distance first (for RaBitQ storage)
-        if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
-            return Ok(dist);
-        }
-
-        // Fallback to regular distance for non-RaBitQ storage
-        self.distance_cmp(query, id)
     }
 
     /// L2 distance using decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩

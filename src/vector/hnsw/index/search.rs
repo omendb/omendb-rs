@@ -13,25 +13,35 @@ use ordered_float::OrderedFloat;
 use std::cmp::Reverse;
 use tracing::{debug, error, instrument, warn};
 
+/// Validation result for search parameters
+enum SearchValidation {
+    /// Validation passed, continue with search
+    Continue,
+    /// Index is empty, return empty results immediately
+    Empty,
+}
+
 impl HNSWIndex {
-    /// Search for k nearest neighbors
+    /// Validate search parameters (k, ef, query dimensions, NaN/Inf)
     ///
-    /// Returns up to k nearest neighbors sorted by distance (closest first).
-    #[instrument(skip(self, query), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
-    pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
-        // Validate k > 0
+    /// Returns `SearchValidation::Empty` if index is empty (caller should return empty results).
+    /// Returns `SearchValidation::Continue` if validation passes and search should proceed.
+    fn validate_search_params(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+    ) -> Result<SearchValidation> {
         if k == 0 {
             error!(k, ef, "Invalid search parameters: k must be > 0");
             return Err(HNSWError::InvalidSearchParams { k, ef });
         }
 
-        // Validate ef >= k
         if ef < k {
             error!(k, ef, "Invalid search parameters: ef must be >= k");
             return Err(HNSWError::InvalidSearchParams { k, ef });
         }
 
-        // Validate dimensions
         if query.len() != self.dimensions() {
             error!(
                 expected_dim = self.dimensions(),
@@ -44,15 +54,28 @@ impl HNSWIndex {
             });
         }
 
-        // Check for NaN/Inf in query
         if query.iter().any(|x| !x.is_finite()) {
             error!("Invalid query vector: contains NaN or Inf values");
             return Err(HNSWError::InvalidVector);
         }
 
-        // Handle empty index
         if self.is_empty() {
             debug!("Search on empty index, returning empty results");
+            return Ok(SearchValidation::Empty);
+        }
+
+        Ok(SearchValidation::Continue)
+    }
+
+    /// Search for k nearest neighbors
+    ///
+    /// Returns up to k nearest neighbors sorted by distance (closest first).
+    #[instrument(skip(self, query), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
+    pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
+        if matches!(
+            self.validate_search_params(query, k, ef)?,
+            SearchValidation::Empty
+        ) {
             return Ok(Vec::new());
         }
 
@@ -117,23 +140,10 @@ impl HNSWIndex {
         k: usize,
         ef: usize,
     ) -> Result<Vec<SearchResult>> {
-        // Validate inputs (same as search())
-        if k == 0 {
-            return Err(HNSWError::InvalidSearchParams { k, ef });
-        }
-        if ef < k {
-            return Err(HNSWError::InvalidSearchParams { k, ef });
-        }
-        if query.len() != self.dimensions() {
-            return Err(HNSWError::DimensionMismatch {
-                expected: self.dimensions(),
-                actual: query.len(),
-            });
-        }
-        if query.iter().any(|x| !x.is_finite()) {
-            return Err(HNSWError::InvalidVector);
-        }
-        if self.is_empty() {
+        if matches!(
+            self.validate_search_params(query, k, ef)?,
+            SearchValidation::Empty
+        ) {
             return Ok(Vec::new());
         }
 
@@ -307,32 +317,10 @@ impl HNSWIndex {
     where
         F: Fn(u32) -> bool,
     {
-        // Validate parameters (same as standard search)
-        if k == 0 {
-            error!(k, ef, "Invalid search parameters: k must be > 0");
-            return Err(HNSWError::InvalidSearchParams { k, ef });
-        }
-        if ef < k {
-            error!(k, ef, "Invalid search parameters: ef must be >= k");
-            return Err(HNSWError::InvalidSearchParams { k, ef });
-        }
-        if query.len() != self.dimensions() {
-            error!(
-                expected_dim = self.dimensions(),
-                actual_dim = query.len(),
-                "Dimension mismatch during search"
-            );
-            return Err(HNSWError::DimensionMismatch {
-                expected: self.dimensions(),
-                actual: query.len(),
-            });
-        }
-        if query.iter().any(|x| !x.is_finite()) {
-            error!("Invalid query vector: contains NaN or Inf values");
-            return Err(HNSWError::InvalidVector);
-        }
-        if self.is_empty() {
-            debug!("Search on empty index, returning empty results");
+        if matches!(
+            self.validate_search_params(query, k, ef)?,
+            SearchValidation::Empty
+        ) {
             return Ok(Vec::new());
         }
 
@@ -532,6 +520,58 @@ impl HNSWIndex {
         }
     }
 
+    /// ACORN-1 GET-NEIGHBORS: Collect matching neighbors with 2-hop expansion.
+    ///
+    /// Implements the per-neighbor adaptive expansion from ACORN-1 (arXiv:2403.04871):
+    /// - If a 1-hop neighbor matches the filter, add it directly
+    /// - If a 1-hop neighbor doesn't match, expand to its neighbors (2-hop)
+    /// - Stop early once M matching neighbors are found (truncation)
+    #[inline]
+    fn collect_matching_neighbors_acorn1<F>(
+        &self,
+        source_node: u32,
+        level: u8,
+        visited: &super::super::query_buffers::VisitedList,
+        filter_fn: &F,
+        m: usize,
+        output: &mut Vec<u32>,
+    ) where
+        F: Fn(u32) -> bool,
+    {
+        output.clear();
+        self.neighbors
+            .with_neighbors(source_node, level, |neighbors_1hop| {
+                for &neighbor_id in neighbors_1hop {
+                    if visited.contains(neighbor_id) {
+                        continue;
+                    }
+                    if filter_fn(neighbor_id) {
+                        output.push(neighbor_id);
+                        if output.len() >= m {
+                            return;
+                        }
+                    } else {
+                        // 2-hop expansion for non-matching neighbors
+                        self.neighbors
+                            .with_neighbors(neighbor_id, level, |second_hop| {
+                                for &second_hop_id in second_hop {
+                                    if !visited.contains(second_hop_id) && filter_fn(second_hop_id)
+                                    {
+                                        output.push(second_hop_id);
+                                        if output.len() >= m {
+                                            return;
+                                        }
+                                    }
+                                }
+                            });
+                        if output.len() >= m {
+                            return;
+                        }
+                    }
+                }
+            });
+    }
+
     /// Monomorphized filtered search layer (static dispatch, no match in hot loop)
     ///
     /// Implements ACORN-1 algorithm from arXiv:2403.04871 with Weaviate optimization:
@@ -554,10 +594,9 @@ impl HNSWIndex {
     {
         use super::super::query_buffers;
 
-        // ACORN-1: M parameter for truncation (from HNSW params)
         let m = self.params.m;
 
-        // L2 decomposition optimization: pre-compute query norm once
+        // L2 decomposition: pre-compute query norm once
         let use_l2_decomposition =
             self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
         let query_norm = if use_l2_decomposition {
@@ -566,82 +605,50 @@ impl HNSWIndex {
             0.0
         };
 
+        // Distance computation helper (avoids repeating L2 decomposition check)
+        let compute_distance = |node_id: u32| -> Result<f32> {
+            if use_l2_decomposition {
+                self.distance_l2_decomposed(query, query_norm, node_id)
+                    .ok_or(HNSWError::VectorNotFound(node_id))
+            } else {
+                self.distance_cmp_mono::<D>(query, node_id)
+            }
+        };
+
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
             let candidates = &mut buffers.candidates;
             let working = &mut buffers.working;
-            let neighbors_to_explore = &mut buffers.unvisited; // Reuse unvisited buffer
+            let matching_neighbors = &mut buffers.unvisited;
             let results_buf = &mut buffers.results;
-            let expanded_neighbors = &mut buffers.expanded_neighbors; // Reuse buffer
 
-            // ACORN-1: Initialize with entry points using GET-NEIGHBORS
-            // Per-neighbor 2-hop: expand through non-matching nodes to find matching ones
+            // Initialize with entry points
             for &ep in entry_points {
                 visited.insert(ep);
 
                 if filter_fn(ep) {
-                    // Entry point matches filter - add to results and exploration
-                    let dist = if use_l2_decomposition {
-                        self.distance_l2_decomposed(query, query_norm, ep)
-                            .ok_or(HNSWError::VectorNotFound(ep))?
-                    } else {
-                        self.distance_cmp_mono::<D>(query, ep)?
-                    };
+                    // Entry point matches - add directly
+                    let dist = compute_distance(ep)?;
                     let candidate = Candidate::new(ep, dist);
                     candidates.push(Reverse(candidate));
                     working.push(candidate);
                 } else {
-                    // Entry point doesn't match - use ACORN-1 GET-NEIGHBORS
-                    // Collect matching neighbors with 2-hop expansion (zero-copy)
-                    expanded_neighbors.clear();
+                    // Entry point doesn't match - expand via ACORN-1
+                    self.collect_matching_neighbors_acorn1(
+                        ep,
+                        level,
+                        visited,
+                        filter_fn,
+                        m,
+                        matching_neighbors,
+                    );
 
-                    self.neighbors.with_neighbors(ep, level, |neighbors_1hop| {
-                        for &neighbor_id in neighbors_1hop {
-                            if visited.contains(neighbor_id) {
-                                continue;
-                            }
-                            if filter_fn(neighbor_id) {
-                                // 1-hop neighbor matches - add directly
-                                expanded_neighbors.push(neighbor_id);
-                                // Early exit: stop once we have M matches
-                                if expanded_neighbors.len() >= m {
-                                    return;
-                                }
-                            } else {
-                                // 1-hop doesn't match - expand to 2-hop (Weaviate optimization)
-                                self.neighbors
-                                    .with_neighbors(neighbor_id, level, |second_hop| {
-                                        for &second_hop_id in second_hop {
-                                            if !visited.contains(second_hop_id)
-                                                && filter_fn(second_hop_id)
-                                            {
-                                                expanded_neighbors.push(second_hop_id);
-                                                // Early exit: stop once we have M matches
-                                                if expanded_neighbors.len() >= m {
-                                                    return;
-                                                }
-                                            }
-                                        }
-                                    });
-                                if expanded_neighbors.len() >= m {
-                                    return;
-                                }
-                            }
-                        }
-                    });
-
-                    // Add matching neighbors to candidates
-                    for &neighbor_id in expanded_neighbors.iter() {
+                    for &neighbor_id in matching_neighbors.iter() {
                         if visited.contains(neighbor_id) {
                             continue;
                         }
                         visited.insert(neighbor_id);
-                        let dist = if use_l2_decomposition {
-                            self.distance_l2_decomposed(query, query_norm, neighbor_id)
-                                .ok_or(HNSWError::VectorNotFound(neighbor_id))?
-                        } else {
-                            self.distance_cmp_mono::<D>(query, neighbor_id)?
-                        };
+                        let dist = compute_distance(neighbor_id)?;
                         let candidate = Candidate::new(neighbor_id, dist);
                         candidates.push(Reverse(candidate));
                         working.push(candidate);
@@ -649,69 +656,35 @@ impl HNSWIndex {
                 }
             }
 
-            // If still no candidates found, return empty
             if candidates.is_empty() {
                 return Ok(Vec::new());
             }
 
-            // Greedy search with ACORN-1 GET-NEIGHBORS
+            // Greedy search with ACORN-1 neighbor expansion
             while let Some(Reverse(current)) = candidates.pop() {
-                // If current is farther than farthest in working set, stop
                 if let Some(&farthest) = working.peek() {
                     if current.distance > farthest.distance {
                         break;
                     }
                 }
 
-                // ACORN-1 GET-NEIGHBORS: collect matching neighbors with 2-hop expansion (zero-copy)
-                neighbors_to_explore.clear();
+                // Collect matching neighbors via ACORN-1 2-hop expansion
+                self.collect_matching_neighbors_acorn1(
+                    current.node_id,
+                    level,
+                    visited,
+                    filter_fn,
+                    m,
+                    matching_neighbors,
+                );
 
-                self.neighbors
-                    .with_neighbors(current.node_id, level, |neighbors_1hop| {
-                        for &neighbor_id in neighbors_1hop {
-                            if visited.contains(neighbor_id) {
-                                continue;
-                            }
-
-                            if filter_fn(neighbor_id) {
-                                // 1-hop neighbor matches - add directly
-                                neighbors_to_explore.push(neighbor_id);
-                                // Early exit: stop once we have M matches
-                                if neighbors_to_explore.len() >= m {
-                                    return;
-                                }
-                            } else {
-                                // 1-hop doesn't match - expand to 2-hop (Weaviate optimization)
-                                self.neighbors
-                                    .with_neighbors(neighbor_id, level, |second_hop| {
-                                        for &second_hop_id in second_hop {
-                                            if !visited.contains(second_hop_id)
-                                                && filter_fn(second_hop_id)
-                                            {
-                                                neighbors_to_explore.push(second_hop_id);
-                                                // Early exit: stop once we have M matches
-                                                if neighbors_to_explore.len() >= m {
-                                                    return;
-                                                }
-                                            }
-                                        }
-                                    });
-                                if neighbors_to_explore.len() >= m {
-                                    return;
-                                }
-                            }
-                        }
-                    });
-
-                // Process matching neighbors with prefetching
-                // Platform-aware prefetching: disabled on Apple Silicon
+                // Prefetching setup
                 use crate::vector::hnsw::prefetch::PrefetchConfig;
                 const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
                 const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
 
-                let neighbors_slice = neighbors_to_explore.as_slice();
+                let neighbors_slice = matching_neighbors.as_slice();
 
-                // Initial burst prefetch (skip on Apple Silicon)
                 if PREFETCH_ENABLED {
                     for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
                         self.vectors.prefetch(id);
@@ -719,9 +692,7 @@ impl HNSWIndex {
                     }
                 }
 
-                // All neighbors in neighbors_to_explore already match filter (filtered during collection)
                 for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
-                    // Stride prefetch
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < neighbors_slice.len() {
                         let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
                         self.vectors.prefetch(prefetch_id);
@@ -733,22 +704,13 @@ impl HNSWIndex {
                     }
                     visited.insert(neighbor_id);
 
-                    // Compute distance (filter already applied during GET-NEIGHBORS)
-                    let dist = if use_l2_decomposition {
-                        self.distance_l2_decomposed(query, query_norm, neighbor_id)
-                            .ok_or(HNSWError::VectorNotFound(neighbor_id))?
-                    } else {
-                        self.distance_cmp_mono::<D>(query, neighbor_id)?
-                    };
+                    let dist = compute_distance(neighbor_id)?;
                     let neighbor = Candidate::new(neighbor_id, dist);
 
-                    // If neighbor is closer than farthest in working set, or working set not full, add it
                     if let Some(&farthest) = working.peek() {
-                        if dist < farthest.distance.0 || working.len() < ef {
+                        if neighbor.distance < farthest.distance || working.len() < ef {
                             candidates.push(Reverse(neighbor));
                             working.push(neighbor);
-
-                            // Prune working set to ef size
                             if working.len() > ef {
                                 working.pop();
                             }
@@ -761,7 +723,6 @@ impl HNSWIndex {
             }
 
             // Return node IDs sorted by distance (closest first)
-            // Use pre-allocated buffer to avoid per-search allocation
             results_buf.extend(working.drain());
             results_buf.sort_unstable_by_key(|c| c.distance);
             let mut output = Vec::with_capacity(results_buf.len());
@@ -1045,18 +1006,15 @@ impl HNSWIndex {
             if let Some(dist) = self.vectors.distance_adc(adc, id) {
                 return Ok(dist);
             }
-            // ADC failed, try asymmetric distance
-            if let Ok(dist) = self.distance_asymmetric(query, id) {
+            // ADC failed, fall back to standard distance
+            if let Ok(dist) = self.distance_cmp(query, id) {
                 return Ok(dist);
             }
             // Both failed - log and return max distance to push to end of results
-            warn!(
-                id,
-                "ADC and asymmetric distance both failed, using f32::MAX"
-            );
+            warn!(id, "ADC and standard distance both failed, using f32::MAX");
             Ok(f32::MAX)
         } else {
-            self.distance_asymmetric(query, id)
+            self.distance_cmp(query, id)
         }
     }
 
