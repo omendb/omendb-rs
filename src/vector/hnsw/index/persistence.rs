@@ -33,12 +33,12 @@ impl HNSWIndex {
     /// - Dimensions: u32 (4 bytes)
     /// - Num nodes: u32 (4 bytes)
     /// - Entry point: Option<u32> (1 + 4 bytes)
-    /// - Distance function: `DistanceFunction` (bincode)
-    /// - Params: `HNSWParams` (bincode)
+    /// - Distance function: `DistanceFunction` (length-prefixed postcard)
+    /// - Params: `HNSWParams` (length-prefixed postcard)
     /// - RNG state: u64 (8 bytes)
     /// - Nodes: Vec<HNSWNode> (raw bytes, 64 * `num_nodes`)
-    /// - Neighbors: `NeighborLists` (bincode)
-    /// - Vectors: `VectorStorage` (bincode)
+    /// - Neighbors: `NeighborLists` (length-prefixed postcard)
+    /// - Vectors: `VectorStorage` (length-prefixed postcard)
     #[instrument(skip(self, path), fields(index_size = self.len(), dimensions = self.dimensions()))]
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         info!("Starting index save");
@@ -56,8 +56,8 @@ impl HNSWIndex {
         // Write magic bytes
         writer.write_all(b"HNSWIDX\0")?;
 
-        // Write version
-        writer.write_all(&1u32.to_le_bytes())?;
+        // Write version (2 = postcard format, 1 = bincode format)
+        writer.write_all(&2u32.to_le_bytes())?;
 
         // Write dimensions
         writer.write_all(&(self.dimensions() as u32).to_le_bytes())?;
@@ -76,11 +76,15 @@ impl HNSWIndex {
             }
         }
 
-        // Write distance function
-        bincode::serialize_into(&mut writer, &self.distance_fn)?;
+        // Write distance function (length-prefixed postcard)
+        let df_bytes = postcard::to_allocvec(&self.distance_fn)?;
+        writer.write_all(&(df_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(&df_bytes)?;
 
-        // Write params
-        bincode::serialize_into(&mut writer, &self.params)?;
+        // Write params (length-prefixed postcard)
+        let params_bytes = postcard::to_allocvec(&self.params)?;
+        writer.write_all(&(params_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(&params_bytes)?;
 
         // Write RNG state
         writer.write_all(&self.rng_state.to_le_bytes())?;
@@ -96,11 +100,15 @@ impl HNSWIndex {
             writer.write_all(nodes_bytes)?;
         }
 
-        // Write neighbor lists
-        bincode::serialize_into(&mut writer, &self.neighbors)?;
+        // Write neighbor lists (length-prefixed postcard)
+        let neighbors_bytes = postcard::to_allocvec(&self.neighbors)?;
+        writer.write_all(&(neighbors_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(&neighbors_bytes)?;
 
-        // Write vectors
-        bincode::serialize_into(&mut writer, &self.vectors)?;
+        // Write vectors (length-prefixed postcard)
+        let vectors_bytes = postcard::to_allocvec(&self.vectors)?;
+        writer.write_all(&(vectors_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(&vectors_bytes)?;
 
         let elapsed = start.elapsed();
         info!(
@@ -137,10 +145,13 @@ impl HNSWIndex {
         let mut version_bytes = [0u8; 4];
         reader.read_exact(&mut version_bytes)?;
         let version = u32::from_le_bytes(version_bytes);
-        if version != 1 {
-            error!(version, "Unsupported index file version");
+        if version != 2 {
+            error!(
+                version,
+                "Unsupported index file version (expected v2 postcard format)"
+            );
             return Err(HNSWError::Storage(format!(
-                "Unsupported version: {version}"
+                "Unsupported version: {version} (expected 2)"
             )));
         }
 
@@ -165,11 +176,20 @@ impl HNSWIndex {
             None
         };
 
-        // Read distance function
-        let distance_fn: DistanceFunction = bincode::deserialize_from(&mut reader)?;
+        // Read distance function (length-prefixed postcard)
+        let mut len_bytes = [0u8; 4];
+        reader.read_exact(&mut len_bytes)?;
+        let df_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut df_bytes = vec![0u8; df_len];
+        reader.read_exact(&mut df_bytes)?;
+        let distance_fn: DistanceFunction = postcard::from_bytes(&df_bytes)?;
 
-        // Read params
-        let params: HNSWParams = bincode::deserialize_from(&mut reader)?;
+        // Read params (length-prefixed postcard)
+        reader.read_exact(&mut len_bytes)?;
+        let params_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut params_bytes = vec![0u8; params_len];
+        reader.read_exact(&mut params_bytes)?;
+        let params: HNSWParams = postcard::from_bytes(&params_bytes)?;
 
         // Read RNG state
         let mut rng_state_bytes = [0u8; 8];
@@ -188,12 +208,21 @@ impl HNSWIndex {
             reader.read_exact(nodes_bytes)?;
         }
 
-        // Read neighbor lists (always Memory mode when loading from file)
-        let neighbor_lists: NeighborLists = bincode::deserialize_from(&mut reader)?;
+        // Read neighbor lists (length-prefixed postcard, always Memory mode when loading)
+        let mut len_bytes = [0u8; 4];
+        reader.read_exact(&mut len_bytes)?;
+        let neighbors_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut neighbors_bytes = vec![0u8; neighbors_len];
+        reader.read_exact(&mut neighbors_bytes)?;
+        let neighbor_lists: NeighborLists = postcard::from_bytes(&neighbors_bytes)?;
         let neighbors = GraphStorage::from_neighbor_lists(neighbor_lists);
 
-        // Read vectors
-        let vectors: VectorStorage = bincode::deserialize_from(&mut reader)?;
+        // Read vectors (length-prefixed postcard)
+        reader.read_exact(&mut len_bytes)?;
+        let vectors_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut vectors_bytes = vec![0u8; vectors_len];
+        reader.read_exact(&mut vectors_bytes)?;
+        let vectors: VectorStorage = postcard::from_bytes(&vectors_bytes)?;
 
         // Verify dimensions match
         if vectors.dimensions() != dimensions {

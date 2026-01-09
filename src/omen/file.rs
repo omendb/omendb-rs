@@ -1,6 +1,6 @@
 //! `OmenFile` - main API for .omen format
 //!
-//! Storage backend for `VectorStore`. Uses bincode for efficient binary serialization.
+//! Storage backend for `VectorStore`. Uses postcard for efficient binary serialization.
 
 use crate::omen::{
     align_to_page,
@@ -86,22 +86,24 @@ impl OmenFile {
         if path.extension().is_some_and(|ext| ext == "omen") {
             path.to_path_buf()
         } else {
-            // Append .omen (don't use with_extension which replaces)
             let mut omen = path.as_os_str().to_os_string();
             omen.push(".omen");
             PathBuf::from(omen)
         }
     }
 
+    /// Compute .wal path by appending extension
+    fn compute_wal_path(path: &Path) -> PathBuf {
+        let mut wal = path.as_os_str().to_os_string();
+        wal.push(".wal");
+        PathBuf::from(wal)
+    }
+
     /// Create a new .omen database
     pub fn create(path: impl AsRef<Path>, dimensions: u32) -> io::Result<Self> {
         let path = path.as_ref();
         let omen_path = Self::compute_omen_path(path);
-        let wal_path = {
-            let mut wal = path.as_os_str().to_os_string();
-            wal.push(".wal");
-            PathBuf::from(wal)
-        };
+        let wal_path = Self::compute_wal_path(path);
 
         // Create empty file with header
         let mut opts = OpenOptions::new();
@@ -146,11 +148,7 @@ impl OmenFile {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
         let omen_path = Self::compute_omen_path(path);
-        let wal_path = {
-            let mut wal = path.as_os_str().to_os_string();
-            wal.push(".wal");
-            PathBuf::from(wal)
-        };
+        let wal_path = Self::compute_wal_path(path);
 
         let mut opts = OpenOptions::new();
         opts.read(true).write(true);
@@ -219,13 +217,13 @@ impl OmenFile {
                 }
             }
 
-            // Load metadata section (bincode-encoded CheckpointMetadata)
+            // Load metadata section (postcard-encoded CheckpointMetadata)
             if let Some(meta_section) = header.get_section(SectionType::MetadataRaw) {
                 let meta_offset = meta_section.offset as usize;
                 let meta_len = meta_section.length as usize;
                 if meta_offset + meta_len <= mmap.len() {
                     let meta_bytes = &mmap[meta_offset..meta_offset + meta_len];
-                    if let Ok(meta) = bincode::deserialize::<CheckpointMetadata>(meta_bytes) {
+                    if let Ok(meta) = postcard::from_bytes::<CheckpointMetadata>(meta_bytes) {
                         id_to_index = meta.id_to_index;
                         index_to_id = meta.index_to_id;
                         deleted = meta.deleted;
@@ -497,13 +495,20 @@ impl OmenFile {
         self.header.dimensions
     }
 
-    /// Checkpoint - compact WAL into main file
+    /// Checkpoint - compact WAL into main file (atomic via temp-file-rename)
+    ///
+    /// Uses write-to-temp-then-rename pattern for crash safety:
+    /// 1. Write complete file to `.omen.tmp`
+    /// 2. Fsync temp file
+    /// 3. Rename temp to actual (atomic on POSIX)
+    /// 4. Fsync directory
+    /// 5. Truncate WAL
     pub fn checkpoint(&mut self) -> io::Result<()> {
         if self.vectors_mem.is_empty() && self.hnsw_index_bytes.is_none() {
             return Ok(());
         }
 
-        // Serialize metadata with bincode (much faster than JSON)
+        // Serialize metadata with postcard (compact, fast, actively maintained)
         let checkpoint_meta = CheckpointMetadata {
             id_to_index: self.id_to_index.clone(),
             index_to_id: self.index_to_id.clone(),
@@ -511,7 +516,7 @@ impl OmenFile {
             config: self.config.clone(),
             metadata: self.metadata_mem.clone(),
         };
-        let metadata_bytes = bincode::serialize(&checkpoint_meta)
+        let metadata_bytes = postcard::to_allocvec(&checkpoint_meta)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         // Calculate section sizes
@@ -529,34 +534,14 @@ impl OmenFile {
         let hnsw_offset = align_to_page(metadata_offset + metadata_size);
         let total_size = align_to_page(hnsw_offset + hnsw_size);
 
-        // Drop mmap before resizing file (required on Windows - file cannot be
-        // resized while memory-mapped)
-        self.mmap = None;
+        // Create temp file path
+        let temp_path = {
+            let mut p = self.path.as_os_str().to_os_string();
+            p.push(".tmp");
+            PathBuf::from(p)
+        };
 
-        // Extend file
-        self.file.set_len(total_size as u64)?;
-
-        // Write vectors
-        self.file.seek(SeekFrom::Start(vector_offset as u64))?;
-        for vector in &self.vectors_mem {
-            for &val in vector {
-                self.file.write_all(&val.to_le_bytes())?;
-            }
-        }
-
-        // Graph section is empty - HNSWIndex stores graph in hnsw_index_bytes
-
-        // Write metadata
-        self.file.seek(SeekFrom::Start(metadata_offset as u64))?;
-        self.file.write_all(&metadata_bytes)?;
-
-        // Write HNSW index (if present)
-        if let Some(ref hnsw_bytes) = self.hnsw_index_bytes {
-            self.file.seek(SeekFrom::Start(hnsw_offset as u64))?;
-            self.file.write_all(hnsw_bytes)?;
-        }
-
-        // Update header
+        // Update header for new checkpoint
         self.header.count = self.vectors_mem.len() as u64;
         self.header.entry_point = 0; // Entry point managed by HNSWIndex
         self.header.set_section(SectionEntry::new(
@@ -582,12 +567,68 @@ impl OmenFile {
             ));
         }
 
-        // Write header
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(&self.header.to_bytes())?;
-        self.file.sync_all()?;
+        // Write to temp file
+        {
+            let mut opts = OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            configure_open_options(&mut opts);
+            let mut temp_file = opts.open(&temp_path)?;
+            temp_file.set_len(total_size as u64)?;
 
-        // Truncate WAL
+            // Write header
+            temp_file.write_all(&self.header.to_bytes())?;
+
+            // Write vectors
+            temp_file.seek(SeekFrom::Start(vector_offset as u64))?;
+            for vector in &self.vectors_mem {
+                for &val in vector {
+                    temp_file.write_all(&val.to_le_bytes())?;
+                }
+            }
+
+            // Write metadata
+            temp_file.seek(SeekFrom::Start(metadata_offset as u64))?;
+            temp_file.write_all(&metadata_bytes)?;
+
+            // Write HNSW index (if present)
+            if let Some(ref hnsw_bytes) = self.hnsw_index_bytes {
+                temp_file.seek(SeekFrom::Start(hnsw_offset as u64))?;
+                temp_file.write_all(hnsw_bytes)?;
+            }
+
+            // Fsync temp file before rename
+            temp_file.sync_all()?;
+        }
+
+        // Drop mmap before rename (required - file handle must be released)
+        self.mmap = None;
+
+        // Atomic rename (POSIX guarantees atomicity for same-filesystem rename)
+        std::fs::rename(&temp_path, &self.path)?;
+
+        // Fsync directory to ensure rename is durable
+        #[cfg(unix)]
+        if let Some(parent) = self.path.parent() {
+            if let Ok(dir) = File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+
+        // Reopen main file
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true);
+        configure_open_options(&mut opts);
+        self.file = opts.open(&self.path)?;
+
+        // Acquire exclusive lock on reopened file
+        self.file.try_lock_exclusive().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Database is locked by another process",
+            )
+        })?;
+
+        // Truncate WAL (safe now - checkpoint is durable)
         self.wal.truncate()?;
 
         // Write checkpoint marker

@@ -146,8 +146,8 @@ mod tests {
         let mut storage = GraphStorage::new(8);
         storage.set_neighbors(0, 0, vec![1, 2, 3]);
 
-        let serialized = bincode::serialize(&storage).unwrap();
-        let deserialized: GraphStorage = bincode::deserialize(&serialized).unwrap();
+        let serialized = postcard::to_allocvec(&storage).unwrap();
+        let deserialized: GraphStorage = postcard::from_bytes(&serialized).unwrap();
 
         assert_eq!(deserialized.get_neighbors(0, 0), vec![1, 2, 3]);
     }

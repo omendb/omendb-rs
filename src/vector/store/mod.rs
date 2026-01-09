@@ -142,6 +142,21 @@ fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
     }
 }
 
+/// Convert QuantizationMode to storage mode ID.
+///
+/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8, 5=binary
+fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
+    match mode {
+        QuantizationMode::Binary => 5,
+        QuantizationMode::SQ8 => 1,
+        QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
+            2 => 3,
+            8 => 4,
+            _ => 2, // 4-bit default
+        },
+    }
+}
+
 /// Create HNSW index with proper quantization mode.
 ///
 /// This ensures rebuilt indexes preserve the original quantization settings.
@@ -426,7 +441,7 @@ impl VectorStore {
             .count();
 
         let hnsw_index = if let Some(hnsw_bytes) = storage.get_hnsw_index() {
-            match bincode::deserialize::<HNSWIndex>(hnsw_bytes) {
+            match postcard::from_bytes::<HNSWIndex>(hnsw_bytes) {
                 Ok(index) => {
                     // Check if HNSW index matches loaded vectors (WAL recovery may add more)
                     if index.len() != active_vector_count && !vectors.is_empty() {
@@ -645,9 +660,6 @@ impl VectorStore {
             .oversample
             .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
 
-        // Get distance metric from options (default: L2)
-        let distance_metric = options.metric.unwrap_or(Metric::L2);
-
         Ok(Self {
             vectors: Vec::new(),
             hnsw_index,
@@ -776,17 +788,8 @@ impl VectorStore {
                     .with_ef_search(self.hnsw_ef_search);
 
                 // Save quantization mode to storage for persistence
-                let quant_mode_id = match &quant_mode {
-                    QuantizationMode::Binary => 5u64,
-                    QuantizationMode::SQ8 => 1u64,
-                    QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
-                        2 => 3u64,
-                        8 => 4u64,
-                        _ => 2u64,
-                    },
-                };
                 if let Some(ref mut storage) = self.storage {
-                    storage.put_quantization_mode(quant_mode_id)?;
+                    storage.put_quantization_mode(quantization_mode_to_id(&quant_mode))?;
                 }
 
                 let index = match quant_mode {
@@ -949,17 +952,8 @@ impl VectorStore {
                         .with_ef_construction(self.hnsw_ef_construction)
                         .with_ef_search(self.hnsw_ef_search);
 
-                    let quant_mode_id = match &quant_mode {
-                        QuantizationMode::Binary => 5u64,
-                        QuantizationMode::SQ8 => 1u64,
-                        QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
-                            2 => 3u64,
-                            8 => 4u64,
-                            _ => 2u64,
-                        },
-                    };
                     if let Some(ref mut storage) = self.storage {
-                        storage.put_quantization_mode(quant_mode_id)?;
+                        storage.put_quantization_mode(quantization_mode_to_id(&quant_mode))?;
                     }
 
                     let index = match quant_mode {
@@ -2568,7 +2562,7 @@ impl VectorStore {
         let hnsw_bytes = self
             .hnsw_index
             .as_ref()
-            .map(bincode::serialize)
+            .map(postcard::to_allocvec)
             .transpose()?;
 
         if let Some(ref mut storage) = self.storage {

@@ -43,7 +43,7 @@ pub enum HNSWError {
 
     /// Serialization failed
     #[error("Serialization error: {0}")]
-    Serialization(#[from] bincode::Error),
+    Serialization(#[from] postcard::Error),
 
     /// IO error during save/load
     #[error("IO error: {0}")]
