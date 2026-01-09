@@ -470,7 +470,7 @@ class TestFileHandleLeaks:
             # Flush and clean up
             for db in dbs:
                 db.flush()  # Required for persistence
-                del db
+            dbs.clear()  # Release all references
             gc.collect()
 
             # Verify all still accessible after reopening

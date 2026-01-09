@@ -147,6 +147,17 @@ export declare class VectorDatabase {
    */
   flush(): void
   /**
+   * Close the database and release file locks.
+   *
+   * After calling close(), the database is no longer usable.
+   * Any subsequent operations will fail or return empty results.
+   *
+   * This is useful when you need to reopen the same database path
+   * in the same process, since JavaScript doesn't have deterministic
+   * object destruction like Python's `del`.
+   */
+  close(): void
+  /**
    * Optimize index for cache-efficient search.
    *
    * Reorders nodes for better memory locality, improving search performance by 6-40%.

@@ -58,6 +58,8 @@ impl KeywordIndex {
         for bitmap in self.terms.values_mut() {
             bitmap.remove(doc_id);
         }
+        // Clean up empty bitmaps to prevent memory leak
+        self.terms.retain(|_, bitmap| !bitmap.is_empty());
     }
 
     /// Get documents matching a term
@@ -112,7 +114,8 @@ impl KeywordIndex {
             let term_len = u32::from_le_bytes(len_buf) as usize;
             let mut term_buf = vec![0u8; term_len];
             reader.read_exact(&mut term_buf)?;
-            let term = String::from_utf8_lossy(&term_buf).to_string();
+            let term = String::from_utf8(term_buf)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
             // Read bitmap
             reader.read_exact(&mut len_buf)?;
@@ -172,6 +175,49 @@ impl BooleanIndex {
     pub fn get_false(&self) -> &RoaringBitmap {
         &self.false_docs
     }
+
+    /// Serialize to bytes
+    pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        // Write true_docs bitmap
+        let mut true_bytes = Vec::new();
+        self.true_docs.serialize_into(&mut true_bytes)?;
+        writer.write_all(&(true_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(&true_bytes)?;
+
+        // Write false_docs bitmap
+        let mut false_bytes = Vec::new();
+        self.false_docs.serialize_into(&mut false_bytes)?;
+        writer.write_all(&(false_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(&false_bytes)?;
+
+        Ok(())
+    }
+
+    /// Deserialize from bytes
+    pub fn deserialize<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let mut len_buf = [0u8; 4];
+
+        // Read true_docs bitmap
+        reader.read_exact(&mut len_buf)?;
+        let true_len = u32::from_le_bytes(len_buf) as usize;
+        let mut true_buf = vec![0u8; true_len];
+        reader.read_exact(&mut true_buf)?;
+        let true_docs = RoaringBitmap::deserialize_from(&true_buf[..])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        // Read false_docs bitmap
+        reader.read_exact(&mut len_buf)?;
+        let false_len = u32::from_le_bytes(len_buf) as usize;
+        let mut false_buf = vec![0u8; false_len];
+        reader.read_exact(&mut false_buf)?;
+        let false_docs = RoaringBitmap::deserialize_from(&false_buf[..])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        Ok(Self {
+            true_docs,
+            false_docs,
+        })
+    }
 }
 
 /// Numeric index for integer/float range queries
@@ -216,6 +262,8 @@ impl NumericIndex {
         for bitmap in self.common_values.values_mut() {
             bitmap.remove(doc_id);
         }
+        // Clean up empty bitmaps to prevent memory leak
+        self.common_values.retain(|_, bitmap| !bitmap.is_empty());
     }
 
     /// Get documents where value == target (fast path for integers)
@@ -256,12 +304,89 @@ impl NumericIndex {
         }
     }
 
-    /// Check if document is in range
+    /// Check if document is in range [min, max] (inclusive)
     #[inline]
     pub fn matches_range(&self, doc_id: u32, min: f64, max: f64) -> bool {
         self.entries
             .iter()
             .any(|(v, id)| *id == doc_id && *v >= min && *v <= max)
+    }
+
+    /// Check if document value > threshold (strict greater than)
+    #[inline]
+    pub fn matches_gt(&self, doc_id: u32, threshold: f64) -> bool {
+        self.entries
+            .iter()
+            .any(|(v, id)| *id == doc_id && *v > threshold)
+    }
+
+    /// Check if document value < threshold (strict less than)
+    #[inline]
+    pub fn matches_lt(&self, doc_id: u32, threshold: f64) -> bool {
+        self.entries
+            .iter()
+            .any(|(v, id)| *id == doc_id && *v < threshold)
+    }
+
+    /// Serialize to bytes
+    pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        // Write entries count and data
+        writer.write_all(&(self.entries.len() as u32).to_le_bytes())?;
+        for (value, doc_id) in &self.entries {
+            writer.write_all(&value.to_le_bytes())?;
+            writer.write_all(&doc_id.to_le_bytes())?;
+        }
+
+        // Write common_values count and data
+        writer.write_all(&(self.common_values.len() as u32).to_le_bytes())?;
+        for (int_val, bitmap) in &self.common_values {
+            writer.write_all(&int_val.to_le_bytes())?;
+            let mut bitmap_bytes = Vec::new();
+            bitmap.serialize_into(&mut bitmap_bytes)?;
+            writer.write_all(&(bitmap_bytes.len() as u32).to_le_bytes())?;
+            writer.write_all(&bitmap_bytes)?;
+        }
+
+        Ok(())
+    }
+
+    /// Deserialize from bytes
+    pub fn deserialize<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let mut buf4 = [0u8; 4];
+        let mut buf8 = [0u8; 8];
+
+        // Read entries
+        reader.read_exact(&mut buf4)?;
+        let entries_len = u32::from_le_bytes(buf4) as usize;
+        let mut entries = Vec::with_capacity(entries_len);
+        for _ in 0..entries_len {
+            reader.read_exact(&mut buf8)?;
+            let value = f64::from_le_bytes(buf8);
+            reader.read_exact(&mut buf4)?;
+            let doc_id = u32::from_le_bytes(buf4);
+            entries.push((value, doc_id));
+        }
+
+        // Read common_values
+        reader.read_exact(&mut buf4)?;
+        let common_len = u32::from_le_bytes(buf4) as usize;
+        let mut common_values = HashMap::with_capacity(common_len);
+        for _ in 0..common_len {
+            reader.read_exact(&mut buf8)?;
+            let int_val = i64::from_le_bytes(buf8);
+            reader.read_exact(&mut buf4)?;
+            let bitmap_len = u32::from_le_bytes(buf4) as usize;
+            let mut bitmap_buf = vec![0u8; bitmap_len];
+            reader.read_exact(&mut bitmap_buf)?;
+            let bitmap = RoaringBitmap::deserialize_from(&bitmap_buf[..])
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            common_values.insert(int_val, bitmap);
+        }
+
+        Ok(Self {
+            entries,
+            common_values,
+        })
     }
 }
 
@@ -416,32 +541,28 @@ impl MetadataIndex {
 
     fn matches_gt(&self, doc_id: u32, field: &str, value: f64) -> bool {
         match self.get(field) {
-            Some(FieldIndex::Numeric(idx)) => {
-                idx.matches_range(doc_id, value + f64::EPSILON, f64::MAX)
-            }
+            Some(FieldIndex::Numeric(idx)) => idx.matches_gt(doc_id, value),
             _ => false,
         }
     }
 
     fn matches_gte(&self, doc_id: u32, field: &str, value: f64) -> bool {
         match self.get(field) {
-            Some(FieldIndex::Numeric(idx)) => idx.matches_range(doc_id, value, f64::MAX),
+            Some(FieldIndex::Numeric(idx)) => idx.matches_range(doc_id, value, f64::INFINITY),
             _ => false,
         }
     }
 
     fn matches_lt(&self, doc_id: u32, field: &str, value: f64) -> bool {
         match self.get(field) {
-            Some(FieldIndex::Numeric(idx)) => {
-                idx.matches_range(doc_id, f64::MIN, value - f64::EPSILON)
-            }
+            Some(FieldIndex::Numeric(idx)) => idx.matches_lt(doc_id, value),
             _ => false,
         }
     }
 
     fn matches_lte(&self, doc_id: u32, field: &str, value: f64) -> bool {
         match self.get(field) {
-            Some(FieldIndex::Numeric(idx)) => idx.matches_range(doc_id, f64::MIN, value),
+            Some(FieldIndex::Numeric(idx)) => idx.matches_range(doc_id, f64::NEG_INFINITY, value),
             _ => false,
         }
     }

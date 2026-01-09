@@ -1217,6 +1217,127 @@ fn test_asymmetric_only_supports_l2() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_binary_quantization_search() {
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new_with_binary(64, params, DistanceFunction::L2).unwrap();
+
+    assert!(index.is_asymmetric());
+    assert!(index.is_empty());
+
+    // Train thresholds from sample vectors
+    let samples: Vec<Vec<f32>> = (0..20)
+        .map(|i| {
+            let mut v = vec![0.0f32; 64];
+            // Create vectors with clear patterns above/below zero
+            for j in 0..64 {
+                v[j] = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
+            }
+            v
+        })
+        .collect();
+    index.train_quantizer(&samples).unwrap();
+
+    // Insert vectors with distinct binary patterns
+    let num_vectors = 100;
+    for i in 0..num_vectors {
+        let mut vec = vec![0.0f32; 64];
+        // Create vectors where bits are set based on i
+        for j in 0..64 {
+            vec[j] = if (i >> (j % 7)) & 1 == 1 { 1.0 } else { -1.0 };
+        }
+        index.insert(&vec).unwrap();
+    }
+
+    assert_eq!(index.len(), num_vectors);
+
+    // Search for vector similar to vector 0
+    let mut query = vec![0.0f32; 64];
+    for j in 0..64 {
+        query[j] = if j % 7 == 0 { 1.0 } else { -1.0 };
+    }
+
+    let results = index.search(&query, 10, 50).unwrap();
+
+    // Should find results
+    assert!(!results.is_empty(), "Binary search should return results");
+    assert!(results.len() <= 10, "Should return at most k results");
+
+    // Results should be sorted by distance
+    for i in 1..results.len() {
+        assert!(
+            results[i - 1].distance <= results[i].distance,
+            "Results should be sorted by distance"
+        );
+    }
+}
+
+#[test]
+fn test_binary_quantization_recall() {
+    use rand::prelude::*;
+
+    let dim = 128;
+    let n_vectors = 500;
+    let n_queries = 20;
+    let k = 10;
+    let ef = 100;
+
+    // Fixed seed for reproducibility
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Create binary index
+    let params = HNSWParams::default();
+    let mut binary_index = HNSWIndex::new_with_binary(dim, params, DistanceFunction::L2).unwrap();
+
+    // Create full precision index for ground truth
+    let mut fp_index = HNSWIndex::new(dim, params, DistanceFunction::L2, false).unwrap();
+
+    // Generate random vectors
+    let vectors: Vec<Vec<f32>> = (0..n_vectors)
+        .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+        .collect();
+
+    // Train binary quantization
+    let sample: Vec<Vec<f32>> = vectors.iter().take(100).cloned().collect();
+    binary_index.train_quantizer(&sample).unwrap();
+
+    // Insert into both indexes
+    for vec in &vectors {
+        binary_index.insert(vec).unwrap();
+        fp_index.insert(vec).unwrap();
+    }
+
+    // Generate queries and measure recall
+    let mut total_recall = 0.0;
+    for _ in 0..n_queries {
+        let query: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+
+        // Get ground truth from full precision index
+        let fp_results = fp_index.search(&query, k, ef).unwrap();
+        let ground_truth: std::collections::HashSet<u32> =
+            fp_results.iter().map(|r| r.id).collect();
+
+        // Get binary quantization results
+        let binary_results = binary_index.search(&query, k, ef).unwrap();
+        let binary_ids: std::collections::HashSet<u32> =
+            binary_results.iter().map(|r| r.id).collect();
+
+        // Calculate recall
+        let matches = ground_truth.intersection(&binary_ids).count();
+        total_recall += matches as f64 / k as f64;
+    }
+
+    let avg_recall = total_recall / n_queries as f64;
+
+    // Binary quantization should achieve at least 70% recall with rescore
+    // (hamming is used for graph traversal, L2 for final ranking)
+    assert!(
+        avg_recall >= 0.70,
+        "Binary quantization recall too low: {:.2}% (expected >= 70%)",
+        avg_recall * 100.0
+    );
+}
+
 /// Test SQ8 recall at the HNSW level (small scale - 1K vectors)
 ///
 /// This test verifies that L2 decomposition gives the same results as direct L2 distance.

@@ -341,6 +341,7 @@ class TestOmenDBVectorStore:
         )
         assert len(store1) == 1
         store1.flush()  # Required for persistence
+        del store1
 
         # Open in new session
         store2 = OmenDBVectorStore(

@@ -221,6 +221,7 @@ class TestPersistenceScale:
             db.flush()
             save_time = time.time() - start
             print(f"\n10K save: {save_time:.2f}s")
+            del db
 
             # Load in new instance
             start = time.time()

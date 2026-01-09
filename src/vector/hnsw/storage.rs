@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::compression::binary::hamming_distance;
 use crate::compression::rabitq::QuantizedVector;
 use crate::compression::{ADCTable, RaBitQ, RaBitQParams, ScalarParams};
 use crate::distance::dot_product;
@@ -1003,8 +1004,16 @@ impl VectorStorage {
     pub fn is_asymmetric(&self) -> bool {
         matches!(
             self,
-            Self::RaBitQQuantized { .. } | Self::ScalarQuantized { .. }
+            Self::RaBitQQuantized { .. }
+                | Self::ScalarQuantized { .. }
+                | Self::BinaryQuantized { .. }
         )
+    }
+
+    /// Check if this storage uses binary quantization
+    #[must_use]
+    pub fn is_binary_quantized(&self) -> bool {
+        matches!(self, Self::BinaryQuantized { .. })
     }
 
     /// Check if this storage uses SQ8 quantization
@@ -1387,8 +1396,28 @@ impl VectorStorage {
                     norms[idx],
                 ))
             }
-            // For non-quantized storage, return None (caller should use regular distance)
-            _ => None,
+            Self::BinaryQuantized {
+                quantized,
+                thresholds,
+                ..
+            } => {
+                let idx = id as usize;
+                if idx >= quantized.len() {
+                    return None;
+                }
+
+                // Quantize query using stored thresholds
+                let query_quantized = Self::quantize_binary(query, thresholds);
+
+                // Compute hamming distance (number of different bits)
+                let hamming = hamming_distance(&query_quantized, &quantized[idx]);
+
+                // Return hamming distance as f32 for ranking
+                // Lower hamming = more similar (like L2 distance)
+                Some(hamming as f32)
+            }
+            // FullPrecision uses regular L2 distance, not asymmetric
+            Self::FullPrecision { .. } => None,
         }
     }
 

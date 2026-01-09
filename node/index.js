@@ -225,6 +225,10 @@ class VectorDatabase {
 		return this._native.flush();
 	}
 
+	close() {
+		return this._native.close();
+	}
+
 	optimize() {
 		return this._native.optimize();
 	}

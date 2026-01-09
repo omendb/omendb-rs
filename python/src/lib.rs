@@ -23,8 +23,8 @@ use std::time::Instant;
 /// Accepts:
 /// - True → SQ8 (4x compression, ~99% recall) - RECOMMENDED
 /// - "sq8" → SQ8 (explicit)
-/// - "binary" → Binary (32x compression, ~95% recall with rescore)
 /// - "rabitq" → RaBitQ 4-bit (8x compression, ~98% recall)
+/// - "binary" → Binary (32x compression, ~70-85% recall, fastest search)
 /// - None/False → no quantization (full precision)
 ///
 /// Returns Ok(Some(mode)) if quantization enabled, Ok(None) if disabled
@@ -46,7 +46,7 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     if let Ok(mode) = value.extract::<String>() {
         return match mode.to_lowercase().as_str() {
             "sq8" => Ok(Some(QuantizationMode::SQ8)),
-            "binary" | "bbq" => Ok(Some(QuantizationMode::Binary)), // 32x compression
+            "binary" => Ok(Some(QuantizationMode::Binary)), // 32x compression, fastest
             "rabitq" | "rabitq-4" | "rabitq_4" => {
                 Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4()))) // 8x compression
             }
@@ -54,8 +54,8 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
                 "Unknown quantization mode: '{}'\n\
                   Valid modes:\n\
                   - True or 'sq8':  4x smaller, ~99% recall (RECOMMENDED)\n\
-                  - 'binary':       32x smaller, ~95% recall (high dims, large datasets)\n\
-                  - 'rabitq':       8x smaller, ~98% recall (balanced)",
+                  - 'rabitq':       8x smaller, ~98% recall (balanced)\n\
+                  - 'binary':      32x smaller, ~70-85% recall (fastest)",
                 mode
             ))),
         };
@@ -64,8 +64,8 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     Err(PyValueError::new_err(
         "quantization must be True, False, or a string:\n\
           - True or 'sq8':  4x smaller, ~99% recall (RECOMMENDED)\n\
-          - 'binary':       32x smaller, ~95% recall (high dims, large datasets)\n\
-          - 'rabitq':       8x smaller, ~98% recall (balanced)",
+          - 'rabitq':       8x smaller, ~98% recall (balanced)\n\
+          - 'binary':      32x smaller, ~70-85% recall (fastest)",
     ))
 }
 
@@ -375,7 +375,7 @@ impl VectorDatabase {
     #[pyo3(name = "set", signature = (id_or_items=None, vector=None, metadata=None, *, ids=None, vectors=None, metadatas=None))]
     fn set_vectors(
         &self,
-        _py: Python<'_>,
+        py: Python<'_>,
         id_or_items: Option<&Bound<'_, PyAny>>,
         vector: Option<Vec<f32>>,
         metadata: Option<&Bound<'_, PyDict>>,
@@ -405,9 +405,14 @@ impl VectorDatabase {
                 })
                 .collect::<PyResult<Vec<_>>>()?;
 
-            let mut inner = self.inner.write();
-            let result = inner.store.set_batch(batch).map_err(convert_error)?;
-            inner.cache_valid = false;
+            // Release GIL during batch insert
+            let inner_arc = Arc::clone(&self.inner);
+            let result = py.detach(|| {
+                let mut inner = inner_arc.write();
+                let result = inner.store.set_batch(batch).map_err(convert_error);
+                inner.cache_valid = false;
+                result
+            })?;
             return Ok(result.len());
         }
 
@@ -437,43 +442,48 @@ impl VectorDatabase {
                 // Check if any items have text
                 let has_text = parsed.iter().any(|item| item.text.is_some());
 
-                let mut inner = self.inner.write();
+                // Release GIL during batch insert
+                let inner_arc = Arc::clone(&self.inner);
+                let count = py.detach(move || -> PyResult<usize> {
+                    let mut inner = inner_arc.write();
 
-                // Auto-enable text search if text field is present
-                if has_text && !inner.store.has_text_search() {
-                    inner.store.enable_text_search().map_err(convert_error)?;
-                }
-
-                // Insert items - use batch path when no text for performance
-                let results = if has_text {
-                    // Slow path: items with text must be inserted individually
-                    let mut results = Vec::with_capacity(parsed.len());
-                    for item in parsed {
-                        let result = if let Some(text) = item.text {
-                            inner
-                                .store
-                                .set_with_text(item.id, item.vector, &text, item.metadata)
-                                .map_err(convert_error)?
-                        } else {
-                            inner
-                                .store
-                                .set(item.id, item.vector, item.metadata)
-                                .map_err(convert_error)?
-                        };
-                        results.push(result);
+                    // Auto-enable text search if text field is present
+                    if has_text && !inner.store.has_text_search() {
+                        inner.store.enable_text_search().map_err(convert_error)?;
                     }
-                    results
-                } else {
-                    // Fast path: use set_batch for items without text
-                    let batch: Vec<_> = parsed
-                        .into_iter()
-                        .map(|item| (item.id, item.vector, item.metadata))
-                        .collect();
-                    inner.store.set_batch(batch).map_err(convert_error)?
-                };
 
-                inner.cache_valid = false;
-                return Ok(results.len());
+                    // Insert items - use batch path when no text for performance
+                    let results = if has_text {
+                        // Slow path: items with text must be inserted individually
+                        let mut results = Vec::with_capacity(parsed.len());
+                        for item in parsed {
+                            let result = if let Some(text) = item.text {
+                                inner
+                                    .store
+                                    .set_with_text(item.id, item.vector, &text, item.metadata)
+                                    .map_err(convert_error)?
+                            } else {
+                                inner
+                                    .store
+                                    .set(item.id, item.vector, item.metadata)
+                                    .map_err(convert_error)?
+                            };
+                            results.push(result);
+                        }
+                        results
+                    } else {
+                        // Fast path: use set_batch for items without text
+                        let batch: Vec<_> = parsed
+                            .into_iter()
+                            .map(|item| (item.id, item.vector, item.metadata))
+                            .collect();
+                        inner.store.set_batch(batch).map_err(convert_error)?
+                    };
+
+                    inner.cache_valid = false;
+                    Ok(results.len())
+                })?;
+                return Ok(count);
             }
 
             return Err(PyValueError::new_err(
@@ -982,7 +992,7 @@ impl VectorDatabase {
             );
             result.insert(
                 "vector".to_string(),
-                vector.data.clone().into_pyobject(py).unwrap().unbind(),
+                vector.data.into_pyobject(py).unwrap().unbind(),
             );
 
             let metadata_dict = json_to_pyobject(py, &metadata)?;
@@ -1016,11 +1026,23 @@ impl VectorDatabase {
         py: Python<'_>,
         ids: Vec<String>,
     ) -> PyResult<Vec<Option<HashMap<String, Py<PyAny>>>>> {
-        let inner = self.inner.read();
+        // Release GIL during data loading
+        let inner_arc = Arc::clone(&self.inner);
+        let fetched: Vec<_> = py.detach(|| {
+            let inner = inner_arc.read();
+            ids.into_iter()
+                .map(|id| {
+                    let data = inner.store.get(&id);
+                    (id, data)
+                })
+                .collect()
+        });
 
-        ids.into_iter()
-            .map(|id| {
-                if let Some((vector, metadata)) = inner.store.get(&id) {
+        // Convert to Python with GIL held
+        fetched
+            .into_iter()
+            .map(|(id, data)| {
+                if let Some((vector, metadata)) = data {
                     let mut result = HashMap::new();
                     result.insert(
                         "id".to_string(),
@@ -1028,7 +1050,7 @@ impl VectorDatabase {
                     );
                     result.insert(
                         "vector".to_string(),
-                        vector.data.clone().into_pyobject(py).unwrap().unbind(),
+                        vector.data.into_pyobject(py).unwrap().unbind(),
                     );
                     result.insert("metadata".to_string(), json_to_pyobject(py, &metadata)?);
                     Ok(Some(result))
@@ -1195,9 +1217,14 @@ impl VectorDatabase {
     ///     >>> import pandas as pd
     ///     >>> df = pd.DataFrame(db.items())
     fn items(&self, py: Python<'_>) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
-        let inner = self.inner.read();
-        let items = inner.store.items();
+        // Release GIL during data loading
+        let inner_arc = Arc::clone(&self.inner);
+        let items: Vec<_> = py.detach(|| {
+            let inner = inner_arc.read();
+            inner.store.items()
+        });
 
+        // Convert to Python with GIL held
         items
             .into_iter()
             .map(|(id, vector, metadata)| {
@@ -1799,11 +1826,6 @@ fn open(
     config: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<VectorDatabase> {
     use std::path::{Path, PathBuf};
-
-    // Validate dimensions
-    if dimensions == 0 {
-        return Err(PyValueError::new_err("dimensions must be greater than 0"));
-    }
 
     // Validate optional params
     if let Some(m_val) = m {

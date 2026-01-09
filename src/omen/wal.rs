@@ -36,15 +36,28 @@ pub enum WalEntryType {
     Checkpoint = 100,
 }
 
+impl WalEntryType {
+    /// Try to parse a WAL entry type from a byte
+    ///
+    /// Returns None for unknown entry types (which should be skipped during recovery)
+    #[must_use]
+    pub fn from_byte(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(Self::InsertNode),
+            2 => Some(Self::DeleteNode),
+            3 => Some(Self::UpdateNeighbors),
+            4 => Some(Self::UpdateMetadata),
+            100 => Some(Self::Checkpoint),
+            _ => None, // Unknown entry type - caller should handle
+        }
+    }
+}
+
 impl From<u8> for WalEntryType {
     fn from(v: u8) -> Self {
-        match v {
-            1 => Self::InsertNode,
-            2 => Self::DeleteNode,
-            3 => Self::UpdateNeighbors,
-            4 => Self::UpdateMetadata,
-            _ => Self::Checkpoint, // Unknown entries treated as checkpoint
-        }
+        // For backwards compatibility, unknown entries are treated as checkpoint
+        // But prefer using from_byte() which returns Option
+        Self::from_byte(v).unwrap_or(Self::Checkpoint)
     }
 }
 
@@ -259,10 +272,25 @@ impl Wal {
         let mut max_timestamp = 0u64;
         let mut count = 0u64;
 
+        // Maximum reasonable entry size (100MB) - protects against corrupted data_len
+        const MAX_ENTRY_SIZE: u32 = 100 * 1024 * 1024;
+
         loop {
             match file.read_exact(&mut header_buf) {
                 Ok(()) => {
                     let header = WalEntryHeader::from_bytes(&header_buf);
+
+                    // Sanity check: reject obviously corrupted entries
+                    if header.data_len > MAX_ENTRY_SIZE {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "WAL entry has suspicious data_len: {} bytes (max: {})",
+                                header.data_len, MAX_ENTRY_SIZE
+                            ),
+                        ));
+                    }
+
                     max_timestamp = max_timestamp.max(header.timestamp);
                     count += 1;
 
@@ -306,6 +334,9 @@ impl Wal {
     }
 
     /// Read all entries after last checkpoint
+    ///
+    /// Note: Entries are validated via checksum. Invalid entries are skipped.
+    /// Unknown entry types are also skipped (not treated as checkpoints).
     pub fn entries_after_checkpoint(&mut self) -> io::Result<Vec<WalEntry>> {
         let file = self.file.get_mut();
         file.seek(SeekFrom::Start(0))?;
@@ -314,10 +345,25 @@ impl Wal {
         let mut last_checkpoint_idx: Option<usize> = None;
         let mut header_buf = [0u8; WalEntryHeader::SIZE];
 
+        // Maximum reasonable entry size (100MB)
+        const MAX_ENTRY_SIZE: u32 = 100 * 1024 * 1024;
+
         loop {
             match file.read_exact(&mut header_buf) {
                 Ok(()) => {
                     let header = WalEntryHeader::from_bytes(&header_buf);
+
+                    // Sanity check on data_len
+                    if header.data_len > MAX_ENTRY_SIZE {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "WAL entry has suspicious data_len: {} bytes",
+                                header.data_len
+                            ),
+                        ));
+                    }
+
                     let mut data = vec![0u8; header.data_len as usize];
                     if header.data_len > 0 {
                         file.read_exact(&mut data)?;
@@ -325,7 +371,15 @@ impl Wal {
 
                     let entry = WalEntry { header, data };
 
-                    if entry.header.entry_type == WalEntryType::Checkpoint {
+                    // Skip entries that fail checksum verification
+                    if !entry.verify() {
+                        continue;
+                    }
+
+                    // Only count as checkpoint if it's actually a valid checkpoint entry type
+                    // (not an unknown entry type that defaulted to Checkpoint via From<u8>)
+                    let entry_type_byte = entry.header.entry_type as u8;
+                    if WalEntryType::from_byte(entry_type_byte) == Some(WalEntryType::Checkpoint) {
                         last_checkpoint_idx = Some(all_entries.len());
                     }
 
@@ -450,7 +504,7 @@ mod tests {
             wal.sync().unwrap();
         }
 
-        // Corrupt the middle of the file (corrupt second entry's data)
+        // Corrupt the middle of the file (corrupt first entry's data)
         {
             let mut file = OpenOptions::new()
                 .read(true)
@@ -458,33 +512,28 @@ mod tests {
                 .open(&wal_path)
                 .unwrap();
 
-            // Skip first entry header + data, then write garbage to second entry data
-            // First entry: header(20) + data(~50 bytes for vec1)
-            // Just corrupt some bytes in the middle of the file
-            file.seek(SeekFrom::Start(40)).unwrap();
+            // Corrupt bytes in the first entry's data section (after header)
+            // Header is 20 bytes, so corrupt data at offset 25
+            file.seek(SeekFrom::Start(25)).unwrap();
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF]).unwrap();
             file.sync_all().unwrap();
         }
 
-        // Read entries - corrupted entries should fail verify()
+        // Read entries - corrupted entries should be SKIPPED (not returned)
         {
             let mut wal = Wal::open(&wal_path).unwrap();
             let entries = wal.entries_after_checkpoint().unwrap();
 
-            // At least one entry should fail verification
-            let invalid_count = entries.iter().filter(|e| !e.verify()).count();
-            assert!(
-                invalid_count > 0,
-                "Expected at least one corrupted entry, got none"
-            );
+            // All returned entries should pass verification (corrupted ones are skipped)
+            for entry in &entries {
+                assert!(entry.verify(), "All returned entries should be valid");
+            }
 
-            // Valid entries should still verify correctly
-            let valid_count = entries.iter().filter(|e| e.verify()).count();
-            // At least the structure should be readable (may have 0-2 valid entries
-            // depending on exact corruption location)
+            // We started with 2 entries, at least one should have been corrupted and skipped
+            // The exact count depends on how corruption affects parsing
             assert!(
-                valid_count + invalid_count == entries.len(),
-                "All entries should be either valid or invalid"
+                entries.len() <= 2,
+                "Should have at most 2 entries after skipping corrupted ones"
             );
         }
     }

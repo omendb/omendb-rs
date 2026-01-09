@@ -301,16 +301,23 @@ impl VectorDatabase {
             .map(|item| {
                 let mut metadata = item.metadata.unwrap_or(serde_json::json!({}));
 
-                // Handle document field
+                // Handle document field - requires metadata to be an object
                 if let Some(doc) = item.document {
-                    if let Some(obj) = metadata.as_object_mut() {
-                        obj.insert("document".to_string(), serde_json::json!(doc));
+                    match metadata.as_object_mut() {
+                        Some(obj) => {
+                            obj.insert("document".to_string(), serde_json::json!(doc));
+                        }
+                        None => {
+                            return Err(Error::from_reason(
+                                "metadata must be an object when document field is provided",
+                            ));
+                        }
                     }
                 }
 
-                (item.id, Vector::new(item.vector.to_vec()), metadata)
+                Ok((item.id, Vector::new(item.vector.to_vec()), metadata))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         let mut inner = self.inner.write();
         let result = inner.store.set_batch(batch).map_err(convert_error)?;
@@ -630,7 +637,9 @@ impl VectorDatabase {
         inner
             .store
             .update(&id, vec, metadata)
-            .map_err(convert_error)
+            .map_err(convert_error)?;
+        inner.cache_valid = false;
+        Ok(())
     }
 
     /// Get number of vectors in database.
@@ -1063,6 +1072,30 @@ impl VectorDatabase {
     pub fn flush(&self) -> Result<()> {
         let mut inner = self.inner.write();
         inner.store.flush().map_err(convert_error)
+    }
+
+    /// Close the database and release file locks.
+    ///
+    /// After calling close(), the database is no longer usable.
+    /// Any subsequent operations will fail or return empty results.
+    ///
+    /// This is useful when you need to reopen the same database path
+    /// in the same process, since JavaScript doesn't have deterministic
+    /// object destruction like Python's `del`.
+    #[napi]
+    pub fn close(&self) -> Result<()> {
+        let mut inner = self.inner.write();
+        // Flush first to ensure all data is persisted
+        inner.store.flush().map_err(convert_error)?;
+        // Replace with minimal in-memory store to release file lock
+        let dummy_store = VectorStoreOptions::default()
+            .dimensions(self.dimensions as usize)
+            .build()
+            .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
+        inner.store = dummy_store;
+        inner.cache_valid = false;
+        inner.index_to_id_cache.clear();
+        Ok(())
     }
 
     /// Optimize index for cache-efficient search.

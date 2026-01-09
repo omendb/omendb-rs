@@ -159,6 +159,7 @@ class TestEfSearchPersistence:
             assert db.get_ef_search() == 50
 
             db.flush()
+            del db
 
             # Reopen - ef_search should be back to default
             db2 = omendb.open(db_path, dimensions=64)

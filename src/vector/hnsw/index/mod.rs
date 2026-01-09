@@ -413,9 +413,12 @@ impl HNSWIndex {
     /// Actual distance (with sqrt for L2)
     #[inline]
     pub(super) fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
-        // Try asymmetric distance first (for SQ8/RaBitQ storage)
-        if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
-            return Ok(dist.sqrt());
+        // For SQ8/RaBitQ: use asymmetric distance (returns squared L2)
+        // For Binary: skip asymmetric (hamming is not L2), use original vectors
+        if !self.vectors.is_binary_quantized() {
+            if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
+                return Ok(dist.sqrt());
+            }
         }
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance(query, vec))

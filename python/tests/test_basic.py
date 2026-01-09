@@ -138,8 +138,9 @@ def test_save_and_load():
         db = omendb.open(db_path, dimensions=3)
         db.set([{"id": "doc1", "vector": [1.0, 0.0, 0.0], "metadata": {"title": "Document 1"}}])
 
-        # Save database
+        # Save and close database
         db.flush()
+        del db
 
         # Load database
         db2 = omendb.open(db_path, dimensions=3)
