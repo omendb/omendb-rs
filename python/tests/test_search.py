@@ -375,3 +375,52 @@ def test_search_max_distance_negative_raises(db_with_vectors):
     """Test that negative max_distance raises ValueError"""
     with pytest.raises(ValueError, match="max_distance must be non-negative"):
         db_with_vectors.search([0.1] * 128, k=5, max_distance=-1.0)
+
+
+def test_search_sparse_filter_acorn1(temp_db_path):
+    """Test ACORN-1 filtered search with sparse filter (entry points may not match).
+
+    Regression test for bug where filtered search returned empty when
+    the entry point didn't match the filter. ACORN-1 requires traversing
+    THROUGH non-matching nodes to find matching ones.
+    """
+    import gc
+
+    import numpy as np
+
+    import omendb
+
+    # Create dataset where only 1% matches the filter
+    n = 1000
+    dim = 64
+    np.random.seed(42)
+    vectors = np.random.randn(n, dim).astype(np.float32)
+
+    db = omendb.open(temp_db_path, dimensions=dim, m=16, ef_construction=100)
+
+    items = []
+    for i in range(n):
+        items.append(
+            {
+                "id": f"d{i}",
+                "vector": vectors[i].tolist(),
+                "metadata": {"category": 0 if i < 10 else 1},  # 1% match
+            }
+        )
+    db.set(items)
+
+    # Query - entry point is likely NOT in category 0
+    query = np.random.randn(dim).astype(np.float32)
+    results = db.search(query.tolist(), k=5, filter={"category": 0}, ef=100)
+
+    # Must find results even with sparse filter
+    assert len(results) > 0, "ACORN-1 should find results through non-matching entry points"
+    assert len(results) <= 5
+
+    # Verify all results match the filter
+    for r in results:
+        idx = int(r["id"][1:])
+        assert idx < 10, f"Result {r['id']} should match category=0 filter"
+
+    del db
+    gc.collect()

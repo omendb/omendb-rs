@@ -276,8 +276,9 @@ impl HNSWIndex {
 
     /// Search for k nearest neighbors with metadata filtering (ACORN-1)
     ///
-    /// Implements ACORN-1 filtered search algorithm for efficient metadata-aware search.
-    /// Skips distance calculations for nodes that don't match the filter.
+    /// Implements ACORN-1 filtered search algorithm (arXiv:2403.04871).
+    /// Key insight: traverse THROUGH non-matching nodes to find matching ones,
+    /// using 2-hop expansion when selectivity is low (<10%).
     ///
     /// # Arguments
     /// * `query` - Query vector
@@ -572,27 +573,71 @@ impl HNSWIndex {
             let neighbors_to_explore = &mut buffers.unvisited; // Reuse unvisited buffer
             let results_buf = &mut buffers.results;
 
-            // Initialize with entry points (only add if they match filter)
+            // ACORN-1: Initialize with entry points
+            // Key insight: Even non-matching entry points must be used for traversal
+            // to maintain graph connectivity and find matching nodes.
             for &ep in entry_points {
-                if !filter_fn(ep) {
-                    visited.insert(ep);
-                    continue;
-                }
-
-                let dist = if use_l2_decomposition {
-                    self.distance_l2_decomposed(query, query_norm, ep)
-                        .ok_or(HNSWError::VectorNotFound(ep))?
-                } else {
-                    self.distance_cmp_mono::<D>(query, ep)?
-                };
-                let candidate = Candidate::new(ep, dist);
-
-                candidates.push(Reverse(candidate));
-                working.push(candidate);
                 visited.insert(ep);
+
+                if filter_fn(ep) {
+                    // Entry point matches filter - add to results and exploration
+                    let dist = if use_l2_decomposition {
+                        self.distance_l2_decomposed(query, query_norm, ep)
+                            .ok_or(HNSWError::VectorNotFound(ep))?
+                    } else {
+                        self.distance_cmp_mono::<D>(query, ep)?
+                    };
+                    let candidate = Candidate::new(ep, dist);
+                    candidates.push(Reverse(candidate));
+                    working.push(candidate);
+                } else {
+                    // Entry point doesn't match - but still explore its neighbors (ACORN-1)
+                    // This is critical: we must traverse THROUGH non-matching nodes
+                    let neighbors = self.neighbors.get_neighbors(ep, level);
+                    for &neighbor_id in &neighbors {
+                        if visited.contains(neighbor_id) {
+                            continue;
+                        }
+                        if filter_fn(neighbor_id) {
+                            // Found matching neighbor via entry point
+                            visited.insert(neighbor_id);
+                            let dist = if use_l2_decomposition {
+                                self.distance_l2_decomposed(query, query_norm, neighbor_id)
+                                    .ok_or(HNSWError::VectorNotFound(neighbor_id))?
+                            } else {
+                                self.distance_cmp_mono::<D>(query, neighbor_id)?
+                            };
+                            let candidate = Candidate::new(neighbor_id, dist);
+                            candidates.push(Reverse(candidate));
+                            working.push(candidate);
+                        } else if use_two_hop {
+                            // 2-hop: explore neighbor's neighbors
+                            visited.insert(neighbor_id);
+                            let second_hop = self.neighbors.get_neighbors(neighbor_id, level);
+                            for &second_hop_id in &second_hop {
+                                if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
+                                    visited.insert(second_hop_id);
+                                    let dist = if use_l2_decomposition {
+                                        self.distance_l2_decomposed(
+                                            query,
+                                            query_norm,
+                                            second_hop_id,
+                                        )
+                                        .ok_or(HNSWError::VectorNotFound(second_hop_id))?
+                                    } else {
+                                        self.distance_cmp_mono::<D>(query, second_hop_id)?
+                                    };
+                                    let candidate = Candidate::new(second_hop_id, dist);
+                                    candidates.push(Reverse(candidate));
+                                    working.push(candidate);
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
-            // If no entry points match, return empty
+            // If still no candidates found, return empty
             if candidates.is_empty() {
                 return Ok(Vec::new());
             }
