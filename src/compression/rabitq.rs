@@ -1,20 +1,24 @@
-//! `RaBitQ` Quantization for `OmenDB`
+//! Multi-bit Scalar Quantization for `OmenDB`
 //!
-//! `RaBitQ` (SIGMOD 2025) provides flexible vector compression with arbitrary
-//! bit rates (2-8 bits per dimension) using optimal rescaling per vector.
+//! Provides flexible vector compression with arbitrary bit rates (2-8 bits per
+//! dimension) using per-dimension min/max quantization with trained parameters.
+//!
+//! **Note:** This module is named `rabitq` for historical reasons but implements
+//! standard scalar quantization, NOT the RaBitQ algorithm from arXiv:2405.12497.
+//! True RaBitQ requires random orthogonal rotation + binary quantization.
 //!
 //! # Tiered Compression Strategy
 //!
 //! - L0-L2 (hot): Full precision f32 (no compression)
-//! - L3-L4 (warm): `RaBitQ` 4-bit (8× compression, 98% recall)
-//! - L5-L6 (cold): `RaBitQ` 2-bit (16× compression, 95% recall)
+//! - L3-L4 (warm): 4-bit (8× compression)
+//! - L5-L6 (cold): 2-bit (16× compression)
 //!
 //! # Key Features
 //!
 //! - Flexible compression (2, 3, 4, 5, 7, 8 bits/dimension)
-//! - Optimal rescaling for each vector
+//! - Per-dimension min/max training (percentile-based for outlier robustness)
 //! - SIMD-accelerated distance (AVX2/NEON)
-//! - Same query speed as scalar quantization
+//! - Same query speed as 8-bit scalar quantization
 //! - Better accuracy than binary quantization
 
 use serde::{Deserialize, Serialize};
