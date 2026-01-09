@@ -184,7 +184,6 @@ fn create_hnsw_index(
         None => HNSWQuantization::None,
     };
 
-    // Use builder pattern for consistent index creation
     HNSWIndex::builder()
         .dimensions(dimensions)
         .max_elements(training_vectors.len().max(10_000))
@@ -194,6 +193,69 @@ fn create_hnsw_index(
         .metric(distance_metric.into())
         .quantization(quantization)
         .build_with_training(training_vectors)
+}
+
+/// Initialize HNSW index from pending quantization mode.
+fn initialize_quantized_hnsw(
+    dimensions: usize,
+    hnsw_m: usize,
+    hnsw_ef_construction: usize,
+    hnsw_ef_search: usize,
+    distance_metric: Metric,
+    quant_mode: QuantizationMode,
+    training_vectors: &[Vec<f32>],
+) -> Result<HNSWIndex> {
+    let hnsw_params = HNSWParams::default()
+        .with_m(hnsw_m)
+        .with_ef_construction(hnsw_ef_construction)
+        .with_ef_search(hnsw_ef_search);
+
+    match quant_mode {
+        QuantizationMode::Binary => {
+            let mut idx =
+                HNSWIndex::new_with_binary(dimensions, hnsw_params, distance_metric.into())?;
+            idx.train_quantizer(training_vectors)?;
+            Ok(idx)
+        }
+        QuantizationMode::SQ8 => {
+            HNSWIndex::new_with_sq8(dimensions, hnsw_params, distance_metric.into())
+        }
+        QuantizationMode::RaBitQ(params) => {
+            let mut idx = HNSWIndex::new_with_asymmetric(
+                dimensions,
+                hnsw_params,
+                distance_metric.into(),
+                params,
+            )?;
+            idx.train_quantizer(training_vectors)?;
+            Ok(idx)
+        }
+    }
+}
+
+/// Initialize standard (non-quantized) HNSW index.
+fn initialize_standard_hnsw(
+    dimensions: usize,
+    hnsw_m: usize,
+    hnsw_ef_construction: usize,
+    hnsw_ef_search: usize,
+    distance_metric: Metric,
+    capacity: usize,
+) -> Result<HNSWIndex> {
+    HNSWIndex::new_with_params(
+        capacity,
+        dimensions,
+        hnsw_m,
+        hnsw_ef_construction,
+        hnsw_ef_search,
+        distance_metric.into(),
+    )
+}
+
+/// Default empty JSON object for missing metadata.
+#[inline]
+fn default_metadata() -> JsonValue {
+    serde_json::json!({})
 }
 
 /// Vector store with HNSW indexing
@@ -757,78 +819,77 @@ impl VectorStore {
     }
 
     // ============================================================================
+    // Private Helpers
+    // ============================================================================
+
+    /// Resolve dimensions from vector or existing store config.
+    fn resolve_dimensions(&self, vector_dim: usize) -> Result<usize> {
+        if self.dimensions == 0 {
+            Ok(vector_dim)
+        } else if vector_dim != self.dimensions {
+            anyhow::bail!(
+                "Vector dimension mismatch: store expects {}, got {}",
+                self.dimensions,
+                vector_dim
+            );
+        } else {
+            Ok(self.dimensions)
+        }
+    }
+
+    /// Create initial HNSW index, handling pending quantization.
+    fn create_initial_hnsw(
+        &mut self,
+        dimensions: usize,
+        training_vectors: &[Vec<f32>],
+    ) -> Result<HNSWIndex> {
+        self.create_initial_hnsw_with_capacity(dimensions, training_vectors, 10_000)
+    }
+
+    /// Create initial HNSW index with custom capacity.
+    fn create_initial_hnsw_with_capacity(
+        &mut self,
+        dimensions: usize,
+        training_vectors: &[Vec<f32>],
+        capacity: usize,
+    ) -> Result<HNSWIndex> {
+        if let Some(quant_mode) = self.pending_quantization.take() {
+            if let Some(ref mut storage) = self.storage {
+                storage.put_quantization_mode(quantization_mode_to_id(&quant_mode))?;
+            }
+            initialize_quantized_hnsw(
+                dimensions,
+                self.hnsw_m,
+                self.hnsw_ef_construction,
+                self.hnsw_ef_search,
+                self.distance_metric,
+                quant_mode,
+                training_vectors,
+            )
+        } else {
+            initialize_standard_hnsw(
+                dimensions,
+                self.hnsw_m,
+                self.hnsw_ef_construction,
+                self.hnsw_ef_search,
+                self.distance_metric,
+                capacity,
+            )
+        }
+    }
+
+    // ============================================================================
     // Insert/Set Methods
     // ============================================================================
 
     /// Insert vector and return its ID
     pub fn insert(&mut self, vector: Vector) -> Result<usize> {
-        // Use next_index counter (reliable even when skip_ram enabled for quantized stores)
         let id = self.next_index;
 
-        // Lazy initialize HNSW on first insert
         if self.hnsw_index.is_none() {
-            let dimensions = if self.dimensions == 0 {
-                vector.dim()
-            } else {
-                if vector.dim() != self.dimensions {
-                    anyhow::bail!(
-                        "Vector dimension mismatch: store expects {}, got {}",
-                        self.dimensions,
-                        vector.dim()
-                    );
-                }
-                self.dimensions
-            };
-
-            // Check if we have pending quantization
-            if let Some(quant_mode) = self.pending_quantization.take() {
-                let hnsw_params = HNSWParams::default()
-                    .with_m(self.hnsw_m)
-                    .with_ef_construction(self.hnsw_ef_construction)
-                    .with_ef_search(self.hnsw_ef_search);
-
-                // Save quantization mode to storage for persistence
-                if let Some(ref mut storage) = self.storage {
-                    storage.put_quantization_mode(quantization_mode_to_id(&quant_mode))?;
-                }
-
-                let index = match quant_mode {
-                    QuantizationMode::Binary => {
-                        let mut idx = HNSWIndex::new_with_binary(
-                            dimensions,
-                            hnsw_params,
-                            self.distance_metric.into(),
-                        )?;
-                        idx.train_quantizer(std::slice::from_ref(&vector.data))?;
-                        idx
-                    }
-                    QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
-                        dimensions,
-                        hnsw_params,
-                        self.distance_metric.into(),
-                    )?,
-                    QuantizationMode::RaBitQ(params) => {
-                        let mut idx = HNSWIndex::new_with_asymmetric(
-                            dimensions,
-                            hnsw_params,
-                            self.distance_metric.into(),
-                            params,
-                        )?;
-                        idx.train_quantizer(std::slice::from_ref(&vector.data))?;
-                        idx
-                    }
-                };
-                self.hnsw_index = Some(index);
-            } else {
-                self.hnsw_index = Some(HNSWIndex::new_with_params(
-                    10_000,
-                    dimensions,
-                    self.hnsw_m,
-                    self.hnsw_ef_construction,
-                    self.hnsw_ef_search,
-                    self.distance_metric.into(),
-                )?);
-            }
+            let dimensions = self.resolve_dimensions(vector.dim())?;
+            self.hnsw_index =
+                Some(self.create_initial_hnsw(dimensions, std::slice::from_ref(&vector.data))?);
             self.dimensions = dimensions;
         } else if vector.dim() != self.dimensions {
             anyhow::bail!(
@@ -838,12 +899,10 @@ impl VectorStore {
             );
         }
 
-        // Insert into HNSW index
         if let Some(ref mut index) = self.hnsw_index {
             index.insert(&vector.data)?;
         }
 
-        // Persist to storage if available
         if let Some(ref mut storage) = self.storage {
             storage.put_vector(id, &vector.data)?;
             storage.increment_count()?;
@@ -852,8 +911,6 @@ impl VectorStore {
             }
         }
 
-        // Only store in RAM if not quantized OR no disk storage (in-memory mode)
-        // When quantized with disk storage, we fetch from disk for rescore
         if !self.is_quantized() || self.storage.is_none() {
             self.vectors.push(vector);
         }
@@ -936,72 +993,16 @@ impl VectorStore {
             result_indices.push(index);
         }
 
-        // Process inserts in batch
         if !inserts.is_empty() {
-            // Lazy initialize HNSW if needed
+            let vectors_data: Vec<Vec<f32>> =
+                inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
+
             if self.hnsw_index.is_none() {
-                let dimensions = if self.dimensions == 0 {
-                    inserts[0].1.dim()
-                } else {
-                    self.dimensions
-                };
-
-                if let Some(quant_mode) = self.pending_quantization.take() {
-                    let hnsw_params = HNSWParams::default()
-                        .with_m(self.hnsw_m)
-                        .with_ef_construction(self.hnsw_ef_construction)
-                        .with_ef_search(self.hnsw_ef_search);
-
-                    if let Some(ref mut storage) = self.storage {
-                        storage.put_quantization_mode(quantization_mode_to_id(&quant_mode))?;
-                    }
-
-                    let index = match quant_mode {
-                        QuantizationMode::Binary => {
-                            let mut idx = HNSWIndex::new_with_binary(
-                                dimensions,
-                                hnsw_params,
-                                self.distance_metric.into(),
-                            )?;
-                            let training_vectors: Vec<Vec<f32>> =
-                                inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
-                            idx.train_quantizer(&training_vectors)?;
-                            idx
-                        }
-                        QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
-                            dimensions,
-                            hnsw_params,
-                            self.distance_metric.into(),
-                        )?,
-                        QuantizationMode::RaBitQ(params) => {
-                            let mut idx = HNSWIndex::new_with_asymmetric(
-                                dimensions,
-                                hnsw_params,
-                                self.distance_metric.into(),
-                                params,
-                            )?;
-                            let training_vectors: Vec<Vec<f32>> =
-                                inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
-                            idx.train_quantizer(&training_vectors)?;
-                            idx
-                        }
-                    };
-
-                    self.hnsw_index = Some(index);
-                } else {
-                    self.hnsw_index = Some(HNSWIndex::new_with_params(
-                        10_000,
-                        dimensions,
-                        self.hnsw_m,
-                        self.hnsw_ef_construction,
-                        self.hnsw_ef_search,
-                        self.distance_metric.into(),
-                    )?);
-                }
+                let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
+                self.hnsw_index = Some(self.create_initial_hnsw(dimensions, &vectors_data)?);
                 self.dimensions = dimensions;
             }
 
-            // Validate all vectors have same dimensions
             for (i, (_, vector, _)) in inserts.iter().enumerate() {
                 if vector.dim() != self.dimensions {
                     anyhow::bail!(
@@ -1013,13 +1014,6 @@ impl VectorStore {
                 }
             }
 
-            // Extract vectors for batch HNSW insertion
-            let vectors_data: Vec<Vec<f32>> =
-                inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
-
-            // Insert vectors into HNSW using batch_insert for optimal graph construction
-            // batch_insert works for all modes (f32, SQ8, RaBitQ) after fix to use get_dequantized
-            // Use next_index counter (reliable even when skip_ram enabled for quantized stores)
             let base_index = self.next_index;
             let insert_count = inserts.len();
             if let Some(ref mut index) = self.hnsw_index {
@@ -1286,7 +1280,7 @@ impl VectorStore {
                     .get(&id)
                     .and_then(|&idx| self.metadata.get(&idx))
                     .cloned()
-                    .unwrap_or(serde_json::json!({}));
+                    .unwrap_or_else(default_metadata);
                 (id, score, metadata)
             })
             .collect()
@@ -1404,7 +1398,7 @@ impl VectorStore {
                     .get(&result.id)
                     .and_then(|&idx| self.metadata.get(&idx))
                     .cloned()
-                    .unwrap_or(serde_json::json!({}));
+                    .unwrap_or_else(default_metadata);
                 (result, metadata)
             })
             .collect()
@@ -1713,66 +1707,20 @@ impl VectorStore {
         }
 
         if self.hnsw_index.is_none() {
-            if let Some(quant_mode) = self.pending_quantization.take() {
-                let hnsw_params = HNSWParams::default()
-                    .with_m(self.hnsw_m)
-                    .with_ef_construction(self.hnsw_ef_construction)
-                    .with_ef_search(self.hnsw_ef_search);
-
-                let index = match quant_mode {
-                    QuantizationMode::Binary => {
-                        let mut idx = HNSWIndex::new_with_binary(
-                            self.dimensions,
-                            hnsw_params,
-                            self.distance_metric.into(),
-                        )?;
-                        let training_vectors: Vec<Vec<f32>> =
-                            vectors.iter().map(|v| v.data.clone()).collect();
-                        idx.train_quantizer(&training_vectors)?;
-                        idx
-                    }
-                    QuantizationMode::SQ8 => HNSWIndex::new_with_sq8(
-                        self.dimensions,
-                        hnsw_params,
-                        self.distance_metric.into(),
-                    )?,
-                    QuantizationMode::RaBitQ(params) => {
-                        let mut idx = HNSWIndex::new_with_asymmetric(
-                            self.dimensions,
-                            hnsw_params,
-                            self.distance_metric.into(),
-                            params,
-                        )?;
-                        let training_vectors: Vec<Vec<f32>> =
-                            vectors.iter().map(|v| v.data.clone()).collect();
-                        idx.train_quantizer(&training_vectors)?;
-                        idx
-                    }
-                };
-
-                self.hnsw_index = Some(index);
-            } else {
-                let capacity = vectors.len().max(1_000_000);
-                self.hnsw_index = Some(HNSWIndex::new_with_params(
-                    capacity,
-                    self.dimensions,
-                    self.hnsw_m,
-                    self.hnsw_ef_construction,
-                    self.hnsw_ef_search,
-                    self.distance_metric.into(),
-                )?);
-            }
+            let training: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
+            let capacity = vectors.len().max(1_000_000);
+            self.hnsw_index = Some(self.create_initial_hnsw_with_capacity(
+                self.dimensions,
+                &training,
+                capacity,
+            )?);
         }
 
-        let _start_id = self.vectors.len();
         let mut all_ids = Vec::with_capacity(vectors.len());
-
         for chunk in vectors.chunks(CHUNK_SIZE) {
             let vector_data: Vec<Vec<f32>> = chunk.iter().map(|v| v.data.clone()).collect();
-
             if let Some(ref mut index) = self.hnsw_index {
-                let chunk_ids = index.batch_insert(&vector_data)?;
-                all_ids.extend(chunk_ids);
+                all_ids.extend(index.batch_insert(&vector_data)?);
             }
         }
 
@@ -2066,7 +2014,7 @@ impl VectorStore {
                     let metadata = metadata_map
                         .get(&index)
                         .cloned()
-                        .unwrap_or(serde_json::json!({}));
+                        .unwrap_or_else(default_metadata);
                     filter.matches(&metadata)
                 };
                 hnsw.search_with_filter_ef(&query.data, k, Some(effective_ef), filter_fn)?
@@ -2079,7 +2027,7 @@ impl VectorStore {
                         .metadata
                         .get(&index)
                         .cloned()
-                        .unwrap_or(serde_json::json!({}));
+                        .unwrap_or_else(default_metadata);
                     (index, distance, metadata)
                 })
                 .collect();
@@ -2105,7 +2053,7 @@ impl VectorStore {
                         .metadata
                         .get(&index)
                         .cloned()
-                        .unwrap_or(serde_json::json!({}));
+                        .unwrap_or_else(default_metadata);
                     filter.matches(&metadata)
                 };
 
@@ -2117,7 +2065,7 @@ impl VectorStore {
                     .metadata
                     .get(&index)
                     .cloned()
-                    .unwrap_or(serde_json::json!({}));
+                    .unwrap_or_else(default_metadata);
                 let distance = query.l2_distance(vec).unwrap_or(f32::MAX);
                 Some((index, distance, metadata))
             })
@@ -2197,7 +2145,7 @@ impl VectorStore {
                         .metadata
                         .get(&index)
                         .cloned()
-                        .unwrap_or(serde_json::json!({}));
+                        .unwrap_or_else(default_metadata);
                     Some((index, distance, metadata))
                 })
                 .collect();
@@ -2252,7 +2200,7 @@ impl VectorStore {
                     .metadata
                     .get(&index)
                     .cloned()
-                    .unwrap_or(serde_json::json!({}));
+                    .unwrap_or_else(default_metadata);
                 Some((index, distance, metadata))
             })
             .collect())

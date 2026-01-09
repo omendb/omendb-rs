@@ -29,22 +29,23 @@ fn configure_open_options(opts: &mut OpenOptions) {
 }
 
 #[cfg(not(windows))]
-fn configure_open_options(_opts: &mut OpenOptions) {
-    // No-op on Unix
+fn configure_open_options(_opts: &mut OpenOptions) {}
+
+fn lock_exclusive(file: &File) -> io::Result<()> {
+    file.try_lock_exclusive().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "Database is locked by another process",
+        )
+    })
 }
 
-/// Serializable metadata for checkpoint persistence
 #[derive(Serialize, Deserialize, Default)]
 struct CheckpointMetadata {
-    /// String ID → internal index
     id_to_index: HashMap<String, u32>,
-    /// Internal index → string ID
     index_to_id: HashMap<u32, String>,
-    /// Deleted vector indices
     deleted: HashMap<u32, bool>,
-    /// Configuration values
     config: HashMap<String, u64>,
-    /// Per-vector metadata (JSON bytes)
     metadata: HashMap<u32, Vec<u8>>,
 }
 
@@ -99,34 +100,20 @@ impl OmenFile {
         PathBuf::from(wal)
     }
 
-    /// Create a new .omen database
     pub fn create(path: impl AsRef<Path>, dimensions: u32) -> io::Result<Self> {
         let path = path.as_ref();
         let omen_path = Self::compute_omen_path(path);
         let wal_path = Self::compute_wal_path(path);
 
-        // Create empty file with header
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).create(true).truncate(true);
         configure_open_options(&mut opts);
         let mut file = opts.open(&omen_path)?;
-
-        // Acquire exclusive lock to prevent concurrent access
-        file.try_lock_exclusive().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "Database is locked by another process",
-            )
-        })?;
+        lock_exclusive(&file)?;
 
         let header = OmenHeader::new(dimensions);
         file.write_all(&header.to_bytes())?;
         file.sync_all()?;
-
-        let wal = Wal::open(&wal_path)?;
-
-        let mut config = HashMap::new();
-        config.insert("dimensions".to_string(), u64::from(dimensions));
 
         Ok(Self {
             path: omen_path,
@@ -138,13 +125,12 @@ impl OmenFile {
             index_to_id: HashMap::new(),
             metadata_mem: HashMap::new(),
             deleted: HashMap::new(),
-            config,
-            wal,
+            config: HashMap::from([("dimensions".to_string(), u64::from(dimensions))]),
+            wal: Wal::open(&wal_path)?,
             hnsw_index_bytes: None,
         })
     }
 
-    /// Open an existing .omen database
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
         let omen_path = Self::compute_omen_path(path);
@@ -154,21 +140,12 @@ impl OmenFile {
         opts.read(true).write(true);
         configure_open_options(&mut opts);
         let mut file = opts.open(&omen_path)?;
+        lock_exclusive(&file)?;
 
-        // Acquire exclusive lock to prevent concurrent access
-        file.try_lock_exclusive().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "Database is locked by another process",
-            )
-        })?;
-
-        // Read header
         let mut header_buf = [0u8; HEADER_SIZE];
         file.read_exact(&mut header_buf)?;
         let header = OmenHeader::from_bytes(&header_buf)?;
 
-        // Create mmap if file has data
         let file_len = file.metadata()?.len() as usize;
         let mmap = if file_len > HEADER_SIZE {
             Some(unsafe { MmapMut::map_mut(&file)? })
@@ -176,15 +153,12 @@ impl OmenFile {
             None
         };
 
-        // Open WAL
         let wal = Wal::open(&wal_path)?;
+        let mut config = HashMap::from([
+            ("dimensions".to_string(), u64::from(header.dimensions)),
+            ("count".to_string(), header.count),
+        ]);
 
-        // Initialize config from header
-        let mut config = HashMap::new();
-        config.insert("dimensions".to_string(), u64::from(header.dimensions));
-        config.insert("count".to_string(), header.count);
-
-        // Load vectors from checkpoint if present
         let mut vectors_mem = Vec::new();
         let mut id_to_index = HashMap::new();
         let mut index_to_id = HashMap::new();
@@ -197,22 +171,13 @@ impl OmenFile {
                 let vec_offset = vec_section.offset as usize;
                 let dim = header.dimensions as usize;
                 let count = header.count as usize;
+                let vec_size = dim * 4;
 
-                if dim > 0 && count > 0 {
-                    for i in 0..count {
-                        let start = vec_offset + i * dim * 4;
-                        let end = start + dim * 4;
-                        if end <= mmap.len() {
-                            let bytes = &mmap[start..end];
-                            let vector: Vec<f32> = bytes
-                                .chunks(4)
-                                .map(|chunk| {
-                                    let arr: [u8; 4] = chunk.try_into().unwrap_or([0; 4]);
-                                    f32::from_le_bytes(arr)
-                                })
-                                .collect();
-                            vectors_mem.push(vector);
-                        }
+                for i in 0..count {
+                    let start = vec_offset + i * vec_size;
+                    let end = start + vec_size;
+                    if end <= mmap.len() {
+                        vectors_mem.push(read_vector_from_bytes(&mmap[start..end], dim));
                     }
                 }
             }
@@ -234,22 +199,14 @@ impl OmenFile {
             }
         }
 
-        // Load HNSW index bytes (if present)
-        let hnsw_index_bytes = if let Some(ref mmap) = mmap {
-            if let Some(hnsw_section) = header.get_section(SectionType::HnswIndex) {
-                let hnsw_offset = hnsw_section.offset as usize;
-                let hnsw_len = hnsw_section.length as usize;
-                if hnsw_offset + hnsw_len <= mmap.len() {
-                    Some(mmap[hnsw_offset..hnsw_offset + hnsw_len].to_vec())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let hnsw_index_bytes = mmap
+            .as_ref()
+            .and_then(|m| header.get_section(SectionType::HnswIndex).map(|s| (m, s)))
+            .and_then(|(m, s)| {
+                let start = s.offset as usize;
+                let end = start + s.length as usize;
+                (end <= m.len()).then(|| m[start..end].to_vec())
+            });
 
         let mut db = Self {
             path: omen_path,
@@ -306,41 +263,28 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Replay insert from WAL
     fn replay_insert(&mut self, data: &[u8]) -> io::Result<()> {
         let mut cursor = std::io::Cursor::new(data);
+        let string_id = read_string_id(&mut cursor)?;
 
-        // Read string ID
-        let mut len_buf = [0u8; 4];
-        cursor.read_exact(&mut len_buf)?;
-        let id_len = u32::from_le_bytes(len_buf) as usize;
-        let mut id_buf = vec![0u8; id_len];
-        cursor.read_exact(&mut id_buf)?;
-        let string_id = String::from_utf8_lossy(&id_buf).to_string();
+        let mut buf = [0u8; 4];
 
-        // Read level
-        let mut level_buf = [0u8; 1];
-        cursor.read_exact(&mut level_buf)?;
-        let level = level_buf[0];
+        // Skip level byte (HNSW graph managed by HNSWIndex)
+        cursor.read_exact(&mut buf[..1])?;
 
         // Read vector
-        cursor.read_exact(&mut len_buf)?;
-        let vec_len = u32::from_le_bytes(len_buf) as usize;
-        let mut vector = vec![0.0f32; vec_len];
-        for val in &mut vector {
-            let mut f32_buf = [0u8; 4];
-            cursor.read_exact(&mut f32_buf)?;
-            *val = f32::from_le_bytes(f32_buf);
-        }
+        cursor.read_exact(&mut buf)?;
+        let vec_len = u32::from_le_bytes(buf) as usize;
+        let mut vec_bytes = vec![0u8; vec_len * 4];
+        cursor.read_exact(&mut vec_bytes)?;
+        let vector = read_vector_from_bytes(&vec_bytes, vec_len);
 
         // Read metadata
-        cursor.read_exact(&mut len_buf)?;
-        let meta_len = u32::from_le_bytes(len_buf) as usize;
+        cursor.read_exact(&mut buf)?;
+        let meta_len = u32::from_le_bytes(buf) as usize;
         let mut metadata = vec![0u8; meta_len];
         cursor.read_exact(&mut metadata)?;
 
-        // Apply insert (level is ignored - HNSW graph managed by HNSWIndex)
-        let _ = level; // Consumed from WAL but not stored (HNSWIndex manages graph)
         let index = self.vectors_mem.len() as u32;
         self.vectors_mem.push(vector);
         self.id_to_index.insert(string_id.clone(), index);
@@ -352,17 +296,9 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Replay delete from WAL
     fn replay_delete(&mut self, data: &[u8]) -> io::Result<()> {
         let mut cursor = std::io::Cursor::new(data);
-
-        // Read string ID
-        let mut len_buf = [0u8; 4];
-        cursor.read_exact(&mut len_buf)?;
-        let id_len = u32::from_le_bytes(len_buf) as usize;
-        let mut id_buf = vec![0u8; id_len];
-        cursor.read_exact(&mut id_buf)?;
-        let string_id = String::from_utf8_lossy(&id_buf).to_string();
+        let string_id = read_string_id(&mut cursor)?;
 
         if let Some(&index) = self.id_to_index.get(&string_id) {
             self.deleted.insert(index, true);
@@ -422,24 +358,18 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Find k nearest neighbors (simple greedy search)
     fn find_nearest(&self, query: &[f32], k: usize) -> Vec<u32> {
-        if self.vectors_mem.is_empty() {
-            return Vec::new();
-        }
-
-        // Simple brute force for now - full HNSW search would be more efficient
         let mut distances: Vec<(u32, f32)> = self
             .vectors_mem
             .iter()
             .enumerate()
-            .filter(|(i, _)| !self.deleted.get(&(*i as u32)).copied().unwrap_or(false))
+            .filter(|(i, _)| !self.deleted.contains_key(&(*i as u32)))
             .map(|(i, v)| (i as u32, l2_distance(query, v)))
             .collect();
 
         distances.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-        distances.into_iter().take(k).map(|(id, _)| id).collect()
+        distances.truncate(k);
+        distances.into_iter().map(|(id, _)| id).collect()
     }
 
     /// Search for k nearest neighbors
@@ -462,19 +392,15 @@ impl OmenFile {
             .collect()
     }
 
-    /// Delete a vector by ID
     pub fn delete(&mut self, id: &str) -> io::Result<bool> {
-        if let Some(&index) = self.id_to_index.get(id) {
-            // Log to WAL
-            let entry = WalEntry::delete_node(0, id);
-            self.wal.append(entry)?;
-            self.wal.sync()?;
+        let Some(&index) = self.id_to_index.get(id) else {
+            return Ok(false);
+        };
 
-            self.deleted.insert(index, true);
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        self.wal.append(WalEntry::delete_node(0, id))?;
+        self.wal.sync()?;
+        self.deleted.insert(index, true);
+        Ok(true)
     }
 
     /// Get vector count
@@ -614,28 +540,15 @@ impl OmenFile {
             }
         }
 
-        // Reopen main file
         let mut opts = OpenOptions::new();
         opts.read(true).write(true);
         configure_open_options(&mut opts);
         self.file = opts.open(&self.path)?;
+        lock_exclusive(&self.file)?;
 
-        // Acquire exclusive lock on reopened file
-        self.file.try_lock_exclusive().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "Database is locked by another process",
-            )
-        })?;
-
-        // Truncate WAL (safe now - checkpoint is durable)
         self.wal.truncate()?;
-
-        // Write checkpoint marker
         self.wal.append(WalEntry::checkpoint(0))?;
         self.wal.sync()?;
-
-        // Update mmap
         self.mmap = Some(unsafe { MmapMut::map_mut(&self.file)? });
 
         Ok(())
@@ -657,37 +570,32 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Get a vector by internal index
     pub fn get_vector(&self, id: usize) -> Result<Option<Vec<f32>>> {
-        // Try memory first
         if id < self.vectors_mem.len() && !self.vectors_mem[id].is_empty() {
             return Ok(Some(self.vectors_mem[id].clone()));
         }
 
-        // Fall back to mmap for quantized stores (vectors not in RAM)
-        if let Some(ref mmap) = self.mmap {
-            if let Some(vec_section) = self.header.get_section(SectionType::Vectors) {
-                let dim = self.header.dimensions as usize;
-                if dim > 0 && id < self.header.count as usize {
-                    let vec_offset = vec_section.offset as usize;
-                    let start = vec_offset + id * dim * 4;
-                    let end = start + dim * 4;
-                    if end <= mmap.len() {
-                        let bytes = &mmap[start..end];
-                        let vector: Vec<f32> = bytes
-                            .chunks(4)
-                            .map(|chunk| {
-                                let arr: [u8; 4] = chunk.try_into().unwrap_or([0; 4]);
-                                f32::from_le_bytes(arr)
-                            })
-                            .collect();
-                        return Ok(Some(vector));
-                    }
-                }
-            }
+        let Some(ref mmap) = self.mmap else {
+            return Ok(None);
+        };
+        let Some(vec_section) = self.header.get_section(SectionType::Vectors) else {
+            return Ok(None);
+        };
+
+        let dim = self.header.dimensions as usize;
+        if id >= self.header.count as usize {
+            return Ok(None);
         }
 
-        Ok(None)
+        let vec_size = dim * 4;
+        let start = vec_section.offset as usize + id * vec_size;
+        let end = start + vec_size;
+
+        if end <= mmap.len() {
+            Ok(Some(read_vector_from_bytes(&mmap[start..end], dim)))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Store metadata for a vector (as JSON)
@@ -697,15 +605,12 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Get metadata for a vector (as JSON)
     pub fn get_metadata(&self, id: usize) -> Result<Option<JsonValue>> {
-        match self.metadata_mem.get(&(id as u32)) {
-            Some(bytes) => {
-                let metadata: JsonValue = serde_json::from_slice(bytes)?;
-                Ok(Some(metadata))
-            }
-            None => Ok(None),
-        }
+        self.metadata_mem
+            .get(&(id as u32))
+            .map(|bytes| serde_json::from_slice(bytes))
+            .transpose()
+            .map_err(Into::into)
     }
 
     /// Store string ID to internal index mapping
@@ -793,15 +698,16 @@ impl OmenFile {
         Ok(self.get_quantization_mode()?.unwrap_or(0) > 0)
     }
 
-    /// Load all metadata from storage
     pub fn load_all_metadata(&self) -> Result<HashMap<usize, JsonValue>> {
-        let mut result = HashMap::new();
-        for (&id, bytes) in &self.metadata_mem {
-            if let Ok(metadata) = serde_json::from_slice(bytes) {
-                result.insert(id as usize, metadata);
-            }
-        }
-        Ok(result)
+        Ok(self
+            .metadata_mem
+            .iter()
+            .filter_map(|(&id, bytes)| {
+                serde_json::from_slice(bytes)
+                    .ok()
+                    .map(|meta| (id as usize, meta))
+            })
+            .collect())
     }
 
     /// Load all ID mappings from storage
@@ -819,9 +725,8 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Check if a vector is deleted
     pub fn is_deleted(&self, id: usize) -> Result<bool> {
-        Ok(self.deleted.get(&(id as u32)).copied().unwrap_or(false))
+        Ok(self.deleted.contains_key(&(id as u32)))
     }
 
     /// Remove deleted marker (for re-insertion)
@@ -916,14 +821,29 @@ impl OmenFile {
     }
 }
 
-/// L2 distance between two vectors
-#[inline]
 fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| (x - y).powi(2))
         .sum::<f32>()
         .sqrt()
+}
+
+fn read_string_id(cursor: &mut std::io::Cursor<&[u8]>) -> io::Result<String> {
+    let mut len_buf = [0u8; 4];
+    cursor.read_exact(&mut len_buf)?;
+    let id_len = u32::from_le_bytes(len_buf) as usize;
+    let mut id_buf = vec![0u8; id_len];
+    cursor.read_exact(&mut id_buf)?;
+    String::from_utf8(id_buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+fn read_vector_from_bytes(bytes: &[u8], dimensions: usize) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .take(dimensions)
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap_or([0; 4])))
+        .collect()
 }
 
 #[cfg(test)]
