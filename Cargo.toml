@@ -37,7 +37,7 @@ parking_lot = "0.12"
 
 # HNSW dependencies
 ordered-float = "4.2"
-lru = "0.12"
+lru = "0.16"
 memmap2 = "0.9"
 
 # Logging
