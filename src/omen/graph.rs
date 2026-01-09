@@ -99,9 +99,9 @@ impl GraphSection {
             return None;
         }
 
-        // Read offset from offsets table
-        let offset_pos = self.count as usize + node_id as usize * 4;
-        if offset_pos + 4 > self.data_len {
+        // Read offset from offsets table (use checked arithmetic to prevent overflow)
+        let offset_pos = (self.count as usize).checked_add((node_id as usize).checked_mul(4)?)?;
+        if offset_pos.checked_add(4)? > self.data_len {
             return None;
         }
 
@@ -111,8 +111,8 @@ impl GraphSection {
         };
 
         // Read neighbor count (first u32 at offset)
-        let neighbor_start = self.level0_neighbors_start + offset;
-        if neighbor_start + 4 > self.data_len {
+        let neighbor_start = self.level0_neighbors_start.checked_add(offset)?;
+        if neighbor_start.checked_add(4)? > self.data_len {
             return None;
         }
 
@@ -126,8 +126,9 @@ impl GraphSection {
         }
 
         // Safety: bounds should be valid if file is not corrupted
-        let neighbors_ptr = neighbor_start + 4;
-        if neighbors_ptr + neighbor_count * 4 > self.upper_section_start {
+        let neighbors_ptr = neighbor_start.checked_add(4)?;
+        let neighbors_end = neighbors_ptr.checked_add(neighbor_count.checked_mul(4)?)?;
+        if neighbors_end > self.upper_section_start {
             return None;
         }
 

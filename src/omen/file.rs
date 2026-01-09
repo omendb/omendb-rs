@@ -10,6 +10,7 @@ use crate::omen::{
     wal::{Wal, WalEntry, WalEntryType},
 };
 use anyhow::Result;
+use fs2::FileExt;
 use memmap2::MmapMut;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -108,6 +109,14 @@ impl OmenFile {
         configure_open_options(&mut opts);
         let mut file = opts.open(&omen_path)?;
 
+        // Acquire exclusive lock to prevent concurrent access
+        file.try_lock_exclusive().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Database is locked by another process",
+            )
+        })?;
+
         let header = OmenHeader::new(dimensions);
         file.write_all(&header.to_bytes())?;
         file.sync_all()?;
@@ -147,6 +156,14 @@ impl OmenFile {
         opts.read(true).write(true);
         configure_open_options(&mut opts);
         let mut file = opts.open(&omen_path)?;
+
+        // Acquire exclusive lock to prevent concurrent access
+        file.try_lock_exclusive().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Database is locked by another process",
+            )
+        })?;
 
         // Read header
         let mut header_buf = [0u8; HEADER_SIZE];
@@ -263,7 +280,12 @@ impl OmenFile {
 
         for entry in entries {
             if !entry.verify() {
-                // Skip corrupted entries
+                // Log and skip corrupted entries
+                tracing::warn!(
+                    entry_type = ?entry.header.entry_type,
+                    timestamp = entry.header.timestamp,
+                    "Skipping corrupted WAL entry during recovery"
+                );
                 continue;
             }
 
