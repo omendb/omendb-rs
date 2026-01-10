@@ -1,116 +1,44 @@
 # Changelog
 
-All notable changes to OmenDB are documented here.
+## v0.0.22 (Unreleased)
 
-## [0.0.21] - 2025-01-04
+### BREAKING CHANGES
 
-### Breaking Changes
+**Persistence format upgraded to v2 (postcard)**
+- Existing `.omen` files from v0.0.21 or earlier will fail to load
+- Error: `"Unsupported version: 1 (expected 2)"`
+- **Migration**: Re-create databases by reinserting vectors
+- Reason: bincode → postcard for better maintenance and smaller files
 
-- **Rust**: Library renamed from `omendb` to `omendb_core` (use `omendb_core::*` in imports)
-- **API**: Renamed `get_by_id` → `get` (old method removed)
-- **API**: Renamed `batch_search_parallel` → `search_batch` (old method removed)
-- **Python**: Renamed `get_many` → `get_batch` (old method removed)
-- **Python**: Renamed `delete_where` → `delete_by_filter` (old method removed)
+### Bug Fixes
+
+- **ACORN-1 filtered search**: Fix sparse filter searches (<10% selectivity)
+  - Entry points that don't match filter now have neighbors explored
+  - Correctly implements 2-hop expansion per ACORN-1 paper
+- **Binary quantization**: Use hamming distance for graph traversal
+- **FFI**: Fix omendb_save mutability, filter parsing, config parsing
+- **WAL**: Add 100MB size validation, skip corrupted entries on recovery
+- **Metadata**: Fix f64::MIN→NEG_INFINITY, UTF-8 error handling
+- **Persistence**: Add file locking (fs2), atomic checkpoint via temp-file-rename
+- **Security**: Update lru to 0.16 for RUSTSEC-2026-0002
 
 ### Performance
 
-- **SQ8**: Switched from per-dimension to uniform quantization
-  - 2-3x faster via integer SIMD (768D: 57µs → 18µs)
-  - ~97% recall (vs ~98% before, acceptable tradeoff for speed)
-- **FastScan**: SIMD-accelerated batched distance computation (internal)
+- ACORN-1 filtered search: 6-13% faster via zero-copy neighbor access
+- Early exit once M matching neighbors found
 
-### Added
+### Refactoring
 
-- `get_batch(&[String])` for batch retrieval by IDs
-- `search_batch_with_metadata` for batch search with metadata
-- `count()` as alias for `len()` for database-style APIs
+- Simplify file.rs, store/mod.rs (~130 lines removed)
+- Extract HNSW validation and construction helpers
 
-### Internal
+### Node.js Bindings
 
-- Made `get(usize)` and `get_owned(usize)` crate-private (internal index access)
-- API alignment with cloud LSM-VEC for seamless local→production transition
-- Simplified SQ8 from per-dimension to uniform quantization (1,100 lines removed)
+- Add `close()` method for explicit file lock release
+- Error on non-object metadata with document field
+- Fix cache invalidation in update()
 
-## [0.0.20] - 2025-12-27
+### Python Bindings
 
-### Changed
-
-- Minor stability improvements
-
-## [0.0.19] - 2025-12-26
-
-### Added
-
-- CHANGELOG.md for tracking releases
-- Pre-release checklist in RELEASING.md
-
-### Developer
-
-- Fixed all clippy warnings across lib, Python, and Node bindings
-- Updated RELEASING.md with git tagging workflow
-
-## [0.0.18] - 2025-12-25
-
-### Changed
-
-- **Stability**: Eliminated all `unwrap()` calls in core modules - errors now return `Result`
-- **Stability**: Replaced `panic!` with `Option` in metadata index functions
-- **Stability**: Replaced `assert!` with `Result` in compression training
-- Consolidated duplicate type definitions
-
-### Fixed
-
-- Bounds check for `new_idx` in `optimize()`
-- Log errors instead of silently ignoring in `delete_batch`
-
-### Added
-
-- 13 tests for error path coverage
-- Benchmark script now stores latency metrics (`s_ms`, `b_ms`)
-
-### Developer
-
-- Fixed all clippy warnings (lib, Python, Node bindings)
-- Clean up repo artifacts
-
-## [0.0.17] - 2025-12-24
-
-### Changed
-
-- **License**: Changed from AGPL-3.0 to Elastic License 2.0
-
-### Fixed
-
-- Handle tantivy cleanup race in test fixtures
-- Use `contextlib.suppress` for ruff SIM105
-- Add Elastic-2.0 to allowed licenses in deny.toml
-- Use license text instead of file reference for maturin sdist
-
-## [0.0.16] - 2025-12-20
-
-### Added
-
-- `max_distance` search parameter - filter results by maximum distance threshold
-- Builder methods for HNSWParams (`with_m`, `with_ef_construction`)
-
-### Changed
-
-- **License**: Changed from Apache-2.0 to AGPL-3.0 (later changed to Elastic-2.0 in 0.0.17)
-- Merged omendb-core into main omendb crate (simpler structure)
-- Consolidated to single HNSW implementation
-
-### Fixed
-
-- VectorStore mappings after `optimize()`
-- npm platform package require paths
-- Missing k and ef validation in Node binding
-- Decouple publish jobs so crates.io failure doesn't block npm/PyPI
-
-### Removed
-
-- `valid_at` parameter (removed before release)
-- omendb-core crate (merged into main)
-
-## [0.0.15] - 2025-12-15
-
-Previous stable release.
+- Add `py.detach()` for GIL release in set_vectors, items, get_batch
+- Remove unnecessary vector clones
