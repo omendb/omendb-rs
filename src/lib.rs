@@ -95,9 +95,6 @@ pub mod text;
 pub mod types;
 pub mod vector;
 
-#[cfg(feature = "ffi")]
-pub mod ffi;
-
 // Re-export core types
 pub use compression::{ADCTable, QuantizedVector, QueryPrep, RaBitQ, RaBitQParams, ScalarParams};
 pub use distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};

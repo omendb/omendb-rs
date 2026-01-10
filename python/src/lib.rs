@@ -3,8 +3,8 @@
 #![allow(clippy::type_complexity)]
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
-use omendb_core::text::TextSearchConfig;
-use omendb_core::vector::{
+use omendb_lib::text::TextSearchConfig;
+use omendb_lib::vector::{
     MetadataFilter, QuantizationMode, RaBitQParams, Vector, VectorStore, VectorStoreOptions,
 };
 use parking_lot::RwLock;
@@ -2266,7 +2266,7 @@ fn bench_sq8_via_storage(
     n_vectors: usize,
     n_iterations: usize,
 ) -> PyResult<f64> {
-    use omendb_core::vector::hnsw::VectorStorage;
+    use omendb_lib::vector::hnsw::VectorStorage;
     use rand::Rng;
     use std::hint::black_box;
 
@@ -2321,8 +2321,8 @@ fn bench_sq8_decomposed(
     n_vectors: usize,
     n_iterations: usize,
 ) -> PyResult<f64> {
-    use omendb_core::distance::norm_squared;
-    use omendb_core::vector::hnsw::VectorStorage;
+    use omendb_lib::distance::norm_squared;
+    use omendb_lib::vector::hnsw::VectorStorage;
     use rand::Rng;
     use std::hint::black_box;
 
@@ -2378,8 +2378,8 @@ fn bench_sq8_via_closure(
     n_vectors: usize,
     n_iterations: usize,
 ) -> PyResult<f64> {
-    use omendb_core::distance::norm_squared;
-    use omendb_core::vector::hnsw::VectorStorage;
+    use omendb_lib::distance::norm_squared;
+    use omendb_lib::vector::hnsw::VectorStorage;
     use rand::Rng;
     use std::hint::black_box;
 
@@ -2440,8 +2440,8 @@ fn bench_fp32_decomposed(
     n_vectors: usize,
     n_iterations: usize,
 ) -> PyResult<f64> {
-    use omendb_core::distance::norm_squared;
-    use omendb_core::vector::hnsw::VectorStorage;
+    use omendb_lib::distance::norm_squared;
+    use omendb_lib::vector::hnsw::VectorStorage;
     use rand::Rng;
     use std::hint::black_box;
 

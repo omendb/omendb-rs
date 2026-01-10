@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "omendb"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "omendb-node"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "anyhow",
  "napi",

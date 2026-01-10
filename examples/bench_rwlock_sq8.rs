@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --release --example bench_rwlock_sq8
 
-use omendb_core::vector::{QuantizationMode, Vector, VectorStoreOptions};
+use omendb::vector::{QuantizationMode, Vector, VectorStoreOptions};
 use parking_lot::RwLock;
 use rand::Rng;
 use std::sync::Arc;

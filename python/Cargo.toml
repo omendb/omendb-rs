@@ -1,6 +1,6 @@
 [package]
 name = "omendb-python"
-version = "0.0.22"
+version = "0.0.23"
 edition = "2021"
 readme = "../README.md"
 
@@ -13,8 +13,8 @@ name = "omendb"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Parent crate (package=omendb, lib=omendb_core)
-omendb_core = { package = "omendb", path = ".." }
+# Parent crate (aliased to avoid conflict with Python module name)
+omendb_lib = { package = "omendb", path = ".." }
 
 # PyO3 for Python bindings (latest stable)
 pyo3 = { version = "0.27", features = ["extension-module"] }

@@ -43,7 +43,7 @@ jobs:
           CARGO_V=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
           PYTHON_V=$(grep '^version = ' python/Cargo.toml | head -1 | cut -d'"' -f2)
           INIT_V=$(grep '__version__' python/omendb/__init__.py | cut -d'"' -f2)
-          FFI_V=$(grep 'static VERSION' src/ffi.rs | sed 's/.*b"\([0-9.]*\).*/\1/' || echo "")
+          FFI_V=$(grep '^version = ' omendb-ffi/Cargo.toml | head -1 | cut -d'"' -f2)
           NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)
           NODE_V=$(jq -r .version node/package.json)
           NODE_OPT=$(jq -r '.optionalDependencies["@omendb/omendb-darwin-arm64"]' node/package.json)
@@ -66,7 +66,7 @@ jobs:
           check_version "Cargo.toml (version)" "$CARGO_V"
           check_version "python/Cargo.toml" "$PYTHON_V"
           check_version "python/omendb/__init__.py" "$INIT_V"
-          check_version "src/ffi.rs" "$FFI_V"
+          check_version "omendb-ffi/Cargo.toml" "$FFI_V"
           check_version "node/Cargo.toml" "$NODE_CARGO_V"
           check_version "node/package.json" "$NODE_V"
           check_version "node/package.json (optionalDeps)" "$NODE_OPT"
@@ -323,6 +323,39 @@ jobs:
         continue-on-error: true
         run: cargo publish -p omendb --token ${{ steps.crates-io-auth.outputs.token }}
 
+  publish-crates-ffi:
+    needs: [verify, publish-crates]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Wait for crates.io index
+        run: |
+          VERSION=${{ needs.verify.outputs.version }}
+          echo "Waiting for omendb $VERSION to appear in crates.io index..."
+          for i in {1..30}; do
+            if curl -sf "https://crates.io/api/v1/crates/omendb/$VERSION" > /dev/null 2>&1; then
+              echo "omendb $VERSION found in index"
+              exit 0
+            fi
+            echo "Attempt $i/30 - waiting 10s..."
+            sleep 10
+          done
+          echo "Timeout waiting for crates.io index"
+          exit 1
+      - name: Get crates.io token via OIDC
+        uses: rust-lang/crates-io-auth-action@v1
+        id: crates-io-auth
+      - name: Publish omendb-ffi to crates.io
+        continue-on-error: true
+        working-directory: omendb-ffi
+        run: cargo publish --token ${{ steps.crates-io-auth.outputs.token }}
+
   publish-pypi:
     needs:
       [
@@ -425,7 +458,8 @@ jobs:
   # ============================================================================
 
   create-release:
-    needs: [verify, publish-crates, publish-pypi, publish-npm]
+    needs:
+      [verify, publish-crates, publish-crates-ffi, publish-pypi, publish-npm]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     steps:

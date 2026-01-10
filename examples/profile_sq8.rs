@@ -3,7 +3,7 @@
 //! Run with: cargo build --release --example profile_sq8
 //! Then: samply record ./target/release/examples/profile_sq8
 
-use omendb_core::vector::hnsw::{DistanceFunction, HNSWIndex, HNSWParams};
+use omendb::vector::hnsw::{DistanceFunction, HNSWIndex, HNSWParams};
 use rand::Rng;
 use std::time::Instant;
 

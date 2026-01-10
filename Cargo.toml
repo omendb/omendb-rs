@@ -1,11 +1,11 @@
 [workspace]
 members = ["."]
-exclude = ["python", "node", "fuzz", "omendb-core"]
+exclude = ["python", "node", "fuzz", "omendb-ffi"]
 resolver = "2"
 
 [package]
 name = "omendb"
-version = "0.0.22"
+version = "0.0.23"
 edition = "2021"
 authors = ["OmenDB Team"]
 description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
@@ -17,9 +17,8 @@ readme = "README.md"
 exclude = [".hhg/", ".claude/", ".github/", "benchmarks/", "scripts/", "*.md", "!README.md"]
 
 [lib]
-name = "omendb_core"
+name = "omendb"
 path = "src/lib.rs"
-crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 # Error handling
@@ -84,7 +83,6 @@ tempfile = "3.23"
 
 [features]
 default = []
-ffi = []           # Enable C FFI bindings
 profile_search = []
 
 [profile.release]

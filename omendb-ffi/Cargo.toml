@@ -1,0 +1,30 @@
+[workspace]
+
+[package]
+name = "omendb-ffi"
+version = "0.0.23"
+edition = "2021"
+authors = ["OmenDB Team"]
+description = "C FFI bindings for OmenDB vector database"
+repository = "https://github.com/omendb/omendb"
+license = "Apache-2.0"
+keywords = ["vector-database", "ffi", "c-bindings"]
+categories = ["database", "external-ffi-bindings"]
+readme = "../README.md"
+
+[lib]
+name = "omendb"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+omendb = { version = "0.0.23", path = ".." }
+serde_json = "1.0"
+
+[features]
+default = []
+
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

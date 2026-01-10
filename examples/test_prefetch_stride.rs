@@ -1,5 +1,5 @@
 //! Test different prefetch strides for HNSW
-use omendb_core::vector::hnsw::{DistanceFunction, HNSWIndex, HNSWParams};
+use omendb::vector::hnsw::{DistanceFunction, HNSWIndex, HNSWParams};
 use rand::Rng;
 use std::time::Instant;
 

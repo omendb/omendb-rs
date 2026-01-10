@@ -33,12 +33,13 @@
 //! ```
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::Path;
 use std::ptr;
 
-use crate::vector::{MetadataFilter, Vector, VectorStore, VectorStoreOptions};
+use omendb::vector::{MetadataFilter, Vector, VectorStore, VectorStoreOptions};
 use serde_json::{json, Value as JsonValue};
 
 thread_local! {
@@ -59,6 +60,28 @@ fn clear_last_error() {
 pub struct OmenDB {
     store: VectorStore,
     dimensions: usize,
+    /// Cache: internal index -> string ID (rebuilt when needed)
+    index_to_id: HashMap<usize, String>,
+}
+
+impl OmenDB {
+    /// Rebuild the index->ID cache from the store's id_to_index map
+    fn rebuild_cache(&mut self) {
+        self.index_to_id = self
+            .store
+            .id_to_index
+            .iter()
+            .map(|(id, &idx)| (idx, id.clone()))
+            .collect();
+    }
+
+    /// Get string ID for an internal index
+    fn get_id(&self, idx: usize) -> String {
+        self.index_to_id
+            .get(&idx)
+            .cloned()
+            .unwrap_or_else(|| idx.to_string())
+    }
 }
 
 /// Open a database at the given path
@@ -144,7 +167,19 @@ pub unsafe extern "C" fn omendb_open(
     };
 
     match result {
-        Ok(store) => Box::into_raw(Box::new(OmenDB { store, dimensions })),
+        Ok(store) => {
+            // Build initial index->ID cache
+            let index_to_id: HashMap<usize, String> = store
+                .id_to_index
+                .iter()
+                .map(|(id, &idx)| (idx, id.clone()))
+                .collect();
+            Box::into_raw(Box::new(OmenDB {
+                store,
+                dimensions,
+                index_to_id,
+            }))
+        }
         Err(e) => {
             set_last_error(format!("Failed to open database: {e}"));
             ptr::null_mut()
@@ -229,12 +264,16 @@ pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) 
 
         let vector = Vector::new(vector_data);
         if let Err(e) = db.store.set(id, vector, metadata) {
-            set_last_error(format!("Set failed: {e}"));
+            // Rebuild cache even on partial failure to stay in sync
+            db.rebuild_cache();
+            set_last_error(format!("Set failed after {count} items: {e}"));
             return -1;
         }
         count += 1;
     }
 
+    // Rebuild cache after insertions
+    db.rebuild_cache();
     count
 }
 
@@ -361,7 +400,10 @@ pub unsafe extern "C" fn omendb_delete(db: *mut OmenDB, ids_json: *const c_char)
     };
 
     match db.store.delete_batch(&ids) {
-        Ok(count) => i64::try_from(count).unwrap_or(i64::MAX),
+        Ok(count) => {
+            db.rebuild_cache();
+            i64::try_from(count).unwrap_or(i64::MAX)
+        }
         Err(e) => {
             set_last_error(format!("Delete failed: {e}"));
             -1
@@ -445,63 +487,26 @@ pub unsafe extern "C" fn omendb_search(
         }
     };
 
-    // Search with or without filter
-    // Note: filtered search returns metadata inline, unfiltered requires lookup
-    let mut json_results = Vec::new();
-
-    if let Some(f) = &filter {
-        let results = match db.store.knn_search_with_filter(&query, k, f) {
-            Ok(r) => r,
-            Err(e) => {
-                set_last_error(format!("Filtered search failed: {e}"));
-                return -1;
-            }
-        };
-        for (idx, distance, metadata) in results {
-            if let Some(vector) = db.store.get_by_internal_index_owned(idx) {
-                let id = db
-                    .store
-                    .id_to_index
-                    .iter()
-                    .find(|(_, &i)| i == idx)
-                    .map_or_else(|| idx.to_string(), |(id, _)| id.clone());
-
-                json_results.push(json!({
-                    "id": id,
-                    "distance": distance,
-                    "vector": vector.data,
-                    "metadata": metadata
-                }));
-            }
+    // Search using the store's search method (returns index, distance, metadata)
+    let results = match db.store.search(&query, k, filter.as_ref()) {
+        Ok(r) => r,
+        Err(e) => {
+            set_last_error(format!("Search failed: {e}"));
+            return -1;
         }
-    } else {
-        let results = match db.store.knn_search(&query, k) {
-            Ok(r) => r,
-            Err(e) => {
-                set_last_error(format!("Search failed: {e}"));
-                return -1;
-            }
-        };
-        for (idx, distance) in results {
-            if let Some(vector) = db.store.get_by_internal_index_owned(idx) {
-                let id = db
-                    .store
-                    .id_to_index
-                    .iter()
-                    .find(|(_, &i)| i == idx)
-                    .map_or_else(|| idx.to_string(), |(id, _)| id.clone());
+    };
 
-                let metadata = db.store.get(&id).map(|(_, m)| m).unwrap_or(json!({}));
-
-                json_results.push(json!({
-                    "id": id,
-                    "distance": distance,
-                    "vector": vector.data,
-                    "metadata": metadata
-                }));
-            }
-        }
-    }
+    // Convert results to JSON, mapping internal indices to string IDs
+    let json_results: Vec<JsonValue> = results
+        .into_iter()
+        .map(|(idx, distance, metadata)| {
+            json!({
+                "id": db.get_id(idx),
+                "distance": distance,
+                "metadata": metadata
+            })
+        })
+        .collect();
 
     let json_str = match serde_json::to_string(&json_results) {
         Ok(s) => s,
@@ -534,9 +539,13 @@ pub unsafe extern "C" fn omendb_search(
 /// - `db` must be NULL or a valid pointer returned by `omendb_open`
 #[no_mangle]
 pub unsafe extern "C" fn omendb_count(db: *const OmenDB) -> i64 {
+    clear_last_error();
     match db.as_ref() {
         Some(db) => i64::try_from(db.store.len()).unwrap_or(i64::MAX),
-        None => -1,
+        None => {
+            set_last_error("Null database handle".to_string());
+            -1
+        }
     }
 }
 
@@ -589,8 +598,10 @@ pub unsafe extern "C" fn omendb_free_string(s: *mut c_char) {
 /// Get `OmenDB` version
 #[no_mangle]
 pub extern "C" fn omendb_version() -> *const c_char {
-    static VERSION: &[u8] = b"0.0.22\0";
-    VERSION.as_ptr().cast::<c_char>()
+    // Use compile-time version from Cargo.toml with null terminator
+    concat!(env!("CARGO_PKG_VERSION"), "\0")
+        .as_ptr()
+        .cast::<c_char>()
 }
 
 // ============================================================================
@@ -631,7 +642,9 @@ pub unsafe extern "C" fn omendb_enable_text_search(db: *mut OmenDB) -> i32 {
 /// - `db` must be a valid pointer returned by `omendb_open`
 #[no_mangle]
 pub unsafe extern "C" fn omendb_has_text_search(db: *const OmenDB) -> i32 {
+    clear_last_error();
     let Some(db) = db.as_ref() else {
+        set_last_error("Null database handle".to_string());
         return -1;
     };
     i32::from(db.store.has_text_search())
@@ -716,12 +729,16 @@ pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *cons
 
         let vector = Vector::new(vector_data);
         if let Err(e) = db.store.set_with_text(id, vector, text, metadata) {
-            set_last_error(format!("Set with text failed: {e}"));
+            // Rebuild cache even on partial failure to stay in sync
+            db.rebuild_cache();
+            set_last_error(format!("Set with text failed after {count} items: {e}"));
             return -1;
         }
         count += 1;
     }
 
+    // Rebuild cache after insertions
+    db.rebuild_cache();
     count
 }
 
@@ -887,7 +904,7 @@ pub unsafe extern "C" fn omendb_hybrid_search(
             }
         };
         match serde_json::from_str::<JsonValue>(filter_str) {
-            Ok(v) => match crate::vector::store::MetadataFilter::from_json(&v) {
+            Ok(v) => match MetadataFilter::from_json(&v) {
                 Ok(f) => Some(f),
                 Err(e) => {
                     set_last_error(format!("Invalid filter format: {e}"));

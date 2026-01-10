@@ -8,7 +8,7 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use omendb_core::vector::{
+use omendb_lib::vector::{
     MetadataFilter, QuantizationMode, RaBitQParams, Vector, VectorStore, VectorStoreOptions,
 };
 use parking_lot::RwLock;

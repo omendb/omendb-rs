@@ -11,7 +11,7 @@
 #   2. Cargo.toml                 - Main Rust crate (version)
 #   3. python/Cargo.toml          - Python bindings crate
 #   4. python/omendb/__init__.py  - Python __version__
-#   5. src/ffi.rs                 - C FFI version string
+#   5. omendb-ffi/Cargo.toml      - C FFI crate
 #   6. node/Cargo.toml            - Node bindings crate
 #   7. node/package.json          - npm @omendb/omendb package
 #   8. node/wrapper/package.json  - npm omendb wrapper (version + dep)
@@ -88,12 +88,14 @@ if [ "$CHECK_ONLY" = false ] && [ "$INIT_V" != "$VERSION" ]; then
 fi
 check_or_update "python/omendb/__init__.py" "$INIT_V"
 
-# 6. src/ffi.rs (C FFI version string)
-FFI_V=$(grep 'static VERSION' src/ffi.rs | sed 's/.*b"\([0-9.]*\).*/\1/' || echo "")
+# 6. omendb-ffi/Cargo.toml (FFI crate)
+FFI_V=$(grep '^version = ' omendb-ffi/Cargo.toml | head -1 | cut -d'"' -f2)
 if [ "$CHECK_ONLY" = false ] && [ "$FFI_V" != "$VERSION" ]; then
-    sed -i '' "s/static VERSION: \&\[u8\] = b\"[^\"]*\\\\0\";/static VERSION: \&[u8] = b\"$VERSION\\\\0\";/" src/ffi.rs
+    sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" omendb-ffi/Cargo.toml
+    # Also update the omendb dependency version
+    sed -i '' "s/omendb = { version = \"[^\"]*\"/omendb = { version = \"$VERSION\"/" omendb-ffi/Cargo.toml
 fi
-check_or_update "src/ffi.rs" "$FFI_V"
+check_or_update "omendb-ffi/Cargo.toml" "$FFI_V"
 
 # 7. node/Cargo.toml
 NODE_CARGO_V=$(grep '^version = ' node/Cargo.toml | head -1 | cut -d'"' -f2)

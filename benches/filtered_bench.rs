@@ -4,8 +4,8 @@
 //! Run: cargo bench --bench filtered_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omendb_core::vector::store::MetadataFilter;
-use omendb_core::vector::{Vector, VectorStore};
+use omendb::vector::store::MetadataFilter;
+use omendb::vector::{Vector, VectorStore};
 use rand::Rng;
 use serde_json::json;
 
