@@ -1,5 +1,5 @@
 //! Quick test: single vs batch performance
-use omendb::vector::{Vector, VectorStore};
+use omendb_core::vector::{Vector, VectorStore};
 use rand::Rng;
 use std::time::Instant;
 

@@ -70,6 +70,9 @@ def main():
         # Flush to disk (also auto-flushes on close)
         db.flush()
 
+        # Release first db to release file lock before reopening
+        del db
+
         # Reopen to verify persistence
         db2 = omendb.open(str(db_path), dimensions=3)
         print(f"\nReopened database: {len(db2)} vectors")

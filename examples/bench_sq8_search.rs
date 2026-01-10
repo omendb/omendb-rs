@@ -1,6 +1,6 @@
 /// Benchmark full HNSW search with SQ8 vs FP32
-use omendb::vector::QuantizationMode;
-use omendb::{Vector, VectorStore};
+use omendb_core::vector::QuantizationMode;
+use omendb_core::{Vector, VectorStore};
 use rand::Rng;
 use std::time::Instant;
 

@@ -3,9 +3,9 @@
 //! Run with: cargo build --release --example profile_rabitq
 //! Then: samply record ./target/release/examples/profile_rabitq
 
-use omendb::vector::store::VectorStoreOptions;
-use omendb::vector::types::Vector;
-use omendb::vector::QuantizationMode;
+use omendb_core::vector::store::VectorStoreOptions;
+use omendb_core::vector::types::Vector;
+use omendb_core::vector::QuantizationMode;
 use rand::Rng;
 use serde_json::json;
 use std::time::Instant;

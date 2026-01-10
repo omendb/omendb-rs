@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run --release --example bench_adc_x86
 
-use omendb::compression::scalar::ScalarParams;
+use omendb_core::compression::scalar::ScalarParams;
 use std::time::Instant;
 
 fn benchmark_dimension(dimensions: usize, num_vectors: usize, num_queries: usize) -> (f64, f64) {

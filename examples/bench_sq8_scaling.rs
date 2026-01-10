@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --release --example bench_sq8_scaling
 
-use omendb::vector::{QuantizationMode, RaBitQParams, Vector, VectorStoreOptions};
+use omendb_core::vector::{QuantizationMode, RaBitQParams, Vector, VectorStoreOptions};
 use rand::Rng;
 use std::time::Instant;
 

@@ -4,7 +4,7 @@
 //!
 //! Run with: cargo run --example basic
 
-use omendb::{Vector, VectorStore};
+use omendb_core::{Vector, VectorStore};
 use serde_json::json;
 
 fn main() -> anyhow::Result<()> {

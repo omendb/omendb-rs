@@ -4,7 +4,7 @@
 //! Then: perf record -g ./target/release/examples/profile_search
 //!       perf report
 
-use omendb::vector::hnsw::{DistanceFunction, HNSWIndex, HNSWParams};
+use omendb_core::vector::hnsw::{DistanceFunction, HNSWIndex, HNSWParams};
 use rand::Rng;
 use std::time::Instant;
 

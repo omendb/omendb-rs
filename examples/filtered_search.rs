@@ -4,7 +4,7 @@
 //!
 //! Run with: cargo run --example filtered_search
 
-use omendb::{MetadataFilter, Vector, VectorStore};
+use omendb_core::{MetadataFilter, Vector, VectorStore};
 use serde_json::json;
 
 fn main() -> anyhow::Result<()> {
