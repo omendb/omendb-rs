@@ -219,14 +219,14 @@ def benchmark_text_search(db, query_texts: list[str], k: int = 10, warmup: int =
 
     # Warmup
     for q in query_texts[:warmup]:
-        db.text_search(q, k=k)
+        db.search_text(q, k=k)
 
     # Benchmark
     latencies = []
     start = time.time()
     for q in query_texts:
         t0 = time.time()
-        db.text_search(q, k=k)
+        db.search_text(q, k=k)
         latencies.append((time.time() - t0) * 1000)
     total = time.time() - start
 
@@ -253,7 +253,7 @@ def benchmark_hybrid_search(
 
     # Warmup
     for i in range(min(warmup, n_queries)):
-        db.hybrid_search(
+        db.search_hybrid(
             query_vectors[i].tolist(), query_texts[i % len(query_texts)], k=k, alpha=alpha
         )
 
@@ -262,7 +262,7 @@ def benchmark_hybrid_search(
     start = time.time()
     for i in range(n_queries):
         t0 = time.time()
-        db.hybrid_search(
+        db.search_hybrid(
             query_vectors[i].tolist(), query_texts[i % len(query_texts)], k=k, alpha=alpha
         )
         latencies.append((time.time() - t0) * 1000)

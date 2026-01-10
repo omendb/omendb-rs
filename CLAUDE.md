@@ -24,7 +24,7 @@ uv run pytest tests/ -x --timeout=60
 uv run ruff check . && uv run ruff format --check .
 
 # Node (from node/)
-npm install && npm run build && npm test
+bun install && bun run build && bun test
 ```
 
 ## Configuration Defaults
@@ -120,9 +120,59 @@ cd python && uv run pytest tests/test_recall.py  # Recall verification
 
 **Recall thresholds:** 95%+ (small), 90%+ (medium), 85%+ (large)
 
-## Release Process
+## Pre-Release Checklist (MANDATORY)
 
-See `RELEASING.md`. Quick version:
+Before ANY release, complete ALL of these checks:
+
+### 1. Run ALL Test Suites
+
+```bash
+# Rust (must pass 279+ tests)
+cargo test --lib
+cargo clippy --lib -- -D warnings
+
+# Python (must pass 253+ tests)
+cd python && uv run pytest tests/ -x
+
+# Node (must pass 60+ tests)
+cd node && bun test
+```
+
+### 2. Run Performance Benchmarks
+
+```bash
+# Standard benchmark (10k/128D) - compare against history.json
+cd python && uv run python benchmark.py
+
+# Full benchmark (multiple dimensions and scales)
+cd python && uv run python benchmark.py --full
+
+# Check for regressions against previous versions in python/benchmarks/history.json
+```
+
+**Performance baselines (10k vectors, M3 Max):**
+
+| Dimension | Single QPS | Batch QPS | Recall |
+| --------- | ---------- | --------- | ------ |
+| 128D      | >9,000     | >80,000   | >89%   |
+| 768D      | >3,000     | >15,000   | >84%   |
+
+### 3. Verify SDK APIs Match
+
+Ensure benchmark.py and README examples use correct method names:
+
+- `search()`, `search_batch()`, `search_text()`, `search_hybrid()`
+- NOT `text_search()` or `hybrid_search()`
+
+### 4. Check Version Sync
+
+```bash
+./scripts/sync-version.sh --check
+```
+
+All 8 locations must match and be higher than published PyPI version.
+
+## Release Process
 
 ```bash
 ./scripts/sync-version.sh 0.0.10   # Bump all 9 version locations
