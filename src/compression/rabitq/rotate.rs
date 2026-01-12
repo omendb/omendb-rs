@@ -146,6 +146,7 @@ impl Rotator {
     ///
     /// For orthogonal matrices: R^(-1) = R^T, and for our construction
     /// using sign flips and Hadamard, R^T = R (symmetric orthogonal).
+    #[allow(dead_code)] // Public API for future decompression/debugging
     pub fn unrotate(&self, vector: &mut [f32]) {
         // For Hadamard-based rotation with sign flips, the rotation is
         // symmetric orthogonal, so inverse = forward
@@ -178,6 +179,7 @@ impl Rotator {
 
     /// Unrotate in-place (for power-of-2 or padded vectors)
     #[inline]
+    #[allow(dead_code)]
     fn unrotate_inplace(&self, vector: &mut [f32]) {
         // Apply rounds in reverse order: rescale → FHT → sign flip
         let scale = 1.0 / (self.padded_dim as f32).sqrt();
@@ -214,7 +216,7 @@ impl Rotator {
 /// Panics if x.len() is not a power of 2.
 fn fht(x: &mut [f32]) {
     let n = x.len();
-    debug_assert!(n.is_power_of_two(), "FHT requires power-of-2 length");
+    assert!(n.is_power_of_two(), "FHT requires power-of-2 length");
 
     // Butterfly pattern: h = 1, 2, 4, ..., n/2
     let mut h = 1;
@@ -256,6 +258,7 @@ fn kacs_walk(x: &mut [f32], trunc_dim: usize) {
 }
 
 /// Inverse Kac's Walk
+#[allow(dead_code)]
 fn kacs_walk_inverse(x: &mut [f32], trunc_dim: usize) {
     let n = x.len();
     let half = n / 2;

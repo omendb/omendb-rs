@@ -3,7 +3,7 @@
 //! Provides optimized Hamming distance and popcount for binary codes.
 
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::{vaddvq_u8, vcntq_u8, veorq_u8, vld1q_u8};
+use std::arch::aarch64::{vaddlvq_u8, vcntq_u8, veorq_u8, vld1q_u8};
 #[cfg(target_arch = "x86_64")]
 #[allow(clippy::wildcard_imports)]
 use std::arch::x86_64::*;
@@ -34,8 +34,12 @@ pub fn hamming_distance_u64(a: &[u64], b: &[u64]) -> u32 {
     #[cfg(target_arch = "aarch64")]
     {
         // NEON operates on u8 arrays, so we need to reinterpret
-        let a_bytes: &[u8] = unsafe { std::slice::from_raw_parts(a.as_ptr().cast(), a.len() * 8) };
-        let b_bytes: &[u8] = unsafe { std::slice::from_raw_parts(b.as_ptr().cast(), b.len() * 8) };
+        let byte_len = a
+            .len()
+            .checked_mul(8)
+            .expect("slice too large for byte conversion");
+        let a_bytes: &[u8] = unsafe { std::slice::from_raw_parts(a.as_ptr().cast(), byte_len) };
+        let b_bytes: &[u8] = unsafe { std::slice::from_raw_parts(b.as_ptr().cast(), byte_len) };
         return unsafe { hamming_distance_neon(a_bytes, b_bytes) };
     }
 
@@ -68,7 +72,7 @@ unsafe fn hamming_distance_popcnt(a: &[u64], b: &[u64]) -> u32 {
 
 /// NEON Hamming distance (for u8 arrays)
 ///
-/// Optimized: accumulates in vector register, does single horizontal sum at end.
+/// Optimized: accumulates in vector register, uses vaddlvq_u8 (returns u16) to avoid overflow.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn hamming_distance_neon(a: &[u8], b: &[u8]) -> u32 {
@@ -76,8 +80,7 @@ unsafe fn hamming_distance_neon(a: &[u8], b: &[u8]) -> u32 {
 
     let mut i = 0;
 
-    // Use wider accumulators to avoid overflow and defer horizontal sum
-    // u8 popcounts -> u16 pairwise add -> u32 pairwise add -> u64 pairwise add
+    // Use u64 accumulators; vaddlvq_u8 returns u16 which safely holds sums up to 2048
     let mut acc_lo: u64 = 0;
     let mut acc_hi: u64 = 0;
 
@@ -91,13 +94,14 @@ unsafe fn hamming_distance_neon(a: &[u8], b: &[u8]) -> u32 {
             let vb = vld1q_u8(b.as_ptr().add(i));
             let xor = veorq_u8(va, vb);
             let cnt = vcntq_u8(xor);
-            // Accumulate popcounts (safe: max 64*8 = 512, fits in u8 sum of 4 iterations)
+            // Per-element popcount is 0-8, 16 elements per vector, 4 iterations = max 512
+            // This exceeds u8 max (255), but we use vaddlvq_u8 below which returns u16
             sum16 = std::arch::aarch64::vaddq_u8(sum16, cnt);
             i += 16;
         }
 
-        // Widen and add to accumulator
-        acc_lo += vaddvq_u8(sum16) as u64;
+        // vaddlvq_u8 returns u16, handles sums > 255 correctly
+        acc_lo += vaddlvq_u8(sum16) as u64;
     }
 
     // Process remaining 16-byte chunks
@@ -106,7 +110,8 @@ unsafe fn hamming_distance_neon(a: &[u8], b: &[u8]) -> u32 {
         let vb = vld1q_u8(b.as_ptr().add(i));
         let xor = veorq_u8(va, vb);
         let cnt = vcntq_u8(xor);
-        acc_hi += vaddvq_u8(cnt) as u64;
+        // Single vector: max 16 * 8 = 128, fits in u8, but use u16 for consistency
+        acc_hi += vaddlvq_u8(cnt) as u64;
         i += 16;
     }
 
