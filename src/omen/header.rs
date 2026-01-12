@@ -29,6 +29,7 @@ pub enum QuantizationCode {
     RabitQ2 = 3,
     RabitQ8 = 4,
     Binary = 5,
+    TrueRaBitQ = 6,
 }
 
 impl From<u8> for QuantizationCode {
@@ -39,12 +40,14 @@ impl From<u8> for QuantizationCode {
             3 => Self::RabitQ2,
             4 => Self::RabitQ8,
             5 => Self::Binary,
+            6 => Self::TrueRaBitQ,
             _ => Self::F32,
         }
     }
 }
 
 impl From<&crate::vector::QuantizationMode> for QuantizationCode {
+    #[allow(deprecated)]
     fn from(mode: &crate::vector::QuantizationMode) -> Self {
         use crate::compression::QuantizationBits;
         match mode {
@@ -58,6 +61,7 @@ impl From<&crate::vector::QuantizationMode> for QuantizationCode {
                     Self::RabitQ8
                 }
             },
+            crate::vector::QuantizationMode::TrueRaBitQ => Self::TrueRaBitQ,
         }
     }
 }
@@ -73,6 +77,7 @@ impl QuantizationCode {
     ///
     /// Returns `None` for `F32` (no quantization).
     #[must_use]
+    #[allow(deprecated)]
     pub fn to_runtime(self) -> Option<crate::vector::QuantizationMode> {
         use crate::compression::RaBitQParams;
         match self {
@@ -88,6 +93,7 @@ impl QuantizationCode {
             Self::RabitQ8 => Some(crate::vector::QuantizationMode::RaBitQ(
                 RaBitQParams::bits8(),
             )),
+            Self::TrueRaBitQ => Some(crate::vector::QuantizationMode::TrueRaBitQ),
         }
     }
 }

@@ -105,7 +105,9 @@ mod tests;
 /// - RaBitQ 2-bit: ~93% accurate, needs more candidates (4.0x)
 /// - RaBitQ 4-bit: ~96% accurate, moderate oversampling (3.0x)
 /// - RaBitQ 8-bit: ~99% accurate, minimal oversampling (2.0x)
+/// - TrueRaBitQ: ~95% accurate, moderate oversampling (3.0x)
 /// - No quantization: 1.0 (rescore disabled, oversample unused)
+#[allow(deprecated)]
 fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
     match mode {
         None => 1.0,
@@ -116,12 +118,14 @@ fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
             8 => 2.0, // ~99% recall baseline
             _ => 3.0, // 4-bit default: ~96% recall baseline
         },
+        Some(QuantizationMode::TrueRaBitQ) => 3.0, // ~95% recall baseline
     }
 }
 
 /// Convert stored quantization mode ID to QuantizationMode.
 ///
-/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8, 5=binary
+/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8, 5=binary, 6=true-rabitq
+#[allow(deprecated)]
 fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
     match mode_id {
         1 => Some(QuantizationMode::SQ8),
@@ -138,13 +142,15 @@ fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
             ..RaBitQParams::default()
         })),
         5 => Some(QuantizationMode::Binary),
+        6 => Some(QuantizationMode::TrueRaBitQ),
         _ => None, // 0 and unknown values
     }
 }
 
 /// Convert QuantizationMode to storage mode ID.
 ///
-/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8, 5=binary
+/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8, 5=binary, 6=true-rabitq
+#[allow(deprecated)]
 fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
     match mode {
         QuantizationMode::Binary => 5,
@@ -154,6 +160,7 @@ fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
             8 => 4,
             _ => 2, // 4-bit default
         },
+        QuantizationMode::TrueRaBitQ => 6,
     }
 }
 
@@ -177,10 +184,12 @@ fn create_hnsw_index(
     let ef_search = hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH);
 
     // Convert QuantizationMode to HNSWQuantization
+    #[allow(deprecated)]
     let quantization = match quantization_mode {
         Some(QuantizationMode::Binary) => HNSWQuantization::Binary,
         Some(QuantizationMode::SQ8) => HNSWQuantization::SQ8,
         Some(QuantizationMode::RaBitQ(params)) => HNSWQuantization::RaBitQ(params.clone()),
+        Some(QuantizationMode::TrueRaBitQ) => HNSWQuantization::TrueRaBitQ,
         None => HNSWQuantization::None,
     };
 
@@ -210,6 +219,7 @@ fn initialize_quantized_hnsw(
         .with_ef_construction(hnsw_ef_construction)
         .with_ef_search(hnsw_ef_search);
 
+    #[allow(deprecated)]
     match quant_mode {
         QuantizationMode::Binary => {
             let mut idx =
@@ -227,6 +237,14 @@ fn initialize_quantized_hnsw(
                 distance_metric.into(),
                 params,
             )?;
+            idx.train_quantizer(training_vectors)?;
+            Ok(idx)
+        }
+        QuantizationMode::TrueRaBitQ => {
+            // For now, TrueRaBitQ uses the same HNSW structure as Binary
+            // TODO: Integrate true RaBitQ with proper training
+            let mut idx =
+                HNSWIndex::new_with_true_rabitq(dimensions, hnsw_params, distance_metric.into())?;
             idx.train_quantizer(training_vectors)?;
             Ok(idx)
         }

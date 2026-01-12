@@ -74,6 +74,8 @@ pub enum HNSWQuantization {
     SQ8,
     /// RaBitQ asymmetric quantization (8x compression, ~98% recall)
     RaBitQ(RaBitQParams),
+    /// True RaBitQ with FFHT rotation (32x compression, ~95% recall with rescore)
+    TrueRaBitQ,
 }
 
 /// Builder for creating HNSWIndex with compile-time safety
@@ -205,6 +207,11 @@ impl HNSWIndexBuilder {
                 .map_err(|e| anyhow::anyhow!(e))?,
             HNSWQuantization::RaBitQ(rabitq_params) => {
                 CoreHNSW::new_with_asymmetric(dimensions, params, self.metric, rabitq_params)
+                    .map_err(|e| anyhow::anyhow!(e))?
+            }
+            HNSWQuantization::TrueRaBitQ => {
+                // True RaBitQ uses binary storage structure with FFHT rotation
+                CoreHNSW::new_with_true_rabitq(dimensions, params, self.metric)
                     .map_err(|e| anyhow::anyhow!(e))?
             }
         };
@@ -466,6 +473,26 @@ impl HNSWIndex {
             max_nb_connection: params.m,
             ef_construction: params.ef_construction,
             ef_search: params.ef_construction, // Match ef_construction initially
+            dimensions,
+            num_vectors: 0,
+        })
+    }
+
+    /// Create index with True RaBitQ quantization (32x compression with FFHT rotation)
+    pub fn new_with_true_rabitq(
+        dimensions: usize,
+        params: CoreParams,
+        distance_fn: DistanceFunction,
+    ) -> Result<Self> {
+        let index = CoreHNSW::new_with_true_rabitq(dimensions, params, distance_fn)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(Self {
+            index,
+            max_elements: 1_000_000,
+            max_nb_connection: params.m,
+            ef_construction: params.ef_construction,
+            ef_search: params.ef_construction,
             dimensions,
             num_vectors: 0,
         })

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::compression::binary::hamming_distance;
-use crate::compression::rabitq::QuantizedVector;
+use crate::compression::sq_multi::QuantizedVector;
 use crate::compression::{ADCTable, RaBitQ, RaBitQParams, ScalarParams};
 use crate::distance::dot_product;
 
@@ -931,6 +931,22 @@ impl VectorStorage {
                 None
             },
             thresholds: vec![0.0; dimensions], // Will be computed during training
+            dimensions,
+        }
+    }
+
+    /// Create empty True RaBitQ storage
+    ///
+    /// Uses binary storage with FFHT rotation for better accuracy.
+    /// Currently implemented as BinaryQuantized; full integration pending.
+    #[must_use]
+    pub fn new_true_rabitq(dimensions: usize) -> Self {
+        // For now, use binary storage until full TrueRaBitQ integration
+        // The rotation and distance correction happen at a higher level
+        Self::BinaryQuantized {
+            quantized: Vec::new(),
+            original: Some(Vec::new()), // Keep originals for rescore
+            thresholds: vec![0.0; dimensions],
             dimensions,
         }
     }
