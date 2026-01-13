@@ -101,33 +101,29 @@ pub fn estimate_distance(
 
     // ASYMMETRIC RABITQ DISTANCE FORMULA
     //
-    // From the paper, the distance is:
-    //   dist = sqr_x + sqr_y - 2 * ||data|| * ||query|| * <q_hat, o_hat>
+    // From the paper (Lemma 3.1):
+    //   <o, q> ≈ <o_bar, q> / x_0
     //
-    // Where <q_hat, o_hat> is estimated using the asymmetric inner product:
-    //   <q_hat, o_hat> ≈ asymmetric_ip / sum_abs_data
+    // Where:
+    //   o_bar = sign(o_rot) (binary ±1)
+    //   x_0 = <o_rot, o_bar> / ||o_rot||² = sum_abs / sqr_x
+    //
+    // For asymmetric with float query:
+    //   <o_bar, q_rot> = asymmetric_ip = sum(q_rot[i] * sign(o_rot[i]))
     //
     // So:
-    //   dist = sqr_x + sqr_y - 2 * sqrt(sqr_x) * sqrt(sqr_y) * asymmetric_ip / sum_abs_data
+    //   <o_rot, q_rot> ≈ asymmetric_ip / (sum_abs / sqr_x)
+    //                  = asymmetric_ip * sqr_x / sum_abs
     //
-    // Since f_rescale = -2 * sqr_x / sum_abs_data, we can derive:
-    //   sum_abs_data = -2 * sqr_x / f_rescale (when f_rescale != 0)
+    // The distance:
+    //   dist = sqr_x + sqr_y - 2 * <o_rot, q_rot>
+    //        = sqr_x + sqr_y - 2 * asymmetric_ip * sqr_x / sum_abs
+    //        = sqr_x + sqr_y + (-2 * sqr_x / sum_abs) * asymmetric_ip
+    //        = f_add + g_add + f_rescale * asymmetric_ip
     //
-    // Substituting:
-    //   dist = sqr_x + sqr_y - 2 * sqrt(sqr_x * sqr_y) * asymmetric_ip * f_rescale / (-2 * sqr_x)
-    //        = sqr_x + sqr_y + sqrt(sqr_y / sqr_x) * f_rescale * asymmetric_ip
-    //        = f_add + g_add + f_rescale * sqrt(g_add / f_add) * asymmetric_ip
-    //
-    // Note: sqrt(g_add / f_add) = ||query|| / ||data||
-    // This normalizes for the asymmetry in vector magnitudes.
+    // Reference: RaBitQ paper (arXiv:2405.12497), Lemma 3.1
 
-    let scale = if data_meta.f_add > 1e-10 {
-        (query_lut.g_add / data_meta.f_add).sqrt()
-    } else {
-        1.0
-    };
-
-    let estimated = data_meta.f_add + query_lut.g_add + data_meta.f_rescale * scale * asymmetric_ip;
+    let estimated = data_meta.f_add + query_lut.g_add + data_meta.f_rescale * asymmetric_ip;
 
     // Error bound
     let error_bound = data_meta.f_error;
@@ -315,6 +311,101 @@ mod tests {
         for (i, (codes, meta)) in quantized.iter().enumerate() {
             let individual = estimate_distance(codes, meta, &query_lut);
             assert!((batch_results[i].0 - individual.0).abs() < 1e-6);
+        }
+    }
+
+    /// Diagnostic test: compute correlation between estimated and true distances
+    #[test]
+    fn test_distance_correlation() {
+        let dim = 128;
+        let n_vectors = 200;
+        let n_queries = 5;
+
+        let vectors = random_normalized_vectors(n_vectors, dim, 12345);
+        let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+
+        let index = RaBitQIndex::train(&refs, 67890).unwrap();
+        let quantized: Vec<_> = vectors.iter().map(|v| index.quantize(v)).collect();
+
+        // Test with multiple queries
+        for q_idx in 0..n_queries {
+            let query = &vectors[q_idx * 10]; // Pick queries from the dataset
+            let query_lut = QueryLUT::new(query, &index);
+
+            // Compute true L2 distances
+            let true_distances: Vec<f32> = vectors
+                .iter()
+                .map(|v| {
+                    query
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum()
+                })
+                .collect();
+
+            // Compute estimated distances
+            let estimated_distances: Vec<f32> = quantized
+                .iter()
+                .map(|(codes, meta)| estimate_distance(codes, meta, &query_lut).0)
+                .collect();
+
+            // Compute Spearman rank correlation
+            let mut true_ranks: Vec<(usize, f32)> =
+                true_distances.iter().copied().enumerate().collect();
+            let mut est_ranks: Vec<(usize, f32)> =
+                estimated_distances.iter().copied().enumerate().collect();
+
+            true_ranks.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            est_ranks.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+            let mut true_rank_map = vec![0usize; n_vectors];
+            let mut est_rank_map = vec![0usize; n_vectors];
+            for (rank, (idx, _)) in true_ranks.iter().enumerate() {
+                true_rank_map[*idx] = rank;
+            }
+            for (rank, (idx, _)) in est_ranks.iter().enumerate() {
+                est_rank_map[*idx] = rank;
+            }
+
+            // Compute Spearman correlation: 1 - 6*sum(d^2) / (n*(n^2-1))
+            let d_sum: f64 = (0..n_vectors)
+                .map(|i| {
+                    let d = true_rank_map[i] as i64 - est_rank_map[i] as i64;
+                    (d * d) as f64
+                })
+                .sum();
+            let n = n_vectors as f64;
+            let spearman = 1.0 - 6.0 * d_sum / (n * (n * n - 1.0));
+
+            // Compute recall@k for different k values
+            let mut recalls = Vec::new();
+            for k in [10, 20, 50, 100] {
+                let true_topk: std::collections::HashSet<usize> =
+                    true_ranks.iter().take(k).map(|(idx, _)| *idx).collect();
+                let est_topk: std::collections::HashSet<usize> =
+                    est_ranks.iter().take(k).map(|(idx, _)| *idx).collect();
+                let recall = true_topk.intersection(&est_topk).count() as f64 / k as f64;
+                recalls.push((k, recall));
+            }
+
+            eprintln!(
+                "Query {}: Spearman = {:.4}, R@10 = {:.0}%, R@20 = {:.0}%, R@50 = {:.0}%, R@100 = {:.0}%",
+                q_idx,
+                spearman,
+                recalls[0].1 * 100.0,
+                recalls[1].1 * 100.0,
+                recalls[2].1 * 100.0,
+                recalls[3].1 * 100.0,
+            );
+
+            // Spearman should be positive (rankings should correlate)
+            assert!(
+                spearman > 0.3,
+                "Spearman correlation {} is too low for query {}",
+                spearman,
+                q_idx
+            );
         }
     }
 }
