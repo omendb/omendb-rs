@@ -122,7 +122,8 @@ fn test_quantization_insert() {
 
     // Create store with 4-bit RaBitQ quantization
     let params = RaBitQParams::bits4();
-    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::RaBitQ(params));
+    let mut store =
+        VectorStore::new_with_quantization(128, QuantizationMode::LegacyMultiBit(params));
 
     // Insert vectors
     for i in 0..50 {
@@ -144,7 +145,8 @@ fn test_quantization_search_accuracy() {
 
     // Create store with 4-bit RaBitQ quantization
     let params = RaBitQParams::bits4();
-    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::RaBitQ(params));
+    let mut store =
+        VectorStore::new_with_quantization(128, QuantizationMode::LegacyMultiBit(params));
 
     // Insert vectors
     for i in 0..100 {
@@ -171,7 +173,8 @@ fn test_quantization_batch_insert() {
 
     // Create store with 4-bit RaBitQ quantization
     let params = RaBitQParams::bits4();
-    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::RaBitQ(params));
+    let mut store =
+        VectorStore::new_with_quantization(128, QuantizationMode::LegacyMultiBit(params));
 
     // Batch insert vectors
     let vectors: Vec<Vector> = (0..100).map(|i| random_vector(128, i)).collect();

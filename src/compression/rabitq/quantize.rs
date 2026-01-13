@@ -215,45 +215,39 @@ impl RaBitQIndex {
         }
 
         // Step 4: Compute corrective factors
-        // Based on RaBitQ paper formulas
+        // Based on RaBitQ paper (arXiv:2405.12497)
+        //
+        // The distance formula is:
+        //   ||o_r - q_r||^2 = sqr_x + sqr_y - 2 * dist_o * dist_q * <q, o>_est
+        //
+        // Where <q, o>_est = (binary_ip / D) / x_0
+        // And x_0 = sum_abs / (dist_o * sqrt(D))
+        //
+        // Simplifying:
+        //   dist = sqr_x + sqr_y + f_rescale * g_rescale * binary_ip
+        // Where:
+        //   f_add = sqr_x = ||data - centroid||^2
+        //   f_rescale = -2 * sqr_x / sum_abs (data-side coefficient)
+        //   g_rescale = sqrt(sqr_y / D) (query-side, computed at query time)
 
-        // Compute xu_cb: quantized binary code interpreted as ±1 scaled
-        // ip_resi_xucb = sum of (residual[i] * sign(residual[i])) = sum_abs
-        let ip_resi_xucb = sum_abs;
+        // f_add: simply ||data - centroid||^2
+        let f_add = l2_sqr;
 
-        // ip_cent_xucb: inner product of centroid projection with binary code
-        // Uses pre-rotated centroid (cached at training time for performance)
-        let ip_cent_xucb: f32 = self
-            .rotated_centroid
-            .iter()
-            .zip(residual.iter())
-            .map(|(&c, &r)| if r > 0.0 { c } else { -c })
-            .sum();
-
-        // f_add: additive correction (L2 metric)
-        // f_add = l2_sqr + 2 * l2_sqr * ip_cent_xucb / ip_resi_xucb
-        let f_add = if ip_resi_xucb.abs() > 1e-10 {
-            l2_sqr + 2.0 * l2_sqr * ip_cent_xucb / ip_resi_xucb
-        } else {
-            l2_sqr
-        };
-
-        // f_rescale: multiplicative correction
-        // f_rescale = -2 * l2_sqr / ip_resi_xucb
-        let f_rescale = if ip_resi_xucb.abs() > 1e-10 {
-            -2.0 * l2_sqr / ip_resi_xucb
+        // f_rescale: multiplicative correction (data-side)
+        // f_rescale = -2 * ||data - centroid||^2 / sum_abs
+        let f_rescale = if sum_abs.abs() > 1e-10 {
+            -2.0 * l2_sqr / sum_abs
         } else {
             0.0
         };
 
         // f_error: error bound factor
         // Based on concentration inequality from the paper
-        // tmp_error = l2_norm * 1.9 * sqrt((variance_term) / (dim - 1))
         // xu_cb_norm_sqr = ||binary_code||^2 where each component is ±1
         // This equals dim since each squared component is 1
         let xu_cb_norm_sqr = self.dim as f32;
-        let variance_term = if ip_resi_xucb.abs() > 1e-10 {
-            (l2_sqr * xu_cb_norm_sqr) / (ip_resi_xucb * ip_resi_xucb) - 1.0
+        let variance_term = if sum_abs.abs() > 1e-10 {
+            (l2_sqr * xu_cb_norm_sqr) / (sum_abs * sum_abs) - 1.0
         } else {
             0.0
         };

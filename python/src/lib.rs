@@ -5,7 +5,7 @@
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use omendb_lib::text::TextSearchConfig;
 use omendb_lib::vector::{
-    MetadataFilter, QuantizationMode, RaBitQParams, Vector, VectorStore, VectorStoreOptions,
+    MetadataFilter, QuantizationMode, Vector, VectorStore, VectorStoreOptions,
 };
 use parking_lot::RwLock;
 use pyo3::conversion::IntoPyObject;
@@ -22,9 +22,8 @@ use std::time::Instant;
 ///
 /// Accepts:
 /// - True → SQ8 (4x compression, ~99% recall) - RECOMMENDED
-/// - "sq8" → SQ8 (explicit)
-/// - "rabitq" → RaBitQ 4-bit (8x compression, ~98% recall)
-/// - "binary" → Binary (32x compression, ~70-85% recall, fastest search)
+/// - "sq8" or "scalar" → SQ8 (explicit)
+/// - "rabitq" → RaBitQ (32x compression, ~95% recall with rescore)
 /// - None/False → no quantization (full precision)
 ///
 /// Returns Ok(Some(mode)) if quantization enabled, Ok(None) if disabled
@@ -36,7 +35,7 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     // Handle boolean: True enables SQ8 (default), False disables
     if let Ok(b) = value.extract::<bool>() {
         return if b {
-            Ok(Some(QuantizationMode::SQ8)) // SQ8 is the new default
+            Ok(Some(QuantizationMode::SQ8))
         } else {
             Ok(None)
         };
@@ -45,17 +44,13 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     // Handle string quantization modes
     if let Ok(mode) = value.extract::<String>() {
         return match mode.to_lowercase().as_str() {
-            "sq8" => Ok(Some(QuantizationMode::SQ8)),
-            "binary" => Ok(Some(QuantizationMode::Binary)), // 32x compression, fastest
-            "rabitq" | "rabitq-4" | "rabitq_4" => {
-                Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4()))) // 8x compression
-            }
+            "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
+            "rabitq" => Ok(Some(QuantizationMode::true_rabitq())),
             _ => Err(PyValueError::new_err(format!(
                 "Unknown quantization mode: '{}'\n\
                   Valid modes:\n\
-                  - True or 'sq8':  4x smaller, ~99% recall (RECOMMENDED)\n\
-                  - 'rabitq':       8x smaller, ~98% recall (balanced)\n\
-                  - 'binary':      32x smaller, ~70-85% recall (fastest)",
+                  - True or 'sq8' or 'scalar': 4x smaller, ~99% recall (RECOMMENDED)\n\
+                  - 'rabitq': 32x smaller, ~95% recall",
                 mode
             ))),
         };
@@ -63,9 +58,8 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
 
     Err(PyValueError::new_err(
         "quantization must be True, False, or a string:\n\
-          - True or 'sq8':  4x smaller, ~99% recall (RECOMMENDED)\n\
-          - 'rabitq':       8x smaller, ~98% recall (balanced)\n\
-          - 'binary':      32x smaller, ~70-85% recall (fastest)",
+          - True or 'sq8' or 'scalar': 4x smaller, ~99% recall (RECOMMENDED)\n\
+          - 'rabitq': 32x smaller, ~95% recall",
     ))
 }
 
@@ -1772,8 +1766,8 @@ impl VectorDatabase {
 ///     ef_construction (int): Build quality (default: 100, higher = better graph)
 ///     ef_search (int): Search quality (default: 100, higher = better recall)
 ///     quantization (bool|str): Enable quantization (default: None = full precision)
-///         - True or "sq8": SQ8 ~4x smaller, ~99% recall (RECOMMENDED)
-///         - "rabitq": RaBitQ 4-bit, ~8x smaller, ~98% recall
+///         - True or "sq8" or "scalar": SQ8 ~4x smaller, ~99% recall (RECOMMENDED)
+///         - "rabitq": RaBitQ ~32x smaller, ~95% recall
 ///         - False/None: Full precision (no quantization)
 ///     rescore (bool): Rerank with full precision (default: True when quantized)
 ///     oversample (float): Candidate multiplier for rescoring (default: 3.0)
@@ -1800,7 +1794,7 @@ impl VectorDatabase {
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization="sq8")
 ///
-///     # With RaBitQ for higher compression (8x smaller, ~98% recall)
+///     # With RaBitQ for higher compression (32x smaller, ~95% recall)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization="rabitq")
 ///
 ///     # Disable rescore for max speed (~1-3% recall loss)

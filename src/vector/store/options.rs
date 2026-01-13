@@ -150,28 +150,26 @@ impl VectorStoreOptions {
         self.quantization(QuantizationMode::SQ8)
     }
 
-    /// Enable `RaBitQ` quantization with default 4-bit parameters (8x compression)
-    #[deprecated(since = "0.0.24", note = "Use quantization_true_rabitq() instead")]
-    #[allow(deprecated)]
-    #[must_use]
-    pub fn quantization_rabitq(self) -> Self {
-        self.quantization(QuantizationMode::rabitq())
-    }
-
-    /// Enable `RaBitQ` quantization with custom parameters
-    #[deprecated(since = "0.0.24", note = "Use quantization_true_rabitq() instead")]
-    #[allow(deprecated)]
-    #[must_use]
-    pub fn quantization_rabitq_params(self, params: RaBitQParams) -> Self {
-        self.quantization(QuantizationMode::RaBitQ(params))
-    }
-
-    /// Enable true RaBitQ quantization (32x compression)
+    /// Enable RaBitQ quantization (32x compression)
     ///
     /// Uses 1-bit codes with FFHT rotation for better accuracy than naive binary.
     #[must_use]
+    pub fn quantization_rabitq(self) -> Self {
+        self.quantization(QuantizationMode::RaBitQ)
+    }
+
+    /// Alias for quantization_rabitq() - kept for transition
+    #[must_use]
     pub fn quantization_true_rabitq(self) -> Self {
-        self.quantization(QuantizationMode::TrueRaBitQ)
+        self.quantization(QuantizationMode::RaBitQ)
+    }
+
+    /// Enable legacy multi-bit quantization with custom parameters
+    #[deprecated(since = "0.0.24", note = "Use quantization_rabitq() instead")]
+    #[allow(deprecated)]
+    #[must_use]
+    pub fn quantization_legacy_multibit(self, params: RaBitQParams) -> Self {
+        self.quantization(QuantizationMode::LegacyMultiBit(params))
     }
 
     /// Enable/disable rescoring with original vectors (default: true when quantization enabled).

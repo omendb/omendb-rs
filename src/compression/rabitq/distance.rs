@@ -82,6 +82,8 @@ impl QueryLUT {
 /// Estimate L2 squared distance between query and quantized vector
 ///
 /// Uses binary inner product and correction factors for unbiased estimation.
+/// Based on RaBitQ paper (arXiv:2405.12497) Equation 2:
+///   ||o_r - q_r||^2 = sqr_x + sqr_y - 2 * dist_o * dist_q * <q, o>_est
 ///
 /// # Returns
 /// (estimated_distance, error_bound)
@@ -108,9 +110,20 @@ pub fn estimate_distance(
     #[allow(clippy::cast_possible_wrap)]
     let binary_ip = dim as i32 - 2 * hamming as i32;
 
-    // Apply correction formula:
-    // distance ≈ f_add + g_add + f_rescale * binary_ip
-    let estimated = data_meta.f_add + query_lut.g_add + data_meta.f_rescale * binary_ip as f32;
+    // Apply correction formula from RaBitQ paper:
+    // distance ≈ f_add + g_add + f_rescale * g_rescale * binary_ip
+    //
+    // Where:
+    // - f_add = ||data - centroid||^2 (data-side)
+    // - g_add = ||query - centroid||^2 (query-side)
+    // - f_rescale = -2 * ||data - centroid||^2 / sum_abs_data (data-side)
+    // - g_rescale = sqrt(||query - centroid||^2 / dim) (query-side, was MISSING)
+    //
+    // The g_rescale factor is critical: it normalizes the query contribution
+    // to match the expected variance of the binary inner product.
+    let g_rescale = (query_lut.dis_v_2 / dim as f32).sqrt();
+    let estimated =
+        data_meta.f_add + query_lut.g_add + data_meta.f_rescale * g_rescale * binary_ip as f32;
 
     // Error bound
     let error_bound = data_meta.f_error;

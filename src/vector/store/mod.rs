@@ -102,23 +102,28 @@ mod tests;
 /// Different quantization modes have different baseline recall:
 /// - Binary: ~85% accurate, needs higher oversampling (5.0x)
 /// - SQ8: ~99% accurate, needs minimal oversampling (2.0x)
-/// - RaBitQ 2-bit: ~93% accurate, needs more candidates (4.0x)
-/// - RaBitQ 4-bit: ~96% accurate, moderate oversampling (3.0x)
-/// - RaBitQ 8-bit: ~99% accurate, minimal oversampling (2.0x)
-/// - TrueRaBitQ: ~95% accurate, moderate oversampling (3.0x)
+/// - Legacy 2-bit: ~93% accurate, needs more candidates (4.0x)
+/// - Legacy 4-bit: ~96% accurate, moderate oversampling (3.0x)
+/// - Legacy 8-bit: ~99% accurate, minimal oversampling (2.0x)
+/// - RaBitQ (FFHT 1-bit): ~50% raw recall with symmetric binary-binary,
+///   needs high oversampling (10.0x) to achieve ~80% recall with rescore
 /// - No quantization: 1.0 (rescore disabled, oversample unused)
+///
+/// Note: RaBitQ uses symmetric binary-binary quantization which is less accurate
+/// than the reference asymmetric scalar-binary approach (~95% recall).
 #[allow(deprecated)]
 fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
     match mode {
         None => 1.0,
         Some(QuantizationMode::Binary) => 5.0, // ~85% recall baseline
         Some(QuantizationMode::SQ8) => 2.0,
-        Some(QuantizationMode::RaBitQ(params)) => match params.bits_per_dim.to_u8() {
+        Some(QuantizationMode::LegacyMultiBit(params)) => match params.bits_per_dim.to_u8() {
             2 => 4.0, // ~93% recall baseline
             8 => 2.0, // ~99% recall baseline
             _ => 3.0, // 4-bit default: ~96% recall baseline
         },
-        Some(QuantizationMode::TrueRaBitQ) => 3.0, // ~95% recall baseline
+        // FFHT 1-bit symmetric needs high oversampling due to noisy distance estimates
+        Some(QuantizationMode::RaBitQ) => 10.0, // ~50% raw, ~80% with rescore@10x
     }
 }
 
@@ -129,20 +134,20 @@ fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
 fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
     match mode_id {
         1 => Some(QuantizationMode::SQ8),
-        2 => Some(QuantizationMode::RaBitQ(RaBitQParams {
+        2 => Some(QuantizationMode::LegacyMultiBit(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits4,
             ..RaBitQParams::default()
         })),
-        3 => Some(QuantizationMode::RaBitQ(RaBitQParams {
+        3 => Some(QuantizationMode::LegacyMultiBit(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits2,
             ..RaBitQParams::default()
         })),
-        4 => Some(QuantizationMode::RaBitQ(RaBitQParams {
+        4 => Some(QuantizationMode::LegacyMultiBit(RaBitQParams {
             bits_per_dim: QuantizationBits::Bits8,
             ..RaBitQParams::default()
         })),
         5 => Some(QuantizationMode::Binary),
-        6 => Some(QuantizationMode::TrueRaBitQ),
+        6 => Some(QuantizationMode::RaBitQ),
         _ => None, // 0 and unknown values
     }
 }
@@ -155,12 +160,12 @@ fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
     match mode {
         QuantizationMode::Binary => 5,
         QuantizationMode::SQ8 => 1,
-        QuantizationMode::RaBitQ(p) => match p.bits_per_dim.to_u8() {
+        QuantizationMode::LegacyMultiBit(p) => match p.bits_per_dim.to_u8() {
             2 => 3,
             8 => 4,
             _ => 2, // 4-bit default
         },
-        QuantizationMode::TrueRaBitQ => 6,
+        QuantizationMode::RaBitQ => 6,
     }
 }
 
@@ -188,8 +193,8 @@ fn create_hnsw_index(
     let quantization = match quantization_mode {
         Some(QuantizationMode::Binary) => HNSWQuantization::Binary,
         Some(QuantizationMode::SQ8) => HNSWQuantization::SQ8,
-        Some(QuantizationMode::RaBitQ(params)) => HNSWQuantization::RaBitQ(params.clone()),
-        Some(QuantizationMode::TrueRaBitQ) => HNSWQuantization::TrueRaBitQ,
+        Some(QuantizationMode::LegacyMultiBit(params)) => HNSWQuantization::RaBitQ(params.clone()),
+        Some(QuantizationMode::RaBitQ) => HNSWQuantization::TrueRaBitQ,
         None => HNSWQuantization::None,
     };
 
@@ -230,7 +235,7 @@ fn initialize_quantized_hnsw(
         QuantizationMode::SQ8 => {
             HNSWIndex::new_with_sq8(dimensions, hnsw_params, distance_metric.into())
         }
-        QuantizationMode::RaBitQ(params) => {
+        QuantizationMode::LegacyMultiBit(params) => {
             let mut idx = HNSWIndex::new_with_asymmetric(
                 dimensions,
                 hnsw_params,
@@ -240,7 +245,7 @@ fn initialize_quantized_hnsw(
             idx.train_quantizer(training_vectors)?;
             Ok(idx)
         }
-        QuantizationMode::TrueRaBitQ => {
+        QuantizationMode::RaBitQ => {
             // For now, TrueRaBitQ uses the same HNSW structure as Binary
             // TODO: Integrate true RaBitQ with proper training
             let mut idx =

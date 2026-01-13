@@ -53,7 +53,7 @@ impl From<&crate::vector::QuantizationMode> for QuantizationCode {
         match mode {
             crate::vector::QuantizationMode::Binary => Self::Binary,
             crate::vector::QuantizationMode::SQ8 => Self::Sq8,
-            crate::vector::QuantizationMode::RaBitQ(params) => match params.bits_per_dim {
+            crate::vector::QuantizationMode::LegacyMultiBit(params) => match params.bits_per_dim {
                 QuantizationBits::Bits1 => Self::Binary,
                 QuantizationBits::Bits2 => Self::RabitQ2,
                 QuantizationBits::Bits3 | QuantizationBits::Bits4 => Self::RabitQ4,
@@ -61,7 +61,7 @@ impl From<&crate::vector::QuantizationMode> for QuantizationCode {
                     Self::RabitQ8
                 }
             },
-            crate::vector::QuantizationMode::TrueRaBitQ => Self::TrueRaBitQ,
+            crate::vector::QuantizationMode::RaBitQ => Self::TrueRaBitQ,
         }
     }
 }
@@ -84,16 +84,16 @@ impl QuantizationCode {
             Self::F32 => None,
             Self::Sq8 => Some(crate::vector::QuantizationMode::SQ8),
             Self::Binary => Some(crate::vector::QuantizationMode::Binary),
-            Self::RabitQ2 => Some(crate::vector::QuantizationMode::RaBitQ(
+            Self::RabitQ2 => Some(crate::vector::QuantizationMode::LegacyMultiBit(
                 RaBitQParams::bits2(),
             )),
-            Self::RabitQ4 => Some(crate::vector::QuantizationMode::RaBitQ(
+            Self::RabitQ4 => Some(crate::vector::QuantizationMode::LegacyMultiBit(
                 RaBitQParams::bits4(),
             )),
-            Self::RabitQ8 => Some(crate::vector::QuantizationMode::RaBitQ(
+            Self::RabitQ8 => Some(crate::vector::QuantizationMode::LegacyMultiBit(
                 RaBitQParams::bits8(),
             )),
-            Self::TrueRaBitQ => Some(crate::vector::QuantizationMode::TrueRaBitQ),
+            Self::TrueRaBitQ => Some(crate::vector::QuantizationMode::RaBitQ),
         }
     }
 }

@@ -9,7 +9,7 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use omendb_lib::vector::{
-    MetadataFilter, QuantizationMode, RaBitQParams, Vector, VectorStore, VectorStoreOptions,
+    MetadataFilter, QuantizationMode, Vector, VectorStore, VectorStoreOptions,
 };
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
@@ -28,47 +28,29 @@ fn extract_query_vector(query: Either<Vec<f64>, Float32Array>) -> Vec<f32> {
     }
 }
 
-/// Parse quantization option from JS value (bool, string, or number)
+/// Parse quantization option from JS value (bool or string)
 fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMode>> {
     match value {
         serde_json::Value::Null => Ok(None),
         serde_json::Value::Bool(true) => Ok(Some(QuantizationMode::SQ8)),
         serde_json::Value::Bool(false) => Ok(None),
         serde_json::Value::String(s) => match s.to_lowercase().as_str() {
-            "sq8" => Ok(Some(QuantizationMode::SQ8)),
-            "rabitq" | "rabitq-4" | "rabitq_4" => {
-                Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4())))
-            }
-            "binary" | "bbq" => Ok(Some(QuantizationMode::Binary)),
+            "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
+            "rabitq" => Ok(Some(QuantizationMode::true_rabitq())),
             _ => Err(Error::new(
                 Status::InvalidArg,
                 format!(
                     "Unknown quantization mode: '{}'\n\
                      Valid modes:\n\
-                     - true or 'sq8': 4x smaller, ~99% recall (RECOMMENDED)\n\
-                     - 'rabitq': 8x smaller, ~98% recall\n\
-                     - 'binary': 32x smaller, ~95% recall",
+                     - true or 'sq8' or 'scalar': 4x smaller, ~99% recall (RECOMMENDED)\n\
+                     - 'rabitq': 32x smaller, ~95% recall",
                     s
                 ),
             )),
         },
-        serde_json::Value::Number(n) => {
-            let bits = n.as_u64().ok_or_else(|| {
-                Error::new(Status::InvalidArg, "quantization bits must be a positive integer")
-            })? as u8;
-            match bits {
-                2 => Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits2()))),
-                4 => Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits4()))),
-                8 => Ok(Some(QuantizationMode::RaBitQ(RaBitQParams::bits8()))),
-                _ => Err(Error::new(
-                    Status::InvalidArg,
-                    format!("quantization bits must be 2, 4, or 8, got {}", bits),
-                )),
-            }
-        }
         _ => Err(Error::new(
             Status::InvalidArg,
-            "quantization must be true, false, a string ('sq8', 'rabitq', 'binary'), or a number (2, 4, 8)",
+            "quantization must be true, false, or a string ('sq8', 'scalar', 'rabitq')",
         )),
     }
 }
