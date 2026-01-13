@@ -2934,6 +2934,117 @@ mod tests {
         assert_eq!(ncs.get_neighbor_count(2), 2);
     }
 
+    /// Test True RaBitQ recall using asymmetric distance
+    ///
+    /// This test verifies that the asymmetric float-binary distance
+    /// provides good recall compared to full precision brute force.
+    #[test]
+    fn test_true_rabitq_recall() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+        use std::collections::HashSet;
+
+        let dim = 128;
+        let n_vectors = 500;
+        let n_queries = 20;
+        let k = 10;
+
+        // Fixed seed for reproducibility
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Generate random vectors
+        let vectors: Vec<Vec<f32>> = (0..n_vectors)
+            .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+            .collect();
+
+        // Create True RaBitQ storage
+        let mut storage = VectorStorage::new_true_rabitq(dim);
+
+        // Insert vectors
+        for vec in &vectors {
+            storage.insert(vec.clone()).unwrap();
+        }
+
+        // Verify training occurred
+        assert!(matches!(
+            &storage,
+            VectorStorage::RaBitQQuantized { trained: true, .. }
+        ));
+
+        // Generate queries
+        let queries: Vec<Vec<f32>> = (0..n_queries)
+            .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+            .collect();
+
+        // Compute ground truth using brute force L2
+        let ground_truth: Vec<Vec<u32>> = queries
+            .iter()
+            .map(|query| {
+                let mut distances: Vec<(u32, f32)> = vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let dist: f32 = query
+                            .iter()
+                            .zip(v.iter())
+                            .map(|(a, b)| (a - b).powi(2))
+                            .sum();
+                        (i as u32, dist)
+                    })
+                    .collect();
+                distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                distances.iter().take(k).map(|(id, _)| *id).collect()
+            })
+            .collect();
+
+        // Compute RaBitQ distances and measure recall
+        let mut total_recall = 0.0;
+        for (q_idx, query) in queries.iter().enumerate() {
+            // Get distances from RaBitQ storage
+            let mut rabitq_distances: Vec<(u32, f32)> = (0..n_vectors as u32)
+                .filter_map(|id| {
+                    storage
+                        .distance_asymmetric_l2(query, id)
+                        .map(|dist| (id, dist))
+                })
+                .collect();
+            rabitq_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+            // Get top-k from RaBitQ
+            let rabitq_topk: HashSet<u32> =
+                rabitq_distances.iter().take(k).map(|(id, _)| *id).collect();
+
+            // Get ground truth top-k
+            let gt_topk: HashSet<u32> = ground_truth[q_idx].iter().copied().collect();
+
+            // Calculate recall
+            let matches = rabitq_topk.intersection(&gt_topk).count();
+            total_recall += matches as f64 / k as f64;
+        }
+
+        let avg_recall = total_recall / n_queries as f64;
+
+        println!(
+            "True RaBitQ asymmetric recall@{} (500 vectors): {:.2}%",
+            k,
+            avg_recall * 100.0
+        );
+
+        // With asymmetric float-binary distance, we expect >= 40% raw recall
+        // This is WITHOUT HNSW graph traversal or rescore - pure distance ranking.
+        // (This was ~11% with symmetric binary-binary distance)
+        //
+        // Expected recall levels:
+        // - Symmetric binary-binary: ~11% (broken)
+        // - Asymmetric float-binary: ~45% (current, working)
+        // - With HNSW + rescore: ~70%+ (production use)
+        assert!(
+            avg_recall >= 0.40,
+            "True RaBitQ recall too low: {:.2}% (expected >= 40%)",
+            avg_recall * 100.0
+        );
+    }
+
     #[test]
     fn test_true_rabitq_reconstruct_after_load() {
         use rand::rngs::StdRng;

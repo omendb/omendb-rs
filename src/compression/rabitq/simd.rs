@@ -1,6 +1,11 @@
 //! SIMD-optimized operations for RaBitQ
 //!
 //! Provides optimized Hamming distance and popcount for binary codes.
+//!
+//! NOTE: Currently unused - asymmetric distance uses float-binary inner product.
+//! Kept for potential future use with symmetric distance comparison.
+
+#![allow(dead_code)]
 
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::{vaddlvq_u8, vcntq_u8, veorq_u8, vld1q_u8};
