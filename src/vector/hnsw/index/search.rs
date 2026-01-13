@@ -3,6 +3,7 @@
 //! Implements k-NN search, filtered search (ACORN-1), and layer-level search.
 
 use super::HNSWIndex;
+use crate::compression::scalar::QueryPrep;
 use crate::distance::norm_squared;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::storage::UnifiedADC;
@@ -201,6 +202,29 @@ impl HNSWIndex {
     ) -> Result<Vec<(u32, f32)>> {
         use super::super::query_buffers;
 
+        // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
+        let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
+        let vectors = &self.vectors;
+
+        // Distance computation helper
+        let compute_distance = |id: u32| -> Result<f32> {
+            // ADC path (RaBitQ)
+            if let Some(ref adc) = adc_table {
+                if let Some(dist) = vectors.distance_adc(adc, id) {
+                    return Ok(dist);
+                }
+            }
+            // SQ8 fast path
+            if let Some(ref prep) = sq8_prep {
+                if let Some(dist) = vectors.distance_sq8_with_prep(prep, id) {
+                    return Ok(dist);
+                }
+            }
+            // Fallback to full precision
+            let vec = vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
+            Ok(crate::distance::l2_distance_squared(query, vec))
+        };
+
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
             let candidates = &mut buffers.candidates;
@@ -209,7 +233,7 @@ impl HNSWIndex {
             let results_buf = &mut buffers.results;
 
             for &ep in entry_points {
-                let dist = self.distance_with_adc(query, ep, adc_table)?;
+                let dist = compute_distance(ep)?;
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -243,19 +267,18 @@ impl HNSWIndex {
 
                 if PREFETCH_ENABLED {
                     for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                        self.vectors.prefetch_quantized(id);
+                        vectors.prefetch_quantized(id);
                     }
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
-                        self.vectors
-                            .prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
+                        vectors.prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
 
                     visited.insert(neighbor_id);
 
-                    let dist = self.distance_with_adc(query, neighbor_id, adc_table)?;
+                    let dist = compute_distance(neighbor_id)?;
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     if let Some(&farthest) = working.peek() {
@@ -605,14 +628,31 @@ impl HNSWIndex {
             0.0
         };
 
-        // Distance computation helper (avoids repeating L2 decomposition check)
+        // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
+        let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
+
+        // Cache reference to storage
+        let vectors = &self.vectors;
+
+        // Distance computation helper (avoids repeating checks)
         let compute_distance = |node_id: u32| -> Result<f32> {
-            if use_l2_decomposition {
-                self.distance_l2_decomposed(query, query_norm, node_id)
-                    .ok_or(HNSWError::VectorNotFound(node_id))
-            } else {
-                self.distance_cmp_mono::<D>(query, node_id)
+            // SQ8 fast path: use pre-prepared query
+            if let Some(ref prep) = sq8_prep {
+                if let Some(dist) = vectors.distance_sq8_with_prep(prep, node_id) {
+                    return Ok(dist);
+                }
             }
+            // L2 decomposition path (FullPrecision only)
+            if use_l2_decomposition {
+                return self
+                    .distance_l2_decomposed(query, query_norm, node_id)
+                    .ok_or(HNSWError::VectorNotFound(node_id));
+            }
+            // Fallback to full precision
+            let vec = vectors
+                .get(node_id)
+                .ok_or(HNSWError::VectorNotFound(node_id))?;
+            Ok(D::distance(query, vec))
         };
 
         query_buffers::with_buffers(|buffers| {
@@ -775,8 +815,7 @@ impl HNSWIndex {
 
         // L2 decomposition optimization: pre-compute query norm once
         // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ (~7% faster for L2)
-        // Note: Only used for FullPrecision storage. SQ8 uses asymmetric path
-        // for better recall (L2 decomposition has numerical precision issues).
+        // Note: Only used for FullPrecision storage. SQ8 uses its own optimized path.
         let use_l2_decomposition =
             self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
         let query_norm = if use_l2_decomposition {
@@ -785,9 +824,32 @@ impl HNSWIndex {
             0.0 // unused
         };
 
+        // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
+        // This avoids the O(D) prepare_query() overhead per distance calculation
+        let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
+
         // Cache reference to storage to avoid repeated field access
         let vectors = &self.vectors;
         let neighbors = &self.neighbors;
+
+        // Distance computation helper - avoids repeated branching in hot loop
+        let compute_distance = |id: u32| -> Result<f32> {
+            // SQ8 fast path: use pre-prepared query
+            if let Some(ref prep) = sq8_prep {
+                if let Some(dist) = vectors.distance_sq8_with_prep(prep, id) {
+                    return Ok(dist);
+                }
+            }
+            // L2 decomposition path (FullPrecision only)
+            if use_l2_decomposition {
+                return vectors
+                    .distance_l2_decomposed(query, query_norm, id)
+                    .ok_or(HNSWError::VectorNotFound(id));
+            }
+            // Fallback to full precision
+            let vec = vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
+            Ok(D::distance(query, vec))
+        };
 
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
@@ -798,13 +860,7 @@ impl HNSWIndex {
 
             // Initialize with entry points
             for &ep in entry_points {
-                let dist = if use_l2_decomposition {
-                    vectors
-                        .distance_l2_decomposed(query, query_norm, ep)
-                        .ok_or(HNSWError::VectorNotFound(ep))?
-                } else {
-                    self.distance_cmp_mono::<D>(query, ep)?
-                };
+                let dist = compute_distance(ep)?;
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -858,15 +914,7 @@ impl HNSWIndex {
 
                     visited.insert(neighbor_id);
 
-                    // Use L2 decomposition when available (~7% faster for L2)
-                    // SQ8 uses distance_cmp_mono → distance_asymmetric_l2 for recall
-                    let dist = if use_l2_decomposition {
-                        vectors
-                            .distance_l2_decomposed(query, query_norm, neighbor_id)
-                            .ok_or(HNSWError::VectorNotFound(neighbor_id))?
-                    } else {
-                        self.distance_cmp_mono::<D>(query, neighbor_id)?
-                    };
+                    let dist = compute_distance(neighbor_id)?;
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     // If neighbor is closer than farthest in working set, or working set not full, add it
@@ -995,7 +1043,9 @@ impl HNSWIndex {
     }
 
     /// Compute distance using ADC table if available, with fallback to asymmetric distance
+    /// Currently unused - kept for potential future use cases.
     #[inline]
+    #[allow(dead_code)]
     pub(super) fn distance_with_adc(
         &self,
         query: &[f32],
@@ -1034,6 +1084,32 @@ impl HNSWIndex {
         use crate::compression::{fastscan_batch_with_lut, FastScanLUT, FASTSCAN_BATCH_SIZE};
 
         let adc_table = self.vectors.build_adc_table(query);
+
+        // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
+        // This avoids the O(D) prepare_query() overhead per distance calculation
+        let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
+
+        // Cache reference to storage for the closure
+        let vectors = &self.vectors;
+
+        // Distance computation helper for asymmetric search
+        let compute_distance_asymmetric = |id: u32| -> Result<f32> {
+            // ADC path (RaBitQ)
+            if let Some(ref adc) = adc_table {
+                if let Some(dist) = vectors.distance_adc(adc, id) {
+                    return Ok(dist);
+                }
+            }
+            // SQ8 fast path: use pre-prepared query
+            if let Some(ref prep) = sq8_prep {
+                if let Some(dist) = vectors.distance_sq8_with_prep(prep, id) {
+                    return Ok(dist);
+                }
+            }
+            // Fallback to full precision
+            let vec = vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
+            Ok(crate::distance::l2_distance_squared(query, vec))
+        };
 
         // FastScan is disabled on Apple Silicon where:
         // 1. DMP (Data Memory-dependent Prefetcher) handles cache efficiently
@@ -1088,7 +1164,7 @@ impl HNSWIndex {
             };
 
             for &ep in entry_points {
-                let dist = self.distance_with_adc(query, ep, adc_table.as_ref())?;
+                let dist = compute_distance_asymmetric(ep)?;
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -1159,8 +1235,7 @@ impl HNSWIndex {
                             for &neighbor_id in unvisited_slice.iter().skip(valid_count) {
                                 visited.insert(neighbor_id);
 
-                                let dist =
-                                    self.distance_with_adc(query, neighbor_id, adc_table.as_ref())?;
+                                let dist = compute_distance_asymmetric(neighbor_id)?;
                                 let neighbor = Candidate::new(neighbor_id, dist);
 
                                 if let Some(&farthest) = working.peek() {
@@ -1191,19 +1266,18 @@ impl HNSWIndex {
 
                 if PREFETCH_ENABLED {
                     for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                        self.vectors.prefetch_quantized(id);
+                        vectors.prefetch_quantized(id);
                     }
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
-                        self.vectors
-                            .prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
+                        vectors.prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
 
                     visited.insert(neighbor_id);
 
-                    let dist = self.distance_with_adc(query, neighbor_id, adc_table.as_ref())?;
+                    let dist = compute_distance_asymmetric(neighbor_id)?;
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     if let Some(&farthest) = working.peek() {

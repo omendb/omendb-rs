@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use crate::compression::binary::hamming_distance;
 use crate::compression::rabitq::{estimate_distance, CodeMetadata, QueryLUT, RaBitQIndex};
+use crate::compression::scalar::QueryPrep;
 use crate::compression::sq_multi::QuantizedVector;
 use crate::compression::{ADCTable, RaBitQ, RaBitQParams, ScalarParams};
 use crate::distance::dot_product;
@@ -1638,6 +1639,8 @@ impl VectorStorage {
 
                 let start = idx * *dimensions;
                 let end = start + *dimensions;
+                // NOTE: This path is inefficient - prepare_query is called per-vector!
+                // Use distance_sq8_with_prep() instead for batch operations.
                 let query_prep = params.prepare_query(query);
                 Some(params.distance_l2_squared_raw(
                     &query_prep,
@@ -1700,6 +1703,74 @@ impl VectorStorage {
             }
             // FullPrecision uses regular L2 distance, not asymmetric
             Self::FullPrecision { .. } => None,
+        }
+    }
+
+    /// Get ScalarParams reference for SQ8 storage (to prepare query once per search)
+    #[inline]
+    #[must_use]
+    pub fn get_sq8_params(&self) -> Option<&ScalarParams> {
+        if let Self::ScalarQuantized {
+            params, trained, ..
+        } = self
+        {
+            if *trained {
+                return Some(params);
+            }
+        }
+        None
+    }
+
+    /// Prepare query for efficient SQ8 distance computation
+    ///
+    /// Call this ONCE at the start of search, then use `distance_sq8_with_prep()`
+    /// for each distance calculation. This avoids the O(D) query preparation
+    /// overhead on each distance call.
+    ///
+    /// Returns None if storage is not SQ8 or not trained.
+    #[inline]
+    #[must_use]
+    pub fn prepare_sq8_query(&self, query: &[f32]) -> Option<QueryPrep> {
+        self.get_sq8_params()
+            .map(|params| params.prepare_query(query))
+    }
+
+    /// Compute SQ8 distance with a pre-prepared query (efficient batch path)
+    ///
+    /// Use this instead of `distance_asymmetric_l2` when doing multiple distance
+    /// computations with the same query. Call `params.prepare_query()` once,
+    /// then use this method for each vector.
+    #[inline(always)]
+    #[must_use]
+    pub fn distance_sq8_with_prep(&self, prep: &QueryPrep, id: u32) -> Option<f32> {
+        if let Self::ScalarQuantized {
+            params,
+            quantized,
+            norms,
+            sums,
+            count,
+            dimensions,
+            trained,
+            ..
+        } = self
+        {
+            if !*trained {
+                return None;
+            }
+            let idx = id as usize;
+            if idx >= *count {
+                return None;
+            }
+            let start = idx * *dimensions;
+            let end = start + *dimensions;
+            Some(params.distance_l2_squared_raw(
+                prep,
+                &quantized[start..end],
+                sums[idx],
+                norms[idx],
+            ))
+        } else {
+            None
         }
     }
 

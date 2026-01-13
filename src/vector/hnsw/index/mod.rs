@@ -403,8 +403,9 @@ impl HNSWIndex {
 
     /// Monomorphized distance computation (static dispatch, no match)
     ///
-    /// Critical for x86/ARM servers where branch misprediction hurts performance.
-    /// The Distance trait enables compile-time specialization.
+    /// Generic fallback path for storage types that don't have optimized distance.
+    /// Currently unused as SQ8 and FP32 have specialized fast paths.
+    #[allow(dead_code)]
     #[inline(always)]
     pub(super) fn distance_cmp_mono<D: Distance>(&self, query: &[f32], id: u32) -> Result<f32> {
         // Try asymmetric distance first (for SQ8/RaBitQ storage)
