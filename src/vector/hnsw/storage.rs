@@ -8,16 +8,12 @@
 // - LOCK-FREE READS for search performance (ArcSwap)
 
 use arc_swap::ArcSwap;
-use ordered_float::OrderedFloat;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::compression::binary::hamming_distance;
-use crate::compression::rabitq::{estimate_distance, CodeMetadata, QueryLUT, RaBitQIndex};
 use crate::compression::scalar::QueryPrep;
-use crate::compression::sq_multi::QuantizedVector;
-use crate::compression::{ADCTable, RaBitQ, RaBitQParams, ScalarParams};
+use crate::compression::ScalarParams;
 use crate::distance::dot_product;
 
 /// Empty neighbor list constant (avoid allocation for empty results)
@@ -557,7 +553,7 @@ pub const FASTSCAN_BATCH_SIZE: usize = 32;
 ///
 /// # Performance
 ///
-/// Benchmark showed 5x speedup for distance computation (390ns vs 1.93µs for 32 neighbors).
+/// Benchmark showed 5x speedup for distance computation (390ns vs 1.93us for 32 neighbors).
 /// Expected 2-3x end-to-end search speedup since distance is ~50-70% of search time.
 #[allow(dead_code)] // Used in Phase 3: FastScan search integration
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -656,71 +652,14 @@ impl NeighborCodeStorage {
     ///
     /// # Returns
     /// New NeighborCodeStorage with interleaved codes for all vertices
+    ///
+    /// Currently returns None - FastScan integration pending.
     pub fn build_from_storage(
-        vectors: &VectorStorage,
-        neighbors: &NeighborLists,
-        level: u8,
+        _vectors: &VectorStorage,
+        _neighbors: &NeighborLists,
+        _level: u8,
     ) -> Option<Self> {
-        // Only works with legacy multi-bit quantized storage
-        #[allow(deprecated)]
-        let (quantized_data, code_size) = match vectors {
-            VectorStorage::LegacyMultiBitQuantized {
-                quantized_data,
-                code_size,
-                ..
-            } => (quantized_data, *code_size),
-            _ => return None,
-        };
-
-        let num_vertices = neighbors.len();
-        if num_vertices == 0 {
-            return Some(Self::new(code_size));
-        }
-
-        let block_size = code_size * FASTSCAN_BATCH_SIZE;
-        let mut codes = Vec::with_capacity(num_vertices * block_size);
-        let mut offsets = Vec::with_capacity(num_vertices);
-        let mut neighbor_counts = Vec::with_capacity(num_vertices);
-
-        for vertex_id in 0..num_vertices {
-            let offset = codes.len();
-            offsets.push(offset);
-
-            // Get this vertex's neighbors
-            let vertex_neighbors = neighbors.get_neighbors(vertex_id as u32, level);
-            let count = vertex_neighbors.len().min(FASTSCAN_BATCH_SIZE);
-            neighbor_counts.push(count);
-
-            // Allocate block for this vertex (will be filled with interleaved codes)
-            let block_start = codes.len();
-            codes.resize(block_start + block_size, 0);
-
-            // Interleave: for each sub-quantizer position, store all neighbors' codes
-            for sq in 0..code_size {
-                for (n, &neighbor_id) in vertex_neighbors
-                    .iter()
-                    .take(FASTSCAN_BATCH_SIZE)
-                    .enumerate()
-                {
-                    let neighbor_idx = neighbor_id as usize;
-                    // Get this neighbor's code at sub-quantizer position sq
-                    let code_start = neighbor_idx * code_size;
-                    if code_start + sq < quantized_data.len() {
-                        codes[block_start + sq * FASTSCAN_BATCH_SIZE + n] =
-                            quantized_data[code_start + sq];
-                    }
-                    // Else: padding with 0 (already initialized)
-                }
-            }
-        }
-
-        Some(Self {
-            codes,
-            offsets,
-            neighbor_counts,
-            code_size,
-            block_size,
-        })
+        None
     }
 
     /// Update neighbor codes for a single vertex
@@ -769,23 +708,7 @@ impl NeighborCodeStorage {
     }
 }
 
-/// Unified ADC (Asymmetric Distance Computation) table
-///
-/// Unified ADC table for quantized distance computation.
-/// Built once per query, used for all distance computations.
-/// Note: SQ8 uses integer SIMD distance instead of ADC tables for better performance.
-#[derive(Clone, Debug)]
-pub enum UnifiedADC {
-    /// `RaBitQ` ADC table (variable bit width)
-    RaBitQ(ADCTable),
-}
-
 /// Vector storage (quantized or full precision)
-///
-/// Note: The RaBitQQuantized variant is large due to the Rotator storing a fixed-size
-/// array for random sign bits (NUM_ROUNDS x MAX_WORDS = 4 x 32 = 128 u64s = 1024 bytes).
-/// This is intentional as boxing would add indirection overhead in the hot path.
-#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum VectorStorage {
     /// Full precision f32 vectors - FLAT CONTIGUOUS STORAGE
@@ -796,80 +719,17 @@ pub enum VectorStorage {
     /// Vectors stored in single contiguous array for cache efficiency.
     /// Access: vectors[id * dimensions..(id + 1) * dimensions]
     ///
-    /// Norms (||v||²) are stored separately for L2 decomposition optimization:
-    /// ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+    /// Norms (||v||^2) are stored separately for L2 decomposition optimization:
+    /// ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
     /// This reduces L2 distance from 3N FLOPs to 2N+3 FLOPs (~7% faster).
     FullPrecision {
         /// Flat contiguous vector data (all vectors concatenated)
         vectors: Vec<f32>,
-        /// Pre-computed squared norms (||v||²) for L2 decomposition
+        /// Pre-computed squared norms (||v||^2) for L2 decomposition
         norms: Vec<f32>,
         /// Number of vectors stored
         count: usize,
         /// Dimensions per vector
-        dimensions: usize,
-    },
-
-    /// Binary quantized vectors
-    ///
-    /// Memory: dimensions / 8 bytes per vector (1 bit per dimension)
-    /// Example: 1536D = 192 bytes per vector (32x compression)
-    BinaryQuantized {
-        /// Quantized vectors (1 bit per dimension, packed into bytes)
-        quantized: Vec<Vec<u8>>,
-
-        /// Original vectors for reranking (optional)
-        ///
-        /// If present: Memory = quantized + original
-        /// If absent: Faster but lower recall
-        original: Option<Vec<Vec<f32>>>,
-
-        /// Quantization thresholds (one per dimension)
-        thresholds: Vec<f32>,
-
-        /// Vector dimensions
-        dimensions: usize,
-    },
-
-    /// Legacy multi-bit quantized vectors (DEPRECATED - use SQ8 or RaBitQ)
-    ///
-    /// Memory: dimensions * bits / 8 bytes per vector (4-bit = 8x compression)
-    /// Example: 1536D @ 4-bit = 768 bytes per vector
-    ///
-    /// Key optimization: During search, query stays full precision while
-    /// candidates use quantized representation. This gives 2-3x throughput
-    /// by avoiding decompression while maintaining accuracy.
-    ///
-    /// Reranking with original vectors restores recall to near full-precision.
-    #[deprecated(since = "0.0.24", note = "Use RaBitQQuantized or ScalarQuantized")]
-    LegacyMultiBitQuantized {
-        /// `RaBitQ` quantizer (contains params)
-        #[serde(skip)]
-        quantizer: Option<RaBitQ>,
-
-        /// `RaBitQ` parameters (for serialization)
-        params: RaBitQParams,
-
-        /// Quantized codes - flat contiguous array for cache efficiency
-        /// Access: quantized_data[id * code_size..(id + 1) * code_size]
-        quantized_data: Vec<u8>,
-
-        /// Per-vector rescaling factors - contiguous for cache efficiency
-        /// Access: quantized_scales[id]
-        quantized_scales: Vec<f32>,
-
-        /// Bytes per quantized vector (computed from dimensions and bits)
-        /// For 4-bit: code_size = dimensions / 2
-        code_size: usize,
-
-        /// Original vectors for reranking (required for final accuracy)
-        /// Stored as flat contiguous array for cache efficiency.
-        original: Vec<f32>,
-
-        /// Number of original vectors stored
-        original_count: usize,
-
-        /// Vector dimensions
         dimensions: usize,
     },
 
@@ -882,7 +742,6 @@ pub enum VectorStorage {
     /// Lazy training: Buffers first 256 vectors, then trains and quantizes.
     ///
     /// Note: No rescore support - originals not stored to save memory.
-    /// Use `RaBitQ` if you need rescore with originals on disk.
     ScalarQuantized {
         /// Trained quantization parameters (global scale/offset)
         params: ScalarParams,
@@ -893,12 +752,12 @@ pub enum VectorStorage {
         quantized: Vec<u8>,
 
         /// Pre-computed squared norms of dequantized vectors for L2 decomposition
-        /// ||dequant(q)||² = Σ(code[d] * scale + offset)²
-        /// Enables fast distance: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+        /// ||dequant(q)||^2 = sum((code[d] * scale + offset)^2)
+        /// Enables fast distance: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
         norms: Vec<f32>,
 
         /// Pre-computed sums of quantized values for fast integer dot product
-        /// sum = Σ quantized[d]
+        /// sum = sum(quantized[d])
         sums: Vec<i32>,
 
         /// Buffer for training vectors (cleared after training)
@@ -915,53 +774,6 @@ pub enum VectorStorage {
         /// Training happens automatically after 256 vectors are inserted
         trained: bool,
     },
-
-    /// True RaBitQ quantized vectors (FFHT + 1-bit)
-    ///
-    /// Uses random rotation (Fast Hadamard Transform + Kac's walk) before binary
-    /// quantization for better accuracy than naive binary quantization.
-    ///
-    /// Memory: ~32x compression (1 bit per dimension + metadata)
-    /// Recall: ~95% with rescore
-    ///
-    /// Lazy training: Buffers first 256 vectors, then trains and quantizes.
-    RaBitQQuantized {
-        /// RaBitQ index (centroid, rotation matrix) - skip for serde
-        #[serde(skip)]
-        index: Option<RaBitQIndex>,
-
-        /// Seed for reproducible rotation (for serialization)
-        seed: u64,
-
-        /// Centroid (for serialization/deserialization)
-        centroid: Vec<f32>,
-
-        /// Quantized binary codes - flat contiguous u64 array
-        /// Access: codes[id * num_words..(id + 1) * num_words]
-        codes: Vec<u64>,
-
-        /// Per-vector metadata (f_add, f_rescale, f_error)
-        metadata: Vec<CodeMetadata>,
-
-        /// Original vectors for rescore (flat contiguous f32 array)
-        /// Access: original[id * dimensions..(id + 1) * dimensions]
-        original: Vec<f32>,
-
-        /// Number of u64 words per code (ceil(dimensions / 64))
-        num_words: usize,
-
-        /// Number of vectors stored
-        count: usize,
-
-        /// Vector dimensions
-        dimensions: usize,
-
-        /// Whether index has been trained
-        trained: bool,
-
-        /// Training buffer (cleared after training)
-        training_buffer: Vec<f32>,
-    },
 }
 
 impl VectorStorage {
@@ -972,79 +784,6 @@ impl VectorStorage {
             vectors: Vec::new(),
             norms: Vec::new(),
             count: 0,
-            dimensions,
-        }
-    }
-
-    /// Create empty binary quantized storage
-    #[must_use]
-    pub fn new_binary_quantized(dimensions: usize, keep_original: bool) -> Self {
-        Self::BinaryQuantized {
-            quantized: Vec::new(),
-            original: if keep_original {
-                Some(Vec::new())
-            } else {
-                None
-            },
-            thresholds: vec![0.0; dimensions], // Will be computed during training
-            dimensions,
-        }
-    }
-
-    /// Create empty True RaBitQ storage
-    ///
-    /// Uses FFHT rotation for better accuracy than naive binary quantization.
-    /// 32x compression with ~95% recall after rescore.
-    ///
-    /// Lazy training: Buffers first 256 vectors, then trains (computes centroid
-    /// and rotation matrix) and quantizes all buffered vectors.
-    #[must_use]
-    pub fn new_true_rabitq(dimensions: usize) -> Self {
-        // Use fixed seed for reproducibility
-        let seed = 42;
-        let num_words = dimensions.div_ceil(64);
-
-        Self::RaBitQQuantized {
-            index: None,
-            seed,
-            centroid: Vec::new(),
-            codes: Vec::new(),
-            metadata: Vec::new(),
-            original: Vec::new(),
-            num_words,
-            count: 0,
-            dimensions,
-            trained: false,
-            training_buffer: Vec::new(),
-        }
-    }
-
-    /// Create empty `RaBitQ` quantized storage for asymmetric search (CLOUD MOAT)
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality
-    /// * `params` - `RaBitQ` quantization parameters (typically 4-bit for 8x compression)
-    ///
-    /// # Performance
-    /// - Search: 2-3x faster than full precision (asymmetric distance)
-    /// - Memory: 8x smaller storage (4-bit quantization)
-    /// - Recall: 98%+ with reranking
-    #[must_use]
-    pub fn new_rabitq_quantized(dimensions: usize, params: RaBitQParams) -> Self {
-        // Compute code size: bytes needed per vector
-        // For 4-bit: 2 values per byte, so code_size = dimensions / 2
-        let values_per_byte = params.bits_per_dim.values_per_byte();
-        let code_size = dimensions.div_ceil(values_per_byte);
-
-        #[allow(deprecated)]
-        Self::LegacyMultiBitQuantized {
-            quantizer: Some(RaBitQ::new(params.clone())),
-            params,
-            quantized_data: Vec::new(),
-            quantized_scales: Vec::new(),
-            code_size,
-            original: Vec::new(),
-            original_count: 0,
             dimensions,
         }
     }
@@ -1077,42 +816,13 @@ impl VectorStorage {
         }
     }
 
-    /// Check if this storage uses asymmetric search (RaBitQ and SQ8)
+    /// Check if this storage uses asymmetric search (SQ8)
     ///
-    /// Both RaBitQ and SQ8 use direct asymmetric L2 distance for search.
+    /// SQ8 uses direct asymmetric L2 distance for search.
     /// This gives ~99.9% recall on SIFT-50K.
-    ///
-    /// The mono path with L2 decomposition has 10% recall regression due to
-    /// floating point ordering differences during HNSW graph traversal.
-    /// Even increasing ef doesn't recover the missing candidates.
     #[must_use]
-    #[allow(deprecated)]
     pub fn is_asymmetric(&self) -> bool {
-        matches!(
-            self,
-            Self::RaBitQQuantized { .. }
-                | Self::ScalarQuantized { .. }
-                | Self::BinaryQuantized { .. }
-                | Self::LegacyMultiBitQuantized { .. }
-        )
-    }
-
-    /// Check if this storage uses binary quantization
-    #[must_use]
-    pub fn is_binary_quantized(&self) -> bool {
-        matches!(self, Self::BinaryQuantized { .. })
-    }
-
-    /// Check if this storage uses RaBitQ (FFHT rotation + binary)
-    #[must_use]
-    pub fn is_rabitq(&self) -> bool {
-        matches!(self, Self::RaBitQQuantized { .. })
-    }
-
-    /// Alias for `is_rabitq()` - kept for transition
-    #[must_use]
-    pub fn is_true_rabitq(&self) -> bool {
-        self.is_rabitq()
+        matches!(self, Self::ScalarQuantized { .. })
     }
 
     /// Check if this storage uses SQ8 quantization
@@ -1123,35 +833,17 @@ impl VectorStorage {
 
     /// Reconstruct internal state after deserialization
     ///
-    /// The `RaBitQIndex` is not serialized (marked with `#[serde(skip)]`),
-    /// so it must be reconstructed from the stored `seed` and `centroid`.
-    /// Call this after deserializing a `VectorStorage`.
+    /// Currently a no-op since SQ8 doesn't need reconstruction.
+    /// Kept for API compatibility.
     pub fn reconstruct_after_load(&mut self) {
-        if let Self::RaBitQQuantized {
-            index,
-            seed,
-            centroid,
-            trained,
-            ..
-        } = self
-        {
-            // Only reconstruct if trained and centroid exists
-            if *trained && !centroid.is_empty() && index.is_none() {
-                *index = Some(RaBitQIndex::with_centroid(centroid.clone(), *seed));
-            }
-        }
+        // SQ8 doesn't need reconstruction - params are fully serialized
     }
 
     /// Get number of vectors stored
     #[must_use]
     pub fn len(&self) -> usize {
         match self {
-            Self::FullPrecision { count, .. }
-            | Self::ScalarQuantized { count, .. }
-            | Self::RaBitQQuantized { count, .. } => *count,
-            Self::BinaryQuantized { quantized, .. } => quantized.len(),
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized { original_count, .. } => *original_count,
+            Self::FullPrecision { count, .. } | Self::ScalarQuantized { count, .. } => *count,
         }
     }
 
@@ -1163,14 +855,11 @@ impl VectorStorage {
 
     /// Get dimensions
     #[must_use]
-    #[allow(deprecated)]
     pub fn dimensions(&self) -> usize {
         match self {
-            Self::FullPrecision { dimensions, .. }
-            | Self::BinaryQuantized { dimensions, .. }
-            | Self::RaBitQQuantized { dimensions, .. }
-            | Self::ScalarQuantized { dimensions, .. }
-            | Self::LegacyMultiBitQuantized { dimensions, .. } => *dimensions,
+            Self::FullPrecision { dimensions, .. } | Self::ScalarQuantized { dimensions, .. } => {
+                *dimensions
+            }
         }
     }
 
@@ -1196,66 +885,6 @@ impl VectorStorage {
                 norms.push(norm_sq);
                 vectors.extend(vector);
                 *count += 1;
-                Ok(id)
-            }
-            Self::BinaryQuantized {
-                quantized,
-                original,
-                thresholds,
-                dimensions,
-            } => {
-                if vector.len() != *dimensions {
-                    return Err(format!(
-                        "Vector dimension mismatch: expected {}, got {}",
-                        dimensions,
-                        vector.len()
-                    ));
-                }
-
-                // Quantize vector
-                let quant = Self::quantize_binary(&vector, thresholds);
-                let id = quantized.len() as u32;
-                quantized.push(quant);
-
-                // Store original if requested
-                if let Some(orig) = original {
-                    orig.push(vector);
-                }
-
-                Ok(id)
-            }
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized {
-                quantizer,
-                params,
-                quantized_data,
-                quantized_scales,
-                original,
-                original_count,
-                dimensions,
-                ..
-            } => {
-                if vector.len() != *dimensions {
-                    return Err(format!(
-                        "Vector dimension mismatch: expected {}, got {}",
-                        dimensions,
-                        vector.len()
-                    ));
-                }
-
-                // Lazily initialize quantizer if needed (after deserialization)
-                let q = quantizer.get_or_insert_with(|| RaBitQ::new(params.clone()));
-
-                // Quantize and store in flat arrays (cache-friendly layout)
-                let quant = q.quantize(&vector);
-                let id = *original_count as u32;
-                quantized_data.extend(&quant.data);
-                quantized_scales.push(quant.scale);
-
-                // Store original for reranking (flat contiguous)
-                original.extend(vector);
-                *original_count += 1;
-
                 Ok(id)
             }
             Self::ScalarQuantized {
@@ -1322,87 +951,12 @@ impl VectorStorage {
 
                 Ok(id)
             }
-            Self::RaBitQQuantized {
-                index,
-                seed,
-                centroid,
-                codes,
-                metadata,
-                original,
-                num_words,
-                count,
-                dimensions,
-                trained,
-                training_buffer,
-            } => {
-                if vector.len() != *dimensions {
-                    return Err(format!(
-                        "Vector dimension mismatch: expected {}, got {}",
-                        dimensions,
-                        vector.len()
-                    ));
-                }
-
-                let id = *count as u32;
-                let dim = *dimensions;
-                let nw = *num_words;
-
-                if *trained {
-                    // Already trained - quantize and store
-                    let idx = index.as_ref().expect("index must exist after training");
-                    let (code, meta) = idx.quantize(&vector);
-                    codes.extend(&code);
-                    metadata.push(meta);
-                    original.extend(&vector);
-                    *count += 1;
-                } else {
-                    // Still in training phase - buffer the vector
-                    training_buffer.extend(&vector);
-                    *count += 1;
-
-                    if *count >= 256 {
-                        // Train from buffered vectors
-                        let training_refs: Vec<&[f32]> = (0..256)
-                            .map(|i| &training_buffer[i * dim..(i + 1) * dim])
-                            .collect();
-
-                        let trained_index = RaBitQIndex::train(&training_refs, *seed)
-                            .map_err(ToString::to_string)?;
-
-                        // Store centroid for serialization
-                        *centroid = trained_index.centroid().to_vec();
-
-                        // Quantize all buffered vectors
-                        codes.reserve(*count * nw);
-                        metadata.reserve(*count);
-                        original.reserve(*count * dim);
-
-                        for i in 0..*count {
-                            let vec_slice = &training_buffer[i * dim..(i + 1) * dim];
-                            let (code, meta) = trained_index.quantize(vec_slice);
-                            codes.extend(&code);
-                            metadata.push(meta);
-                            original.extend(vec_slice);
-                        }
-
-                        *index = Some(trained_index);
-                        *trained = true;
-
-                        // Clear training buffer
-                        training_buffer.clear();
-                        training_buffer.shrink_to_fit();
-                    }
-                }
-
-                Ok(id)
-            }
         }
     }
 
     /// Get a vector by ID (full precision)
     ///
     /// Returns slice directly into contiguous storage - zero-copy, cache-friendly.
-    /// For `RaBitQQuantized`, returns the original vector (used for reranking).
     #[inline]
     #[must_use]
     pub fn get(&self, id: u32) -> Option<&[f32]> {
@@ -1420,24 +974,6 @@ impl VectorStorage {
                 let start = idx * *dimensions;
                 let end = start + *dimensions;
                 Some(&vectors[start..end])
-            }
-            Self::BinaryQuantized { original, .. } => original
-                .as_ref()
-                .and_then(|o| o.get(id as usize).map(std::vec::Vec::as_slice)),
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized {
-                original,
-                original_count,
-                dimensions,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= *original_count {
-                    return None;
-                }
-                let start = idx * *dimensions;
-                let end = start + *dimensions;
-                Some(&original[start..end])
             }
             Self::ScalarQuantized {
                 training_buffer,
@@ -1458,30 +994,6 @@ impl VectorStorage {
                 let start = idx * *dimensions;
                 let end = start + *dimensions;
                 Some(&training_buffer[start..end])
-            }
-            Self::RaBitQQuantized {
-                original,
-                training_buffer,
-                count,
-                dimensions,
-                trained,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= *count {
-                    return None;
-                }
-                if *trained {
-                    // Return from original storage
-                    let start = idx * *dimensions;
-                    let end = start + *dimensions;
-                    Some(&original[start..end])
-                } else {
-                    // Return from training buffer
-                    let start = idx * *dimensions;
-                    let end = start + *dimensions;
-                    Some(&training_buffer[start..end])
-                }
             }
         }
     }
@@ -1507,24 +1019,6 @@ impl VectorStorage {
                 let start = idx * *dimensions;
                 let end = start + *dimensions;
                 Some(vectors[start..end].to_vec())
-            }
-            Self::BinaryQuantized { original, .. } => {
-                original.as_ref().and_then(|o| o.get(id as usize).cloned())
-            }
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized {
-                original,
-                original_count,
-                dimensions,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= *original_count {
-                    return None;
-                }
-                let start = idx * *dimensions;
-                let end = start + *dimensions;
-                Some(original[start..end].to_vec())
             }
             Self::ScalarQuantized {
                 params,
@@ -1552,71 +1046,21 @@ impl VectorStorage {
                     Some(training_buffer[start..end].to_vec())
                 }
             }
-            Self::RaBitQQuantized {
-                original,
-                training_buffer,
-                count,
-                dimensions,
-                trained,
-                ..
-            } => {
-                // TrueRaBitQ stores originals for rescore, just clone them
-                let idx = id as usize;
-                if idx >= *count {
-                    return None;
-                }
-                let dim = *dimensions;
-                if *trained {
-                    let start = idx * dim;
-                    let end = start + dim;
-                    Some(original[start..end].to_vec())
-                } else {
-                    let start = idx * dim;
-                    let end = start + dim;
-                    Some(training_buffer[start..end].to_vec())
-                }
-            }
         }
     }
 
     /// Compute asymmetric L2 distance (query full precision, candidate quantized)
     ///
-    /// This is the HOT PATH for asymmetric search. Works with `RaBitQQuantized` and
-    /// `ScalarQuantized` storage. Returns None if storage is not quantized, not trained,
+    /// This is the HOT PATH for asymmetric search. Works with `ScalarQuantized`
+    /// storage. Returns None if storage is not quantized, not trained,
     /// or if id is out of bounds.
     ///
     /// # Performance (Apple Silicon M3 Max, 768D)
     /// - SQ8: Similar speed to full precision (1.07x)
-    /// - RaBitQ: ~0.5x speed (ADC + interleaving overhead)
     #[inline(always)]
     #[must_use]
     pub fn distance_asymmetric_l2(&self, query: &[f32], id: u32) -> Option<f32> {
         match self {
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized {
-                quantizer,
-                quantized_data,
-                quantized_scales,
-                code_size,
-                original_count,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= *original_count {
-                    return None;
-                }
-
-                // Get quantizer (should always be Some after first insert)
-                let q = quantizer.as_ref()?;
-
-                // Access flat storage (cache-friendly layout)
-                let start = idx * code_size;
-                let end = start + code_size;
-                let data = &quantized_data[start..end];
-                let scale = quantized_scales[idx];
-
-                Some(q.distance_asymmetric_l2_flat(query, data, scale))
-            }
             Self::ScalarQuantized {
                 params,
                 quantized,
@@ -1648,58 +1092,6 @@ impl VectorStorage {
                     sums[idx],
                     norms[idx],
                 ))
-            }
-            Self::BinaryQuantized {
-                quantized,
-                thresholds,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= quantized.len() {
-                    return None;
-                }
-
-                // Quantize query using stored thresholds
-                let query_quantized = Self::quantize_binary(query, thresholds);
-
-                // Compute hamming distance (number of different bits)
-                let hamming = hamming_distance(&query_quantized, &quantized[idx]);
-
-                // Return hamming distance as f32 for ranking
-                // Lower hamming = more similar (like L2 distance)
-                Some(hamming as f32)
-            }
-            Self::RaBitQQuantized {
-                index,
-                codes,
-                metadata,
-                num_words,
-                count,
-                trained,
-                ..
-            } => {
-                if !*trained {
-                    return None;
-                }
-
-                let idx = index.as_ref()?;
-                let id_idx = id as usize;
-                if id_idx >= *count {
-                    return None;
-                }
-
-                // Build query LUT (could be cached for batch queries)
-                let query_lut = QueryLUT::new(query, idx);
-
-                // Get codes and metadata for this vector
-                let start = id_idx * *num_words;
-                let end = start + *num_words;
-                let data_codes = &codes[start..end];
-                let data_meta = &metadata[id_idx];
-
-                // Estimate distance
-                let (dist, _error) = estimate_distance(data_codes, data_meta, &query_lut);
-                Some(dist)
             }
             // FullPrecision uses regular L2 distance, not asymmetric
             Self::FullPrecision { .. } => None,
@@ -1774,7 +1166,7 @@ impl VectorStorage {
         }
     }
 
-    /// Get the pre-computed squared norm (||v||²) for a vector
+    /// Get the pre-computed squared norm (||v||^2) for a vector
     ///
     /// Only available for FullPrecision storage. Used for L2 decomposition optimization.
     #[inline]
@@ -1788,7 +1180,7 @@ impl VectorStorage {
                 }
                 Some(norms[idx])
             }
-            _ => None,
+            Self::ScalarQuantized { .. } => None,
         }
     }
 
@@ -1809,7 +1201,7 @@ impl VectorStorage {
         matches!(self, Self::FullPrecision { .. })
     }
 
-    /// Compute L2 squared distance using decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+    /// Compute L2 squared distance using decomposition: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
     ///
     /// This is ~7-15% faster than direct L2/asymmetric computation because:
     /// - Vector norms are pre-computed during insert
@@ -1837,7 +1229,7 @@ impl VectorStorage {
                 let vec = &vectors[start..end];
                 let vec_norm = norms[idx];
 
-                // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
+                // ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
                 // Uses SIMD-accelerated dot product for performance
                 let dot = dot_product(query, vec);
                 Some(query_norm + vec_norm - 2.0 * dot)
@@ -1874,109 +1266,6 @@ impl VectorStorage {
                     vec_norm,
                 ))
             }
-            _ => None,
-        }
-    }
-
-    /// Get the quantized vector for a given ID (reconstructed from flat storage)
-    ///
-    /// Note: Returns an owned `QuantizedVector` reconstructed from flat storage.
-    /// Prefer using `distance_adc` or `distance_asymmetric_l2` for distance computation.
-    #[inline]
-    #[must_use]
-    #[allow(deprecated)]
-    pub fn get_quantized(&self, id: u32) -> Option<QuantizedVector> {
-        match self {
-            Self::LegacyMultiBitQuantized {
-                quantized_data,
-                quantized_scales,
-                code_size,
-                original_count,
-                dimensions,
-                params,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= *original_count {
-                    return None;
-                }
-                let start = idx * code_size;
-                let end = start + code_size;
-                Some(QuantizedVector::new(
-                    quantized_data[start..end].to_vec(),
-                    quantized_scales[idx],
-                    params.bits_per_dim.to_u8(),
-                    *dimensions,
-                ))
-            }
-            _ => None,
-        }
-    }
-
-    /// Get the legacy `RaBitQ` quantizer (for external asymmetric distance computation)
-    #[must_use]
-    #[allow(deprecated)]
-    pub fn quantizer(&self) -> Option<&RaBitQ> {
-        match self {
-            Self::LegacyMultiBitQuantized { quantizer, .. } => quantizer.as_ref(),
-            _ => None,
-        }
-    }
-
-    /// Build ADC lookup table for a query
-    ///
-    /// Only used for legacy multi-bit (4-bit). SQ8 uses asymmetric SIMD instead.
-    /// SQ8 ADC is slower on Apple Silicon because:
-    /// - ADC has scattered memory access (d×256+code stride)
-    /// - Asymmetric SIMD is pure compute (dequantize + L2)
-    /// - Apple Silicon's high SIMD throughput makes compute faster
-    ///
-    /// SQ8 does NOT use ADC tables because:
-    /// - 768D ADC table = 768KB (doesn't fit L1 cache)
-    /// - Scattered memory access pattern causes cache misses
-    /// - Direct asymmetric SIMD is 10x faster on Apple Silicon
-    ///
-    /// Returns None for full-precision, SQ8, or not yet trained.
-    #[must_use]
-    #[allow(deprecated)]
-    pub fn build_adc_table(&self, query: &[f32]) -> Option<UnifiedADC> {
-        match self {
-            Self::LegacyMultiBitQuantized { quantizer, .. } => {
-                let q = quantizer.as_ref()?;
-                Some(UnifiedADC::RaBitQ(q.build_adc_table(query)?))
-            }
-            // SQ8: use direct asymmetric distance (no ADC) for better cache performance
-            _ => None,
-        }
-    }
-
-    /// Compute distance using precomputed ADC table
-    ///
-    /// Note: SQ8 uses integer SIMD distance via `distance_asymmetric_l2` instead of ADC.
-    #[inline]
-    #[must_use]
-    #[allow(deprecated)]
-    pub fn distance_adc(&self, adc: &UnifiedADC, id: u32) -> Option<f32> {
-        match (self, adc) {
-            (
-                Self::LegacyMultiBitQuantized {
-                    quantized_data,
-                    code_size,
-                    original_count,
-                    ..
-                },
-                UnifiedADC::RaBitQ(table),
-            ) => {
-                let idx = id as usize;
-                if idx >= *original_count {
-                    return None;
-                }
-                // Access flat storage directly (cache-friendly)
-                let start = idx * code_size;
-                let end = start + code_size;
-                Some(table.distance(&quantized_data[start..end]))
-            }
-            _ => None, // Mismatched storage/ADC types or SQ8 (uses SIMD instead)
         }
     }
 
@@ -1994,8 +1283,6 @@ impl VectorStorage {
     /// Hardware prefetcher handles subsequent cache lines.
     #[inline]
     pub fn prefetch(&self, id: u32) {
-        // For asymmetric search (RaBitQ), prefetch quantized data
-        // For other modes, prefetch original/full precision data
         let ptr: Option<*const u8> = match self {
             Self::FullPrecision {
                 vectors,
@@ -2009,25 +1296,6 @@ impl VectorStorage {
                 } else {
                     let start = idx * *dimensions;
                     Some(vectors[start..].as_ptr().cast())
-                }
-            }
-            Self::BinaryQuantized { original, .. } => original
-                .as_ref()
-                .and_then(|o| o.get(id as usize).map(|v| v.as_ptr().cast())),
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized {
-                quantized_data,
-                code_size,
-                original_count,
-                ..
-            } => {
-                // Prefetch quantized data (the hot path for asymmetric search)
-                let idx = id as usize;
-                if idx >= *original_count {
-                    None
-                } else {
-                    let start = idx * code_size;
-                    Some(quantized_data[start..].as_ptr())
                 }
             }
             Self::ScalarQuantized {
@@ -2051,28 +1319,6 @@ impl VectorStorage {
                     Some(training_buffer[start..].as_ptr().cast())
                 }
             }
-            Self::RaBitQQuantized {
-                codes,
-                training_buffer,
-                num_words,
-                count,
-                trained,
-                dimensions,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= *count {
-                    None
-                } else if *trained {
-                    // Prefetch binary codes for distance estimation
-                    let start = idx * *num_words;
-                    Some(codes[start..].as_ptr().cast())
-                } else {
-                    // Not trained yet - prefetch training buffer
-                    let start = idx * *dimensions;
-                    Some(training_buffer[start..].as_ptr().cast())
-                }
-            }
         };
 
         if let Some(ptr) = ptr {
@@ -2092,202 +1338,13 @@ impl VectorStorage {
         }
     }
 
-    /// Prefetch quantized vector data for asymmetric search
-    ///
-    /// More efficient than `prefetch()` for legacy multi-bit mode as it only fetches
-    /// the quantized representation, not the full precision original.
-    #[inline]
-    #[allow(deprecated)]
-    pub fn prefetch_quantized(&self, id: u32) {
-        if let Self::LegacyMultiBitQuantized {
-            quantized_data,
-            code_size,
-            original_count,
-            ..
-        } = self
-        {
-            let idx = id as usize;
-            if idx < *original_count {
-                let start = idx * code_size;
-                let ptr = quantized_data[start..].as_ptr();
-                #[cfg(target_arch = "x86_64")]
-                unsafe {
-                    std::arch::x86_64::_mm_prefetch(
-                        ptr.cast::<i8>(),
-                        std::arch::x86_64::_MM_HINT_T0,
-                    );
-                }
-                #[cfg(target_arch = "aarch64")]
-                unsafe {
-                    std::arch::asm!(
-                        "prfm pldl1keep, [{ptr}]",
-                        ptr = in(reg) ptr,
-                        options(nostack, preserves_flags)
-                    );
-                }
-            }
-        }
-    }
-
-    /// Get legacy multi-bit code_size (bytes per quantized vector)
-    ///
-    /// Returns None if not using legacy multi-bit quantization.
-    #[must_use]
-    #[allow(deprecated)]
-    pub fn rabitq_code_size(&self) -> Option<usize> {
-        match self {
-            Self::LegacyMultiBitQuantized { code_size, .. } => Some(*code_size),
-            _ => None,
-        }
-    }
-
-    /// Get quantized code for a vector (legacy multi-bit only)
-    ///
-    /// Returns a slice of the quantized code bytes for the given vector ID.
-    /// Returns None if vector doesn't exist or not using legacy multi-bit.
-    #[must_use]
-    #[allow(deprecated)]
-    pub fn get_rabitq_code(&self, id: u32) -> Option<&[u8]> {
-        match self {
-            Self::LegacyMultiBitQuantized {
-                quantized_data,
-                code_size,
-                original_count,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= *original_count {
-                    return None;
-                }
-                let start = idx * code_size;
-                let end = start + code_size;
-                if end <= quantized_data.len() {
-                    Some(&quantized_data[start..end])
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    /// Build interleaved codes for FastScan from a batch of neighbor IDs
-    ///
-    /// For 32 neighbors with code_size bytes each, produces:
-    /// - 32 bytes for sub-quantizer 0 (one byte from each neighbor)
-    /// - 32 bytes for sub-quantizer 1
-    /// - ... etc
-    ///
-    /// Total output size: code_size * 32 bytes
-    ///
-    /// # Arguments
-    /// * `neighbors` - Up to 32 neighbor IDs to interleave
-    /// * `output` - Pre-allocated buffer of size code_size * 32
-    ///
-    /// Returns number of valid neighbors (rest are zero-padded)
-    pub fn build_interleaved_codes(&self, neighbors: &[u32], output: &mut [u8]) -> usize {
-        let code_size = match self.rabitq_code_size() {
-            Some(cs) => cs,
-            None => return 0,
-        };
-
-        let batch_size = 32;
-        let expected_len = code_size * batch_size;
-        if output.len() < expected_len {
-            return 0;
-        }
-
-        // Zero the output buffer
-        output[..expected_len].fill(0);
-
-        let valid_count = neighbors.len().min(batch_size);
-
-        // Interleave codes: for each sub-quantizer position, gather that byte from all neighbors
-        for (n, &neighbor_id) in neighbors.iter().take(valid_count).enumerate() {
-            if let Some(code) = self.get_rabitq_code(neighbor_id) {
-                for sq in 0..code_size {
-                    output[sq * batch_size + n] = code[sq];
-                }
-            }
-        }
-
-        valid_count
-    }
-
-    /// Binary quantize a vector
-    ///
-    /// Each dimension is quantized to 1 bit based on threshold:
-    /// - value >= threshold[dim] => 1
-    /// - value < threshold[dim] => 0
-    fn quantize_binary(vector: &[f32], thresholds: &[f32]) -> Vec<u8> {
-        debug_assert_eq!(vector.len(), thresholds.len());
-
-        let num_bytes = vector.len().div_ceil(8); // Round up
-        let mut quantized = vec![0u8; num_bytes];
-
-        for (i, (&value, &threshold)) in vector.iter().zip(thresholds.iter()).enumerate() {
-            if value >= threshold {
-                let byte_idx = i / 8;
-                let bit_idx = i % 8;
-                quantized[byte_idx] |= 1 << bit_idx;
-            }
-        }
-
-        quantized
-    }
-
     /// Compute quantization thresholds from sample vectors
     ///
-    /// Uses median of each dimension as threshold
+    /// Only relevant for SQ8 (scalar quantization).
     pub fn train_quantization(&mut self, sample_vectors: &[Vec<f32>]) -> Result<(), String> {
         match self {
-            Self::BinaryQuantized {
-                thresholds,
-                dimensions,
-                ..
-            } => {
-                if sample_vectors.is_empty() {
-                    return Err("Cannot train on empty sample".to_string());
-                }
-
-                // Verify all vectors have correct dimensions
-                for vec in sample_vectors {
-                    if vec.len() != *dimensions {
-                        return Err("Sample vector dimension mismatch".to_string());
-                    }
-                }
-
-                // Compute median for each dimension
-                for dim in 0..*dimensions {
-                    let mut values: Vec<f32> = sample_vectors.iter().map(|v| v[dim]).collect();
-                    values.sort_unstable_by_key(|&x| OrderedFloat(x));
-
-                    let median = if values.len().is_multiple_of(2) {
-                        let mid = values.len() / 2;
-                        f32::midpoint(values[mid - 1], values[mid])
-                    } else {
-                        values[values.len() / 2]
-                    };
-
-                    thresholds[dim] = median;
-                }
-
-                Ok(())
-            }
             Self::FullPrecision { .. } => {
                 Err("Cannot train quantization on full precision storage".to_string())
-            }
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized {
-                quantizer, params, ..
-            } => {
-                if sample_vectors.is_empty() {
-                    return Err("Cannot train on empty sample".to_string());
-                }
-                // Train quantizer from sample vectors
-                let q = quantizer.get_or_insert_with(|| RaBitQ::new(params.clone()));
-                q.train_owned(sample_vectors).map_err(ToString::to_string)?;
-                Ok(())
             }
             Self::ScalarQuantized {
                 params,
@@ -2329,93 +1386,6 @@ impl VectorStorage {
 
                 Ok(())
             }
-            Self::RaBitQQuantized {
-                index,
-                seed,
-                centroid,
-                codes,
-                metadata,
-                original,
-                num_words,
-                count,
-                dimensions,
-                trained,
-                training_buffer,
-            } => {
-                if sample_vectors.is_empty() {
-                    return Err("Cannot train on empty sample".to_string());
-                }
-
-                // RaBitQ needs sufficient samples for meaningful centroid estimation.
-                // With too few samples, the centroid is poorly estimated and distance
-                // estimates become unreliable. Buffer samples until we have enough.
-                const MIN_TRAINING_SAMPLES: usize = 64;
-
-                let dim = *dimensions;
-                let total_samples = sample_vectors.len() + *count;
-
-                if total_samples < MIN_TRAINING_SAMPLES {
-                    // Not enough samples yet - buffer them for later training
-                    // The insert() method will trigger training once we reach 256 samples
-                    for vec in sample_vectors {
-                        if vec.len() != dim {
-                            return Err("Sample vector dimension mismatch".to_string());
-                        }
-                        training_buffer.extend(vec);
-                        *count += 1;
-                    }
-                    // Don't set trained = true; let insert() handle deferred training
-                    return Ok(());
-                }
-
-                // Combine buffered vectors with new samples for training
-                let mut all_training: Vec<Vec<f32>> = Vec::with_capacity(total_samples);
-
-                // Add buffered vectors first
-                for i in 0..*count {
-                    let vec_slice = &training_buffer[i * dim..(i + 1) * dim];
-                    all_training.push(vec_slice.to_vec());
-                }
-
-                // Add new sample vectors
-                for vec in sample_vectors {
-                    if vec.len() != dim {
-                        return Err("Sample vector dimension mismatch".to_string());
-                    }
-                    all_training.push(vec.clone());
-                }
-
-                // Train from combined samples
-                let refs: Vec<&[f32]> = all_training.iter().map(Vec::as_slice).collect();
-                let trained_index =
-                    RaBitQIndex::train(&refs, *seed).map_err(ToString::to_string)?;
-                *centroid = trained_index.centroid().to_vec();
-
-                // Quantize all vectors (buffered + new)
-                let nw = *num_words;
-                codes.clear();
-                metadata.clear();
-                original.clear();
-                codes.reserve(total_samples * nw);
-                metadata.reserve(total_samples);
-                original.reserve(total_samples * dim);
-
-                for vec in &all_training {
-                    let (code, meta) = trained_index.quantize(vec);
-                    codes.extend(&code);
-                    metadata.push(meta);
-                    original.extend(vec);
-                }
-
-                // Update count and clear buffer
-                *count = total_samples;
-                training_buffer.clear();
-                training_buffer.shrink_to_fit();
-
-                *index = Some(trained_index);
-                *trained = true;
-                Ok(())
-            }
         }
     }
 
@@ -2426,33 +1396,6 @@ impl VectorStorage {
             Self::FullPrecision { vectors, norms, .. } => {
                 vectors.len() * std::mem::size_of::<f32>()
                     + norms.len() * std::mem::size_of::<f32>()
-            }
-            Self::BinaryQuantized {
-                quantized,
-                original,
-                thresholds,
-                dimensions,
-            } => {
-                let quantized_size = quantized.len() * (dimensions + 7) / 8;
-                let original_size = original
-                    .as_ref()
-                    .map_or(0, |o| o.len() * dimensions * std::mem::size_of::<f32>());
-                let thresholds_size = thresholds.len() * std::mem::size_of::<f32>();
-                quantized_size + original_size + thresholds_size
-            }
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized {
-                quantized_data,
-                quantized_scales,
-                original,
-                ..
-            } => {
-                // Flat quantized storage: data + scales
-                let quantized_size =
-                    quantized_data.len() + quantized_scales.len() * std::mem::size_of::<f32>();
-                // Original vectors for reranking (flat contiguous)
-                let original_size = original.len() * std::mem::size_of::<f32>();
-                quantized_size + original_size
             }
             Self::ScalarQuantized {
                 quantized,
@@ -2469,26 +1412,6 @@ impl VectorStorage {
                 // Uniform params: scale + offset + dimensions = 2 * f32 + usize
                 let params_size = 2 * std::mem::size_of::<f32>() + std::mem::size_of::<usize>();
                 quantized_size + norms_size + sums_size + buffer_size + params_size
-            }
-            Self::RaBitQQuantized {
-                codes,
-                metadata,
-                original,
-                training_buffer,
-                centroid,
-                ..
-            } => {
-                // Binary codes: Vec<u64>
-                let codes_size = codes.len() * std::mem::size_of::<u64>();
-                // Metadata: Vec<CodeMetadata> (3 f32 per entry)
-                let metadata_size = metadata.len() * 3 * std::mem::size_of::<f32>();
-                // Original vectors for rescore
-                let original_size = original.len() * std::mem::size_of::<f32>();
-                // Training buffer (usually empty after training)
-                let buffer_size = training_buffer.len() * std::mem::size_of::<f32>();
-                // Centroid
-                let centroid_size = centroid.len() * std::mem::size_of::<f32>();
-                codes_size + metadata_size + original_size + buffer_size + centroid_size
             }
         }
     }
@@ -2520,68 +1443,6 @@ impl VectorStorage {
                 }
                 *vectors = new_vectors;
                 *norms = new_norms;
-            }
-            Self::BinaryQuantized {
-                quantized,
-                original,
-                ..
-            } => {
-                // Reorder quantized vectors
-                let mut new_quantized = vec![Vec::new(); quantized.len()];
-                for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                    new_quantized[new_id as usize] = std::mem::take(&mut quantized[old_id]);
-                }
-                *quantized = new_quantized;
-
-                // Reorder original vectors if present
-                if let Some(orig) = original {
-                    let mut new_original = vec![Vec::new(); orig.len()];
-                    for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                        new_original[new_id as usize] = std::mem::take(&mut orig[old_id]);
-                    }
-                    *orig = new_original;
-                }
-            }
-            #[allow(deprecated)]
-            Self::LegacyMultiBitQuantized {
-                quantized_data,
-                quantized_scales,
-                code_size,
-                original,
-                original_count,
-                dimensions,
-                ..
-            } => {
-                let dim = *dimensions;
-                let n = *original_count;
-                let cs = *code_size;
-
-                // Reorder quantized data (flat contiguous)
-                let mut new_data = vec![0u8; quantized_data.len()];
-                let mut new_scales = vec![0.0f32; quantized_scales.len()];
-                for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                    if old_id < n {
-                        let old_start = old_id * cs;
-                        let new_start = new_id as usize * cs;
-                        new_data[new_start..new_start + cs]
-                            .copy_from_slice(&quantized_data[old_start..old_start + cs]);
-                        new_scales[new_id as usize] = quantized_scales[old_id];
-                    }
-                }
-                *quantized_data = new_data;
-                *quantized_scales = new_scales;
-
-                // Reorder original vectors (flat contiguous)
-                let mut new_original = vec![0.0f32; original.len()];
-                for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                    if old_id < n {
-                        let old_start = old_id * dim;
-                        let new_start = new_id as usize * dim;
-                        new_original[new_start..new_start + dim]
-                            .copy_from_slice(&original[old_start..old_start + dim]);
-                    }
-                }
-                *original = new_original;
             }
             Self::ScalarQuantized {
                 quantized,
@@ -2615,48 +1476,6 @@ impl VectorStorage {
                 *quantized = new_quantized;
                 *norms = new_norms;
                 *sums = new_sums;
-            }
-            Self::RaBitQQuantized {
-                codes,
-                metadata,
-                original,
-                num_words,
-                count,
-                dimensions,
-                ..
-            } => {
-                let dim = *dimensions;
-                let n = *count;
-                let nw = *num_words;
-
-                // Reorder codes
-                let mut new_codes = vec![0u64; codes.len()];
-                let mut new_metadata = vec![CodeMetadata::default(); metadata.len()];
-                for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                    if old_id < n {
-                        let old_start = old_id * nw;
-                        let new_start = new_id as usize * nw;
-                        new_codes[new_start..new_start + nw]
-                            .copy_from_slice(&codes[old_start..old_start + nw]);
-                        if old_id < metadata.len() {
-                            new_metadata[new_id as usize] = metadata[old_id];
-                        }
-                    }
-                }
-                *codes = new_codes;
-                *metadata = new_metadata;
-
-                // Reorder original vectors
-                let mut new_original = vec![0.0f32; original.len()];
-                for (old_id, &new_id) in old_to_new.iter().enumerate() {
-                    if old_id < n {
-                        let old_start = old_id * dim;
-                        let new_start = new_id as usize * dim;
-                        new_original[new_start..new_start + dim]
-                            .copy_from_slice(&original[old_start..old_start + dim]);
-                    }
-                }
-                *original = new_original;
             }
         }
     }
@@ -2718,400 +1537,11 @@ mod tests {
     }
 
     #[test]
-    fn test_binary_quantization() {
-        let vector = vec![0.5, -0.3, 0.8, -0.1];
-        let thresholds = vec![0.0, 0.0, 0.0, 0.0];
-
-        let quantized = VectorStorage::quantize_binary(&vector, &thresholds);
-
-        // First 4 bits should be: 1, 0, 1, 0 (based on >= 0.0)
-        // Packed as: bit0=1, bit1=0, bit2=1, bit3=0 => 0b00000101 = 5
-        assert_eq!(quantized[0], 5);
-    }
-
-    #[test]
-    fn test_quantization_training() {
-        let mut storage = VectorStorage::new_binary_quantized(2, true);
-
-        let samples = vec![vec![1.0, 5.0], vec![2.0, 6.0], vec![3.0, 7.0]];
-
-        storage.train_quantization(&samples).unwrap();
-
-        // Thresholds should be medians: [2.0, 6.0]
-        match storage {
-            VectorStorage::BinaryQuantized { thresholds, .. } => {
-                assert_eq!(thresholds, vec![2.0, 6.0]);
-            }
-            _ => panic!("Expected BinaryQuantized storage"),
-        }
-    }
-
-    #[test]
-    fn test_rabitq_storage_insert_and_get() {
-        let params = RaBitQParams::bits4();
-        let mut storage = VectorStorage::new_rabitq_quantized(4, params);
-
-        let vec1 = vec![1.0, 2.0, 3.0, 4.0];
-        let vec2 = vec![5.0, 6.0, 7.0, 8.0];
-
-        let id1 = storage.insert(vec1.clone()).unwrap();
-        let id2 = storage.insert(vec2.clone()).unwrap();
-
-        assert_eq!(id1, 0);
-        assert_eq!(id2, 1);
-        assert_eq!(storage.len(), 2);
-        assert!(storage.is_asymmetric());
-
-        // Get should return original vectors
-        assert_eq!(storage.get(0), Some(vec1.as_slice()));
-        assert_eq!(storage.get(1), Some(vec2.as_slice()));
-    }
-
-    #[test]
-    fn test_rabitq_asymmetric_distance() {
-        let params = RaBitQParams::bits4();
-        let mut storage = VectorStorage::new_rabitq_quantized(4, params);
-
-        let vec1 = vec![1.0, 0.0, 0.0, 0.0];
-        let vec2 = vec![0.0, 1.0, 0.0, 0.0];
-
-        storage.insert(vec1.clone()).unwrap();
-        storage.insert(vec2.clone()).unwrap();
-
-        // Query same as vec1 should have distance ~0 to vec1
-        let query = vec![1.0, 0.0, 0.0, 0.0];
-        let dist0 = storage.distance_asymmetric_l2(&query, 0).unwrap();
-        let dist1 = storage.distance_asymmetric_l2(&query, 1).unwrap();
-
-        // Distance to self should be very small (quantization error)
-        assert!(dist0 < 0.5, "Distance to self should be small: {dist0}");
-        // Distance to orthogonal vector should be larger
-        assert!(dist1 > dist0, "Distance to orthogonal should be larger");
-    }
-
-    #[test]
-    fn test_rabitq_get_quantized() {
-        let params = RaBitQParams::bits4();
-        let mut storage = VectorStorage::new_rabitq_quantized(4, params);
-
-        let vec1 = vec![1.0, 2.0, 3.0, 4.0];
-        storage.insert(vec1).unwrap();
-
-        let qv = storage.get_quantized(0);
-        assert!(qv.is_some());
-        let qv = qv.unwrap();
-        assert_eq!(qv.dimensions, 4);
-        assert_eq!(qv.bits, 4); // 4-bit quantization
-    }
-
-    #[test]
-    fn test_binary_quantized_train_empty_sample_rejected() {
-        let mut storage = VectorStorage::new_binary_quantized(4, true);
-        let empty_samples: Vec<Vec<f32>> = vec![];
-        let result = storage.train_quantization(&empty_samples);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("empty sample"));
-    }
-
-    #[test]
-    fn test_binary_quantized_train_dimension_mismatch_rejected() {
-        let mut storage = VectorStorage::new_binary_quantized(4, true);
-        // Storage expects 4 dimensions, but sample has 2
-        let samples = vec![vec![1.0, 2.0]];
-        let result = storage.train_quantization(&samples);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("dimension mismatch"));
-    }
-
-    #[test]
-    fn test_rabitq_train_empty_sample_rejected() {
-        let params = RaBitQParams::bits4();
-        let mut storage = VectorStorage::new_rabitq_quantized(4, params);
-        let empty_samples: Vec<Vec<f32>> = vec![];
-        let result = storage.train_quantization(&empty_samples);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("empty sample"));
-    }
-
-    #[test]
     fn test_sq8_train_empty_sample_rejected() {
         let mut storage = VectorStorage::new_sq8_quantized(4);
         let empty_samples: Vec<Vec<f32>> = vec![];
         let result = storage.train_quantization(&empty_samples);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("empty sample"));
-    }
-
-    #[test]
-    fn test_neighbor_code_storage_interleaving() {
-        // Create RaBitQ storage with 8 dimensions (code_size = 4 bytes for 4-bit)
-        let params = RaBitQParams::bits4();
-        let mut storage = VectorStorage::new_rabitq_quantized(8, params);
-
-        // Insert 3 vectors
-        let vec0 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let vec1 = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
-        let vec2 = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0];
-        storage.insert(vec0).unwrap();
-        storage.insert(vec1).unwrap();
-        storage.insert(vec2).unwrap();
-
-        // Create neighbor lists: vertex 0 has neighbors [1, 2]
-        let mut neighbors = NeighborLists::new(8);
-        neighbors.set_neighbors(0, 0, vec![1, 2]);
-        neighbors.set_neighbors(1, 0, vec![0, 2]);
-        neighbors.set_neighbors(2, 0, vec![0, 1]);
-
-        // Build neighbor code storage
-        let ncs = NeighborCodeStorage::build_from_storage(&storage, &neighbors, 0);
-        assert!(ncs.is_some());
-        let ncs = ncs.unwrap();
-
-        // Verify basic properties
-        assert_eq!(ncs.len(), 3); // 3 vertices
-        assert_eq!(ncs.get_neighbor_count(0), 2); // vertex 0 has 2 neighbors
-        assert_eq!(ncs.get_neighbor_count(1), 2);
-        assert_eq!(ncs.get_neighbor_count(2), 2);
-
-        // Get block for vertex 0
-        let block = ncs.get_block(0);
-        assert!(block.is_some());
-        let block = block.unwrap();
-
-        // Block size should be code_size * FASTSCAN_BATCH_SIZE
-        // For 8D with 4-bit: code_size = 8 / 2 = 4 bytes
-        assert_eq!(block.len(), 4 * FASTSCAN_BATCH_SIZE);
-
-        // Verify interleaving: first 32 bytes should be sub-quantizer 0 for all neighbors
-        // Neighbors are [1, 2], padded to 32
-        // block[0] = neighbor 1's code at sub-quantizer 0
-        // block[1] = neighbor 2's code at sub-quantizer 0
-        // block[2..32] = padding (0)
-
-        // We can't easily verify exact values without knowing the quantization,
-        // but we can verify the structure is correct
-        assert!(ncs.memory_usage() > 0);
-    }
-
-    #[test]
-    fn test_neighbor_code_storage_update() {
-        let params = RaBitQParams::bits4();
-        let mut storage = VectorStorage::new_rabitq_quantized(8, params);
-
-        // Insert 4 vectors
-        for i in 0..4 {
-            let v: Vec<f32> = (0..8).map(|j| (i * 8 + j) as f32).collect();
-            storage.insert(v).unwrap();
-        }
-
-        // Get quantized data for updates
-        #[allow(deprecated)]
-        let quantized_data = match &storage {
-            VectorStorage::LegacyMultiBitQuantized {
-                quantized_data,
-                code_size,
-                ..
-            } => (quantized_data.clone(), *code_size),
-            _ => panic!("Expected LegacyMultiBitQuantized"),
-        };
-
-        // Create empty neighbor code storage
-        let mut ncs = NeighborCodeStorage::new(quantized_data.1);
-        assert!(ncs.is_empty());
-
-        // Update vertex 0 with neighbors [1, 2, 3]
-        ncs.update_vertex(0, &[1, 2, 3], &quantized_data.0);
-        assert_eq!(ncs.len(), 1);
-        assert_eq!(ncs.get_neighbor_count(0), 3);
-
-        // Verify block exists
-        let block = ncs.get_block(0);
-        assert!(block.is_some());
-
-        // Update vertex 2 (should expand storage)
-        ncs.update_vertex(2, &[0, 1], &quantized_data.0);
-        assert_eq!(ncs.len(), 3); // 0, 1 (empty), 2
-        assert_eq!(ncs.get_neighbor_count(2), 2);
-    }
-
-    /// Test True RaBitQ recall using asymmetric distance
-    ///
-    /// This test verifies that the asymmetric float-binary distance
-    /// provides good recall compared to full precision brute force.
-    #[test]
-    fn test_true_rabitq_recall() {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
-        use std::collections::HashSet;
-
-        let dim = 128;
-        let n_vectors = 500;
-        let n_queries = 20;
-        let k = 10;
-
-        // Fixed seed for reproducibility
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // Generate random vectors
-        let vectors: Vec<Vec<f32>> = (0..n_vectors)
-            .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
-            .collect();
-
-        // Create True RaBitQ storage
-        let mut storage = VectorStorage::new_true_rabitq(dim);
-
-        // Insert vectors
-        for vec in &vectors {
-            storage.insert(vec.clone()).unwrap();
-        }
-
-        // Verify training occurred
-        assert!(matches!(
-            &storage,
-            VectorStorage::RaBitQQuantized { trained: true, .. }
-        ));
-
-        // Generate queries
-        let queries: Vec<Vec<f32>> = (0..n_queries)
-            .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
-            .collect();
-
-        // Compute ground truth using brute force L2
-        let ground_truth: Vec<Vec<u32>> = queries
-            .iter()
-            .map(|query| {
-                let mut distances: Vec<(u32, f32)> = vectors
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        let dist: f32 = query
-                            .iter()
-                            .zip(v.iter())
-                            .map(|(a, b)| (a - b).powi(2))
-                            .sum();
-                        (i as u32, dist)
-                    })
-                    .collect();
-                distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                distances.iter().take(k).map(|(id, _)| *id).collect()
-            })
-            .collect();
-
-        // Compute RaBitQ distances and measure recall
-        let mut total_recall = 0.0;
-        for (q_idx, query) in queries.iter().enumerate() {
-            // Get distances from RaBitQ storage
-            let mut rabitq_distances: Vec<(u32, f32)> = (0..n_vectors as u32)
-                .filter_map(|id| {
-                    storage
-                        .distance_asymmetric_l2(query, id)
-                        .map(|dist| (id, dist))
-                })
-                .collect();
-            rabitq_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-
-            // Get top-k from RaBitQ
-            let rabitq_topk: HashSet<u32> =
-                rabitq_distances.iter().take(k).map(|(id, _)| *id).collect();
-
-            // Get ground truth top-k
-            let gt_topk: HashSet<u32> = ground_truth[q_idx].iter().copied().collect();
-
-            // Calculate recall
-            let matches = rabitq_topk.intersection(&gt_topk).count();
-            total_recall += matches as f64 / k as f64;
-        }
-
-        let avg_recall = total_recall / n_queries as f64;
-
-        println!(
-            "True RaBitQ asymmetric recall@{} (500 vectors): {:.2}%",
-            k,
-            avg_recall * 100.0
-        );
-
-        // With asymmetric float-binary distance, we expect >= 40% raw recall
-        // This is WITHOUT HNSW graph traversal or rescore - pure distance ranking.
-        // (This was ~11% with symmetric binary-binary distance)
-        //
-        // Expected recall levels:
-        // - Symmetric binary-binary: ~11% (broken)
-        // - Asymmetric float-binary: ~45% (current, working)
-        // - With HNSW + rescore: ~70%+ (production use)
-        assert!(
-            avg_recall >= 0.40,
-            "True RaBitQ recall too low: {:.2}% (expected >= 40%)",
-            avg_recall * 100.0
-        );
-    }
-
-    #[test]
-    fn test_true_rabitq_reconstruct_after_load() {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
-
-        let dim = 64;
-        let mut rng = StdRng::seed_from_u64(12345);
-
-        // Create storage and insert enough vectors to trigger training
-        let mut storage = VectorStorage::new_true_rabitq(dim);
-
-        // Insert 300 vectors (more than 256 threshold)
-        for _ in 0..300 {
-            let v: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
-            storage.insert(v).unwrap();
-        }
-
-        // Verify storage is trained
-        assert!(matches!(
-            &storage,
-            VectorStorage::RaBitQQuantized { trained: true, .. }
-        ));
-
-        // Get distance before serialization
-        let query: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
-        let dist_before = storage.distance_asymmetric_l2(&query, 0);
-        assert!(
-            dist_before.is_some(),
-            "Should have distance before serialize"
-        );
-
-        // Serialize to bytes
-        let bytes = postcard::to_allocvec(&storage).unwrap();
-
-        // Deserialize
-        let mut loaded: VectorStorage = postcard::from_bytes(&bytes).unwrap();
-
-        // Before reconstruct, index should be None (serde(skip))
-        if let VectorStorage::RaBitQQuantized { index, .. } = &loaded {
-            assert!(index.is_none(), "Index should be None after deserialize");
-        }
-
-        // Distance should be None before reconstruct
-        let dist_after_load = loaded.distance_asymmetric_l2(&query, 0);
-        assert!(
-            dist_after_load.is_none(),
-            "Should NOT have distance before reconstruct"
-        );
-
-        // Reconstruct
-        loaded.reconstruct_after_load();
-
-        // Now distance should work
-        let dist_after_reconstruct = loaded.distance_asymmetric_l2(&query, 0);
-        assert!(
-            dist_after_reconstruct.is_some(),
-            "Should have distance after reconstruct"
-        );
-
-        // Distances should be approximately equal (same seed produces same rotation)
-        let d1 = dist_before.unwrap();
-        let d2 = dist_after_reconstruct.unwrap();
-        assert!(
-            (d1 - d2).abs() < 0.001,
-            "Distances should match: {} vs {}",
-            d1,
-            d2
-        );
     }
 }

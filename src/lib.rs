@@ -96,7 +96,7 @@ pub mod types;
 pub mod vector;
 
 // Re-export core types
-pub use compression::{ADCTable, QuantizedVector, QueryPrep, RaBitQ, RaBitQParams, ScalarParams};
+pub use compression::{QueryPrep, ScalarParams};
 pub use distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
 pub use types::{
     CompactionStats, CompressionTier, DistanceMetric, OmenDBError, Result, SearchResult,

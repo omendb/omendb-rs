@@ -25,7 +25,6 @@ use super::error::{HNSWError, Result};
 use super::graph_storage::GraphStorage;
 use super::storage::VectorStorage;
 use super::types::{Distance, DistanceFunction, HNSWNode, HNSWParams};
-use crate::compression::RaBitQParams;
 use serde::{Deserialize, Serialize};
 
 /// Index statistics for monitoring and debugging
@@ -136,7 +135,7 @@ impl HNSWIndex {
     /// * `dimensions` - Vector dimensionality
     /// * `params` - HNSW construction parameters
     /// * `distance_fn` - Distance function (L2, Cosine, Dot)
-    /// * `use_quantization` - Whether to use binary quantization
+    /// * `use_quantization` - Whether to use SQ8 quantization
     pub fn new(
         dimensions: usize,
         params: HNSWParams,
@@ -146,46 +145,11 @@ impl HNSWIndex {
         params.validate().map_err(HNSWError::InvalidParams)?;
 
         let vectors = if use_quantization {
-            VectorStorage::new_binary_quantized(dimensions, true)
+            VectorStorage::new_sq8_quantized(dimensions)
         } else {
             VectorStorage::new_full_precision(dimensions)
         };
 
-        Ok(Self::build(vectors, params, distance_fn))
-    }
-
-    /// Create a new HNSW index with `RaBitQ` asymmetric search (CLOUD MOAT)
-    ///
-    /// This enables 2-3x faster search by using asymmetric distance computation:
-    /// - Query vector stays full precision
-    /// - Candidate vectors use `RaBitQ` quantization (8x smaller)
-    /// - Final reranking uses full precision for accuracy
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality
-    /// * `params` - HNSW construction parameters
-    /// * `distance_fn` - Distance function (only L2 supported for asymmetric)
-    /// * `rabitq_params` - `RaBitQ` quantization parameters (typically 4-bit)
-    ///
-    /// # Performance
-    /// - Search: 2-3x faster than full precision
-    /// - Memory: 8x smaller quantized storage (+ original for reranking)
-    /// - Recall: 98%+ with reranking
-    ///
-    /// # Example
-    /// ```ignore
-    /// let params = HNSWParams::default();
-    /// let rabitq = RaBitQParams::bits4(); // 4-bit, 8x compression
-    /// let index = HNSWIndex::new_with_asymmetric(128, params, DistanceFunction::L2, rabitq)?;
-    /// ```
-    pub fn new_with_asymmetric(
-        dimensions: usize,
-        params: HNSWParams,
-        distance_fn: DistanceFunction,
-        rabitq_params: RaBitQParams,
-    ) -> Result<Self> {
-        Self::validate_l2_required(&params, distance_fn, "RaBitQ asymmetric search")?;
-        let vectors = VectorStorage::new_rabitq_quantized(dimensions, rabitq_params);
         Ok(Self::build(vectors, params, distance_fn))
     }
 
@@ -214,55 +178,11 @@ impl HNSWIndex {
         Ok(Self::build(vectors, params, distance_fn))
     }
 
-    /// Create new HNSW index with binary (1-bit) quantization
-    ///
-    /// Uses SIMD-optimized Hamming distance for fast search.
-    ///
-    /// # Performance
-    /// - Search: 2-4x faster than SQ8 (SIMD Hamming is extremely fast)
-    /// - Memory: 32x smaller quantized storage (+ original for reranking)
-    /// - Recall: ~85% raw, ~95-98% with reranking
-    ///
-    /// # Example
-    /// ```ignore
-    /// let params = HNSWParams::default();
-    /// let index = HNSWIndex::new_with_binary(768, params, DistanceFunction::L2)?;
-    /// ```
-    pub fn new_with_binary(
-        dimensions: usize,
-        params: HNSWParams,
-        distance_fn: DistanceFunction,
-    ) -> Result<Self> {
-        Self::validate_l2_required(&params, distance_fn, "Binary quantization")?;
-        let vectors = VectorStorage::new_binary_quantized(dimensions, true);
-        Ok(Self::build(vectors, params, distance_fn))
-    }
-
-    /// Create index with True RaBitQ quantization (32x compression with FFHT rotation)
-    ///
-    /// True RaBitQ provides better accuracy than naive binary quantization by using
-    /// random orthogonal rotation (FFHT + Kac's Walk) before sign extraction.
-    ///
-    /// # Performance
-    /// - Memory: 32x compression (28x with metadata)
-    /// - Recall: ~95% with rescore
-    /// - Best for: >100K vectors, memory-constrained deployments
-    pub fn new_with_true_rabitq(
-        dimensions: usize,
-        params: HNSWParams,
-        distance_fn: DistanceFunction,
-    ) -> Result<Self> {
-        Self::validate_l2_required(&params, distance_fn, "True RaBitQ quantization")?;
-        // For now, use binary storage until full TrueRaBitQ integration
-        let vectors = VectorStorage::new_true_rabitq(dimensions);
-        Ok(Self::build(vectors, params, distance_fn))
-    }
-
     // =========================================================================
     // Getters
     // =========================================================================
 
-    /// Check if this index uses asymmetric search (`RaBitQ` or `SQ8`)
+    /// Check if this index uses asymmetric search (SQ8)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
         self.vectors.is_asymmetric()
@@ -369,7 +289,7 @@ impl HNSWIndex {
     /// Uses dequantized vectors if storage is quantized (SQ8).
     #[inline]
     pub(super) fn distance_between_cmp(&self, id_a: u32, id_b: u32) -> Result<f32> {
-        // Try asymmetric distance first (for SQ8/RaBitQ - use id_b as quantized candidate)
+        // Try asymmetric distance first (for SQ8 - use id_b as quantized candidate)
         if let Some(vec_a) = self.vectors.get_dequantized(id_a) {
             if let Some(dist) = self.vectors.distance_asymmetric_l2(&vec_a, id_b) {
                 return Ok(dist);
@@ -389,10 +309,10 @@ impl HNSWIndex {
 
     /// Distance from query to node for ordering comparisons
     ///
-    /// Tries asymmetric distance first (for SQ8/RaBitQ), falls back to full precision.
+    /// Tries asymmetric distance first (for SQ8), falls back to full precision.
     #[inline(always)]
     pub(super) fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
-        // Try asymmetric distance first (for SQ8/RaBitQ storage)
+        // Try asymmetric distance first (for SQ8 storage)
         if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
             return Ok(dist);
         }
@@ -408,7 +328,7 @@ impl HNSWIndex {
     #[allow(dead_code)]
     #[inline(always)]
     pub(super) fn distance_cmp_mono<D: Distance>(&self, query: &[f32], id: u32) -> Result<f32> {
-        // Try asymmetric distance first (for SQ8/RaBitQ storage)
+        // Try asymmetric distance first (for SQ8 storage)
         if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
             return Ok(dist);
         }
@@ -420,7 +340,7 @@ impl HNSWIndex {
     /// Distance from query to node using full precision (f32-to-f32)
     ///
     /// Used during graph construction where quantization noise hurts graph quality.
-    /// For RaBitQ, uses stored originals. For SQ8, dequantizes.
+    /// For SQ8, dequantizes.
     #[inline]
     pub(super) fn distance_cmp_full_precision(&self, query: &[f32], id: u32) -> Result<f32> {
         // Always use dequantized/original vectors for full precision comparison
@@ -434,12 +354,9 @@ impl HNSWIndex {
     /// Actual distance (with sqrt for L2)
     #[inline]
     pub(super) fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
-        // For SQ8/RaBitQ: use asymmetric distance (returns squared L2)
-        // For Binary: skip asymmetric (hamming is not L2), use original vectors
-        if !self.vectors.is_binary_quantized() {
-            if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
-                return Ok(dist.sqrt());
-            }
+        // For quantized modes (SQ8): use asymmetric distance (returns squared L2)
+        if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
+            return Ok(dist.sqrt());
         }
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance(query, vec))

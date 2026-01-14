@@ -3,7 +3,6 @@
 //! Follows `std::fs::OpenOptions` pattern for familiar, ergonomic API.
 
 use super::VectorStore;
-use crate::compression::RaBitQParams;
 use crate::omen::Metric;
 use crate::text::TextSearchConfig;
 use crate::vector::QuantizationMode;
@@ -52,7 +51,7 @@ pub struct VectorStoreOptions {
     /// HNSW `ef_search`: search quality/speed tradeoff (default: 100)
     pub(super) ef_search: Option<usize>,
 
-    /// Quantization mode (SQ8 or `RaBitQ` for asymmetric HNSW search)
+    /// Quantization mode (SQ8 for asymmetric HNSW search)
     pub(super) quantization: Option<QuantizationMode>,
 
     /// Rescore candidates with original vectors (default: true when quantization enabled)
@@ -119,21 +118,14 @@ impl VectorStoreOptions {
     /// Enable quantization for memory-efficient storage.
     ///
     /// # Modes
-    /// - `QuantizationMode::SQ8`: 4x compression, similar speed, ~99% recall (default)
-    /// - `QuantizationMode::RaBitQ(params)`: 8x compression, ~0.5x speed, 93-99% recall
+    /// - `QuantizationMode::SQ8`: 4x compression, similar speed, ~99% recall
     ///
     /// # Example
     /// ```ignore
-    /// // SQ8 (recommended for most cases)
+    /// // SQ8 (recommended)
     /// let store = VectorStoreOptions::default()
     ///     .dimensions(768)
     ///     .quantization(QuantizationMode::sq8())
-    ///     .open("./vectors")?;
-    ///
-    /// // RaBitQ for higher compression
-    /// let store = VectorStoreOptions::default()
-    ///     .dimensions(768)
-    ///     .quantization(QuantizationMode::rabitq())
     ///     .open("./vectors")?;
     /// ```
     #[must_use]
@@ -148,28 +140,6 @@ impl VectorStoreOptions {
     #[must_use]
     pub fn quantization_sq8(self) -> Self {
         self.quantization(QuantizationMode::SQ8)
-    }
-
-    /// Enable RaBitQ quantization (32x compression)
-    ///
-    /// Uses 1-bit codes with FFHT rotation for better accuracy than naive binary.
-    #[must_use]
-    pub fn quantization_rabitq(self) -> Self {
-        self.quantization(QuantizationMode::RaBitQ)
-    }
-
-    /// Alias for quantization_rabitq() - kept for transition
-    #[must_use]
-    pub fn quantization_true_rabitq(self) -> Self {
-        self.quantization(QuantizationMode::RaBitQ)
-    }
-
-    /// Enable legacy multi-bit quantization with custom parameters
-    #[deprecated(since = "0.0.24", note = "Use quantization_rabitq() instead")]
-    #[allow(deprecated)]
-    #[must_use]
-    pub fn quantization_legacy_multibit(self, params: RaBitQParams) -> Self {
-        self.quantization(QuantizationMode::LegacyMultiBit(params))
     }
 
     /// Enable/disable rescoring with original vectors (default: true when quantization enabled).

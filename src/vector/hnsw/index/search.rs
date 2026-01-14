@@ -6,7 +6,6 @@ use super::HNSWIndex;
 use crate::compression::scalar::QueryPrep;
 use crate::distance::norm_squared;
 use crate::vector::hnsw::error::{HNSWError, Result};
-use crate::vector::hnsw::storage::UnifiedADC;
 use crate::vector::hnsw::types::{
     Candidate, Cosine, Distance, DistanceFunction, NegDot, SearchResult, L2,
 };
@@ -86,7 +85,7 @@ impl HNSWIndex {
         // Start from entry point, descend to layer 0
         let mut nearest = vec![entry_point];
 
-        // Use asymmetric search for RaBitQ storage (CLOUD MOAT - 2-3x speedup)
+        // Use asymmetric search for SQ8 storage (faster quantized distance)
         let use_asymmetric = self.is_asymmetric();
 
         // Greedy search at each layer (find 1 nearest)
@@ -128,12 +127,10 @@ impl HNSWIndex {
         Ok(results)
     }
 
-    /// Search using quantized (ADC) distances only - no exact distance calculation.
+    /// Search using quantized distances (asymmetric mode).
     ///
-    /// Returns candidates with approximate distances computed via ADC tables.
-    /// Use this for fast search when rescore=False (accept quantization error).
-    ///
-    /// Falls back to regular search if not in asymmetric mode.
+    /// SQ8 uses distance_asymmetric_l2 via the regular search path.
+    /// This method is kept for API compatibility.
     #[instrument(skip(self, query), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
     pub fn search_asymmetric(
         &self,
@@ -141,170 +138,8 @@ impl HNSWIndex {
         k: usize,
         ef: usize,
     ) -> Result<Vec<SearchResult>> {
-        if matches!(
-            self.validate_search_params(query, k, ef)?,
-            SearchValidation::Empty
-        ) {
-            return Ok(Vec::new());
-        }
-
-        // If not asymmetric, fall back to regular search
-        if !self.is_asymmetric() {
-            return self.search(query, k, ef);
-        }
-
-        let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
-        let entry_level = self.nodes[entry_point as usize].level;
-
-        // Build ADC lookup table once for this query
-        let adc_table = self.vectors.build_adc_table(query);
-
-        // Greedy search at each layer using ADC distances
-        let mut nearest = vec![entry_point];
-        for level in (1..=entry_level).rev() {
-            nearest = self.search_layer_asymmetric(query, &nearest, 1, level)?;
-        }
-
-        // Beam search at layer 0 with ADC distances
-        let candidates = self.search_layer_asymmetric_with_distances(
-            query,
-            &nearest,
-            ef.max(k),
-            0,
-            adc_table.as_ref(),
-        )?;
-
-        // Return top k with ADC distances (no recomputation)
-        let mut results: Vec<SearchResult> = candidates
-            .into_iter()
-            .map(|(id, dist)| SearchResult::new(id, dist))
-            .collect();
-
-        results.truncate(k);
-
-        debug!(
-            num_results = results.len(),
-            closest_distance = results.first().map(|r| r.distance),
-            "Asymmetric search completed (ADC distances)"
-        );
-
-        Ok(results)
-    }
-
-    /// Search layer returning (id, distance) tuples for asymmetric mode.
-    pub(super) fn search_layer_asymmetric_with_distances(
-        &self,
-        query: &[f32],
-        entry_points: &[u32],
-        ef: usize,
-        level: u8,
-        adc_table: Option<&UnifiedADC>,
-    ) -> Result<Vec<(u32, f32)>> {
-        use super::super::query_buffers;
-
-        // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
-        let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
-        let vectors = &self.vectors;
-
-        // Distance computation helper
-        let compute_distance = |id: u32| -> Result<f32> {
-            // ADC path (RaBitQ)
-            if let Some(ref adc) = adc_table {
-                if let Some(dist) = vectors.distance_adc(adc, id) {
-                    return Ok(dist);
-                }
-            }
-            // SQ8 fast path
-            if let Some(ref prep) = sq8_prep {
-                if let Some(dist) = vectors.distance_sq8_with_prep(prep, id) {
-                    return Ok(dist);
-                }
-            }
-            // Fallback to full precision
-            let vec = vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
-            Ok(crate::distance::l2_distance_squared(query, vec))
-        };
-
-        query_buffers::with_buffers(|buffers| {
-            let visited = &mut buffers.visited;
-            let candidates = &mut buffers.candidates;
-            let working = &mut buffers.working;
-            let unvisited = &mut buffers.unvisited;
-            let results_buf = &mut buffers.results;
-
-            for &ep in entry_points {
-                let dist = compute_distance(ep)?;
-                let candidate = Candidate::new(ep, dist);
-
-                candidates.push(Reverse(candidate));
-                working.push(candidate);
-                visited.insert(ep);
-            }
-
-            while let Some(Reverse(current)) = candidates.pop() {
-                if let Some(&farthest) = working.peek() {
-                    if current.distance > farthest.distance {
-                        break;
-                    }
-                }
-
-                unvisited.clear();
-                self.neighbors
-                    .with_neighbors(current.node_id, level, |neighbors| {
-                        for &id in neighbors {
-                            if !visited.contains(id) {
-                                unvisited.push(id);
-                            }
-                        }
-                    });
-
-                // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
-                use crate::vector::hnsw::prefetch::PrefetchConfig;
-                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
-                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
-
-                let unvisited_slice = unvisited.as_slice();
-
-                if PREFETCH_ENABLED {
-                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                        vectors.prefetch_quantized(id);
-                    }
-                }
-
-                for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
-                        vectors.prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
-                    }
-
-                    visited.insert(neighbor_id);
-
-                    let dist = compute_distance(neighbor_id)?;
-                    let neighbor = Candidate::new(neighbor_id, dist);
-
-                    if let Some(&farthest) = working.peek() {
-                        if dist < farthest.distance.0 || working.len() < ef {
-                            candidates.push(Reverse(neighbor));
-                            working.push(neighbor);
-
-                            if working.len() > ef {
-                                working.pop();
-                            }
-                        }
-                    } else {
-                        candidates.push(Reverse(neighbor));
-                        working.push(neighbor);
-                    }
-                }
-            }
-
-            // Return (id, distance) tuples sorted by distance
-            // Use pre-allocated buffer to avoid per-search allocation
-            results_buf.extend(working.drain());
-            results_buf.sort_unstable_by_key(|c| c.distance);
-            let mut output = Vec::with_capacity(results_buf.len());
-            output.extend(results_buf.iter().map(|c| (c.node_id, c.distance.0)));
-            Ok(output)
-        })
+        // All quantized modes work through distance_asymmetric_l2 in the regular search
+        self.search(query, k, ef)
     }
 
     /// Search for k nearest neighbors with metadata filtering (ACORN-1)
@@ -1042,37 +877,10 @@ impl HNSWIndex {
         })
     }
 
-    /// Compute distance using ADC table if available, with fallback to asymmetric distance
-    /// Currently unused - kept for potential future use cases.
-    #[inline]
-    #[allow(dead_code)]
-    pub(super) fn distance_with_adc(
-        &self,
-        query: &[f32],
-        id: u32,
-        adc_table: Option<&UnifiedADC>,
-    ) -> Result<f32> {
-        if let Some(adc) = adc_table {
-            if let Some(dist) = self.vectors.distance_adc(adc, id) {
-                return Ok(dist);
-            }
-            // ADC failed, fall back to standard distance
-            if let Ok(dist) = self.distance_cmp(query, id) {
-                return Ok(dist);
-            }
-            // Both failed - log and return max distance to push to end of results
-            warn!(id, "ADC and standard distance both failed, using f32::MAX");
-            Ok(f32::MAX)
-        } else {
-            self.distance_cmp(query, id)
-        }
-    }
-
-    /// Asymmetric search layer for quantized storage (`RaBitQ` or SQ8)
+    /// Asymmetric search layer for quantized storage (SQ8)
     ///
-    /// Uses ADC (Asymmetric Distance Computation) lookup tables for fast distance.
-    /// When available, uses FastScan SIMD for 5x speedup on batched distance computation.
-    /// Falls back to asymmetric distance if ADC fails.
+    /// Uses asymmetric distance computation for fast quantized search.
+    /// SQ8: integer SIMD via distance_sq8_with_prep
     pub(super) fn search_layer_asymmetric(
         &self,
         query: &[f32],
@@ -1081,25 +889,15 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<u32>> {
         use super::super::query_buffers;
-        use crate::compression::{fastscan_batch_with_lut, FastScanLUT, FASTSCAN_BATCH_SIZE};
-
-        let adc_table = self.vectors.build_adc_table(query);
 
         // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
-        // This avoids the O(D) prepare_query() overhead per distance calculation
         let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
 
         // Cache reference to storage for the closure
         let vectors = &self.vectors;
 
         // Distance computation helper for asymmetric search
-        let compute_distance_asymmetric = |id: u32| -> Result<f32> {
-            // ADC path (RaBitQ)
-            if let Some(ref adc) = adc_table {
-                if let Some(dist) = vectors.distance_adc(adc, id) {
-                    return Ok(dist);
-                }
-            }
+        let compute_distance = |id: u32| -> Result<f32> {
             // SQ8 fast path: use pre-prepared query
             if let Some(ref prep) = sq8_prep {
                 if let Some(dist) = vectors.distance_sq8_with_prep(prep, id) {
@@ -1111,44 +909,6 @@ impl HNSWIndex {
             Ok(crate::distance::l2_distance_squared(query, vec))
         };
 
-        // FastScan is disabled on Apple Silicon where:
-        // 1. DMP (Data Memory-dependent Prefetcher) handles cache efficiently
-        // 2. SQ8 asymmetric SIMD is already faster than RaBitQ+FastScan
-        // 3. The overhead of build_interleaved_codes exceeds SIMD benefit
-        #[cfg(target_arch = "aarch64")]
-        let use_fastscan = false;
-
-        #[cfg(not(target_arch = "aarch64"))]
-        let use_fastscan = {
-            // Try to build FastScan LUT for SIMD acceleration
-            let fastscan_lut = adc_table.as_ref().and_then(|adc| match adc {
-                UnifiedADC::RaBitQ(table) => FastScanLUT::from_adc_table(table),
-            });
-
-            // Get code_size for interleaved buffer allocation
-            let code_size = self.vectors.rabitq_code_size().unwrap_or(0);
-            fastscan_lut.is_some() && code_size > 0
-        };
-
-        // Minimum batch size to justify FastScan overhead
-        // Below this threshold, per-neighbor ADC is faster
-        const FASTSCAN_MIN_BATCH: usize = 8;
-
-        // Only build LUT if we'll use FastScan
-        #[cfg(not(target_arch = "aarch64"))]
-        let fastscan_lut = if use_fastscan {
-            adc_table.as_ref().and_then(|adc| match adc {
-                UnifiedADC::RaBitQ(table) => FastScanLUT::from_adc_table(table),
-            })
-        } else {
-            None
-        };
-
-        #[cfg(target_arch = "aarch64")]
-        let fastscan_lut: Option<FastScanLUT> = None;
-
-        let code_size = self.vectors.rabitq_code_size().unwrap_or(0);
-
         query_buffers::with_buffers(|buffers| {
             let visited = &mut buffers.visited;
             let candidates = &mut buffers.candidates;
@@ -1156,15 +916,8 @@ impl HNSWIndex {
             let unvisited = &mut buffers.unvisited;
             let results_buf = &mut buffers.results;
 
-            // FastScan interleaved codes buffer (reused across iterations)
-            let mut interleaved_codes = if use_fastscan {
-                vec![0u8; code_size * FASTSCAN_BATCH_SIZE]
-            } else {
-                Vec::new()
-            };
-
             for &ep in entry_points {
-                let dist = compute_distance_asymmetric(ep)?;
+                let dist = compute_distance(ep)?;
                 let candidate = Candidate::new(ep, dist);
 
                 candidates.push(Reverse(candidate));
@@ -1194,71 +947,6 @@ impl HNSWIndex {
 
                 let unvisited_slice = unvisited.as_slice();
 
-                // FastScan path: batch compute distances using SIMD
-                // Only use FastScan if batch is large enough to justify overhead
-                if let Some(ref lut) = fastscan_lut {
-                    if unvisited_slice.len() >= FASTSCAN_MIN_BATCH {
-                        // Build interleaved codes for this batch
-                        let valid_count = self
-                            .vectors
-                            .build_interleaved_codes(unvisited_slice, &mut interleaved_codes);
-
-                        if valid_count >= FASTSCAN_MIN_BATCH {
-                            // Compute distances for all neighbors at once
-                            let distances = fastscan_batch_with_lut(lut, &interleaved_codes);
-
-                            // Process results
-                            for (i, &neighbor_id) in
-                                unvisited_slice.iter().take(valid_count).enumerate()
-                            {
-                                visited.insert(neighbor_id);
-
-                                let dist = lut.to_f32(distances[i]);
-                                let neighbor = Candidate::new(neighbor_id, dist);
-
-                                if let Some(&farthest) = working.peek() {
-                                    if dist < farthest.distance.0 || working.len() < ef {
-                                        candidates.push(Reverse(neighbor));
-                                        working.push(neighbor);
-
-                                        if working.len() > ef {
-                                            working.pop();
-                                        }
-                                    }
-                                } else {
-                                    candidates.push(Reverse(neighbor));
-                                    working.push(neighbor);
-                                }
-                            }
-
-                            // Handle any remaining neighbors beyond FASTSCAN_BATCH_SIZE
-                            for &neighbor_id in unvisited_slice.iter().skip(valid_count) {
-                                visited.insert(neighbor_id);
-
-                                let dist = compute_distance_asymmetric(neighbor_id)?;
-                                let neighbor = Candidate::new(neighbor_id, dist);
-
-                                if let Some(&farthest) = working.peek() {
-                                    if dist < farthest.distance.0 || working.len() < ef {
-                                        candidates.push(Reverse(neighbor));
-                                        working.push(neighbor);
-
-                                        if working.len() > ef {
-                                            working.pop();
-                                        }
-                                    }
-                                } else {
-                                    candidates.push(Reverse(neighbor));
-                                    working.push(neighbor);
-                                }
-                            }
-
-                            continue;
-                        }
-                    }
-                }
-
-                // Fallback path: per-neighbor ADC distance
                 // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
                 use crate::vector::hnsw::prefetch::PrefetchConfig;
                 const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
@@ -1266,18 +954,18 @@ impl HNSWIndex {
 
                 if PREFETCH_ENABLED {
                     for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                        vectors.prefetch_quantized(id);
+                        vectors.prefetch(id);
                     }
                 }
 
                 for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
                     if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
-                        vectors.prefetch_quantized(unvisited_slice[i + PREFETCH_DISTANCE]);
+                        vectors.prefetch(unvisited_slice[i + PREFETCH_DISTANCE]);
                     }
 
                     visited.insert(neighbor_id);
 
-                    let dist = compute_distance_asymmetric(neighbor_id)?;
+                    let dist = compute_distance(neighbor_id)?;
                     let neighbor = Candidate::new(neighbor_id, dist);
 
                     if let Some(&farthest) = working.peek() {
@@ -1297,7 +985,6 @@ impl HNSWIndex {
             }
 
             // Return node IDs sorted by distance (closest first)
-            // Use pre-allocated buffer to avoid per-search allocation
             results_buf.extend(working.drain());
             results_buf.sort_unstable_by_key(|c| c.distance);
             let mut output = Vec::with_capacity(results_buf.len());

@@ -17,51 +17,34 @@ pub const HEADER_SIZE: usize = 4096;
 pub const MAX_SECTIONS: usize = 8;
 
 /// Quantization code for file format serialization.
-///
-/// This is a compact `repr(u8)` representation for storing in the .omen header.
-/// For runtime API, use `crate::vector::QuantizationMode` instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum QuantizationCode {
+    /// No quantization (full f32 precision)
     F32 = 0,
+    /// SQ8 scalar quantization (4x compression)
     Sq8 = 1,
-    RabitQ4 = 2,
-    RabitQ2 = 3,
-    RabitQ8 = 4,
-    Binary = 5,
-    TrueRaBitQ = 6,
+    /// RaBitQ 1-bit with FFHT (32x compression)
+    RaBitQ = 2,
+    /// Extended-RaBitQ 4-bit with FFHT (8x compression)
+    RaBitQ4 = 3,
 }
 
 impl From<u8> for QuantizationCode {
     fn from(v: u8) -> Self {
         match v {
             1 => Self::Sq8,
-            2 => Self::RabitQ4,
-            3 => Self::RabitQ2,
-            4 => Self::RabitQ8,
-            5 => Self::Binary,
-            6 => Self::TrueRaBitQ,
+            2 => Self::RaBitQ,
+            3 => Self::RaBitQ4,
             _ => Self::F32,
         }
     }
 }
 
 impl From<&crate::vector::QuantizationMode> for QuantizationCode {
-    #[allow(deprecated)]
     fn from(mode: &crate::vector::QuantizationMode) -> Self {
-        use crate::compression::QuantizationBits;
         match mode {
-            crate::vector::QuantizationMode::Binary => Self::Binary,
             crate::vector::QuantizationMode::SQ8 => Self::Sq8,
-            crate::vector::QuantizationMode::LegacyMultiBit(params) => match params.bits_per_dim {
-                QuantizationBits::Bits1 => Self::Binary,
-                QuantizationBits::Bits2 => Self::RabitQ2,
-                QuantizationBits::Bits3 | QuantizationBits::Bits4 => Self::RabitQ4,
-                QuantizationBits::Bits5 | QuantizationBits::Bits7 | QuantizationBits::Bits8 => {
-                    Self::RabitQ8
-                }
-            },
-            crate::vector::QuantizationMode::RaBitQ => Self::TrueRaBitQ,
         }
     }
 }
@@ -75,50 +58,54 @@ impl From<crate::vector::QuantizationMode> for QuantizationCode {
 impl QuantizationCode {
     /// Convert to runtime `QuantizationMode`.
     ///
-    /// Returns `None` for `F32` (no quantization).
+    /// Returns `None` for `F32` (no quantization) or unsupported legacy codes (RaBitQ).
     #[must_use]
-    #[allow(deprecated)]
     pub fn to_runtime(self) -> Option<crate::vector::QuantizationMode> {
-        use crate::compression::RaBitQParams;
         match self {
-            Self::F32 => None,
             Self::Sq8 => Some(crate::vector::QuantizationMode::SQ8),
-            Self::Binary => Some(crate::vector::QuantizationMode::Binary),
-            Self::RabitQ2 => Some(crate::vector::QuantizationMode::LegacyMultiBit(
-                RaBitQParams::bits2(),
-            )),
-            Self::RabitQ4 => Some(crate::vector::QuantizationMode::LegacyMultiBit(
-                RaBitQParams::bits4(),
-            )),
-            Self::RabitQ8 => Some(crate::vector::QuantizationMode::LegacyMultiBit(
-                RaBitQParams::bits8(),
-            )),
-            Self::TrueRaBitQ => Some(crate::vector::QuantizationMode::RaBitQ),
+            // F32 = no quantization, RaBitQ codes = legacy (no longer supported at runtime)
+            Self::F32 | Self::RaBitQ | Self::RaBitQ4 => None,
         }
     }
 }
 
-/// Distance metric for similarity search (user-facing API type).
-///
-/// This is the serialization/API type stored in .omen file headers.
-/// For runtime distance computation, see `crate::vector::hnsw::DistanceFunction`.
+/// Distance metric for similarity search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Metric {
-    /// L2 / Euclidean distance
     L2 = 0,
-    /// Cosine distance (1 - cosine similarity)
     Cosine = 1,
-    /// Dot product / inner product (for MIPS)
-    Dot = 2,
+    InnerProduct = 2,
+}
+
+impl Metric {
+    /// Parse from string
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "l2" | "euclidean" => Ok(Self::L2),
+            "cosine" | "cos" => Ok(Self::Cosine),
+            "ip" | "inner_product" | "dot" => Ok(Self::InnerProduct),
+            _ => Err(format!("Unknown metric: {s}")),
+        }
+    }
 }
 
 impl From<u8> for Metric {
     fn from(v: u8) -> Self {
         match v {
             1 => Self::Cosine,
-            2 => Self::Dot,
+            2 => Self::InnerProduct,
             _ => Self::L2,
+        }
+    }
+}
+
+impl From<crate::vector::hnsw::DistanceFunction> for Metric {
+    fn from(df: crate::vector::hnsw::DistanceFunction) -> Self {
+        match df {
+            crate::vector::hnsw::DistanceFunction::L2 => Self::L2,
+            crate::vector::hnsw::DistanceFunction::Cosine => Self::Cosine,
+            crate::vector::hnsw::DistanceFunction::NegativeDotProduct => Self::InnerProduct,
         }
     }
 }
@@ -128,77 +115,25 @@ impl From<Metric> for crate::vector::hnsw::DistanceFunction {
         match m {
             Metric::L2 => Self::L2,
             Metric::Cosine => Self::Cosine,
-            Metric::Dot => Self::NegativeDotProduct,
+            Metric::InnerProduct => Self::NegativeDotProduct,
         }
     }
 }
 
-impl From<crate::vector::hnsw::DistanceFunction> for Metric {
-    fn from(d: crate::vector::hnsw::DistanceFunction) -> Self {
-        match d {
-            crate::vector::hnsw::DistanceFunction::L2 => Self::L2,
-            crate::vector::hnsw::DistanceFunction::Cosine => Self::Cosine,
-            crate::vector::hnsw::DistanceFunction::NegativeDotProduct => Self::Dot,
-        }
-    }
-}
-
-impl Metric {
-    /// Parse from string (case-insensitive, with aliases).
-    ///
-    /// # Supported values
-    /// - `"l2"` or `"euclidean"`: Euclidean distance (default)
-    /// - `"cosine"`: Cosine distance (1 - cosine similarity)
-    /// - `"dot"` or `"ip"`: Inner product (for MIPS)
-    pub fn parse(s: &str) -> Result<Self, String> {
-        match s.to_lowercase().as_str() {
-            "l2" | "euclidean" => Ok(Self::L2),
-            "cosine" => Ok(Self::Cosine),
-            "dot" | "ip" => Ok(Self::Dot),
-            _ => Err(format!(
-                "Unknown metric: '{s}'. Valid: l2, euclidean, cosine, dot, ip"
-            )),
-        }
-    }
-
-    /// Get the string representation.
-    #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::L2 => "l2",
-            Self::Cosine => "cosine",
-            Self::Dot => "dot",
-        }
-    }
-}
-
-/// .omen file header
+/// .omen file header (4KB)
 #[derive(Debug, Clone)]
 pub struct OmenHeader {
-    // Magic and version (16 bytes)
     pub version_major: u16,
     pub version_minor: u16,
-    pub flags: u64,
-
-    // Database info (32 bytes)
     pub dimensions: u32,
     pub count: u64,
+    pub entry_point: u64,
     pub quantization: QuantizationCode,
-    pub distance_fn: Metric,
-
-    // HNSW params (16 bytes)
-    pub m: u16,
-    pub ef_construction: u16,
-    pub ef_search: u16,
-    pub max_level: u8,
-    pub entry_point: u32,
-
-    // Section directory
-    pub sections: [SectionEntry; MAX_SECTIONS],
-
-    // Checksums
-    pub header_checksum: u32,
-    pub data_checksum: u32,
+    pub metric: Metric,
+    pub hnsw_m: u32,
+    pub hnsw_ef_construction: u32,
+    pub hnsw_ef_search: u32,
+    pub sections: Vec<SectionEntry>,
 }
 
 impl Default for OmenHeader {
@@ -206,25 +141,21 @@ impl Default for OmenHeader {
         Self {
             version_major: VERSION_MAJOR,
             version_minor: VERSION_MINOR,
-            flags: 0,
             dimensions: 0,
             count: 0,
-            quantization: QuantizationCode::F32,
-            distance_fn: Metric::L2,
-            m: 16,
-            ef_construction: 100,
-            ef_search: 100,
-            max_level: 0,
             entry_point: 0,
-            sections: [SectionEntry::default(); MAX_SECTIONS],
-            header_checksum: 0,
-            data_checksum: 0,
+            quantization: QuantizationCode::F32,
+            metric: Metric::L2,
+            hnsw_m: 16,
+            hnsw_ef_construction: 100,
+            hnsw_ef_search: 100,
+            sections: Vec::new(),
         }
     }
 }
 
 impl OmenHeader {
-    /// Create a new header with the given dimensions
+    /// Create new header with dimensions
     #[must_use]
     pub fn new(dimensions: u32) -> Self {
         Self {
@@ -233,181 +164,48 @@ impl OmenHeader {
         }
     }
 
-    /// Serialize header to bytes (4KB)
+    /// Set quantization mode
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; HEADER_SIZE] {
-        let mut buf = [0u8; HEADER_SIZE];
-        let mut offset = 0;
-
-        // Magic (4 bytes)
-        buf[offset..offset + 4].copy_from_slice(&MAGIC);
-        offset += 4;
-
-        // Version (4 bytes)
-        buf[offset..offset + 2].copy_from_slice(&self.version_major.to_le_bytes());
-        offset += 2;
-        buf[offset..offset + 2].copy_from_slice(&self.version_minor.to_le_bytes());
-        offset += 2;
-
-        // Flags (8 bytes)
-        buf[offset..offset + 8].copy_from_slice(&self.flags.to_le_bytes());
-        offset += 8;
-
-        // Database info (32 bytes)
-        buf[offset..offset + 4].copy_from_slice(&self.dimensions.to_le_bytes());
-        offset += 4;
-        buf[offset..offset + 8].copy_from_slice(&self.count.to_le_bytes());
-        offset += 8;
-        buf[offset] = self.quantization as u8;
-        offset += 1;
-        buf[offset] = self.distance_fn as u8;
-        offset += 1;
-        // 14 bytes reserved (already zeroed)
-        offset += 14;
-
-        // HNSW params (16 bytes)
-        buf[offset..offset + 2].copy_from_slice(&self.m.to_le_bytes());
-        offset += 2;
-        buf[offset..offset + 2].copy_from_slice(&self.ef_construction.to_le_bytes());
-        offset += 2;
-        buf[offset..offset + 2].copy_from_slice(&self.ef_search.to_le_bytes());
-        offset += 2;
-        buf[offset] = self.max_level;
-        offset += 1;
-        buf[offset..offset + 4].copy_from_slice(&self.entry_point.to_le_bytes());
-        offset += 4;
-        // 3 bytes reserved (already zeroed)
-        offset += 3;
-
-        // Sections (8 * 24 bytes = 192 bytes)
-        for section in &self.sections {
-            buf[offset..offset + 24].copy_from_slice(&section.to_bytes());
-            offset += 24;
-        }
-
-        // Checksums (8 bytes)
-        buf[offset..offset + 4].copy_from_slice(&self.header_checksum.to_le_bytes());
-        offset += 4;
-        buf[offset..offset + 4].copy_from_slice(&self.data_checksum.to_le_bytes());
-
-        // Calculate and write header checksum
-        let checksum = crc32fast::hash(&buf[..HEADER_SIZE - 8]);
-        buf[HEADER_SIZE - 8..HEADER_SIZE - 4].copy_from_slice(&checksum.to_le_bytes());
-
-        buf
+    pub fn with_quantization(mut self, q: QuantizationCode) -> Self {
+        self.quantization = q;
+        self
     }
 
-    /// Parse header from bytes
-    pub fn from_bytes(buf: &[u8; HEADER_SIZE]) -> io::Result<Self> {
-        // Verify magic
-        if buf[0..4] != MAGIC {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid magic bytes",
-            ));
+    /// Set distance metric
+    #[must_use]
+    pub fn with_metric(mut self, m: Metric) -> Self {
+        self.metric = m;
+        self
+    }
+
+    /// Set HNSW parameters
+    #[must_use]
+    pub fn with_hnsw(mut self, m: u32, ef_construction: u32, ef_search: u32) -> Self {
+        self.hnsw_m = m;
+        self.hnsw_ef_construction = ef_construction;
+        self.hnsw_ef_search = ef_search;
+        self
+    }
+
+    /// Add a section entry
+    pub fn add_section(&mut self, section_type: SectionType, offset: u64, length: u64) {
+        if self.sections.len() < MAX_SECTIONS {
+            self.sections
+                .push(SectionEntry::new(section_type, offset, length));
         }
+    }
 
-        // Verify checksum - direct array indexing for fixed-size buffer
-        let stored_checksum = u32::from_le_bytes([
-            buf[HEADER_SIZE - 8],
-            buf[HEADER_SIZE - 7],
-            buf[HEADER_SIZE - 6],
-            buf[HEADER_SIZE - 5],
-        ]);
-        let computed_checksum = crc32fast::hash(&buf[..HEADER_SIZE - 8]);
-        if stored_checksum != computed_checksum {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Header checksum mismatch",
-            ));
+    /// Set or update a section entry
+    pub fn set_section(&mut self, entry: SectionEntry) {
+        if let Some(existing) = self
+            .sections
+            .iter_mut()
+            .find(|s| s.section_type == entry.section_type)
+        {
+            *existing = entry;
+        } else if self.sections.len() < MAX_SECTIONS {
+            self.sections.push(entry);
         }
-
-        let mut cursor = io::Cursor::new(&buf[4..]); // Skip magic
-
-        let mut u16_buf = [0u8; 2];
-        let mut u32_buf = [0u8; 4];
-        let mut u64_buf = [0u8; 8];
-        let mut u8_buf = [0u8; 1];
-
-        // Version
-        cursor.read_exact(&mut u16_buf)?;
-        let version_major = u16::from_le_bytes(u16_buf);
-        cursor.read_exact(&mut u16_buf)?;
-        let version_minor = u16::from_le_bytes(u16_buf);
-
-        // Check version compatibility
-        if version_major > VERSION_MAJOR {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Unsupported version: {version_major}.{version_minor}"),
-            ));
-        }
-
-        // Flags
-        cursor.read_exact(&mut u64_buf)?;
-        let flags = u64::from_le_bytes(u64_buf);
-
-        // Database info
-        cursor.read_exact(&mut u32_buf)?;
-        let dimensions = u32::from_le_bytes(u32_buf);
-        cursor.read_exact(&mut u64_buf)?;
-        let count = u64::from_le_bytes(u64_buf);
-        cursor.read_exact(&mut u8_buf)?;
-        let quantization = QuantizationCode::from(u8_buf[0]);
-        cursor.read_exact(&mut u8_buf)?;
-        let distance_fn = Metric::from(u8_buf[0]);
-
-        // Skip reserved
-        let mut reserved = [0u8; 14];
-        cursor.read_exact(&mut reserved)?;
-
-        // HNSW params
-        cursor.read_exact(&mut u16_buf)?;
-        let m = u16::from_le_bytes(u16_buf);
-        cursor.read_exact(&mut u16_buf)?;
-        let ef_construction = u16::from_le_bytes(u16_buf);
-        cursor.read_exact(&mut u16_buf)?;
-        let ef_search = u16::from_le_bytes(u16_buf);
-        cursor.read_exact(&mut u8_buf)?;
-        let max_level = u8_buf[0];
-        cursor.read_exact(&mut u32_buf)?;
-        let entry_point = u32::from_le_bytes(u32_buf);
-
-        // Skip reserved
-        let mut reserved2 = [0u8; 3];
-        cursor.read_exact(&mut reserved2)?;
-
-        // Sections
-        let mut sections = [SectionEntry::default(); MAX_SECTIONS];
-        for section in &mut sections {
-            let mut section_buf = [0u8; 24];
-            cursor.read_exact(&mut section_buf)?;
-            *section = SectionEntry::from_bytes(&section_buf);
-        }
-
-        // Checksums
-        cursor.read_exact(&mut u32_buf)?;
-        let header_checksum = u32::from_le_bytes(u32_buf);
-        cursor.read_exact(&mut u32_buf)?;
-        let data_checksum = u32::from_le_bytes(u32_buf);
-
-        Ok(Self {
-            version_major,
-            version_minor,
-            flags,
-            dimensions,
-            count,
-            quantization,
-            distance_fn,
-            m,
-            ef_construction,
-            ef_search,
-            max_level,
-            entry_point,
-            sections,
-            header_checksum,
-            data_checksum,
-        })
     }
 
     /// Get section by type
@@ -415,86 +213,105 @@ impl OmenHeader {
     pub fn get_section(&self, section_type: SectionType) -> Option<&SectionEntry> {
         self.sections
             .iter()
-            .find(|s| s.section_type == section_type && s.length > 0)
+            .find(|s| s.section_type == section_type)
     }
 
-    /// Set section entry
-    pub fn set_section(&mut self, entry: SectionEntry) {
-        for section in &mut self.sections {
-            if section.section_type == entry.section_type || section.length == 0 {
-                *section = entry;
-                return;
-            }
+    /// Serialize header to bytes
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = vec![0u8; HEADER_SIZE];
+
+        // Magic
+        buf[0..4].copy_from_slice(&MAGIC);
+
+        // Version
+        buf[4..6].copy_from_slice(&self.version_major.to_le_bytes());
+        buf[6..8].copy_from_slice(&self.version_minor.to_le_bytes());
+
+        // Dimensions and count
+        buf[8..12].copy_from_slice(&self.dimensions.to_le_bytes());
+        buf[12..20].copy_from_slice(&self.count.to_le_bytes());
+
+        // Quantization and metric
+        buf[20] = self.quantization as u8;
+        buf[21] = self.metric as u8;
+
+        // HNSW params
+        buf[24..28].copy_from_slice(&self.hnsw_m.to_le_bytes());
+        buf[28..32].copy_from_slice(&self.hnsw_ef_construction.to_le_bytes());
+        buf[32..36].copy_from_slice(&self.hnsw_ef_search.to_le_bytes());
+
+        // Section count and entry_point
+        buf[36..40].copy_from_slice(&(self.sections.len() as u32).to_le_bytes());
+        buf[40..48].copy_from_slice(&self.entry_point.to_le_bytes());
+
+        // Section entries (24 bytes each, starting at offset 64)
+        for (i, section) in self.sections.iter().enumerate() {
+            let offset = 64 + i * 24;
+            buf[offset..offset + 24].copy_from_slice(&section.to_bytes());
         }
-    }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_header_roundtrip() {
-        let mut header = OmenHeader::new(768);
-        header.count = 1000;
-        header.m = 32;
-        header.ef_construction = 200;
-        header.entry_point = 42;
-
-        let bytes = header.to_bytes();
-        let parsed = OmenHeader::from_bytes(&bytes).unwrap();
-
-        assert_eq!(parsed.dimensions, 768);
-        assert_eq!(parsed.count, 1000);
-        assert_eq!(parsed.m, 32);
-        assert_eq!(parsed.ef_construction, 200);
-        assert_eq!(parsed.entry_point, 42);
+        buf
     }
 
-    #[test]
-    fn test_invalid_magic() {
-        let mut buf = [0u8; HEADER_SIZE];
-        buf[0..4].copy_from_slice(b"NOPE");
+    /// Parse header from bytes
+    pub fn from_bytes(data: &[u8]) -> io::Result<Self> {
+        if data.len() < HEADER_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Header too small",
+            ));
+        }
 
-        let result = OmenHeader::from_bytes(&buf);
-        assert!(result.is_err());
+        // Check magic
+        if data[0..4] != MAGIC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid magic bytes",
+            ));
+        }
+
+        let version_major = u16::from_le_bytes([data[4], data[5]]);
+        let version_minor = u16::from_le_bytes([data[6], data[7]]);
+        let dimensions = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        let count = u64::from_le_bytes([
+            data[12], data[13], data[14], data[15], data[16], data[17], data[18], data[19],
+        ]);
+        let quantization = QuantizationCode::from(data[20]);
+        let metric = Metric::from(data[21]);
+        let hnsw_m = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
+        let hnsw_ef_construction = u32::from_le_bytes([data[28], data[29], data[30], data[31]]);
+        let hnsw_ef_search = u32::from_le_bytes([data[32], data[33], data[34], data[35]]);
+        let section_count = u32::from_le_bytes([data[36], data[37], data[38], data[39]]) as usize;
+        let entry_point = u64::from_le_bytes([
+            data[40], data[41], data[42], data[43], data[44], data[45], data[46], data[47],
+        ]);
+
+        let mut sections = Vec::with_capacity(section_count.min(MAX_SECTIONS));
+        for i in 0..section_count.min(MAX_SECTIONS) {
+            let offset = 64 + i * 24;
+            sections.push(SectionEntry::from_bytes(&data[offset..offset + 24])?);
+        }
+
+        Ok(Self {
+            version_major,
+            version_minor,
+            dimensions,
+            count,
+            entry_point,
+            quantization,
+            metric,
+            hnsw_m,
+            hnsw_ef_construction,
+            hnsw_ef_search,
+            sections,
+        })
     }
 
-    #[test]
-    fn test_corrupted_header_detected() {
-        let header = OmenHeader::new(768);
-        let mut bytes = header.to_bytes();
-
-        // Corrupt a byte in the middle of the header (dimensions field)
-        bytes[20] ^= 0xFF;
-
-        let result = OmenHeader::from_bytes(&bytes);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("checksum mismatch"));
-    }
-
-    #[test]
-    fn test_checksum_calculated_correctly() {
-        let mut header = OmenHeader::new(768);
-        header.count = 12345;
-        header.m = 32;
-        header.ef_construction = 200;
-
-        let bytes = header.to_bytes();
-
-        // Extract the stored checksum
-        let stored_checksum =
-            u32::from_le_bytes(bytes[HEADER_SIZE - 8..HEADER_SIZE - 4].try_into().unwrap());
-
-        // Verify it's not zero (would indicate checksum wasn't calculated)
-        assert_ne!(stored_checksum, 0);
-
-        // Verify we can read it back (proves checksum is correct)
-        let parsed = OmenHeader::from_bytes(&bytes).unwrap();
-        assert_eq!(parsed.dimensions, 768);
-        assert_eq!(parsed.count, 12345);
+    /// Read header from a reader
+    pub fn read_from<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let mut buf = vec![0u8; HEADER_SIZE];
+        reader.read_exact(&mut buf)?;
+        Self::from_bytes(&buf)
     }
 }

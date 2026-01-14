@@ -10,7 +10,6 @@
 //! - Optional binary quantization (32x memory reduction)
 
 use super::hnsw::{DistanceFunction, HNSWIndex as CoreHNSW, HNSWParams as CoreParams};
-use crate::compression::RaBitQParams;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -68,14 +67,8 @@ const DEFAULT_MAX_ELEMENTS: usize = 1_000_000;
 pub enum HNSWQuantization {
     /// No quantization (full f32 precision)
     None,
-    /// Binary quantization (32x compression, ~85% raw recall, ~95-98% with rescore)
-    Binary,
     /// SQ8 scalar quantization (4x compression, ~99% recall)
     SQ8,
-    /// RaBitQ asymmetric quantization (8x compression, ~98% recall)
-    RaBitQ(RaBitQParams),
-    /// True RaBitQ with FFHT rotation (32x compression, ~95% recall with rescore)
-    TrueRaBitQ,
 }
 
 /// Builder for creating HNSWIndex with compile-time safety
@@ -201,19 +194,8 @@ impl HNSWIndexBuilder {
 
         let index = match self.quantization {
             HNSWQuantization::None => CoreHNSW::new(dimensions, params, self.metric, false)?,
-            HNSWQuantization::Binary => CoreHNSW::new_with_binary(dimensions, params, self.metric)
-                .map_err(|e| anyhow::anyhow!(e))?,
             HNSWQuantization::SQ8 => CoreHNSW::new_with_sq8(dimensions, params, self.metric)
                 .map_err(|e| anyhow::anyhow!(e))?,
-            HNSWQuantization::RaBitQ(rabitq_params) => {
-                CoreHNSW::new_with_asymmetric(dimensions, params, self.metric, rabitq_params)
-                    .map_err(|e| anyhow::anyhow!(e))?
-            }
-            HNSWQuantization::TrueRaBitQ => {
-                // True RaBitQ uses binary storage structure with FFHT rotation
-                CoreHNSW::new_with_true_rabitq(dimensions, params, self.metric)
-                    .map_err(|e| anyhow::anyhow!(e))?
-            }
         };
 
         Ok(HNSWIndex {
@@ -352,139 +334,13 @@ impl HNSWIndex {
         })
     }
 
-    /// Create new HNSW index with `RaBitQ` asymmetric search
-    ///
-    /// Uses asymmetric distance computation for 2-3x faster search:
-    /// - Query vector stays full precision
-    /// - Candidate vectors use `RaBitQ` quantization (8x smaller)
-    /// - Original vectors stored for rescore accuracy
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality
-    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
-    /// * `distance_fn` - Distance function (only L2 supported for asymmetric)
-    /// * `rabitq_params` - `RaBitQ` quantization parameters (2, 4, or 8 bit)
-    ///
-    /// # Example
-    /// ```ignore
-    /// let index = HNSWIndex::new_with_asymmetric(
-    ///     128,
-    ///     CoreParams::default().with_m(16).with_ef_construction(100),
-    ///     DistanceFunction::L2,
-    ///     RaBitQParams::bits4(),
-    /// )?;
-    /// ```
-    pub fn new_with_asymmetric(
-        dimensions: usize,
-        params: CoreParams,
-        distance_fn: DistanceFunction,
-        rabitq_params: RaBitQParams,
-    ) -> Result<Self> {
-        let index = CoreHNSW::new_with_asymmetric(dimensions, params, distance_fn, rabitq_params)
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        Ok(Self {
-            index,
-            max_elements: 1_000_000, // Default for asymmetric
-            max_nb_connection: params.m,
-            ef_construction: params.ef_construction,
-            ef_search: params.ef_construction, // Match ef_construction initially
-            dimensions,
-            num_vectors: 0,
-        })
-    }
-
-    /// Create new HNSW index with SQ8 (Scalar Quantization)
-    ///
-    /// SQ8 compresses f32 → u8 (4x smaller) and uses direct SIMD operations
-    /// for ~2x faster search than full precision.
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality
-    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
-    /// * `distance_fn` - Distance function (only L2 supported for SQ8)
-    ///
-    /// # Performance
-    /// - Search: ~2x faster than full precision
-    /// - Memory: 4x smaller quantized storage (+ original for reranking)
-    /// - Recall: ~99% with reranking
-    ///
-    /// # Example
-    /// ```ignore
-    /// let index = HNSWIndex::new_with_sq8(
-    ///     768,
-    ///     CoreParams::default().with_m(16).with_ef_construction(100),
-    ///     DistanceFunction::L2,
-    /// )?;
-    /// ```
+    /// Create HNSW index with SQ8 (4x compression, ~99% recall)
     pub fn new_with_sq8(
         dimensions: usize,
         params: CoreParams,
         distance_fn: DistanceFunction,
     ) -> Result<Self> {
         let index = CoreHNSW::new_with_sq8(dimensions, params, distance_fn)
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        Ok(Self {
-            index,
-            max_elements: 1_000_000, // Default for SQ8
-            max_nb_connection: params.m,
-            ef_construction: params.ef_construction,
-            ef_search: params.ef_construction, // Match ef_construction initially
-            dimensions,
-            num_vectors: 0,
-        })
-    }
-
-    /// Create new HNSW index with Binary (1-bit) quantization
-    ///
-    /// Binary quantization uses SIMD-optimized Hamming distance for extremely
-    /// fast search with 32x memory compression.
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality (384+ recommended)
-    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
-    /// * `distance_fn` - Distance function (only L2 supported for binary)
-    ///
-    /// # Performance
-    /// - Search: 2-4x faster than SQ8 (SIMD Hamming is extremely fast)
-    /// - Memory: 32x smaller quantized storage (+ original for reranking)
-    /// - Recall: ~85% raw, ~95-98% with reranking
-    ///
-    /// # Example
-    /// ```ignore
-    /// let index = HNSWIndex::new_with_binary(
-    ///     768,
-    ///     CoreParams::default().with_m(16).with_ef_construction(100),
-    ///     DistanceFunction::L2,
-    /// )?;
-    /// ```
-    pub fn new_with_binary(
-        dimensions: usize,
-        params: CoreParams,
-        distance_fn: DistanceFunction,
-    ) -> Result<Self> {
-        let index = CoreHNSW::new_with_binary(dimensions, params, distance_fn)
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        Ok(Self {
-            index,
-            max_elements: 1_000_000, // Default for binary
-            max_nb_connection: params.m,
-            ef_construction: params.ef_construction,
-            ef_search: params.ef_construction, // Match ef_construction initially
-            dimensions,
-            num_vectors: 0,
-        })
-    }
-
-    /// Create index with True RaBitQ quantization (32x compression with FFHT rotation)
-    pub fn new_with_true_rabitq(
-        dimensions: usize,
-        params: CoreParams,
-        distance_fn: DistanceFunction,
-    ) -> Result<Self> {
-        let index = CoreHNSW::new_with_true_rabitq(dimensions, params, distance_fn)
             .map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(Self {
@@ -498,7 +354,7 @@ impl HNSWIndex {
         })
     }
 
-    /// Check if this index uses asymmetric search (`RaBitQ` or `SQ8`)
+    /// Check if this index uses asymmetric search (`SQ8`)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
         self.index.is_asymmetric()
@@ -999,18 +855,6 @@ mod tests {
         // (L2 decomposition in search_layer_mono causes ~10% recall regression)
         assert!(index.is_asymmetric());
         assert!(index.is_sq8());
-    }
-
-    #[test]
-    fn test_builder_rabitq_quantization() {
-        let index = HNSWIndex::builder()
-            .dimensions(128)
-            .quantization(HNSWQuantization::RaBitQ(RaBitQParams::default()))
-            .build()
-            .unwrap();
-
-        assert!(index.is_asymmetric());
-        assert!(!index.is_sq8());
     }
 
     #[test]

@@ -48,7 +48,7 @@ impl HNSWIndex {
         };
 
         // Check if quantization is enabled
-        let quantization_enabled = matches!(self.vectors, VectorStorage::BinaryQuantized { .. });
+        let quantization_enabled = !matches!(self.vectors, VectorStorage::FullPrecision { .. });
 
         let stats = IndexStats {
             num_vectors: self.len(),

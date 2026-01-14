@@ -224,7 +224,7 @@ impl HNSWIndex {
         reader.read_exact(&mut vectors_bytes)?;
         let mut vectors: VectorStorage = postcard::from_bytes(&vectors_bytes)?;
 
-        // Reconstruct internal state that isn't serialized (e.g., RaBitQIndex)
+        // Reconstruct internal state that isn't serialized (e.g., precomputed norms)
         vectors.reconstruct_after_load();
 
         // Verify dimensions match

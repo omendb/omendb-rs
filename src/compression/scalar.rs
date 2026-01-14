@@ -94,8 +94,23 @@ impl ScalarParams {
             return Err("All vectors must have same dimensions");
         }
 
-        // Collect ALL values across all vectors and dimensions
-        let mut all_values: Vec<f32> = vectors.iter().flat_map(|v| v.iter().copied()).collect();
+        // Limit samples to avoid OOM for large batches (100k samples is enough for percentiles)
+        const MAX_SAMPLES: usize = 100_000;
+        let total_elements = vectors.len() * dimensions;
+        
+        let mut all_values: Vec<f32> = if total_elements > MAX_SAMPLES {
+            let step = total_elements / MAX_SAMPLES;
+            vectors.iter()
+                .flat_map(|v| v.iter().copied())
+                .enumerate()
+                .filter(|(i, _)| i % step == 0)
+                .map(|(_, val)| val)
+                .take(MAX_SAMPLES)
+                .collect()
+        } else {
+            vectors.iter().flat_map(|v| v.iter().copied()).collect()
+        };
+        
         all_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let n = all_values.len();

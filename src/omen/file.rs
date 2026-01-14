@@ -58,7 +58,7 @@ const CHECKPOINT_THRESHOLD: u64 = 1000;
 /// Graph traversal is handled by `HNSWIndex` in the vector layer.
 pub struct OmenFile {
     path: PathBuf,
-    file: File,
+    file: Option<File>,
     mmap: Option<MmapMut>,
     header: OmenHeader,
 
@@ -117,7 +117,7 @@ impl OmenFile {
 
         Ok(Self {
             path: omen_path,
-            file,
+            file: Some(file),
             mmap: None,
             header,
             vectors_mem: Vec::new(),
@@ -210,7 +210,7 @@ impl OmenFile {
 
         let mut db = Self {
             path: omen_path,
-            file,
+            file: Some(file),
             mmap,
             header,
             vectors_mem,
@@ -400,6 +400,11 @@ impl OmenFile {
         self.wal.append(WalEntry::delete_node(0, id))?;
         self.wal.sync()?;
         self.deleted.insert(index, true);
+
+        // Remove mapping so it can be re-inserted later
+        self.id_to_index.remove(id);
+        self.index_to_id.remove(&index);
+
         Ok(true)
     }
 
@@ -434,13 +439,17 @@ impl OmenFile {
             return Ok(());
         }
 
+        // Reclaim space by filtering out deleted items from metadata
+        let mut metadata_mem = self.metadata_mem.clone();
+        metadata_mem.retain(|k, _| !self.deleted.contains_key(k));
+
         // Serialize metadata with postcard (compact, fast, actively maintained)
         let checkpoint_meta = CheckpointMetadata {
             id_to_index: self.id_to_index.clone(),
             index_to_id: self.index_to_id.clone(),
-            deleted: self.deleted.clone(),
+            deleted: HashMap::new(), // Clear deleted map in checkpoint - they are fully purged now
             config: self.config.clone(),
-            metadata: self.metadata_mem.clone(),
+            metadata: metadata_mem,
         };
         let metadata_bytes = postcard::to_allocvec(&checkpoint_meta)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -504,10 +513,17 @@ impl OmenFile {
             // Write header
             temp_file.write_all(&self.header.to_bytes())?;
 
-            // Write vectors
+            // Write vectors (skip data for deleted vectors to save disk space/IO)
             temp_file.seek(SeekFrom::Start(vector_offset as u64))?;
-            for vector in &self.vectors_mem {
-                for &val in vector {
+            let dim = self.header.dimensions as usize;
+            let zero_vec = vec![0.0f32; dim];
+            for (idx, vector) in self.vectors_mem.iter().enumerate() {
+                let to_write = if self.deleted.contains_key(&(idx as u32)) {
+                    &zero_vec
+                } else {
+                    vector
+                };
+                for &val in to_write {
                     temp_file.write_all(&val.to_le_bytes())?;
                 }
             }
@@ -526,8 +542,9 @@ impl OmenFile {
             temp_file.sync_all()?;
         }
 
-        // Drop mmap before rename (required - file handle must be released)
+        // Drop mmap and file handle before rename (required for Windows compatibility)
         self.mmap = None;
+        self.file = None;
 
         // Atomic rename (POSIX guarantees atomicity for same-filesystem rename)
         std::fs::rename(&temp_path, &self.path)?;
@@ -543,13 +560,23 @@ impl OmenFile {
         let mut opts = OpenOptions::new();
         opts.read(true).write(true);
         configure_open_options(&mut opts);
-        self.file = opts.open(&self.path)?;
-        lock_exclusive(&self.file)?;
+        let file = opts.open(&self.path)?;
+        lock_exclusive(&file)?;
 
         self.wal.truncate()?;
         self.wal.append(WalEntry::checkpoint(0))?;
         self.wal.sync()?;
-        self.mmap = Some(unsafe { MmapMut::map_mut(&self.file)? });
+        self.mmap = Some(unsafe { MmapMut::map_mut(&file)? });
+        self.file = Some(file);
+
+        // Purge deleted vectors from memory after successful checkpoint
+        for (idx, vector) in self.vectors_mem.iter_mut().enumerate() {
+            if self.deleted.contains_key(&(idx as u32)) {
+                vector.clear();
+                vector.shrink_to_fit();
+            }
+        }
+        self.deleted.clear();
 
         Ok(())
     }
@@ -771,9 +798,9 @@ impl OmenFile {
     ///
     /// These values are persisted to disk on the next checkpoint/flush.
     pub fn set_hnsw_params(&mut self, m: u16, ef_construction: u16, ef_search: u16) {
-        self.header.m = m;
-        self.header.ef_construction = ef_construction;
-        self.header.ef_search = ef_search;
+        self.header.hnsw_m = m as u32;
+        self.header.hnsw_ef_construction = ef_construction as u32;
+        self.header.hnsw_ef_search = ef_search as u32;
     }
 
     /// Get storage path

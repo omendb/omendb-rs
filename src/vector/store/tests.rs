@@ -117,13 +117,10 @@ fn test_rebuild_index() {
 
 #[test]
 fn test_quantization_insert() {
-    use crate::compression::RaBitQParams;
     use crate::vector::QuantizationMode;
 
-    // Create store with 4-bit RaBitQ quantization
-    let params = RaBitQParams::bits4();
-    let mut store =
-        VectorStore::new_with_quantization(128, QuantizationMode::LegacyMultiBit(params));
+    // Create store with SQ8 quantization
+    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::SQ8);
 
     // Insert vectors
     for i in 0..50 {
@@ -140,13 +137,10 @@ fn test_quantization_insert() {
 
 #[test]
 fn test_quantization_search_accuracy() {
-    use crate::compression::RaBitQParams;
     use crate::vector::QuantizationMode;
 
-    // Create store with 4-bit RaBitQ quantization
-    let params = RaBitQParams::bits4();
-    let mut store =
-        VectorStore::new_with_quantization(128, QuantizationMode::LegacyMultiBit(params));
+    // Create store with SQ8 quantization
+    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::SQ8);
 
     // Insert vectors
     for i in 0..100 {
@@ -168,13 +162,10 @@ fn test_quantization_search_accuracy() {
 
 #[test]
 fn test_quantization_batch_insert() {
-    use crate::compression::RaBitQParams;
     use crate::vector::QuantizationMode;
 
-    // Create store with 4-bit RaBitQ quantization
-    let params = RaBitQParams::bits4();
-    let mut store =
-        VectorStore::new_with_quantization(128, QuantizationMode::LegacyMultiBit(params));
+    // Create store with SQ8 quantization
+    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::SQ8);
 
     // Batch insert vectors
     let vectors: Vec<Vector> = (0..100).map(|i| random_vector(128, i)).collect();

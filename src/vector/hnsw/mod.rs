@@ -4,7 +4,7 @@
 // - Cache-optimized (64-byte aligned hot data)
 // - Memory-efficient (flattened index with u32 node IDs)
 // - SIMD-ready (AVX2/AVX512 distance calculations)
-// - SOTA features support (Extended RaBitQ, delta encoding)
+// - SQ8 scalar quantization support (4x compression)
 
 mod error;
 mod graph_storage;

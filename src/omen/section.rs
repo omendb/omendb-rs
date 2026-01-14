@@ -64,10 +64,14 @@ impl SectionEntry {
     }
 
     /// Parse from bytes
-    #[must_use]
-    pub fn from_bytes(buf: &[u8; 24]) -> Self {
-        // Direct array indexing - infallible for fixed-size input buffer
-        Self {
+    pub fn from_bytes(buf: &[u8]) -> std::io::Result<Self> {
+        if buf.len() < 24 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Section entry too small",
+            ));
+        }
+        Ok(Self {
             section_type: SectionType::from(u16::from_le_bytes([buf[0], buf[1]])),
             flags: u16::from_le_bytes([buf[2], buf[3]]),
             offset: u64::from_le_bytes([
@@ -76,7 +80,7 @@ impl SectionEntry {
             length: u64::from_le_bytes([
                 buf[16], buf[17], buf[18], buf[19], buf[20], buf[21], buf[22], buf[23],
             ]),
-        }
+        })
     }
 
     /// Check if section is valid (has data)
@@ -94,7 +98,7 @@ mod tests {
     fn test_section_entry_roundtrip() {
         let entry = SectionEntry::new(SectionType::Vectors, 4096, 1024 * 1024);
         let bytes = entry.to_bytes();
-        let parsed = SectionEntry::from_bytes(&bytes);
+        let parsed = SectionEntry::from_bytes(&bytes).unwrap();
 
         assert_eq!(parsed.section_type, SectionType::Vectors);
         assert_eq!(parsed.offset, 4096);

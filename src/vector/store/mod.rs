@@ -3,7 +3,7 @@
 //! `VectorStore` manages a collection of vectors and provides k-NN search
 //! using HNSW (Hierarchical Navigable Small World) algorithm.
 //!
-//! Optional Extended `RaBitQ` quantization for memory-efficient storage.
+//! Optional SQ8 quantization for memory-efficient storage.
 //!
 //! Optional tantivy-based full-text search for hybrid (vector + BM25) retrieval.
 
@@ -18,7 +18,6 @@ use super::hnsw::HNSWParams;
 use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
 use super::QuantizationMode;
-use crate::compression::{QuantizationBits, RaBitQParams};
 use crate::distance::l2_distance;
 use crate::omen::{MetadataIndex, OmenFile};
 use crate::text::{
@@ -100,78 +99,33 @@ mod tests;
 /// Compute optimal oversample factor based on quantization mode.
 ///
 /// Different quantization modes have different baseline recall:
-/// - Binary: ~85% accurate, needs higher oversampling (5.0x)
 /// - SQ8: ~99% accurate, needs minimal oversampling (2.0x)
-/// - Legacy 2-bit: ~93% accurate, needs more candidates (4.0x)
-/// - Legacy 4-bit: ~96% accurate, moderate oversampling (3.0x)
-/// - Legacy 8-bit: ~99% accurate, minimal oversampling (2.0x)
-/// - RaBitQ (FFHT 1-bit): ~50% raw recall with symmetric binary-binary,
-///   needs high oversampling (10.0x) to achieve ~80% recall with rescore
-/// - No quantization: 1.0 (rescore disabled, oversample unused)
-///
-/// Note: RaBitQ uses symmetric binary-binary quantization which is less accurate
-/// than the reference asymmetric scalar-binary approach (~95% recall).
-#[allow(deprecated)]
+/// - No quantization: 1.0 (rescore disabled)
 fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
     match mode {
         None => 1.0,
-        Some(QuantizationMode::Binary) => 5.0, // ~85% recall baseline
         Some(QuantizationMode::SQ8) => 2.0,
-        Some(QuantizationMode::LegacyMultiBit(params)) => match params.bits_per_dim.to_u8() {
-            2 => 4.0, // ~93% recall baseline
-            8 => 2.0, // ~99% recall baseline
-            _ => 3.0, // 4-bit default: ~96% recall baseline
-        },
-        // FFHT 1-bit symmetric needs high oversampling due to noisy distance estimates
-        Some(QuantizationMode::RaBitQ) => 10.0, // ~50% raw, ~80% with rescore@10x
     }
 }
 
 /// Convert stored quantization mode ID to QuantizationMode.
 ///
-/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8, 5=binary, 6=true-rabitq
-#[allow(deprecated)]
+/// Mode IDs: 0=none, 1=sq8
 fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
     match mode_id {
         1 => Some(QuantizationMode::SQ8),
-        2 => Some(QuantizationMode::LegacyMultiBit(RaBitQParams {
-            bits_per_dim: QuantizationBits::Bits4,
-            ..RaBitQParams::default()
-        })),
-        3 => Some(QuantizationMode::LegacyMultiBit(RaBitQParams {
-            bits_per_dim: QuantizationBits::Bits2,
-            ..RaBitQParams::default()
-        })),
-        4 => Some(QuantizationMode::LegacyMultiBit(RaBitQParams {
-            bits_per_dim: QuantizationBits::Bits8,
-            ..RaBitQParams::default()
-        })),
-        5 => Some(QuantizationMode::Binary),
-        6 => Some(QuantizationMode::RaBitQ),
-        _ => None, // 0 and unknown values
+        _ => None,
     }
 }
 
 /// Convert QuantizationMode to storage mode ID.
-///
-/// Mode IDs: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8, 5=binary, 6=true-rabitq
-#[allow(deprecated)]
 fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
     match mode {
-        QuantizationMode::Binary => 5,
         QuantizationMode::SQ8 => 1,
-        QuantizationMode::LegacyMultiBit(p) => match p.bits_per_dim.to_u8() {
-            2 => 3,
-            8 => 4,
-            _ => 2, // 4-bit default
-        },
-        QuantizationMode::RaBitQ => 6,
     }
 }
 
-/// Create HNSW index with proper quantization mode.
-///
-/// This ensures rebuilt indexes preserve the original quantization settings.
+/// Create HNSW index with quantization mode.
 fn create_hnsw_index(
     dimensions: usize,
     hnsw_m: usize,
@@ -183,18 +137,12 @@ fn create_hnsw_index(
 ) -> Result<HNSWIndex> {
     use super::hnsw_index::HNSWQuantization;
 
-    // Ensure minimum values for HNSW parameters
     let m = hnsw_m.max(DEFAULT_HNSW_M);
     let ef_construction = hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION);
     let ef_search = hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH);
 
-    // Convert QuantizationMode to HNSWQuantization
-    #[allow(deprecated)]
     let quantization = match quantization_mode {
-        Some(QuantizationMode::Binary) => HNSWQuantization::Binary,
         Some(QuantizationMode::SQ8) => HNSWQuantization::SQ8,
-        Some(QuantizationMode::LegacyMultiBit(params)) => HNSWQuantization::RaBitQ(params.clone()),
-        Some(QuantizationMode::RaBitQ) => HNSWQuantization::TrueRaBitQ,
         None => HNSWQuantization::None,
     };
 
@@ -209,7 +157,7 @@ fn create_hnsw_index(
         .build_with_training(training_vectors)
 }
 
-/// Initialize HNSW index from pending quantization mode.
+/// Initialize HNSW index from quantization mode.
 fn initialize_quantized_hnsw(
     dimensions: usize,
     hnsw_m: usize,
@@ -217,41 +165,16 @@ fn initialize_quantized_hnsw(
     hnsw_ef_search: usize,
     distance_metric: Metric,
     quant_mode: QuantizationMode,
-    training_vectors: &[Vec<f32>],
+    _training_vectors: &[Vec<f32>],
 ) -> Result<HNSWIndex> {
     let hnsw_params = HNSWParams::default()
         .with_m(hnsw_m)
         .with_ef_construction(hnsw_ef_construction)
         .with_ef_search(hnsw_ef_search);
 
-    #[allow(deprecated)]
     match quant_mode {
-        QuantizationMode::Binary => {
-            let mut idx =
-                HNSWIndex::new_with_binary(dimensions, hnsw_params, distance_metric.into())?;
-            idx.train_quantizer(training_vectors)?;
-            Ok(idx)
-        }
         QuantizationMode::SQ8 => {
             HNSWIndex::new_with_sq8(dimensions, hnsw_params, distance_metric.into())
-        }
-        QuantizationMode::LegacyMultiBit(params) => {
-            let mut idx = HNSWIndex::new_with_asymmetric(
-                dimensions,
-                hnsw_params,
-                distance_metric.into(),
-                params,
-            )?;
-            idx.train_quantizer(training_vectors)?;
-            Ok(idx)
-        }
-        QuantizationMode::RaBitQ => {
-            // For now, TrueRaBitQ uses the same HNSW structure as Binary
-            // TODO: Integrate true RaBitQ with proper training
-            let mut idx =
-                HNSWIndex::new_with_true_rabitq(dimensions, hnsw_params, distance_metric.into())?;
-            idx.train_quantizer(training_vectors)?;
-            Ok(idx)
         }
     }
 }
@@ -485,10 +408,10 @@ impl VectorStore {
 
         // Get HNSW parameters from header (for rebuilding HNSW if needed)
         let header = storage.header();
-        let distance_metric = header.distance_fn;
-        let hnsw_m = header.m as usize;
-        let hnsw_ef_construction = header.ef_construction as usize;
-        let hnsw_ef_search = header.ef_search as usize;
+        let distance_metric = header.metric;
+        let hnsw_m = header.hnsw_m as usize;
+        let hnsw_ef_construction = header.hnsw_ef_construction as usize;
+        let hnsw_ef_search = header.hnsw_ef_search as usize;
 
         // Load vectors to RAM only if NOT quantized
         let (vectors, real_indices) = if is_quantized {
