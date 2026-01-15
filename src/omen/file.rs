@@ -189,13 +189,10 @@ impl OmenFile {
             if let Some(ref mmap) = mmap {
                 let manifest_offset = f.manifest_offset as usize;
                 if manifest_offset < mmap.len() {
-                    // Note: We need a way to know manifest length. 
-                    // Usually we serialize it with a length prefix or use EOF.
-                    // For now, let's assume it's stored before the footer.
+                    // Assume manifest is stored before the footer
                     let manifest_bytes = &mmap[manifest_offset..f.total_len as usize];
-                    if let Ok(m) = postcard::from_bytes::<OmenManifest>(manifest_bytes) {
-                        manifest = m;
-                    }
+                    manifest = postcard::from_bytes::<OmenManifest>(manifest_bytes)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Failed to decode V2 manifest: {e}")))?;
                 }
             }
         }
@@ -227,7 +224,8 @@ impl OmenFile {
                 // V2: Load vectors from manifest
                 let dim = header.dimensions as usize;
                 for location in &manifest.nodes {
-                    if location.segment_type == SegmentType::Vectors || location.segment_type == SegmentType::InterleavedNode {
+                    // TODO: Phase 3 - support InterleavedNode by extracting vector part
+                    if location.segment_type == SegmentType::Vectors {
                         let start = location.offset as usize;
                         let end = start + location.length as usize;
                         if end <= mmap.len() {
@@ -559,6 +557,7 @@ impl OmenFile {
         }
 
         // Rebuild V2 manifest for new offsets
+        // NOTE: OmenDB assumes dense NodeIDs corresponding to `vectors_mem` indices.
         let mut new_manifest = OmenManifest::new();
         let dim = self.header.dimensions as usize;
         let vec_size = dim * 4;
