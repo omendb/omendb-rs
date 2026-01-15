@@ -564,7 +564,7 @@ impl VectorStore {
             storage_path: Some(path.to_path_buf()),
             text_index,
             text_search_config: None,
-            pending_quantization: None,
+            pending_quantization: quantization_mode,
             hnsw_m: hnsw_m.max(DEFAULT_HNSW_M),
             hnsw_ef_construction: hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION),
             hnsw_ef_search: hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH),
@@ -652,6 +652,11 @@ impl VectorStore {
         // Save dimensions to storage if set
         if dimensions > 0 {
             storage.put_config("dimensions", dimensions as u64)?;
+        }
+
+        // Save quantization mode to storage if set
+        if let Some(ref q) = options.quantization {
+            storage.put_quantization_mode(quantization_mode_to_id(q))?;
         }
 
         // Initialize text index if enabled

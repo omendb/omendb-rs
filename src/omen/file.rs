@@ -5,7 +5,6 @@
 use crate::omen::{
     align_to_page,
     header::{OmenHeader, HEADER_SIZE},
-    section::{SectionEntry, SectionType},
     vectors::VectorSection,
     wal::{Wal, WalEntry, WalEntryType},
     NodeLocation, OmenFooter, OmenManifest, SegmentType,
@@ -117,6 +116,17 @@ impl OmenFile {
 
         let header = OmenHeader::new(dimensions);
         file.write_all(&header.to_bytes())?;
+
+        // Write initial empty V2 Manifest and Footer
+        let manifest = OmenManifest::new();
+        let manifest_bytes = postcard::to_allocvec(&manifest).unwrap();
+        let manifest_offset = file.seek(SeekFrom::Current(0))?;
+        file.write_all(&manifest_bytes)?;
+
+        let total_len = file.seek(SeekFrom::Current(0))?;
+        let footer = OmenFooter::new(manifest_offset, total_len);
+        file.write_all(&footer.to_bytes())?;
+
         file.sync_all()?;
 
         Ok(Self {
@@ -132,7 +142,7 @@ impl OmenFile {
             config: HashMap::from([("dimensions".to_string(), u64::from(dimensions))]),
             wal: Wal::open(&wal_path)?,
             hnsw_index_bytes: None,
-            manifest: OmenManifest::new(),
+            manifest,
         })
     }
 
@@ -151,6 +161,7 @@ impl OmenFile {
         let file_len = file.metadata()?.len();
         let mut footer = None;
         if file_len >= (HEADER_SIZE + OmenFooter::SIZE) as u64 {
+            // Seek to absolute end - Footer size
             file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
             let mut footer_buf = [0u8; OmenFooter::SIZE];
             file.read_exact(&mut footer_buf)?;
@@ -159,6 +170,12 @@ impl OmenFile {
                 footer = Some(f);
             }
         }
+
+        // Mandatory Footer check (0.0.x Policy: no shims)
+        let footer = footer.ok_or_else(|| io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid or missing OmenFooter. Legacy V1 files are no longer supported."
+        ))?;
 
         let mut header_buf = [0u8; HEADER_SIZE];
         file.seek(SeekFrom::Start(0))?;
@@ -172,94 +189,52 @@ impl OmenFile {
         };
 
         let wal = Wal::open(&wal_path)?;
-        let mut config = HashMap::from([
-            ("dimensions".to_string(), u64::from(header.dimensions)),
-            ("count".to_string(), header.count),
-        ]);
 
-        let mut vectors_mem = Vec::new();
-        let mut id_to_index = HashMap::new();
-        let mut index_to_id = HashMap::new();
-        let mut metadata_mem = HashMap::new();
-        let mut deleted = HashMap::new();
         let mut manifest = OmenManifest::new();
 
-        if let Some(f) = footer {
-            // V2: Load manifest from offset
-            if let Some(ref mmap) = mmap {
-                let manifest_offset = f.manifest_offset as usize;
-                if manifest_offset < mmap.len() {
-                    // Assume manifest is stored before the footer
-                    let manifest_bytes = &mmap[manifest_offset..f.total_len as usize];
-                    manifest = postcard::from_bytes::<OmenManifest>(manifest_bytes)
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Failed to decode V2 manifest: {e}")))?;
-                }
+        // Load manifest (Mandatory in V2)
+        if let Some(ref mmap) = mmap {
+            let manifest_offset = footer.manifest_offset as usize;
+            if manifest_offset < mmap.len() {
+                let manifest_bytes = &mmap[manifest_offset..footer.total_len as usize];
+                manifest = postcard::from_bytes::<OmenManifest>(manifest_bytes)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Failed to decode V2 manifest: {e}")))?;
+            } else {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Manifest offset out of bounds"));
             }
         }
+
+        let mut vectors_mem = Vec::new();
+        let id_to_index = manifest.id_to_index.clone();
+        let index_to_id = manifest.index_to_id.clone();
+        let metadata_mem = manifest.metadata.clone();
+        let mut config = manifest.config.clone();
+        
+        // Ensure dimensions and count are synced from header
+        config.insert("dimensions".to_string(), u64::from(header.dimensions));
+        config.insert("count".to_string(), header.count);
+
+        let mut deleted = HashMap::new();
 
         if let Some(ref mmap) = mmap {
-            // Load vectors (Fallback to Header if manifest is empty - V1)
-            if manifest.nodes.is_empty() {
-                if let Some(vec_section) = header.get_section(SectionType::Vectors) {
-                    let vec_offset = vec_section.offset as usize;
-                    let dim = header.dimensions as usize;
-                    let count = header.count as usize;
-                    let vec_size = dim * 4;
-
-                    for i in 0..count {
-                        let start = vec_offset + i * vec_size;
-                        let end = start + vec_size;
-                        if end <= mmap.len() {
-                            vectors_mem.push(read_vector_from_bytes(&mmap[start..end], dim));
-                            // Synthesize V2 manifest entry
-                            manifest.nodes.push(NodeLocation {
-                                offset: start as u64,
-                                length: vec_size as u32,
-                                segment_type: SegmentType::Vectors,
-                            });
-                        }
-                    }
-                }
-            } else {
-                // V2: Load vectors from manifest
-                let dim = header.dimensions as usize;
-                for location in &manifest.nodes {
-                    // TODO: Phase 3 - support InterleavedNode by extracting vector part
-                    if location.segment_type == SegmentType::Vectors {
-                        let start = location.offset as usize;
-                        let end = start + location.length as usize;
-                        if end <= mmap.len() {
-                            vectors_mem.push(read_vector_from_bytes(&mmap[start..end], dim));
-                        }
+            // V2: Load vectors from manifest (Primary path)
+            let dim = header.dimensions as usize;
+            for location in &manifest.nodes {
+                if location.segment_type == SegmentType::Vectors {
+                    let start = location.offset as usize;
+                    let end = start + location.length as usize;
+                    if end <= mmap.len() {
+                        vectors_mem.push(read_vector_from_bytes(&mmap[start..end], dim));
                     }
                 }
             }
 
-            // Load metadata section (postcard-encoded CheckpointMetadata)
-            if let Some(meta_section) = header.get_section(SectionType::MetadataRaw) {
-                let meta_offset = meta_section.offset as usize;
-                let meta_len = meta_section.length as usize;
-                if meta_offset + meta_len <= mmap.len() {
-                    let meta_bytes = &mmap[meta_offset..meta_offset + meta_len];
-                    if let Ok(meta) = postcard::from_bytes::<CheckpointMetadata>(meta_bytes) {
-                        id_to_index = meta.id_to_index;
-                        index_to_id = meta.index_to_id;
-                        deleted = meta.deleted;
-                        config.extend(meta.config);
-                        metadata_mem = meta.metadata;
-                    }
-                }
-            }
+            // Load metadata (V2 manifest-based path will follow in Phase 2)
+            // Note: Legacy V1 metadata loading removed. 
+            // All V2 files must have been created by a checkpoint that wrote the manifest.
         }
 
-        let hnsw_index_bytes = mmap
-            .as_ref()
-            .and_then(|m| header.get_section(SectionType::HnswIndex).map(|s| (m, s)))
-            .and_then(|(m, s)| {
-                let start = s.offset as usize;
-                let end = start + s.length as usize;
-                (end <= m.len()).then(|| m[start..end].to_vec())
-            });
+        let hnsw_index_bytes = None; // TODO: Load from manifest
 
         let mut db = Self {
             path: omen_path,
@@ -533,28 +508,6 @@ impl OmenFile {
         // Update header for new checkpoint
         self.header.count = self.vectors_mem.len() as u64;
         self.header.entry_point = 0; // Entry point managed by HNSWIndex
-        self.header.set_section(SectionEntry::new(
-            SectionType::Vectors,
-            vector_offset as u64,
-            vector_size as u64,
-        ));
-        self.header.set_section(SectionEntry::new(
-            SectionType::Graph,
-            graph_offset as u64,
-            graph_size as u64,
-        ));
-        self.header.set_section(SectionEntry::new(
-            SectionType::MetadataRaw,
-            metadata_offset as u64,
-            metadata_size as u64,
-        ));
-        if hnsw_size > 0 {
-            self.header.set_section(SectionEntry::new(
-                SectionType::HnswIndex,
-                hnsw_offset as u64,
-                hnsw_size as u64,
-            ));
-        }
 
         // Rebuild V2 manifest for new offsets
         // NOTE: OmenDB assumes dense NodeIDs corresponding to `vectors_mem` indices.
@@ -569,6 +522,13 @@ impl OmenFile {
             });
         }
         new_manifest.max_node_id = (self.vectors_mem.len() as u32).saturating_sub(1);
+        
+        // V2 Foundation: Persist mappings in manifest
+        new_manifest.id_to_index = self.id_to_index.clone();
+        new_manifest.index_to_id = self.index_to_id.clone();
+        new_manifest.metadata = self.metadata_mem.clone();
+        new_manifest.config = self.config.clone();
+        
         self.manifest = new_manifest;
 
         // Write to temp file
@@ -577,7 +537,6 @@ impl OmenFile {
             opts.write(true).create(true).truncate(true);
             configure_open_options(&mut opts);
             let mut temp_file = opts.open(&temp_path)?;
-            temp_file.set_len(total_size as u64)?;
 
             // Write header
             temp_file.write_all(&self.header.to_bytes())?;
@@ -643,6 +602,8 @@ impl OmenFile {
         let file = opts.open(&self.path)?;
         lock_exclusive(&file)?;
 
+        // The file now contains the Footer and Manifest from temp_file
+        
         self.wal.truncate()?;
         self.wal.append(WalEntry::checkpoint(0))?;
         self.wal.sync()?;
@@ -685,18 +646,19 @@ impl OmenFile {
         let Some(ref mmap) = self.mmap else {
             return Ok(None);
         };
-        let Some(vec_section) = self.header.get_section(SectionType::Vectors) else {
+
+        // Use Manifest to locate vector on disk
+        let Some(location) = self.manifest.nodes.get(id) else {
             return Ok(None);
         };
 
-        let dim = self.header.dimensions as usize;
-        if id >= self.header.count as usize {
+        if location.segment_type != SegmentType::Vectors {
             return Ok(None);
         }
 
-        let vec_size = dim * 4;
-        let start = vec_section.offset as usize + id * vec_size;
-        let end = start + vec_size;
+        let dim = self.header.dimensions as usize;
+        let start = location.offset as usize;
+        let end = start + location.length as usize;
 
         if end <= mmap.len() {
             Ok(Some(read_vector_from_bytes(&mmap[start..end], dim)))
@@ -749,9 +711,13 @@ impl OmenFile {
     /// Store configuration value
     pub fn put_config(&mut self, key: &str, value: u64) -> Result<()> {
         self.config.insert(key.to_string(), value);
-        // Sync dimensions to header
-        if key == "dimensions" {
-            self.header.dimensions = value as u32;
+        // Sync to header
+        match key {
+            "dimensions" => self.header.dimensions = value as u32,
+            "quantization" => {
+                self.header.quantization = crate::omen::header::QuantizationCode::from(value as u8);
+            }
+            _ => {}
         }
         Ok(())
     }

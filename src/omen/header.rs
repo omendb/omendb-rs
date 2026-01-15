@@ -1,6 +1,5 @@
 //! .omen file header (4KB)
 
-use crate::omen::section::{SectionEntry, SectionType};
 use std::io::{self, Read};
 
 /// Magic bytes: "OMEN"
@@ -12,9 +11,6 @@ pub const VERSION_MINOR: u16 = 0;
 
 /// Header size (4KB, one page)
 pub const HEADER_SIZE: usize = 4096;
-
-/// Maximum number of sections
-pub const MAX_SECTIONS: usize = 8;
 
 /// Quantization code for file format serialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +129,6 @@ pub struct OmenHeader {
     pub hnsw_m: u32,
     pub hnsw_ef_construction: u32,
     pub hnsw_ef_search: u32,
-    pub sections: Vec<SectionEntry>,
 }
 
 impl Default for OmenHeader {
@@ -149,7 +144,6 @@ impl Default for OmenHeader {
             hnsw_m: 16,
             hnsw_ef_construction: 100,
             hnsw_ef_search: 100,
-            sections: Vec::new(),
         }
     }
 }
@@ -187,35 +181,6 @@ impl OmenHeader {
         self
     }
 
-    /// Add a section entry
-    pub fn add_section(&mut self, section_type: SectionType, offset: u64, length: u64) {
-        if self.sections.len() < MAX_SECTIONS {
-            self.sections
-                .push(SectionEntry::new(section_type, offset, length));
-        }
-    }
-
-    /// Set or update a section entry
-    pub fn set_section(&mut self, entry: SectionEntry) {
-        if let Some(existing) = self
-            .sections
-            .iter_mut()
-            .find(|s| s.section_type == entry.section_type)
-        {
-            *existing = entry;
-        } else if self.sections.len() < MAX_SECTIONS {
-            self.sections.push(entry);
-        }
-    }
-
-    /// Get section by type
-    #[must_use]
-    pub fn get_section(&self, section_type: SectionType) -> Option<&SectionEntry> {
-        self.sections
-            .iter()
-            .find(|s| s.section_type == section_type)
-    }
-
     /// Serialize header to bytes
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -242,14 +207,8 @@ impl OmenHeader {
         buf[32..36].copy_from_slice(&self.hnsw_ef_search.to_le_bytes());
 
         // Section count and entry_point
-        buf[36..40].copy_from_slice(&(self.sections.len() as u32).to_le_bytes());
+        buf[36..40].copy_from_slice(&0u32.to_le_bytes()); // Section count always 0 in V2
         buf[40..48].copy_from_slice(&self.entry_point.to_le_bytes());
-
-        // Section entries (24 bytes each, starting at offset 64)
-        for (i, section) in self.sections.iter().enumerate() {
-            let offset = 64 + i * 24;
-            buf[offset..offset + 24].copy_from_slice(&section.to_bytes());
-        }
 
         buf
     }
@@ -282,16 +241,9 @@ impl OmenHeader {
         let hnsw_m = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
         let hnsw_ef_construction = u32::from_le_bytes([data[28], data[29], data[30], data[31]]);
         let hnsw_ef_search = u32::from_le_bytes([data[32], data[33], data[34], data[35]]);
-        let section_count = u32::from_le_bytes([data[36], data[37], data[38], data[39]]) as usize;
         let entry_point = u64::from_le_bytes([
             data[40], data[41], data[42], data[43], data[44], data[45], data[46], data[47],
         ]);
-
-        let mut sections = Vec::with_capacity(section_count.min(MAX_SECTIONS));
-        for i in 0..section_count.min(MAX_SECTIONS) {
-            let offset = 64 + i * 24;
-            sections.push(SectionEntry::from_bytes(&data[offset..offset + 24])?);
-        }
 
         Ok(Self {
             version_major,
@@ -304,7 +256,6 @@ impl OmenHeader {
             hnsw_m,
             hnsw_ef_construction,
             hnsw_ef_search,
-            sections,
         })
     }
 

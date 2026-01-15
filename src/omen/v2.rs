@@ -128,6 +128,14 @@ pub struct OmenManifest {
     pub prev_manifest: Option<u64>,
     /// Highest NodeID in this manifest
     pub max_node_id: u32,
+
+    // V2: Persist mappings in manifest for Foundation phase
+    // In Phase 2 these will move to columnar storage
+    pub id_to_index: std::collections::HashMap<String, u32>,
+    pub index_to_id: std::collections::HashMap<u32, String>,
+    pub metadata: std::collections::HashMap<u32, Vec<u8>>,
+    /// Global configuration
+    pub config: std::collections::HashMap<String, u64>,
 }
 
 impl OmenManifest {
@@ -136,6 +144,10 @@ impl OmenManifest {
             nodes: Vec::new(),
             prev_manifest: None,
             max_node_id: 0,
+            id_to_index: std::collections::HashMap::new(),
+            index_to_id: std::collections::HashMap::new(),
+            metadata: std::collections::HashMap::new(),
+            config: std::collections::HashMap::new(),
         }
     }
 }
