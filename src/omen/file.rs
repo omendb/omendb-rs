@@ -12,7 +12,6 @@ use crate::omen::{
 use anyhow::Result;
 use fs2::FileExt;
 use memmap2::MmapMut;
-use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -38,15 +37,6 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
             "Database is locked by another process",
         )
     })
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct CheckpointMetadata {
-    id_to_index: HashMap<String, u32>,
-    index_to_id: HashMap<u32, String>,
-    deleted: HashMap<u32, bool>,
-    config: HashMap<String, u64>,
-    metadata: HashMap<u32, Vec<u8>>,
 }
 
 /// Checkpoint threshold (number of WAL entries before compaction)
@@ -214,7 +204,7 @@ impl OmenFile {
         config.insert("dimensions".to_string(), u64::from(header.dimensions));
         config.insert("count".to_string(), header.count);
 
-        let mut deleted = HashMap::new();
+        let deleted = HashMap::new();
 
         if let Some(ref mmap) = mmap {
             // V2: Load vectors from manifest (Primary path)
@@ -229,17 +219,47 @@ impl OmenFile {
                 }
             }
 
-            // Load metadata (V2 manifest-based path will follow in Phase 2)
-            // Note: Legacy V1 metadata loading removed. 
-            // All V2 files must have been created by a checkpoint that wrote the manifest.
+            // Load HNSW index bytes from manifest
+            let mut hnsw_index_bytes = None;
+            for location in &manifest.nodes {
+                if location.segment_type == SegmentType::IndexMetadata {
+                    let start = location.offset as usize;
+                    let end = start + location.length as usize;
+                    if end <= mmap.len() {
+                        hnsw_index_bytes = Some(mmap[start..end].to_vec());
+                        break;
+                    }
+                }
+            }
+
+            let mmap = Some(unsafe { MmapMut::map_mut(&file)? });
+            let mut db = Self {
+                path: omen_path,
+                file: Some(file),
+                mmap,
+                header,
+                vectors_mem,
+                id_to_index,
+                index_to_id,
+                metadata_mem,
+                deleted,
+                config,
+                wal,
+                hnsw_index_bytes,
+                manifest,
+            };
+
+            // Replay WAL
+            db.recover()?;
+
+            return Ok(db);
         }
 
-        let hnsw_index_bytes = None; // TODO: Load from manifest
-
+        // If no mmap (empty file), return basic instance
         let mut db = Self {
             path: omen_path,
             file: Some(file),
-            mmap,
+            mmap: None,
             header,
             vectors_mem,
             id_to_index,
@@ -248,7 +268,7 @@ impl OmenFile {
             deleted,
             config,
             wal,
-            hnsw_index_bytes,
+            hnsw_index_bytes: None,
             manifest,
         };
 
@@ -468,35 +488,15 @@ impl OmenFile {
             return Ok(());
         }
 
-        // Reclaim space by filtering out deleted items from metadata
-        let mut metadata_mem = self.metadata_mem.clone();
-        metadata_mem.retain(|k, _| !self.deleted.contains_key(k));
-
-        // Serialize metadata with postcard (compact, fast, actively maintained)
-        let checkpoint_meta = CheckpointMetadata {
-            id_to_index: self.id_to_index.clone(),
-            index_to_id: self.index_to_id.clone(),
-            deleted: HashMap::new(), // Clear deleted map in checkpoint - they are fully purged now
-            config: self.config.clone(),
-            metadata: metadata_mem,
-        };
-        let metadata_bytes = postcard::to_allocvec(&checkpoint_meta)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
         // Calculate section sizes
         let vector_size =
             VectorSection::size_for_count(self.header.dimensions, self.vectors_mem.len() as u64)
                 as usize;
-        let graph_size = 0; // Graph managed by HNSWIndex, not stored in OmenFile
-        let metadata_size = metadata_bytes.len();
         let hnsw_size = self.hnsw_index_bytes.as_ref().map_or(0, Vec::len);
 
         // Calculate offsets (page-aligned)
         let vector_offset = align_to_page(HEADER_SIZE);
-        let graph_offset = align_to_page(vector_offset + vector_size);
-        let metadata_offset = align_to_page(graph_offset + graph_size);
-        let hnsw_offset = align_to_page(metadata_offset + metadata_size);
-        let total_size = align_to_page(hnsw_offset + hnsw_size);
+        let hnsw_offset = align_to_page(vector_offset + vector_size);
 
         // Create temp file path
         let temp_path = {
@@ -526,8 +526,22 @@ impl OmenFile {
         // V2 Foundation: Persist mappings in manifest
         new_manifest.id_to_index = self.id_to_index.clone();
         new_manifest.index_to_id = self.index_to_id.clone();
-        new_manifest.metadata = self.metadata_mem.clone();
+        
+        // Filter deleted from metadata before persisting
+        let mut metadata_mem = self.metadata_mem.clone();
+        metadata_mem.retain(|k, _| !self.deleted.contains_key(k));
+        new_manifest.metadata = metadata_mem;
+        
         new_manifest.config = self.config.clone();
+
+        // Write HNSW index metadata if present
+        if hnsw_size > 0 {
+            new_manifest.nodes.push(NodeLocation {
+                offset: hnsw_offset as u64,
+                length: hnsw_size as u32,
+                segment_type: SegmentType::IndexMetadata,
+            });
+        }
         
         self.manifest = new_manifest;
 
@@ -555,10 +569,6 @@ impl OmenFile {
                     temp_file.write_all(&val.to_le_bytes())?;
                 }
             }
-
-            // Write metadata
-            temp_file.seek(SeekFrom::Start(metadata_offset as u64))?;
-            temp_file.write_all(&metadata_bytes)?;
 
             // Write HNSW index (if present)
             if let Some(ref hnsw_bytes) = self.hnsw_index_bytes {
