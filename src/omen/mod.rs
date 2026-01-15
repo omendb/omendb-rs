@@ -20,6 +20,7 @@ mod graph;
 mod header;
 mod metadata;
 mod section;
+mod v2;
 mod vectors;
 mod wal;
 
@@ -28,6 +29,7 @@ pub use graph::GraphSection;
 pub use header::{Metric, OmenHeader, HEADER_SIZE, MAGIC, VERSION_MAJOR, VERSION_MINOR};
 pub use metadata::{FieldIndex, Filter, FilterValue, MetadataIndex};
 pub use section::{SectionEntry, SectionType};
+pub use v2::{NodeLocation, OmenFooter, OmenManifest, SegmentType};
 pub use vectors::VectorSection;
 pub use wal::{Wal, WalEntry, WalEntryType};
 

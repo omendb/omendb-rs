@@ -95,11 +95,7 @@ impl HNSWIndex {
         let deleted_neighbor_set: HashSet<u32> = deleted_neighbors.iter().copied().collect();
 
         let mut repairs = 0;
-        let m = if level == 0 {
-            self.params.m * 2
-        } else {
-            self.params.m
-        };
+        let m = self.params.m_for_level(level);
 
         // For each node that has an edge to the deleted node
         for &node_id in &nodes_with_edge_to_deleted {

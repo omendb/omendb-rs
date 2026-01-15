@@ -36,21 +36,18 @@ fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMo
         serde_json::Value::Bool(false) => Ok(None),
         serde_json::Value::String(s) => match s.to_lowercase().as_str() {
             "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
-            "rabitq" => Ok(Some(QuantizationMode::true_rabitq())),
             _ => Err(Error::new(
                 Status::InvalidArg,
                 format!(
                     "Unknown quantization mode: '{}'\n\
-                     Valid modes:\n\
-                     - true or 'sq8' or 'scalar': 4x smaller, ~99% recall (RECOMMENDED)\n\
-                     - 'rabitq': 32x smaller, ~95% recall",
+                     Valid modes: true, 'sq8', or 'scalar' (4x smaller, ~99% recall)",
                     s
                 ),
             )),
         },
         _ => Err(Error::new(
             Status::InvalidArg,
-            "quantization must be true, false, or a string ('sq8', 'scalar', 'rabitq')",
+            "quantization must be true, false, or 'sq8'/'scalar'",
         )),
     }
 }
@@ -1188,7 +1185,7 @@ impl VectorDatabase {
 /// - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
 /// - efConstruction: 100 (build quality, higher = better graph, slower build)
 /// - efSearch: 100 (search quality, higher = better recall, slower search)
-/// - quantization: null (RaBitQ bit width: 2, 4, or 8 for compression)
+/// - quantization: null (true/"sq8" for 4x compression, ~99% recall)
 /// - rescore: true when quantization enabled (rerank candidates with exact distance)
 /// - oversample: 3.0 (fetch k*oversample candidates when rescoring)
 /// - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
@@ -1204,9 +1201,7 @@ pub struct OpenOptions {
     pub ef_search: Option<u32>,
     /// Quantization mode (default: null = no quantization)
     /// - true or "sq8": SQ8 4x compression, ~99% recall (RECOMMENDED)
-    /// - "rabitq": RaBitQ 8x compression, ~98% recall
-    /// - "binary": Binary 32x compression, ~95% recall
-    /// - 2, 4, 8: RaBitQ with specific bits (legacy)
+    /// - false/null: Full precision (no quantization)
     #[napi(ts_type = "boolean | string | number | null | undefined")]
     pub quantization: Option<serde_json::Value>,
     /// Rescore candidates with exact distance (default: true when quantization enabled)
@@ -1242,16 +1237,16 @@ pub struct OpenOptions {
 ///   efSearch: 150
 /// });
 ///
-/// // With RaBitQ quantization (8x memory reduction)
+/// // With SQ8 quantization (4x memory reduction, ~99% recall)
 /// const db = omendb.open("./mydb", {
 ///   dimensions: 128,
-///   quantization: 4  // 4-bit quantization
+///   quantization: true  // or "sq8"
 /// });
 ///
 /// // Quantization with custom rescore settings
 /// const db = omendb.open("./mydb", {
 ///   dimensions: 128,
-///   quantization: 4,
+///   quantization: true,
 ///   rescore: false,    // Disable rescore for max speed
 ///   oversample: 5.0    // Or increase oversample for better recall
 /// });
@@ -1276,7 +1271,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let rescore = opts.rescore;
     let oversample = opts.oversample;
 
-    // Parse quantization (handles true, "sq8", "rabitq", "binary", or numbers)
+    // Parse quantization (handles true or "sq8")
     let quant_mode = opts
         .quantization
         .as_ref()

@@ -87,7 +87,7 @@ class VectorDatabase:
     Provides fast similarity search using HNSW indexing with:
     - ~19,000 QPS @ 10K vectors with 100% recall
     - 20,000-28,000 vec/s insert throughput
-    - Extended RaBitQ 8x compression
+    - SQ8 quantization (4x compression, ~99% recall)
     - ACORN-1 filtered search (37.79x speedup)
 
     Supports context manager protocol for automatic cleanup.
@@ -549,7 +549,7 @@ def open(
     m: int | None = None,
     ef_construction: int | None = None,
     ef_search: int | None = None,
-    quantization: bool | Literal["sq8", "rabitq"] | None = None,
+    quantization: bool | Literal["sq8", "scalar"] | None = None,
     rescore: bool | None = None,
     oversample: float | None = None,
     metric: Literal["l2", "euclidean", "cosine", "dot", "ip"] | None = None,
@@ -565,7 +565,6 @@ def open(
         ef_search: Search quality (default: 100).
         quantization: Enable quantization:
             - True or "sq8": 4x smaller, ~99% recall (recommended)
-            - "rabitq": 8x smaller, ~98% recall
             - None/False: Full precision
         rescore: Rerank with full precision (default: True when quantized).
         oversample: Candidate multiplier for rescoring (default: 3.0).

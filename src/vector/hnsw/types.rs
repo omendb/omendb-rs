@@ -115,6 +115,19 @@ impl HNSWParams {
         }
         Ok(())
     }
+
+    /// Get number of bidirectional links for a given level
+    ///
+    /// Level 0 typically uses 2*M for better connectivity in the base layer.
+    #[inline]
+    #[must_use]
+    pub fn m_for_level(&self, level: u8) -> usize {
+        if level == 0 {
+            self.m * 2
+        } else {
+            self.m
+        }
+    }
 }
 
 /// HNSW node with cache-optimized layout

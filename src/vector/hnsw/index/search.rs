@@ -7,11 +7,218 @@ use crate::compression::scalar::QueryPrep;
 use crate::distance::norm_squared;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::types::{
-    Candidate, Cosine, Distance, DistanceFunction, NegDot, SearchResult, L2,
+    Candidate, Distance, DistanceFunction, SearchResult,
 };
 use ordered_float::OrderedFloat;
-use std::cmp::Reverse;
 use tracing::{debug, error, instrument, warn};
+
+/// Context for distance computation during search
+///
+/// Encapsulates all data needed for optimized distance computation (SQ8, L2 decomposition, etc.)
+/// to avoid repeated branching and parameter passing in the hot loop.
+struct DistanceContext<'a> {
+    query: &'a [f32],
+    sq8_prep: Option<QueryPrep>,
+    query_norm: f32,
+    use_l2_decomposition: bool,
+    force_full_precision: bool,
+    vectors: &'a crate::vector::hnsw::storage::VectorStorage,
+}
+
+impl<'a> DistanceContext<'a> {
+    /// Create a new distance context for the current search
+    fn new<D: Distance>(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
+        let use_l2_decomposition =
+            index.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
+        let query_norm = if use_l2_decomposition {
+            norm_squared(query)
+        } else {
+            0.0
+        };
+
+        let sq8_prep = if force_full_precision {
+            None
+        } else {
+            index.vectors.prepare_sq8_query(query)
+        };
+
+        Self {
+            query,
+            sq8_prep,
+            query_norm,
+            use_l2_decomposition,
+            force_full_precision,
+            vectors: &index.vectors,
+        }
+    }
+
+    /// Compute distance to a node using the best available method
+    #[inline(always)]
+    fn compute<D: Distance>(&self, node_id: u32) -> Result<f32> {
+        // SQ8 fast path (skip if force_full_precision)
+        if !self.force_full_precision {
+            if let Some(ref prep) = self.sq8_prep {
+                if let Some(dist) = self.vectors.distance_sq8_with_prep(prep, node_id) {
+                    return Ok(dist);
+                }
+            }
+        }
+
+        // L2 decomposition path
+        if self.use_l2_decomposition {
+            if let Some(dist) = self
+                .vectors
+                .distance_l2_decomposed(self.query, self.query_norm, node_id)
+            {
+                return Ok(dist);
+            }
+        }
+
+        // Fallback
+        if self.force_full_precision {
+            let vec = self
+                .vectors
+                .get_dequantized(node_id)
+                .ok_or(HNSWError::VectorNotFound(node_id))?;
+            Ok(D::distance(self.query, &vec))
+        } else {
+            let vec = self
+                .vectors
+                .get(node_id)
+                .ok_or(HNSWError::VectorNotFound(node_id))?;
+            Ok(D::distance(self.query, vec))
+        }
+    }
+}
+
+/// Trait for collecting neighbors during HNSW traversal
+trait NeighborCollector {
+    /// Collect unvisited neighbors into the output buffer
+    fn collect(
+        &self,
+        node_id: u32,
+        level: u8,
+        visited: &crate::vector::hnsw::query_buffers::VisitedList,
+        output: &mut Vec<u32>,
+    );
+
+    /// Get initial entry points (some collectors may expand them)
+    fn prepare_entry_points(
+        &self,
+        entry_points: &[u32],
+        level: u8,
+        visited: &mut crate::vector::hnsw::query_buffers::VisitedList,
+        output: &mut Vec<u32>,
+    );
+}
+
+/// Standard HNSW neighbor collector
+struct StandardCollector<'a> {
+    neighbors: &'a crate::vector::hnsw::graph_storage::GraphStorage,
+}
+
+impl NeighborCollector for StandardCollector<'_> {
+    #[inline(always)]
+    fn collect(
+        &self,
+        node_id: u32,
+        level: u8,
+        visited: &crate::vector::hnsw::query_buffers::VisitedList,
+        output: &mut Vec<u32>,
+    ) {
+        output.clear();
+        self.neighbors.with_neighbors(node_id, level, |neighbor_list| {
+            for &id in neighbor_list {
+                if !visited.contains(id) {
+                    output.push(id);
+                }
+            }
+        });
+    }
+
+    #[inline(always)]
+    fn prepare_entry_points(
+        &self,
+        entry_points: &[u32],
+        _level: u8,
+        visited: &mut crate::vector::hnsw::query_buffers::VisitedList,
+        output: &mut Vec<u32>,
+    ) {
+        output.clear();
+        for &ep in entry_points {
+            if !visited.contains(ep) {
+                visited.insert(ep);
+                output.push(ep);
+            }
+        }
+    }
+}
+
+/// ACORN-1 filtered neighbor collector (arXiv:2403.04871)
+struct AcornCollector<'a, F>
+where
+    F: Fn(u32) -> bool,
+{
+    index: &'a HNSWIndex,
+    filter_fn: &'a F,
+    m: usize,
+}
+
+impl<'a, F> NeighborCollector for AcornCollector<'a, F>
+where
+    F: Fn(u32) -> bool,
+{
+    #[inline(always)]
+    fn collect(
+        &self,
+        node_id: u32,
+        level: u8,
+        visited: &crate::vector::hnsw::query_buffers::VisitedList,
+        output: &mut Vec<u32>,
+    ) {
+        self.index.collect_matching_neighbors_acorn1(
+            node_id,
+            level,
+            visited,
+            self.filter_fn,
+            self.m,
+            output,
+        );
+    }
+
+    #[inline(always)]
+    fn prepare_entry_points(
+        &self,
+        entry_points: &[u32],
+        level: u8,
+        visited: &mut crate::vector::hnsw::query_buffers::VisitedList,
+        output: &mut Vec<u32>,
+    ) {
+        output.clear();
+        let mut matching = Vec::new();
+        for &ep in entry_points {
+            if visited.contains(ep) {
+                continue;
+            }
+            visited.insert(ep);
+
+            if (self.filter_fn)(ep) {
+                output.push(ep);
+            } else {
+                // Expand entry point to find matching neighbors
+                self.index.collect_matching_neighbors_acorn1(
+                    ep,
+                    level,
+                    visited,
+                    self.filter_fn,
+                    self.m,
+                    &mut matching,
+                );
+                output.extend(matching.iter().copied());
+            }
+        }
+    }
+}
 
 /// Validation result for search parameters
 enum SearchValidation {
@@ -22,6 +229,107 @@ enum SearchValidation {
 }
 
 impl HNSWIndex {
+    /// Unified search layer loop for both standard and filtered search.
+    #[inline(always)]
+    fn search_layer_internal<D, C>(
+        &self,
+        entry_points: &[u32],
+        ctx: &DistanceContext,
+        collector: &C,
+        ef: usize,
+        level: u8,
+    ) -> Result<Vec<u32>>
+    where
+        D: Distance,
+        C: NeighborCollector,
+    {
+        use super::super::query_buffers;
+        use std::cmp::Reverse;
+
+        query_buffers::with_buffers(|buffers| {
+            let visited = &mut buffers.visited;
+            let candidates = &mut buffers.candidates;
+            let working = &mut buffers.working;
+            let unvisited = &mut buffers.unvisited;
+            let results_buf = &mut buffers.results;
+
+            // Prepare entry points
+            collector.prepare_entry_points(entry_points, level, visited, unvisited);
+            for &ep in unvisited.iter() {
+                let dist = ctx.compute::<D>(ep)?;
+                let candidate = Candidate::new(ep, dist);
+                candidates.push(Reverse(candidate));
+                working.push(candidate);
+            }
+
+            if candidates.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            // Greedy search
+            while let Some(Reverse(current)) = candidates.pop() {
+                if let Some(&farthest) = working.peek() {
+                    if current.distance > farthest.distance {
+                        break;
+                    }
+                }
+
+                // Collect neighbors using specialized collector
+                collector.collect(current.node_id, level, visited, unvisited);
+
+                // Platform-aware prefetching
+                use crate::vector::hnsw::prefetch::PrefetchConfig;
+                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
+                let neighbors_slice = unvisited.as_slice();
+
+                if PREFETCH_ENABLED {
+                    for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
+                        self.vectors.prefetch(id);
+                        self.neighbors.prefetch(id, level);
+                    }
+                }
+
+                for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
+                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < neighbors_slice.len() {
+                        let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
+                        self.vectors.prefetch(prefetch_id);
+                        self.neighbors.prefetch(prefetch_id, level);
+                    }
+
+                    if visited.contains(neighbor_id) {
+                        continue;
+                    }
+                    visited.insert(neighbor_id);
+
+                    let dist = ctx.compute::<D>(neighbor_id)?;
+                    let neighbor = Candidate::new(neighbor_id, dist);
+
+                    if let Some(&farthest) = working.peek() {
+                        if neighbor.distance < farthest.distance || working.len() < ef {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+                            if working.len() > ef {
+                                working.pop();
+                            }
+                        }
+                    } else {
+                        candidates.push(Reverse(neighbor));
+                        working.push(neighbor);
+                    }
+                }
+            }
+
+            // Return node IDs sorted by distance
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance);
+            let mut output = Vec::with_capacity(results_buf.len());
+            output.extend(results_buf.iter().map(|c| c.node_id));
+            Ok(output)
+        })
+    }
+
     /// Validate search parameters (k, ef, query dimensions, NaN/Inf)
     ///
     /// Returns `SearchValidation::Empty` if index is empty (caller should return empty results).
@@ -85,24 +393,13 @@ impl HNSWIndex {
         // Start from entry point, descend to layer 0
         let mut nearest = vec![entry_point];
 
-        // Use asymmetric search for SQ8 storage (faster quantized distance)
-        let use_asymmetric = self.is_asymmetric();
-
         // Greedy search at each layer (find 1 nearest)
         for level in (1..=entry_level).rev() {
-            nearest = if use_asymmetric {
-                self.search_layer_asymmetric(query, &nearest, 1, level)?
-            } else {
-                self.search_layer(query, &nearest, 1, level)?
-            };
+            nearest = self.search_layer(query, &nearest, 1, level)?;
         }
 
         // Beam search at layer 0 (find ef nearest)
-        let candidates = if use_asymmetric {
-            self.search_layer_asymmetric(query, &nearest, ef.max(k), 0)?
-        } else {
-            self.search_layer(query, &nearest, ef.max(k), 0)?
-        };
+        let candidates = self.search_layer(query, &nearest, ef.max(k), 0)?;
 
         // Convert to SearchResult and return k nearest
         // Pre-allocate with exact capacity to avoid reallocations
@@ -349,33 +646,16 @@ impl HNSWIndex {
         F: Fn(u32) -> bool,
     {
         // Dispatch once at the top level to get full monomorphization benefits
-        match self.distance_fn {
-            DistanceFunction::L2 => self.search_layer_with_filter_mono::<L2, F>(
+        dispatch_distance!(self.distance_fn, D => {
+            self.search_layer_with_filter_mono::<D, F>(
                 query,
                 entry_points,
                 ef,
                 level,
                 filter_fn,
                 selectivity,
-            ),
-            DistanceFunction::Cosine => self.search_layer_with_filter_mono::<Cosine, F>(
-                query,
-                entry_points,
-                ef,
-                level,
-                filter_fn,
-                selectivity,
-            ),
-            DistanceFunction::NegativeDotProduct => self
-                .search_layer_with_filter_mono::<NegDot, F>(
-                    query,
-                    entry_points,
-                    ef,
-                    level,
-                    filter_fn,
-                    selectivity,
-                ),
-        }
+            )
+        })
     }
 
     /// ACORN-1 GET-NEIGHBORS: Collect matching neighbors with 2-hop expansion.
@@ -450,160 +730,14 @@ impl HNSWIndex {
     where
         F: Fn(u32) -> bool,
     {
-        use super::super::query_buffers;
-
-        let m = self.params.m;
-
-        // L2 decomposition: pre-compute query norm once
-        let use_l2_decomposition =
-            self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
-        let query_norm = if use_l2_decomposition {
-            norm_squared(query)
-        } else {
-            0.0
+        let ctx = DistanceContext::new::<D>(query, self, false);
+        let collector = AcornCollector {
+            index: self,
+            filter_fn,
+            m: self.params.m,
         };
 
-        // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
-        let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
-
-        // Cache reference to storage
-        let vectors = &self.vectors;
-
-        // Distance computation helper (avoids repeating checks)
-        let compute_distance = |node_id: u32| -> Result<f32> {
-            // SQ8 fast path: use pre-prepared query
-            if let Some(ref prep) = sq8_prep {
-                if let Some(dist) = vectors.distance_sq8_with_prep(prep, node_id) {
-                    return Ok(dist);
-                }
-            }
-            // L2 decomposition path (FullPrecision only)
-            if use_l2_decomposition {
-                return self
-                    .distance_l2_decomposed(query, query_norm, node_id)
-                    .ok_or(HNSWError::VectorNotFound(node_id));
-            }
-            // Fallback to full precision
-            let vec = vectors
-                .get(node_id)
-                .ok_or(HNSWError::VectorNotFound(node_id))?;
-            Ok(D::distance(query, vec))
-        };
-
-        query_buffers::with_buffers(|buffers| {
-            let visited = &mut buffers.visited;
-            let candidates = &mut buffers.candidates;
-            let working = &mut buffers.working;
-            let matching_neighbors = &mut buffers.unvisited;
-            let results_buf = &mut buffers.results;
-
-            // Initialize with entry points
-            for &ep in entry_points {
-                visited.insert(ep);
-
-                if filter_fn(ep) {
-                    // Entry point matches - add directly
-                    let dist = compute_distance(ep)?;
-                    let candidate = Candidate::new(ep, dist);
-                    candidates.push(Reverse(candidate));
-                    working.push(candidate);
-                } else {
-                    // Entry point doesn't match - expand via ACORN-1
-                    self.collect_matching_neighbors_acorn1(
-                        ep,
-                        level,
-                        visited,
-                        filter_fn,
-                        m,
-                        matching_neighbors,
-                    );
-
-                    for &neighbor_id in matching_neighbors.iter() {
-                        if visited.contains(neighbor_id) {
-                            continue;
-                        }
-                        visited.insert(neighbor_id);
-                        let dist = compute_distance(neighbor_id)?;
-                        let candidate = Candidate::new(neighbor_id, dist);
-                        candidates.push(Reverse(candidate));
-                        working.push(candidate);
-                    }
-                }
-            }
-
-            if candidates.is_empty() {
-                return Ok(Vec::new());
-            }
-
-            // Greedy search with ACORN-1 neighbor expansion
-            while let Some(Reverse(current)) = candidates.pop() {
-                if let Some(&farthest) = working.peek() {
-                    if current.distance > farthest.distance {
-                        break;
-                    }
-                }
-
-                // Collect matching neighbors via ACORN-1 2-hop expansion
-                self.collect_matching_neighbors_acorn1(
-                    current.node_id,
-                    level,
-                    visited,
-                    filter_fn,
-                    m,
-                    matching_neighbors,
-                );
-
-                // Prefetching setup
-                use crate::vector::hnsw::prefetch::PrefetchConfig;
-                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
-                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
-
-                let neighbors_slice = matching_neighbors.as_slice();
-
-                if PREFETCH_ENABLED {
-                    for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
-                        self.vectors.prefetch(id);
-                        self.neighbors.prefetch(id, level);
-                    }
-                }
-
-                for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
-                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < neighbors_slice.len() {
-                        let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
-                        self.vectors.prefetch(prefetch_id);
-                        self.neighbors.prefetch(prefetch_id, level);
-                    }
-
-                    if visited.contains(neighbor_id) {
-                        continue;
-                    }
-                    visited.insert(neighbor_id);
-
-                    let dist = compute_distance(neighbor_id)?;
-                    let neighbor = Candidate::new(neighbor_id, dist);
-
-                    if let Some(&farthest) = working.peek() {
-                        if neighbor.distance < farthest.distance || working.len() < ef {
-                            candidates.push(Reverse(neighbor));
-                            working.push(neighbor);
-                            if working.len() > ef {
-                                working.pop();
-                            }
-                        }
-                    } else {
-                        candidates.push(Reverse(neighbor));
-                        working.push(neighbor);
-                    }
-                }
-            }
-
-            // Return node IDs sorted by distance (closest first)
-            results_buf.extend(working.drain());
-            results_buf.sort_unstable_by_key(|c| c.distance);
-            let mut output = Vec::with_capacity(results_buf.len());
-            output.extend(results_buf.iter().map(|c| c.node_id));
-            Ok(output)
-        })
+        self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
     }
 
     /// Search for nearest neighbors at a specific level
@@ -622,15 +756,9 @@ impl HNSWIndex {
     ) -> Result<Vec<u32>> {
         // Dispatch once at the top level to get full monomorphization benefits
         // inside the hot loop. Critical for x86/ARM servers.
-        match self.distance_fn {
-            DistanceFunction::L2 => self.search_layer_mono::<L2>(query, entry_points, ef, level),
-            DistanceFunction::Cosine => {
-                self.search_layer_mono::<Cosine>(query, entry_points, ef, level)
-            }
-            DistanceFunction::NegativeDotProduct => {
-                self.search_layer_mono::<NegDot>(query, entry_points, ef, level)
-            }
-        }
+        dispatch_distance!(self.distance_fn, D => {
+            self.search_layer_mono::<D>(query, entry_points, ef, level)
+        })
     }
 
     /// Monomorphized search layer (static dispatch, no match in hot loop)
@@ -646,138 +774,12 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
     ) -> Result<Vec<u32>> {
-        use super::super::query_buffers;
-
-        // L2 decomposition optimization: pre-compute query norm once
-        // ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ (~7% faster for L2)
-        // Note: Only used for FullPrecision storage. SQ8 uses its own optimized path.
-        let use_l2_decomposition =
-            self.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
-        let query_norm = if use_l2_decomposition {
-            norm_squared(query)
-        } else {
-            0.0 // unused
+        let ctx = DistanceContext::new::<D>(query, self, false);
+        let collector = StandardCollector {
+            neighbors: &self.neighbors,
         };
 
-        // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
-        // This avoids the O(D) prepare_query() overhead per distance calculation
-        let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
-
-        // Cache reference to storage to avoid repeated field access
-        let vectors = &self.vectors;
-        let neighbors = &self.neighbors;
-
-        // Distance computation helper - avoids repeated branching in hot loop
-        let compute_distance = |id: u32| -> Result<f32> {
-            // SQ8 fast path: use pre-prepared query
-            if let Some(ref prep) = sq8_prep {
-                if let Some(dist) = vectors.distance_sq8_with_prep(prep, id) {
-                    return Ok(dist);
-                }
-            }
-            // L2 decomposition path (FullPrecision only)
-            if use_l2_decomposition {
-                return vectors
-                    .distance_l2_decomposed(query, query_norm, id)
-                    .ok_or(HNSWError::VectorNotFound(id));
-            }
-            // Fallback to full precision
-            let vec = vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
-            Ok(D::distance(query, vec))
-        };
-
-        query_buffers::with_buffers(|buffers| {
-            let visited = &mut buffers.visited;
-            let candidates = &mut buffers.candidates;
-            let working = &mut buffers.working;
-            let unvisited = &mut buffers.unvisited;
-            let results_buf = &mut buffers.results;
-
-            // Initialize with entry points
-            for &ep in entry_points {
-                let dist = compute_distance(ep)?;
-                let candidate = Candidate::new(ep, dist);
-
-                candidates.push(Reverse(candidate));
-                working.push(candidate);
-                visited.insert(ep);
-            }
-
-            // Greedy search
-            while let Some(Reverse(current)) = candidates.pop() {
-                // If current is farther than farthest in working set, stop
-                if let Some(&farthest) = working.peek() {
-                    if current.distance > farthest.distance {
-                        break;
-                    }
-                }
-
-                // Collect unvisited neighbors into pre-allocated buffer (no allocation!)
-                unvisited.clear();
-                neighbors.with_neighbors(current.node_id, level, |neighbor_list| {
-                    for &id in neighbor_list {
-                        if !visited.contains(id) {
-                            unvisited.push(id);
-                        }
-                    }
-                });
-
-                // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
-                // enabled on x86/ARM servers where it provides 8-50% gains
-                use crate::vector::hnsw::prefetch::PrefetchConfig;
-                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
-                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
-
-                let unvisited_slice = unvisited.as_slice();
-
-                // Initial burst prefetch (skip on Apple Silicon)
-                // Prefetch both vectors AND neighbor lists for upcoming nodes
-                if PREFETCH_ENABLED {
-                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                        vectors.prefetch(id);
-                        neighbors.prefetch(id, level); // Graph-aware prefetch
-                    }
-                }
-
-                for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    // Stride prefetch: vectors and neighbor lists
-                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
-                        let prefetch_id = unvisited_slice[i + PREFETCH_DISTANCE];
-                        vectors.prefetch(prefetch_id);
-                        neighbors.prefetch(prefetch_id, level); // Graph-aware prefetch
-                    }
-
-                    visited.insert(neighbor_id);
-
-                    let dist = compute_distance(neighbor_id)?;
-                    let neighbor = Candidate::new(neighbor_id, dist);
-
-                    // If neighbor is closer than farthest in working set, or working set not full, add it
-                    if let Some(&farthest) = working.peek() {
-                        if dist < farthest.distance.0 || working.len() < ef {
-                            candidates.push(Reverse(neighbor));
-                            working.push(neighbor);
-
-                            // Prune working set to ef size
-                            if working.len() > ef {
-                                working.pop();
-                            }
-                        }
-                    } else {
-                        candidates.push(Reverse(neighbor));
-                        working.push(neighbor);
-                    }
-                }
-            }
-
-            // Return node IDs sorted by distance (closest first)
-            // Use pre-allocated buffer to avoid per-search allocation
-            results_buf.extend(working.drain());
-            results_buf.sort_unstable_by_key(|c| c.distance); // unstable is faster
-            let mut output = Vec::with_capacity(results_buf.len());
-            output.extend(results_buf.iter().map(|c| c.node_id));
-            Ok(output)
-        })
+        self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
     }
 
     /// Search layer using full precision (f32) distances
@@ -791,205 +793,13 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
     ) -> Result<Vec<u32>> {
-        use super::super::query_buffers;
+        dispatch_distance!(self.distance_fn, D => {
+            let ctx = DistanceContext::new::<D>(query, self, true);
+            let collector = StandardCollector {
+                neighbors: &self.neighbors,
+            };
 
-        query_buffers::with_buffers(|buffers| {
-            let visited = &mut buffers.visited;
-            let candidates = &mut buffers.candidates;
-            let working = &mut buffers.working;
-            let unvisited = &mut buffers.unvisited;
-            let results_buf = &mut buffers.results;
-
-            // Initialize with entry points
-            for &ep in entry_points {
-                let dist = self.distance_cmp_full_precision(query, ep)?;
-                let candidate = Candidate::new(ep, dist);
-
-                candidates.push(Reverse(candidate));
-                working.push(candidate);
-                visited.insert(ep);
-            }
-
-            // Greedy search
-            while let Some(Reverse(current)) = candidates.pop() {
-                if let Some(&farthest) = working.peek() {
-                    if current.distance > farthest.distance {
-                        break;
-                    }
-                }
-
-                unvisited.clear();
-                self.neighbors
-                    .with_neighbors(current.node_id, level, |neighbors| {
-                        for &id in neighbors {
-                            if !visited.contains(id) {
-                                unvisited.push(id);
-                            }
-                        }
-                    });
-
-                // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
-                use crate::vector::hnsw::prefetch::PrefetchConfig;
-                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
-                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
-
-                let unvisited_slice = unvisited.as_slice();
-
-                if PREFETCH_ENABLED {
-                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                        self.vectors.prefetch(id);
-                    }
-                }
-
-                for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
-                        self.vectors
-                            .prefetch(unvisited_slice[i + PREFETCH_DISTANCE]);
-                    }
-
-                    visited.insert(neighbor_id);
-
-                    let dist = self.distance_cmp_full_precision(query, neighbor_id)?;
-                    let neighbor = Candidate::new(neighbor_id, dist);
-
-                    if let Some(&farthest) = working.peek() {
-                        if dist < farthest.distance.0 || working.len() < ef {
-                            candidates.push(Reverse(neighbor));
-                            working.push(neighbor);
-
-                            if working.len() > ef {
-                                working.pop();
-                            }
-                        }
-                    } else {
-                        candidates.push(Reverse(neighbor));
-                        working.push(neighbor);
-                    }
-                }
-            }
-
-            // Use pre-allocated buffer to avoid per-search allocation
-            results_buf.extend(working.drain());
-            results_buf.sort_unstable_by_key(|c| c.distance);
-            let mut output = Vec::with_capacity(results_buf.len());
-            output.extend(results_buf.iter().map(|c| c.node_id));
-            Ok(output)
-        })
-    }
-
-    /// Asymmetric search layer for quantized storage (SQ8)
-    ///
-    /// Uses asymmetric distance computation for fast quantized search.
-    /// SQ8: integer SIMD via distance_sq8_with_prep
-    pub(super) fn search_layer_asymmetric(
-        &self,
-        query: &[f32],
-        entry_points: &[u32],
-        ef: usize,
-        level: u8,
-    ) -> Result<Vec<u32>> {
-        use super::super::query_buffers;
-
-        // SQ8 optimization: prepare query ONCE, use efficient path in hot loop
-        let sq8_prep: Option<QueryPrep> = self.vectors.prepare_sq8_query(query);
-
-        // Cache reference to storage for the closure
-        let vectors = &self.vectors;
-
-        // Distance computation helper for asymmetric search
-        let compute_distance = |id: u32| -> Result<f32> {
-            // SQ8 fast path: use pre-prepared query
-            if let Some(ref prep) = sq8_prep {
-                if let Some(dist) = vectors.distance_sq8_with_prep(prep, id) {
-                    return Ok(dist);
-                }
-            }
-            // Fallback to full precision
-            let vec = vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
-            Ok(crate::distance::l2_distance_squared(query, vec))
-        };
-
-        query_buffers::with_buffers(|buffers| {
-            let visited = &mut buffers.visited;
-            let candidates = &mut buffers.candidates;
-            let working = &mut buffers.working;
-            let unvisited = &mut buffers.unvisited;
-            let results_buf = &mut buffers.results;
-
-            for &ep in entry_points {
-                let dist = compute_distance(ep)?;
-                let candidate = Candidate::new(ep, dist);
-
-                candidates.push(Reverse(candidate));
-                working.push(candidate);
-                visited.insert(ep);
-            }
-
-            // Greedy search
-            while let Some(Reverse(current)) = candidates.pop() {
-                // If current is farther than farthest in working set, stop
-                if let Some(&farthest) = working.peek() {
-                    if current.distance > farthest.distance {
-                        break;
-                    }
-                }
-
-                // Collect unvisited neighbors into pre-allocated buffer
-                unvisited.clear();
-                self.neighbors
-                    .with_neighbors(current.node_id, level, |neighbors| {
-                        for &id in neighbors {
-                            if !visited.contains(id) {
-                                unvisited.push(id);
-                            }
-                        }
-                    });
-
-                let unvisited_slice = unvisited.as_slice();
-
-                // Platform-aware prefetching: disabled on Apple Silicon (DMP handles it)
-                use crate::vector::hnsw::prefetch::PrefetchConfig;
-                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
-                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
-
-                if PREFETCH_ENABLED {
-                    for &id in unvisited_slice.iter().take(PREFETCH_DISTANCE) {
-                        vectors.prefetch(id);
-                    }
-                }
-
-                for (i, &neighbor_id) in unvisited_slice.iter().enumerate() {
-                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < unvisited_slice.len() {
-                        vectors.prefetch(unvisited_slice[i + PREFETCH_DISTANCE]);
-                    }
-
-                    visited.insert(neighbor_id);
-
-                    let dist = compute_distance(neighbor_id)?;
-                    let neighbor = Candidate::new(neighbor_id, dist);
-
-                    if let Some(&farthest) = working.peek() {
-                        if dist < farthest.distance.0 || working.len() < ef {
-                            candidates.push(Reverse(neighbor));
-                            working.push(neighbor);
-
-                            if working.len() > ef {
-                                working.pop();
-                            }
-                        }
-                    } else {
-                        candidates.push(Reverse(neighbor));
-                        working.push(neighbor);
-                    }
-                }
-            }
-
-            // Return node IDs sorted by distance (closest first)
-            results_buf.extend(working.drain());
-            results_buf.sort_unstable_by_key(|c| c.distance);
-            let mut output = Vec::with_capacity(results_buf.len());
-            output.extend(results_buf.iter().map(|c| c.node_id));
-            Ok(output)
+            self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
         })
     }
 }

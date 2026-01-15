@@ -93,6 +93,49 @@ impl HNSWIndex {
         Ok(node_id)
     }
 
+    /// Add bidirectional links and prune neighbors if necessary
+    fn reconcile_node_neighbors(
+        &mut self,
+        node_id: u32,
+        neighbors: &[u32],
+        level: u8,
+    ) -> Result<()> {
+        let m = self.params.m_for_level(level);
+
+        // Add bidirectional links
+        for &neighbor_id in neighbors {
+            self.neighbors
+                .add_bidirectional_link(node_id, neighbor_id, level);
+        }
+
+        // Update neighbor counts
+        self.nodes[node_id as usize].set_neighbor_count(level, neighbors.len());
+
+        // Prune neighbors' connections if they exceed M
+        for &neighbor_id in neighbors {
+            let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, level);
+            if neighbor_neighbors.len() > m {
+                let neighbor_vec = self
+                    .vectors
+                    .get_dequantized(neighbor_id)
+                    .ok_or(HNSWError::VectorNotFound(neighbor_id))?;
+                let pruned = self.select_neighbors_heuristic(
+                    neighbor_id,
+                    &neighbor_neighbors,
+                    m,
+                    level,
+                    &neighbor_vec,
+                )?;
+
+                // Clear and reset neighbors
+                self.neighbors.set_neighbors(neighbor_id, level, pruned.clone());
+                self.nodes[neighbor_id as usize].set_neighbor_count(level, pruned.len());
+            }
+        }
+
+        Ok(())
+    }
+
     /// Insert a vector with entry point hints for faster insertion
     ///
     /// Used by graph merging to speed up insertion when we already know
@@ -161,43 +204,11 @@ impl HNSWIndex {
             let candidates = self.search_layer_full_precision(vector, &nearest, ef, lc)?;
 
             // Select M best neighbors using heuristic
-            let m = if lc == 0 {
-                self.params.m * 2
-            } else {
-                self.params.m
-            };
+            let m = self.params.m_for_level(lc);
 
             let neighbors = self.select_neighbors_heuristic(node_id, &candidates, m, lc, vector)?;
 
-            // Add bidirectional links
-            for &neighbor_id in &neighbors {
-                self.neighbors
-                    .add_bidirectional_link(node_id, neighbor_id, lc);
-            }
-
-            // Update neighbor counts
-            self.nodes[node_id as usize].set_neighbor_count(lc, neighbors.len());
-
-            // Prune overloaded neighbors
-            for &neighbor_id in &neighbors {
-                let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, lc);
-                if neighbor_neighbors.len() > m {
-                    let neighbor_vec = self
-                        .vectors
-                        .get_dequantized(neighbor_id)
-                        .ok_or(HNSWError::VectorNotFound(neighbor_id))?;
-                    let pruned = self.select_neighbors_heuristic(
-                        neighbor_id,
-                        &neighbor_neighbors,
-                        m,
-                        lc,
-                        &neighbor_vec,
-                    )?;
-                    self.neighbors
-                        .set_neighbors(neighbor_id, lc, pruned.clone());
-                    self.nodes[neighbor_id as usize].set_neighbor_count(lc, pruned.len());
-                }
-            }
+            self.reconcile_node_neighbors(node_id, &neighbors, lc)?;
 
             // Update nearest for next level
             nearest = candidates;
@@ -379,11 +390,7 @@ impl HNSWIndex {
                 )?;
 
                 // Select M best neighbors using heuristic
-                let m = if lc == 0 {
-                    self.params.m * 2
-                } else {
-                    self.params.m
-                };
+                let m = self.params.m_for_level(lc);
 
                 let neighbors =
                     self.select_neighbors_heuristic(*node_id, &candidates, m, lc, &vector)?;
@@ -445,11 +452,7 @@ impl HNSWIndex {
         for node_id in 0..max_node_id {
             let level = self.nodes[node_id as usize].level;
             for lc in 0..=level {
-                let m = if lc == 0 {
-                    self.params.m * 2
-                } else {
-                    self.params.m
-                };
+                let m = self.params.m_for_level(lc);
 
                 let neighbors = self.neighbors.get_neighbors(node_id, lc);
 
@@ -520,45 +523,11 @@ impl HNSWIndex {
             )?;
 
             // Select M best neighbors using heuristic
-            let m = if lc == 0 {
-                self.params.m * 2 // Level 0 has more connections
-            } else {
-                self.params.m
-            };
+            let m = self.params.m_for_level(lc);
 
             let neighbors = self.select_neighbors_heuristic(node_id, &candidates, m, lc, vector)?;
 
-            // Add bidirectional links
-            for &neighbor_id in &neighbors {
-                self.neighbors
-                    .add_bidirectional_link(node_id, neighbor_id, lc);
-            }
-
-            // Update neighbor counts
-            self.nodes[node_id as usize].set_neighbor_count(lc, neighbors.len());
-
-            // Prune neighbors' connections if they exceed M
-            for &neighbor_id in &neighbors {
-                let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, lc);
-                if neighbor_neighbors.len() > m {
-                    let neighbor_vec = self
-                        .vectors
-                        .get_dequantized(neighbor_id)
-                        .ok_or(HNSWError::VectorNotFound(neighbor_id))?;
-                    let pruned = self.select_neighbors_heuristic(
-                        neighbor_id,
-                        &neighbor_neighbors,
-                        m,
-                        lc,
-                        &neighbor_vec,
-                    )?;
-
-                    // Clear and reset neighbors
-                    self.neighbors
-                        .set_neighbors(neighbor_id, lc, pruned.clone());
-                    self.nodes[neighbor_id as usize].set_neighbor_count(lc, pruned.len());
-                }
-            }
+            self.reconcile_node_neighbors(node_id, &neighbors, lc)?;
 
             // Update nearest for next level
             nearest = candidates;

@@ -12,6 +12,26 @@
 // - persistence.rs: Save/load to disk
 // - stats.rs: Statistics, memory usage, cache optimization
 
+/// Dispatch distance function to monomorphized implementations
+macro_rules! dispatch_distance {
+    ($distance_fn:expr, $Type:ident => $body:expr) => {
+        match $distance_fn {
+            crate::vector::hnsw::types::DistanceFunction::L2 => {
+                type $Type = crate::vector::hnsw::types::L2;
+                $body
+            }
+            crate::vector::hnsw::types::DistanceFunction::Cosine => {
+                type $Type = crate::vector::hnsw::types::Cosine;
+                $body
+            }
+            crate::vector::hnsw::types::DistanceFunction::NegativeDotProduct => {
+                type $Type = crate::vector::hnsw::types::NegDot;
+                $body
+            }
+        }
+    };
+}
+
 mod delete;
 mod insert;
 mod persistence;
@@ -337,20 +357,6 @@ impl HNSWIndex {
         Ok(D::distance(query, vec))
     }
 
-    /// Distance from query to node using full precision (f32-to-f32)
-    ///
-    /// Used during graph construction where quantization noise hurts graph quality.
-    /// For SQ8, dequantizes.
-    #[inline]
-    pub(super) fn distance_cmp_full_precision(&self, query: &[f32], id: u32) -> Result<f32> {
-        // Always use dequantized/original vectors for full precision comparison
-        let vec = self
-            .vectors
-            .get_dequantized(id)
-            .ok_or(HNSWError::VectorNotFound(id))?;
-        Ok(self.distance_fn.distance_for_comparison(query, &vec))
-    }
-
     /// Actual distance (with sqrt for L2)
     #[inline]
     pub(super) fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
@@ -362,23 +368,8 @@ impl HNSWIndex {
         Ok(self.distance_fn.distance(query, vec))
     }
 
-    /// L2 distance using decomposition: ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩
-    ///
-    /// ~7% faster than direct L2 by pre-computing vector norms during insert.
-    /// Query norm is computed once per search and passed in.
-    ///
-    /// Returns None if decomposition is not available (non-FullPrecision storage).
-    #[inline(always)]
-    pub(super) fn distance_l2_decomposed(
-        &self,
-        query: &[f32],
-        query_norm: f32,
-        id: u32,
-    ) -> Option<f32> {
-        self.vectors.distance_l2_decomposed(query, query_norm, id)
-    }
-
     /// Check if L2 decomposition optimization is available
+
     ///
     /// Returns true if storage supports L2 decomposition AND distance function is L2.
     #[inline]

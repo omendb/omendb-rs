@@ -236,16 +236,16 @@ export interface HybridSearchResult {
  *   efSearch: 150
  * });
  *
- * // With RaBitQ quantization (8x memory reduction)
+ * // With SQ8 quantization (4x memory reduction, ~99% recall)
  * const db = omendb.open("./mydb", {
  *   dimensions: 128,
- *   quantization: 4  // 4-bit quantization
+ *   quantization: true  // or "sq8"
  * });
  *
  * // Quantization with custom rescore settings
  * const db = omendb.open("./mydb", {
  *   dimensions: 128,
- *   quantization: 4,
+ *   quantization: true,
  *   rescore: false,    // Disable rescore for max speed
  *   oversample: 5.0    // Or increase oversample for better recall
  * });
@@ -261,7 +261,7 @@ export declare function open(path: string, options?: OpenOptions | undefined | n
  * - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
  * - efConstruction: 100 (build quality, higher = better graph, slower build)
  * - efSearch: 100 (search quality, higher = better recall, slower search)
- * - quantization: null (RaBitQ bit width: 2, 4, or 8 for compression)
+ * - quantization: null (true/"sq8" for 4x compression, ~99% recall)
  * - rescore: true when quantization enabled (rerank candidates with exact distance)
  * - oversample: 3.0 (fetch k*oversample candidates when rescoring)
  * - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
@@ -278,9 +278,7 @@ export interface OpenOptions {
   /**
    * Quantization mode (default: null = no quantization)
    * - true or "sq8": SQ8 4x compression, ~99% recall (RECOMMENDED)
-   * - "rabitq": RaBitQ 8x compression, ~98% recall
-   * - "binary": Binary 32x compression, ~95% recall
-   * - 2, 4, 8: RaBitQ with specific bits (legacy)
+   * - false/null: Full precision (no quantization)
    */
   quantization?: boolean | string | number | null | undefined
   /**

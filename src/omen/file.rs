@@ -8,6 +8,7 @@ use crate::omen::{
     section::{SectionEntry, SectionType},
     vectors::VectorSection,
     wal::{Wal, WalEntry, WalEntryType},
+    NodeLocation, OmenFooter, OmenManifest, SegmentType,
 };
 use anyhow::Result;
 use fs2::FileExt;
@@ -75,6 +76,9 @@ pub struct OmenFile {
 
     // Serialized HNSW index (persisted on checkpoint, loaded on open)
     hnsw_index_bytes: Option<Vec<u8>>,
+
+    // Omen v2 Manifest
+    manifest: OmenManifest,
 }
 
 impl OmenFile {
@@ -128,6 +132,7 @@ impl OmenFile {
             config: HashMap::from([("dimensions".to_string(), u64::from(dimensions))]),
             wal: Wal::open(&wal_path)?,
             hnsw_index_bytes: None,
+            manifest: OmenManifest::new(),
         })
     }
 
@@ -142,12 +147,25 @@ impl OmenFile {
         let mut file = opts.open(&omen_path)?;
         lock_exclusive(&file)?;
 
+        // Try to read footer from the end of the file (v2)
+        let file_len = file.metadata()?.len();
+        let mut footer = None;
+        if file_len >= (HEADER_SIZE + OmenFooter::SIZE) as u64 {
+            file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
+            let mut footer_buf = [0u8; OmenFooter::SIZE];
+            file.read_exact(&mut footer_buf)?;
+            let f = OmenFooter::from_bytes(&footer_buf);
+            if f.verify() {
+                footer = Some(f);
+            }
+        }
+
         let mut header_buf = [0u8; HEADER_SIZE];
+        file.seek(SeekFrom::Start(0))?;
         file.read_exact(&mut header_buf)?;
         let header = OmenHeader::from_bytes(&header_buf)?;
 
-        let file_len = file.metadata()?.len() as usize;
-        let mmap = if file_len > HEADER_SIZE {
+        let mmap = if file_len > HEADER_SIZE as u64 {
             Some(unsafe { MmapMut::map_mut(&file)? })
         } else {
             None
@@ -164,20 +182,57 @@ impl OmenFile {
         let mut index_to_id = HashMap::new();
         let mut metadata_mem = HashMap::new();
         let mut deleted = HashMap::new();
+        let mut manifest = OmenManifest::new();
+
+        if let Some(f) = footer {
+            // V2: Load manifest from offset
+            if let Some(ref mmap) = mmap {
+                let manifest_offset = f.manifest_offset as usize;
+                if manifest_offset < mmap.len() {
+                    // Note: We need a way to know manifest length. 
+                    // Usually we serialize it with a length prefix or use EOF.
+                    // For now, let's assume it's stored before the footer.
+                    let manifest_bytes = &mmap[manifest_offset..f.total_len as usize];
+                    if let Ok(m) = postcard::from_bytes::<OmenManifest>(manifest_bytes) {
+                        manifest = m;
+                    }
+                }
+            }
+        }
 
         if let Some(ref mmap) = mmap {
-            // Load vectors
-            if let Some(vec_section) = header.get_section(SectionType::Vectors) {
-                let vec_offset = vec_section.offset as usize;
-                let dim = header.dimensions as usize;
-                let count = header.count as usize;
-                let vec_size = dim * 4;
+            // Load vectors (Fallback to Header if manifest is empty - V1)
+            if manifest.nodes.is_empty() {
+                if let Some(vec_section) = header.get_section(SectionType::Vectors) {
+                    let vec_offset = vec_section.offset as usize;
+                    let dim = header.dimensions as usize;
+                    let count = header.count as usize;
+                    let vec_size = dim * 4;
 
-                for i in 0..count {
-                    let start = vec_offset + i * vec_size;
-                    let end = start + vec_size;
-                    if end <= mmap.len() {
-                        vectors_mem.push(read_vector_from_bytes(&mmap[start..end], dim));
+                    for i in 0..count {
+                        let start = vec_offset + i * vec_size;
+                        let end = start + vec_size;
+                        if end <= mmap.len() {
+                            vectors_mem.push(read_vector_from_bytes(&mmap[start..end], dim));
+                            // Synthesize V2 manifest entry
+                            manifest.nodes.push(NodeLocation {
+                                offset: start as u64,
+                                length: vec_size as u32,
+                                segment_type: SegmentType::Vectors,
+                            });
+                        }
+                    }
+                }
+            } else {
+                // V2: Load vectors from manifest
+                let dim = header.dimensions as usize;
+                for location in &manifest.nodes {
+                    if location.segment_type == SegmentType::Vectors || location.segment_type == SegmentType::InterleavedNode {
+                        let start = location.offset as usize;
+                        let end = start + location.length as usize;
+                        if end <= mmap.len() {
+                            vectors_mem.push(read_vector_from_bytes(&mmap[start..end], dim));
+                        }
                     }
                 }
             }
@@ -221,6 +276,7 @@ impl OmenFile {
             config,
             wal,
             hnsw_index_bytes,
+            manifest,
         };
 
         // Replay WAL
@@ -502,6 +558,20 @@ impl OmenFile {
             ));
         }
 
+        // Rebuild V2 manifest for new offsets
+        let mut new_manifest = OmenManifest::new();
+        let dim = self.header.dimensions as usize;
+        let vec_size = dim * 4;
+        for i in 0..self.vectors_mem.len() {
+            new_manifest.nodes.push(NodeLocation {
+                offset: (vector_offset + i * vec_size) as u64,
+                length: vec_size as u32,
+                segment_type: SegmentType::Vectors,
+            });
+        }
+        new_manifest.max_node_id = (self.vectors_mem.len() as u32).saturating_sub(1);
+        self.manifest = new_manifest;
+
         // Write to temp file
         {
             let mut opts = OpenOptions::new();
@@ -537,6 +607,17 @@ impl OmenFile {
                 temp_file.seek(SeekFrom::Start(hnsw_offset as u64))?;
                 temp_file.write_all(hnsw_bytes)?;
             }
+
+            // Write V2 Manifest
+            let manifest_offset = temp_file.seek(SeekFrom::Current(0))?;
+            let manifest_bytes = postcard::to_allocvec(&self.manifest)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            temp_file.write_all(&manifest_bytes)?;
+
+            // Write V2 Footer
+            let total_len = temp_file.seek(SeekFrom::Current(0))?;
+            let footer = OmenFooter::new(manifest_offset, total_len);
+            temp_file.write_all(&footer.to_bytes())?;
 
             // Fsync temp file before rename
             temp_file.sync_all()?;
@@ -937,6 +1018,35 @@ mod tests {
         {
             let db = OmenFile::open(&db_path).unwrap();
             // Should recover from WAL
+            let results = db.search(&[1.0, 2.0, 3.0], 1);
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].0, "vec1");
+        }
+    }
+
+    #[test]
+    fn test_v2_footer_recovery() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_v2.omen");
+
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+            db.insert("vec1", &[1.0, 2.0, 3.0], None).unwrap();
+            db.checkpoint().unwrap();
+            
+            // Check that footer is there
+            let file = File::open(&db_path).unwrap();
+            let len = file.metadata().unwrap().len();
+            assert!(len > (HEADER_SIZE + OmenFooter::SIZE) as u64);
+        }
+
+        {
+            // Open and check if manifest was recovered
+            let db = OmenFile::open(&db_path).unwrap();
+            assert_eq!(db.len(), 1);
+            assert!(!db.manifest.nodes.is_empty());
+            assert_eq!(db.manifest.nodes[0].segment_type, SegmentType::Vectors);
+            
             let results = db.search(&[1.0, 2.0, 3.0], 1);
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].0, "vec1");

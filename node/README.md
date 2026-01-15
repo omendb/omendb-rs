@@ -43,7 +43,7 @@ const batchResults = await db.searchBatch(queries, { k: 10 });
 
 - HNSW indexing for fast approximate nearest neighbor search
 - ACORN-1 filtered search
-- RaBitQ compression (2/4/8-bit quantization)
+- SQ8 quantization (4x compression, ~99% recall)
 - Collections for multi-tenancy
 - Persistent storage with auto-save
 - Works with Node.js 18+ and Bun

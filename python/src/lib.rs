@@ -23,7 +23,6 @@ use std::time::Instant;
 /// Accepts:
 /// - True → SQ8 (4x compression, ~99% recall) - RECOMMENDED
 /// - "sq8" or "scalar" → SQ8 (explicit)
-/// - "rabitq" → RaBitQ (32x compression, ~95% recall with rescore)
 /// - None/False → no quantization (full precision)
 ///
 /// Returns Ok(Some(mode)) if quantization enabled, Ok(None) if disabled
@@ -45,21 +44,16 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     if let Ok(mode) = value.extract::<String>() {
         return match mode.to_lowercase().as_str() {
             "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
-            "rabitq" => Ok(Some(QuantizationMode::true_rabitq())),
             _ => Err(PyValueError::new_err(format!(
                 "Unknown quantization mode: '{}'\n\
-                  Valid modes:\n\
-                  - True or 'sq8' or 'scalar': 4x smaller, ~99% recall (RECOMMENDED)\n\
-                  - 'rabitq': 32x smaller, ~95% recall",
+                  Valid modes: True, 'sq8', or 'scalar' (4x smaller, ~99% recall)",
                 mode
             ))),
         };
     }
 
     Err(PyValueError::new_err(
-        "quantization must be True, False, or a string:\n\
-          - True or 'sq8' or 'scalar': 4x smaller, ~99% recall (RECOMMENDED)\n\
-          - 'rabitq': 32x smaller, ~95% recall",
+        "quantization must be True, False, or 'sq8'/'scalar' (4x smaller, ~99% recall)",
     ))
 }
 
@@ -173,7 +167,7 @@ struct VectorDatabaseInner {
 /// Provides fast similarity search using HNSW indexing with:
 /// - ~19,000 QPS @ 10K vectors with 100% recall
 /// - 20,000-28,000 vec/s insert throughput
-/// - Extended RaBitQ 8x compression
+/// - SQ8 quantization (4x compression, ~99% recall)
 /// - ACORN-1 filtered search (37.79x speedup)
 ///
 /// Auto-persists to disk for seamless data durability.
@@ -1767,7 +1761,6 @@ impl VectorDatabase {
 ///     ef_search (int): Search quality (default: 100, higher = better recall)
 ///     quantization (bool|str): Enable quantization (default: None = full precision)
 ///         - True or "sq8" or "scalar": SQ8 ~4x smaller, ~99% recall (RECOMMENDED)
-///         - "rabitq": RaBitQ ~32x smaller, ~95% recall
 ///         - False/None: Full precision (no quantization)
 ///     rescore (bool): Rerank with full precision (default: True when quantized)
 ///     oversample (float): Candidate multiplier for rescoring (default: 3.0)
@@ -1793,9 +1786,6 @@ impl VectorDatabase {
 ///     # With SQ8 quantization (4x smaller, similar speed, ~99% recall)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization="sq8")
-///
-///     # With RaBitQ for higher compression (32x smaller, ~95% recall)
-///     >>> db = omendb.open("./vectors", dimensions=768, quantization="rabitq")
 ///
 ///     # Disable rescore for max speed (~1-3% recall loss)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, rescore=False)
