@@ -5,7 +5,6 @@
 use crate::omen::{
     align_to_page,
     header::{OmenHeader, HEADER_SIZE},
-    vectors::VectorSection,
     wal::{Wal, WalEntry, WalEntryType},
     NodeLocation, OmenFooter, OmenManifest, SegmentType,
 };
@@ -39,6 +38,95 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
     })
 }
 
+/// In-memory state of the database before persistence
+#[derive(Default)]
+pub struct DatabaseState {
+    pub vectors: Vec<Vec<f32>>,
+    pub id_to_index: HashMap<String, u32>,
+    pub index_to_id: HashMap<u32, String>,
+    pub metadata: HashMap<u32, Vec<u8>>,
+    pub deleted: HashMap<u32, bool>,
+    pub config: HashMap<String, u64>,
+}
+
+impl DatabaseState {
+    pub fn new(dimensions: u32) -> Self {
+        Self {
+            config: HashMap::from([("dimensions".to_string(), u64::from(dimensions))]),
+            ..Default::default()
+        }
+    }
+}
+
+/// Helper for writing aligned segments to an Omen file
+struct SegmentWriter<'a> {
+    file: &'a mut File,
+    current_offset: u64,
+}
+
+impl<'a> SegmentWriter<'a> {
+    fn new(file: &'a mut File, start_offset: u64) -> Self {
+        Self {
+            file,
+            current_offset: start_offset,
+        }
+    }
+
+    /// Write data at the current offset (page-aligned) and return its location
+    fn write_aligned(&mut self, data: &[u8], segment_type: SegmentType) -> io::Result<NodeLocation> {
+        self.current_offset = align_to_page(self.current_offset as usize) as u64;
+        self.file.seek(SeekFrom::Start(self.current_offset))?;
+        self.file.write_all(data)?;
+
+        let location = NodeLocation {
+            offset: self.current_offset,
+            length: data.len() as u32,
+            segment_type,
+        };
+
+        self.current_offset += data.len() as u64;
+        Ok(location)
+    }
+
+    /// Write multiple items as a single segment and return their locations
+    fn write_vectors_aligned(
+        &mut self,
+        vectors: &[Vec<f32>],
+        deleted: &HashMap<u32, bool>,
+        dimensions: usize,
+    ) -> io::Result<Vec<NodeLocation>> {
+        self.current_offset = align_to_page(self.current_offset as usize) as u64;
+        self.file.seek(SeekFrom::Start(self.current_offset))?;
+
+        let mut locations = Vec::with_capacity(vectors.len());
+        let vec_size = (dimensions * 4) as u32;
+        let zero_vec = vec![0.0f32; dimensions];
+
+        for (idx, vector) in vectors.iter().enumerate() {
+            let start_offset = self.current_offset;
+            let to_write = if deleted.contains_key(&(idx as u32)) {
+                &zero_vec
+            } else {
+                vector
+            };
+
+            for &val in to_write {
+                self.file.write_all(&val.to_le_bytes())?;
+            }
+
+            locations.push(NodeLocation {
+                offset: start_offset,
+                length: vec_size,
+                segment_type: SegmentType::Vectors,
+            });
+
+            self.current_offset += vec_size as u64;
+        }
+
+        Ok(locations)
+    }
+}
+
 /// Checkpoint threshold (number of WAL entries before compaction)
 const CHECKPOINT_THRESHOLD: u64 = 1000;
 
@@ -53,12 +141,7 @@ pub struct OmenFile {
     header: OmenHeader,
 
     // In-memory state (for writes before checkpoint)
-    vectors_mem: Vec<Vec<f32>>,
-    id_to_index: HashMap<String, u32>,
-    index_to_id: HashMap<u32, String>,
-    metadata_mem: HashMap<u32, Vec<u8>>,
-    deleted: HashMap<u32, bool>,
-    config: HashMap<String, u64>,
+    state: DatabaseState,
 
     // WAL for durability
     wal: Wal,
@@ -124,12 +207,7 @@ impl OmenFile {
             file: Some(file),
             mmap: None,
             header,
-            vectors_mem: Vec::new(),
-            id_to_index: HashMap::new(),
-            index_to_id: HashMap::new(),
-            metadata_mem: HashMap::new(),
-            deleted: HashMap::new(),
-            config: HashMap::from([("dimensions".to_string(), u64::from(dimensions))]),
+            state: DatabaseState::new(dimensions),
             wal: Wal::open(&wal_path)?,
             hnsw_index_bytes: None,
             manifest,
@@ -204,8 +282,6 @@ impl OmenFile {
         config.insert("dimensions".to_string(), u64::from(header.dimensions));
         config.insert("count".to_string(), header.count);
 
-        let deleted = HashMap::new();
-
         if let Some(ref mmap) = mmap {
             // V2: Load vectors from manifest (Primary path)
             let dim = header.dimensions as usize;
@@ -232,18 +308,22 @@ impl OmenFile {
                 }
             }
 
+            let state = DatabaseState {
+                vectors: vectors_mem,
+                id_to_index,
+                index_to_id,
+                metadata: metadata_mem,
+                config,
+                deleted: HashMap::new(),
+            };
+
             let mmap = Some(unsafe { MmapMut::map_mut(&file)? });
             let mut db = Self {
                 path: omen_path,
                 file: Some(file),
                 mmap,
                 header,
-                vectors_mem,
-                id_to_index,
-                index_to_id,
-                metadata_mem,
-                deleted,
-                config,
+                state,
                 wal,
                 hnsw_index_bytes,
                 manifest,
@@ -255,18 +335,21 @@ impl OmenFile {
             return Ok(db);
         }
 
-        // If no mmap (empty file), return basic instance
+        let state = DatabaseState {
+            vectors: vectors_mem,
+            id_to_index,
+            index_to_id,
+            metadata: metadata_mem,
+            config,
+            deleted: HashMap::new(),
+        };
+
         let mut db = Self {
             path: omen_path,
             file: Some(file),
             mmap: None,
             header,
-            vectors_mem,
-            id_to_index,
-            index_to_id,
-            metadata_mem,
-            deleted,
-            config,
+            state,
             wal,
             hnsw_index_bytes: None,
             manifest,
@@ -334,12 +417,12 @@ impl OmenFile {
         let mut metadata = vec![0u8; meta_len];
         cursor.read_exact(&mut metadata)?;
 
-        let index = self.vectors_mem.len() as u32;
-        self.vectors_mem.push(vector);
-        self.id_to_index.insert(string_id.clone(), index);
-        self.index_to_id.insert(index, string_id);
+        let index = self.state.vectors.len() as u32;
+        self.state.vectors.push(vector);
+        self.state.id_to_index.insert(string_id.clone(), index);
+        self.state.index_to_id.insert(index, string_id);
         if !metadata.is_empty() {
-            self.metadata_mem.insert(index, metadata);
+            self.state.metadata.insert(index, metadata);
         }
 
         Ok(())
@@ -349,8 +432,8 @@ impl OmenFile {
         let mut cursor = std::io::Cursor::new(data);
         let string_id = read_string_id(&mut cursor)?;
 
-        if let Some(&index) = self.id_to_index.get(&string_id) {
-            self.deleted.insert(index, true);
+        if let Some(&index) = self.state.id_to_index.get(&string_id) {
+            self.state.deleted.insert(index, true);
         }
 
         Ok(())
@@ -389,12 +472,12 @@ impl OmenFile {
         self.wal.sync()?;
 
         // 2. Update in-memory state
-        let index = self.vectors_mem.len() as u32;
-        self.vectors_mem.push(vector.to_vec());
-        self.id_to_index.insert(id.to_string(), index);
-        self.index_to_id.insert(index, id.to_string());
+        let index = self.state.vectors.len() as u32;
+        self.state.vectors.push(vector.to_vec());
+        self.state.id_to_index.insert(id.to_string(), index);
+        self.state.index_to_id.insert(index, id.to_string());
         if metadata_bytes != b"{}" {
-            self.metadata_mem.insert(index, metadata_bytes.to_vec());
+            self.state.metadata.insert(index, metadata_bytes.to_vec());
         }
 
         self.header.count += 1;
@@ -409,10 +492,10 @@ impl OmenFile {
 
     fn find_nearest(&self, query: &[f32], k: usize) -> Vec<u32> {
         let mut distances: Vec<(u32, f32)> = self
-            .vectors_mem
+            .state.vectors
             .iter()
             .enumerate()
-            .filter(|(i, _)| !self.deleted.contains_key(&(*i as u32)))
+            .filter(|(i, _)| !self.state.deleted.contains_key(&(*i as u32)))
             .map(|(i, v)| (i as u32, l2_distance(query, v)))
             .collect();
 
@@ -433,8 +516,8 @@ impl OmenFile {
         indices
             .into_iter()
             .filter_map(|idx| {
-                let id = self.index_to_id.get(&idx)?;
-                let vector = self.vectors_mem.get(idx as usize)?;
+                let id = self.state.index_to_id.get(&idx)?;
+                let vector = self.state.vectors.get(idx as usize)?;
                 let distance = l2_distance(query, vector);
                 Some((id.clone(), distance))
             })
@@ -442,17 +525,17 @@ impl OmenFile {
     }
 
     pub fn delete(&mut self, id: &str) -> io::Result<bool> {
-        let Some(&index) = self.id_to_index.get(id) else {
+        let Some(&index) = self.state.id_to_index.get(id) else {
             return Ok(false);
         };
 
         self.wal.append(WalEntry::delete_node(0, id))?;
         self.wal.sync()?;
-        self.deleted.insert(index, true);
+        self.state.deleted.insert(index, true);
 
         // Remove mapping so it can be re-inserted later
-        self.id_to_index.remove(id);
-        self.index_to_id.remove(&index);
+        self.state.id_to_index.remove(id);
+        self.state.index_to_id.remove(&index);
 
         Ok(true)
     }
@@ -484,19 +567,9 @@ impl OmenFile {
     /// 4. Fsync directory
     /// 5. Truncate WAL
     pub fn checkpoint(&mut self) -> io::Result<()> {
-        if self.vectors_mem.is_empty() && self.hnsw_index_bytes.is_none() {
+        if self.state.vectors.is_empty() && self.hnsw_index_bytes.is_none() {
             return Ok(());
         }
-
-        // Calculate section sizes
-        let vector_size =
-            VectorSection::size_for_count(self.header.dimensions, self.vectors_mem.len() as u64)
-                as usize;
-        let hnsw_size = self.hnsw_index_bytes.as_ref().map_or(0, Vec::len);
-
-        // Calculate offsets (page-aligned)
-        let vector_offset = align_to_page(HEADER_SIZE);
-        let hnsw_offset = align_to_page(vector_offset + vector_size);
 
         // Create temp file path
         let temp_path = {
@@ -505,46 +578,6 @@ impl OmenFile {
             PathBuf::from(p)
         };
 
-        // Update header for new checkpoint
-        self.header.count = self.vectors_mem.len() as u64;
-        self.header.entry_point = 0; // Entry point managed by HNSWIndex
-
-        // Rebuild V2 manifest for new offsets
-        // NOTE: OmenDB assumes dense NodeIDs corresponding to `vectors_mem` indices.
-        let mut new_manifest = OmenManifest::new();
-        let dim = self.header.dimensions as usize;
-        let vec_size = dim * 4;
-        for i in 0..self.vectors_mem.len() {
-            new_manifest.nodes.push(NodeLocation {
-                offset: (vector_offset + i * vec_size) as u64,
-                length: vec_size as u32,
-                segment_type: SegmentType::Vectors,
-            });
-        }
-        new_manifest.max_node_id = (self.vectors_mem.len() as u32).saturating_sub(1);
-        
-        // V2 Foundation: Persist mappings in manifest
-        new_manifest.id_to_index = self.id_to_index.clone();
-        new_manifest.index_to_id = self.index_to_id.clone();
-        
-        // Filter deleted from metadata before persisting
-        let mut metadata_mem = self.metadata_mem.clone();
-        metadata_mem.retain(|k, _| !self.deleted.contains_key(k));
-        new_manifest.metadata = metadata_mem;
-        
-        new_manifest.config = self.config.clone();
-
-        // Write HNSW index metadata if present
-        if hnsw_size > 0 {
-            new_manifest.nodes.push(NodeLocation {
-                offset: hnsw_offset as u64,
-                length: hnsw_size as u32,
-                segment_type: SegmentType::IndexMetadata,
-            });
-        }
-        
-        self.manifest = new_manifest;
-
         // Write to temp file
         {
             let mut opts = OpenOptions::new();
@@ -552,42 +585,50 @@ impl OmenFile {
             configure_open_options(&mut opts);
             let mut temp_file = opts.open(&temp_path)?;
 
-            // Write header
+            // 1. Write header
             temp_file.write_all(&self.header.to_bytes())?;
 
-            // Write vectors (skip data for deleted vectors to save disk space/IO)
-            temp_file.seek(SeekFrom::Start(vector_offset as u64))?;
-            let dim = self.header.dimensions as usize;
-            let zero_vec = vec![0.0f32; dim];
-            for (idx, vector) in self.vectors_mem.iter().enumerate() {
-                let to_write = if self.deleted.contains_key(&(idx as u32)) {
-                    &zero_vec
-                } else {
-                    vector
-                };
-                for &val in to_write {
-                    temp_file.write_all(&val.to_le_bytes())?;
-                }
-            }
+            let mut writer = SegmentWriter::new(&mut temp_file, HEADER_SIZE as u64);
+            let mut manifest = OmenManifest::new();
 
-            // Write HNSW index (if present)
+            // 2. Write vectors
+            manifest.nodes = writer.write_vectors_aligned(
+                &self.state.vectors,
+                &self.state.deleted,
+                self.header.dimensions as usize,
+            )?;
+
+            // 3. Write HNSW index (if present)
             if let Some(ref hnsw_bytes) = self.hnsw_index_bytes {
-                temp_file.seek(SeekFrom::Start(hnsw_offset as u64))?;
-                temp_file.write_all(hnsw_bytes)?;
+                let location = writer.write_aligned(hnsw_bytes, SegmentType::IndexMetadata)?;
+                manifest.nodes.push(location);
             }
 
-            // Write V2 Manifest
-            let manifest_offset = temp_file.seek(SeekFrom::Current(0))?;
-            let manifest_bytes = postcard::to_allocvec(&self.manifest)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            temp_file.write_all(&manifest_bytes)?;
+            // 4. Update manifest state
+            manifest.max_node_id = (self.state.vectors.len() as u32).saturating_sub(1);
+            manifest.id_to_index = self.state.id_to_index.clone();
+            manifest.index_to_id = self.state.index_to_id.clone();
+            
+            // Filter deleted from metadata before persisting
+            let mut metadata = self.state.metadata.clone();
+            metadata.retain(|k, _| !self.state.deleted.contains_key(k));
+            manifest.metadata = metadata;
+            manifest.config = self.state.config.clone();
 
-            // Write V2 Footer
+            // 5. Write Manifest
+            let manifest_bytes = postcard::to_allocvec(&manifest)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let manifest_location = writer.write_aligned(&manifest_bytes, SegmentType::Manifest)?;
+
+            // 6. Write Footer (Absolute end)
             let total_len = temp_file.seek(SeekFrom::Current(0))?;
-            let footer = OmenFooter::new(manifest_offset, total_len);
+            let footer = OmenFooter::new(manifest_location.offset, total_len);
             temp_file.write_all(&footer.to_bytes())?;
 
-            // Fsync temp file before rename
+            // Update in-memory manifest and header count
+            self.manifest = manifest;
+            self.header.count = self.state.vectors.len() as u64;
+
             temp_file.sync_all()?;
         }
 
@@ -621,13 +662,13 @@ impl OmenFile {
         self.file = Some(file);
 
         // Purge deleted vectors from memory after successful checkpoint
-        for (idx, vector) in self.vectors_mem.iter_mut().enumerate() {
-            if self.deleted.contains_key(&(idx as u32)) {
+        for (idx, vector) in self.state.vectors.iter_mut().enumerate() {
+            if self.state.deleted.contains_key(&(idx as u32)) {
                 vector.clear();
                 vector.shrink_to_fit();
             }
         }
-        self.deleted.clear();
+        self.state.deleted.clear();
 
         Ok(())
     }
@@ -641,16 +682,16 @@ impl OmenFile {
     /// Store a vector by internal index
     pub fn put_vector(&mut self, id: usize, vector: &[f32]) -> Result<()> {
         let new_len = id + 1;
-        if self.vectors_mem.len() < new_len {
-            self.vectors_mem.resize_with(new_len, Vec::new);
+        if self.state.vectors.len() < new_len {
+            self.state.vectors.resize_with(new_len, Vec::new);
         }
-        self.vectors_mem[id] = vector.to_vec();
+        self.state.vectors[id] = vector.to_vec();
         Ok(())
     }
 
     pub fn get_vector(&self, id: usize) -> Result<Option<Vec<f32>>> {
-        if id < self.vectors_mem.len() && !self.vectors_mem[id].is_empty() {
-            return Ok(Some(self.vectors_mem[id].clone()));
+        if id < self.state.vectors.len() && !self.state.vectors[id].is_empty() {
+            return Ok(Some(self.state.vectors[id].clone()));
         }
 
         let Some(ref mmap) = self.mmap else {
@@ -680,12 +721,12 @@ impl OmenFile {
     /// Store metadata for a vector (as JSON)
     pub fn put_metadata(&mut self, id: usize, metadata: &JsonValue) -> Result<()> {
         let bytes = serde_json::to_vec(metadata)?;
-        self.metadata_mem.insert(id as u32, bytes);
+        self.state.metadata.insert(id as u32, bytes);
         Ok(())
     }
 
     pub fn get_metadata(&self, id: usize) -> Result<Option<JsonValue>> {
-        self.metadata_mem
+        self.state.metadata
             .get(&(id as u32))
             .map(|bytes| serde_json::from_slice(bytes))
             .transpose()
@@ -694,33 +735,33 @@ impl OmenFile {
 
     /// Store string ID to internal index mapping
     pub fn put_id_mapping(&mut self, string_id: &str, index: usize) -> Result<()> {
-        self.id_to_index.insert(string_id.to_string(), index as u32);
-        self.index_to_id.insert(index as u32, string_id.to_string());
+        self.state.id_to_index.insert(string_id.to_string(), index as u32);
+        self.state.index_to_id.insert(index as u32, string_id.to_string());
         Ok(())
     }
 
     /// Get internal index for a string ID
     pub fn get_id_mapping(&self, string_id: &str) -> Result<Option<usize>> {
-        Ok(self.id_to_index.get(string_id).map(|&idx| idx as usize))
+        Ok(self.state.id_to_index.get(string_id).map(|&idx| idx as usize))
     }
 
     /// Get string ID for an internal index (reverse lookup)
     pub fn get_string_id(&self, index: usize) -> Result<Option<String>> {
-        Ok(self.index_to_id.get(&(index as u32)).cloned())
+        Ok(self.state.index_to_id.get(&(index as u32)).cloned())
     }
 
     /// Delete string ID mapping
     pub fn delete_id_mapping(&mut self, string_id: &str) -> Result<()> {
-        if let Some(&index) = self.id_to_index.get(string_id) {
-            self.index_to_id.remove(&index);
+        if let Some(&index) = self.state.id_to_index.get(string_id) {
+            self.state.index_to_id.remove(&index);
         }
-        self.id_to_index.remove(string_id);
+        self.state.id_to_index.remove(string_id);
         Ok(())
     }
 
     /// Store configuration value
     pub fn put_config(&mut self, key: &str, value: u64) -> Result<()> {
-        self.config.insert(key.to_string(), value);
+        self.state.config.insert(key.to_string(), value);
         // Sync to header
         match key {
             "dimensions" => self.header.dimensions = value as u32,
@@ -734,13 +775,13 @@ impl OmenFile {
 
     /// Get configuration value
     pub fn get_config(&self, key: &str) -> Result<Option<u64>> {
-        Ok(self.config.get(key).copied())
+        Ok(self.state.config.get(key).copied())
     }
 
     /// Load all vectors from storage
     pub fn load_all_vectors(&self) -> Result<Vec<(usize, Vec<f32>)>> {
         Ok(self
-            .vectors_mem
+            .state.vectors
             .iter()
             .enumerate()
             .filter(|(_, v)| !v.is_empty())
@@ -750,16 +791,16 @@ impl OmenFile {
 
     /// Increment vector count in storage
     pub fn increment_count(&mut self) -> Result<usize> {
-        let count = self.config.get("count").copied().unwrap_or(0) as usize;
+        let count = self.state.config.get("count").copied().unwrap_or(0) as usize;
         let new_count = count + 1;
-        self.config.insert("count".to_string(), new_count as u64);
+        self.state.config.insert("count".to_string(), new_count as u64);
         self.header.count = new_count as u64;
         Ok(new_count)
     }
 
     /// Get current vector count
     pub fn get_count(&self) -> Result<usize> {
-        Ok(self.config.get("count").copied().unwrap_or(0) as usize)
+        Ok(self.state.config.get("count").copied().unwrap_or(0) as usize)
     }
 
     /// Store quantization mode
@@ -783,7 +824,7 @@ impl OmenFile {
 
     pub fn load_all_metadata(&self) -> Result<HashMap<usize, JsonValue>> {
         Ok(self
-            .metadata_mem
+            .state.metadata
             .iter()
             .filter_map(|(&id, bytes)| {
                 serde_json::from_slice(bytes)
@@ -796,7 +837,7 @@ impl OmenFile {
     /// Load all ID mappings from storage
     pub fn load_all_id_mappings(&self) -> Result<HashMap<String, usize>> {
         Ok(self
-            .id_to_index
+            .state.id_to_index
             .iter()
             .map(|(id, &idx)| (id.clone(), idx as usize))
             .collect())
@@ -804,24 +845,24 @@ impl OmenFile {
 
     /// Mark a vector as deleted (tombstone)
     pub fn put_deleted(&mut self, id: usize) -> Result<()> {
-        self.deleted.insert(id as u32, true);
+        self.state.deleted.insert(id as u32, true);
         Ok(())
     }
 
     pub fn is_deleted(&self, id: usize) -> Result<bool> {
-        Ok(self.deleted.contains_key(&(id as u32)))
+        Ok(self.state.deleted.contains_key(&(id as u32)))
     }
 
     /// Remove deleted marker (for re-insertion)
     pub fn remove_deleted(&mut self, id: usize) -> Result<()> {
-        self.deleted.remove(&(id as u32));
+        self.state.deleted.remove(&(id as u32));
         Ok(())
     }
 
     /// Load all deleted IDs from storage
     pub fn load_all_deleted(&self) -> Result<HashMap<usize, bool>> {
         Ok(self
-            .deleted
+            .state.deleted
             .iter()
             .map(|(&id, &v)| (id as usize, v))
             .collect())
@@ -892,12 +933,12 @@ impl OmenFile {
         // Update count
         let current_count = self.get_count()?;
         let new_count = self
-            .vectors_mem
+            .state.vectors
             .iter()
-            .filter(|v| !v.is_empty())
+            .filter(|v: &&Vec<f32>| !v.is_empty())
             .count()
             .max(current_count);
-        self.config.insert("count".to_string(), new_count as u64);
+        self.state.config.insert("count".to_string(), new_count as u64);
         self.header.count = new_count as u64;
 
         Ok(())

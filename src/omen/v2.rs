@@ -102,8 +102,10 @@ pub enum SegmentType {
     InterleavedNode = 3,
     /// Columnar metadata (tantivy-columnar)
     Metadata = 4,
-    /// Index structures (HNSW levels, etc.)
-    IndexMetadata = 5,
+    /// Metadata (HNSW, etc.)
+    IndexMetadata,
+    /// Manifest segment itself
+    Manifest,
 }
 
 /// Location of a node's data in the file
