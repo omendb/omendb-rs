@@ -1,14 +1,13 @@
-//! HNSW deletion operations with MN-RU graph repair
+//! HNSW deletion operations
 //!
-//! Implements the MN-RU (Mutual Neighbor Replaced Update) algorithm for
-//! maintaining graph connectivity after node deletions.
+//! Uses lazy delete pattern: mark as deleted, filter during search, rebuild on compact.
+//! This is O(1) per deletion and matches production systems (hnswlib, Qdrant, Milvus).
 //!
-//! Reference: "Mutual Neighbor Repair for HNSW" (2024)
-//! https://arxiv.org/abs/2407.07871
+//! The graph structure is NOT modified on delete. Deleted nodes remain in the graph
+//! so search can traverse through them to reach live nodes. Results are filtered
+//! at the VectorStore level.
 //!
-//! Key insight: Only repair using MUTUAL neighbors (nodes that are neighbors
-//! of both the deleted node and the current node). This keeps complexity
-//! at O(M²) per deletion instead of O(M³).
+//! For MN-RU graph repair (optional), see `mark_deleted_with_repair`.
 
 use super::HNSWIndex;
 use crate::vector::hnsw::error::Result;
@@ -16,26 +15,20 @@ use std::collections::HashSet;
 use tracing::{debug, instrument};
 
 impl HNSWIndex {
-    /// Mark a node as deleted and repair the graph using MN-RU algorithm
+    /// Mark a node as deleted (O(1) lazy delete)
     ///
-    /// This method repairs the HNSW graph structure after a node is deleted,
-    /// maintaining recall quality by reconnecting orphaned edges.
-    ///
-    /// # Algorithm (MN-RU)
-    /// For each neighbor N of the deleted node D:
-    /// 1. Remove the edge N → D
-    /// 2. Find mutual neighbors M = neighbors(D) ∩ neighbors(N)
-    /// 3. Add edge N → best(M) if it improves connectivity
+    /// This method does NOT modify the graph structure. The deleted node's neighbors
+    /// remain intact so search can traverse through deleted nodes to reach live ones.
+    /// Deleted nodes are filtered at the VectorStore level during search.
     ///
     /// # Arguments
     /// * `node_id` - The node ID to mark as deleted
     ///
     /// # Returns
-    /// Number of edges repaired across all levels
+    /// Always returns 0 (no graph repairs performed)
     ///
     /// # Performance
-    /// O(M² · L) per deletion where M = max neighbors, L = max level
-    /// Much faster than rebuilding the graph.
+    /// O(1) - only updates entry point if necessary
     #[instrument(skip(self), fields(node_id = node_id))]
     pub fn mark_deleted(&mut self, node_id: u32) -> Result<usize> {
         let node_idx = node_id as usize;
@@ -44,11 +37,31 @@ impl HNSWIndex {
             return Ok(0);
         }
 
-        // We need to repair at ALL levels where OTHER nodes might have edges to this node.
-        // In HNSW, a node at level L can be a neighbor of nodes at ANY level >= L.
-        // So we need to iterate through all nodes and check their neighbor lists.
-        //
-        // Optimization: use the max_level from params instead of checking all nodes
+        // Lazy delete: graph stays intact, deleted filtering happens at VectorStore level
+        // Only update entry point if we're deleting it
+        if self.entry_point == Some(node_id) {
+            self.update_entry_point_after_delete(node_id);
+        }
+
+        debug!(node_id, "Lazy delete complete (graph unchanged)");
+        Ok(0)
+    }
+
+    /// Mark a node as deleted WITH graph repair using MN-RU algorithm
+    ///
+    /// Use this for explicit graph maintenance. Most applications should use
+    /// `mark_deleted` (lazy delete) instead and rely on compaction for cleanup.
+    ///
+    /// # Performance
+    /// O(M² · L) per deletion where M = max neighbors, L = max level
+    #[instrument(skip(self), fields(node_id = node_id))]
+    pub fn mark_deleted_with_repair(&mut self, node_id: u32) -> Result<usize> {
+        let node_idx = node_id as usize;
+        if node_idx >= self.nodes.len() {
+            debug!(node_id, "Node not found, skipping deletion");
+            return Ok(0);
+        }
+
         let max_level = self.params.max_level;
         let mut total_repairs = 0;
 
@@ -77,10 +90,10 @@ impl HNSWIndex {
     ///
     /// Returns the number of replacement edges added.
     fn repair_level_mnru(&mut self, deleted_id: u32, level: u8) -> Result<usize> {
-        // Optimization: Instead of scanning ALL N nodes (O(N)), we check only the neighbors 
+        // Optimization: Instead of scanning ALL N nodes (O(N)), we check only the neighbors
         // of the deleted node (O(M)). In HNSW, edges are predominantly bidirectional.
         // If node A points to deleted node D, it is highly likely that D also points to A
-        // unless pruning occurred. Even if we miss a few unidirectional edges, the 
+        // unless pruning occurred. Even if we miss a few unidirectional edges, the
         // search logic handles deleted nodes gracefully, and graph connectivity remains high.
         let deleted_neighbors = self.neighbors.get_neighbors(deleted_id, level);
         let mut nodes_with_edge_to_deleted: Vec<u32> = Vec::new();
@@ -210,17 +223,31 @@ impl HNSWIndex {
         debug!(new_entry = ?self.entry_point, "Updated entry point after deletion");
     }
 
-    /// Batch mark multiple nodes as deleted with graph repair
+    /// Batch mark multiple nodes as deleted (O(n) where n = node_ids.len())
     ///
-    /// More efficient than individual deletions when deleting many nodes.
+    /// Uses lazy delete pattern - graph structure unchanged.
     ///
     /// # Arguments
     /// * `node_ids` - Node IDs to delete
     ///
     /// # Returns
-    /// Total number of edges repaired
+    /// Always returns 0 (no graph repairs performed)
     #[instrument(skip(self, node_ids), fields(count = node_ids.len()))]
     pub fn mark_deleted_batch(&mut self, node_ids: &[u32]) -> Result<usize> {
+        for &node_id in node_ids {
+            self.mark_deleted(node_id)?;
+        }
+
+        debug!(count = node_ids.len(), "Batch lazy delete complete");
+        Ok(0)
+    }
+
+    /// Batch mark multiple nodes as deleted WITH graph repair
+    ///
+    /// Use this for explicit graph maintenance. Most applications should use
+    /// `mark_deleted_batch` (lazy delete) instead.
+    #[instrument(skip(self, node_ids), fields(count = node_ids.len()))]
+    pub fn mark_deleted_batch_with_repair(&mut self, node_ids: &[u32]) -> Result<usize> {
         let mut total_repairs = 0;
 
         // Sort by level descending to handle higher-level nodes first
@@ -235,14 +262,14 @@ impl HNSWIndex {
         });
 
         for node_id in sorted_ids {
-            let repairs = self.mark_deleted(node_id)?;
+            let repairs = self.mark_deleted_with_repair(node_id)?;
             total_repairs += repairs;
         }
 
         debug!(
             count = node_ids.len(),
             repairs = total_repairs,
-            "Batch deletion complete"
+            "Batch deletion with repair complete"
         );
 
         Ok(total_repairs)
@@ -350,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mnru_basic_deletion() {
+    fn test_lazy_delete_preserves_graph() {
         let mut index = create_test_index(100, 16);
 
         // Get initial connectivity
@@ -358,49 +385,42 @@ mod tests {
         assert_eq!(initial_reachable, 100);
         assert_eq!(initial_orphans, 0);
 
-        // Delete a node
+        // Delete a node - lazy delete keeps graph intact
         let repairs = index.mark_deleted(50).unwrap();
-        println!("Repairs after deleting node 50: {repairs}");
+        assert_eq!(repairs, 0, "Lazy delete should not repair");
 
-        // Check connectivity is maintained
-        let (reachable, orphans) = index.validate_connectivity();
-        println!("After deletion: reachable={reachable}, orphans={orphans}");
-
-        // Node 50 should be orphaned, but graph should still be connected
-        assert!(index.is_orphaned(50));
-        // Most nodes should still be reachable (some may become orphaned due to topology)
+        // Graph structure unchanged - deleted node still has neighbors
         assert!(
-            reachable >= 90,
-            "Too many nodes became unreachable: {reachable}"
+            !index.is_orphaned(50),
+            "Lazy delete should NOT orphan nodes"
         );
+
+        // All nodes still reachable (including deleted one)
+        let (reachable, orphans) = index.validate_connectivity();
+        assert_eq!(reachable, 100, "Graph should be fully connected");
+        assert_eq!(orphans, 0);
     }
 
     #[test]
-    fn test_mnru_batch_deletion() {
+    fn test_lazy_delete_batch() {
         let mut index = create_test_index(200, 32);
 
         // Delete 10% of nodes
         let delete_ids: Vec<u32> = (0..200).step_by(10).collect();
         let repairs = index.mark_deleted_batch(&delete_ids).unwrap();
-        println!("Repairs after batch deletion: {repairs}");
+        assert_eq!(repairs, 0, "Lazy delete should not repair");
 
-        // Check deleted nodes are orphaned
+        // Deleted nodes should NOT be orphaned (graph intact)
         for &id in &delete_ids {
-            assert!(index.is_orphaned(id), "Node {id} should be orphaned");
+            assert!(
+                !index.is_orphaned(id),
+                "Node {id} should NOT be orphaned (lazy delete)"
+            );
         }
 
-        // Graph should still be reasonably connected
-        let (reachable, orphans) = index.validate_connectivity();
-        let expected_reachable = 200 - delete_ids.len();
-        println!(
-            "After batch deletion: reachable={reachable}, orphans={orphans}, expected={expected_reachable}"
-        );
-
-        // Allow some connectivity loss but it should be bounded
-        assert!(
-            reachable >= expected_reachable * 8 / 10,
-            "Too many nodes unreachable: {reachable} < {expected_reachable}*0.8"
-        );
+        // Graph should be fully connected
+        let (reachable, _) = index.validate_connectivity();
+        assert_eq!(reachable, 200, "All nodes should still be reachable");
     }
 
     #[test]
@@ -410,42 +430,61 @@ mod tests {
         // Get current entry point
         let entry_point = index.entry_point().unwrap();
 
-        // Delete entry point
+        // Delete entry point - should still update entry point
         let repairs = index.mark_deleted(entry_point).unwrap();
-        println!("Repairs after deleting entry point: {repairs}");
+        assert_eq!(repairs, 0);
 
-        // Entry point should be updated
+        // Entry point should be updated to a different node
         let new_entry = index.entry_point();
         assert!(new_entry.is_some());
         assert_ne!(new_entry.unwrap(), entry_point);
     }
 
     #[test]
-    fn test_deletion_preserves_search_quality() {
+    fn test_search_returns_deleted_nodes() {
+        // With lazy delete, HNSW search returns deleted nodes.
+        // Filtering happens at VectorStore level, not HNSW level.
         let mut index = create_test_index(500, 64);
 
         // Search before deletion
         let query: Vec<f32> = (0..64).map(|i| (i as f32) / 64.0).collect();
         let results_before = index.search(&query, 10, TEST_EF_SEARCH).unwrap();
 
-        // Delete 5% of nodes (excluding search results)
-        let result_ids: HashSet<u32> = results_before.iter().map(|r| r.id).collect();
-        let delete_ids: Vec<u32> = (0..500)
-            .step_by(20)
-            .filter(|&id| !result_ids.contains(&id))
-            .collect();
+        // Delete some nodes
+        let delete_ids: Vec<u32> = (0..500).step_by(20).collect();
         index.mark_deleted_batch(&delete_ids).unwrap();
 
-        // Search after deletion
+        // Search after deletion - results may include deleted nodes
+        // (VectorStore is responsible for filtering)
         let results_after = index.search(&query, 10, TEST_EF_SEARCH).unwrap();
 
-        // Results should still be reasonable
+        // Should still get results
         assert!(!results_after.is_empty());
         println!(
             "Results before: {}, after: {}",
             results_before.len(),
             results_after.len()
         );
+    }
+
+    #[test]
+    fn test_repair_variant_orphans_nodes() {
+        // The _with_repair variant should still work for those who want it
+        let mut index = create_test_index(100, 16);
+
+        // Delete with repair
+        let repairs = index.mark_deleted_with_repair(50).unwrap();
+        println!("Repairs with MN-RU: {repairs}");
+
+        // Node should be orphaned after repair
+        assert!(
+            index.is_orphaned(50),
+            "Node should be orphaned after repair"
+        );
+
+        // Graph should still be mostly connected
+        let (reachable, _) = index.validate_connectivity();
+        assert!(reachable >= 90, "Most nodes should still be reachable");
     }
 }
 
@@ -455,8 +494,8 @@ mod small_graph_tests {
     use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
 
     #[test]
-    fn test_small_graph_deletion() {
-        // Match the Python test scenario: 5 vectors, 128 dimensions
+    fn test_small_graph_lazy_delete() {
+        // Test lazy delete behavior on small graph
         let params = HNSWParams {
             m: 16,
             ef_construction: 100,
@@ -464,7 +503,7 @@ mod small_graph_tests {
         };
         let mut index = HNSWIndex::new(128, params, DistanceFunction::L2, false).unwrap();
 
-        // Insert 5 uniform vectors like Python test
+        // Insert 5 uniform vectors
         for i in 0..5 {
             let val = (i + 1) as f32 * 0.1;
             let vector: Vec<f32> = vec![val; 128];
@@ -482,52 +521,42 @@ mod small_graph_tests {
             println!("  Node {node_id} -> {neighbors:?}");
         }
 
-        let (reachable, orphans) = index.validate_connectivity();
-        println!("Reachable: {reachable}, Orphans: {orphans}");
+        let (reachable_before, _) = index.validate_connectivity();
+        assert_eq!(reachable_before, 5);
 
-        // Search before delete
-        let query: Vec<f32> = vec![0.1; 128];
-        let results = index.search(&query, 5, 100).unwrap();
-        println!("Search results: {} (should include node 0)", results.len());
-
-        // Delete node 0 (vec1)
-        println!("\n=== Deleting node 0 ===");
+        // Delete node 0 with lazy delete
+        println!("\n=== Deleting node 0 (lazy) ===");
         let repairs = index.mark_deleted(0).unwrap();
-        println!("Repairs: {repairs}");
+        assert_eq!(repairs, 0, "Lazy delete should not repair");
 
         println!("\n=== After deletion ===");
         println!("Entry point: {:?}", index.entry_point());
 
-        // Print neighbors for each node AFTER deletion
-        println!("Graph structure:");
+        // Graph structure should be UNCHANGED with lazy delete
+        println!("Graph structure (should be unchanged):");
         for node_id in 0..5u32 {
             let neighbors = index.neighbors.get_neighbors(node_id, 0);
             println!("  Node {node_id} -> {neighbors:?}");
         }
 
-        println!("Connectivity check:");
-        let (reachable, orphans) = index.validate_connectivity_verbose(true);
-        println!("Reachable: {reachable}, Orphans: {orphans}");
+        // Node 0 should NOT be orphaned (lazy delete keeps graph intact)
+        assert!(!index.is_orphaned(0), "Lazy delete should NOT orphan nodes");
 
-        // Search after delete
+        // All nodes still reachable
+        let (reachable_after, orphans) = index.validate_connectivity();
+        assert_eq!(reachable_after, 5, "All nodes still reachable");
+        assert_eq!(orphans, 0);
+
+        // Search still returns node 0 - filtering happens at VectorStore level
+        let query: Vec<f32> = vec![0.1; 128];
         let results = index.search(&query, 5, 100).unwrap();
-        println!(
-            "\nSearch results: {} (should NOT include node 0)",
-            results.len()
-        );
-        for r in &results {
-            println!("  Node {}: distance {:.4}", r.id, r.distance);
-        }
+        assert!(!results.is_empty());
 
-        // Check that node 0 is NOT in results
+        // At HNSW level, node 0 is still in results (lazy delete)
         let has_node_0 = results.iter().any(|r| r.id == 0);
-        println!("\nNode 0 in results: {has_node_0}");
-
-        // The test passes if we get SOME results (even if node 0 is there, filtering
-        // happens at VectorStore level)
         assert!(
-            !results.is_empty(),
-            "Search should return results after deletion"
+            has_node_0,
+            "HNSW should still return deleted node (filtering happens at VectorStore)"
         );
     }
 }
