@@ -1011,6 +1011,13 @@ impl OmenFile {
         self.header.hnsw_ef_search = ef_search as u32;
     }
 
+    /// Set dimensions in header
+    ///
+    /// Used when dimensions are inferred from vectors after initial creation.
+    pub fn set_dimensions(&mut self, dimensions: u32) {
+        self.header.dimensions = dimensions;
+    }
+
     /// Get storage path
     #[must_use]
     pub fn path(&self) -> &Path {
@@ -1245,6 +1252,7 @@ impl OmenFile {
     /// Append insert entry to WAL without updating internal state
     ///
     /// WAL-only, no state mutation. State is managed by RecordStore.
+    /// Note: Does not sync to disk. Call `wal_sync()` for durability.
     pub fn wal_append_insert(
         &mut self,
         id: &str,
@@ -1253,18 +1261,20 @@ impl OmenFile {
     ) -> io::Result<()> {
         let metadata_bytes = metadata.unwrap_or(b"{}");
         let entry = WalEntry::insert_node(0, id, 0, vector, metadata_bytes);
-        self.wal.append(entry)?;
-        self.wal.sync()?;
-        Ok(())
+        self.wal.append(entry)
     }
 
     /// Append delete entry to WAL without updating internal state
     ///
     /// WAL-only, no state mutation. State is managed by RecordStore.
+    /// Note: Does not sync to disk. Call `wal_sync()` for durability.
     pub fn wal_append_delete(&mut self, id: &str) -> io::Result<()> {
-        self.wal.append(WalEntry::delete_node(0, id))?;
-        self.wal.sync()?;
-        Ok(())
+        self.wal.append(WalEntry::delete_node(0, id))
+    }
+
+    /// Sync WAL to disk for durability
+    pub fn wal_sync(&mut self) -> io::Result<()> {
+        self.wal.sync()
     }
 
     /// Load snapshot from storage
@@ -1276,16 +1286,21 @@ impl OmenFile {
             ..Default::default()
         };
 
-        // Load vectors from state or mmap
-        let dim = self.header.dimensions as usize;
+        // Load vectors from state
         for (idx, vec) in self.state.vectors.iter().enumerate() {
             while snapshot.vectors.len() <= idx {
                 snapshot.vectors.push(None);
             }
             if !vec.is_empty() {
                 snapshot.vectors[idx] = Some(vec.clone());
+                // Infer dimensions from first vector if header says 0
+                if snapshot.dimensions == 0 {
+                    snapshot.dimensions = vec.len() as u32;
+                }
             }
         }
+
+        let dim = snapshot.dimensions as usize;
 
         // Load from mmap if we have persisted data
         if let Some(ref mmap) = self.mmap {

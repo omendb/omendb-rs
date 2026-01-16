@@ -83,7 +83,6 @@ def test_dimensions_parameter(temp_db_path):
         assert len(results) == 1
 
 
-@pytest.mark.xfail(reason="Known persistence issue: data not loaded on reopen")
 def test_config_persistence(temp_db_path):
     """Test that configuration is persisted"""
     config = {"hnsw": {"m": 32, "ef_construction": 400, "ef_search": 100}}

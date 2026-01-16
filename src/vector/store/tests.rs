@@ -1453,3 +1453,34 @@ mod proptest_tests {
         }
     }
 }
+
+#[test]
+fn test_set_writes_to_wal() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test_wal_write");
+
+    // Create and insert
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "vec1".to_string(),
+                Vector::new(vec![1.0, 2.0, 3.0, 4.0]),
+                serde_json::json!({"key": "value"}),
+            )
+            .unwrap();
+        // No flush - just drop
+    }
+
+    // Check WAL file
+    let wal_path = db_path.with_extension("wal");
+    let wal_size = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    println!("WAL file size: {} bytes", wal_size);
+    assert!(wal_size > 0, "WAL file should not be empty after insert");
+
+    // Reopen and verify
+    {
+        let store = VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.len(), 1, "Should have 1 vector after WAL replay");
+    }
+}

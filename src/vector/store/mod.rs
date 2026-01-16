@@ -838,15 +838,10 @@ impl VectorStore {
         // Update metadata index
         self.metadata_index.index_json(slot as u32, &metadata);
 
-        // Persist to storage
-        let dims = self.dimensions();
+        // WAL for crash durability
         if let Some(ref mut storage) = self.storage {
-            storage.put_vector(slot, &vector.data)?;
-            storage.put_metadata(slot, &metadata)?;
-            storage.put_id_mapping(&id, slot)?;
-            if slot == 0 {
-                storage.put_config("dimensions", dims as u64)?;
-            }
+            let metadata_bytes = serde_json::to_vec(&metadata)?;
+            storage.wal_append_insert(&id, &vector.data, Some(&metadata_bytes))?;
         }
 
         Ok(slot)
@@ -890,10 +885,10 @@ impl VectorStore {
             // Update metadata index
             self.metadata_index.index_json(slot, &metadata);
 
-            // Persist update
+            // WAL for crash durability
             if let Some(ref mut storage) = self.storage {
-                storage.put_vector(slot as usize, &vector.data)?;
-                storage.put_metadata(slot as usize, &metadata)?;
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                storage.wal_append_insert(&id, &vector.data, Some(&metadata_bytes))?;
             }
 
             result_indices.push(slot as usize);
@@ -929,7 +924,7 @@ impl VectorStore {
                 index.batch_insert(&vectors_data)?;
             }
 
-            // Insert into RecordStore and collect slots
+            // Insert into RecordStore, update metadata index, and collect slots
             let mut slots = Vec::with_capacity(inserts.len());
             for (id, vector, metadata) in &inserts {
                 let slot =
@@ -939,25 +934,20 @@ impl VectorStore {
                 self.metadata_index.index_json(slot, metadata);
             }
 
-            // Batch persist to storage
-            let dims = self.dimensions();
+            // WAL for crash durability
             if let Some(ref mut storage) = self.storage {
-                if slots.first() == Some(&0) {
-                    storage.put_config("dimensions", dims as u64)?;
+                for (id, vector, metadata) in &inserts {
+                    let metadata_bytes = serde_json::to_vec(metadata)?;
+                    storage.wal_append_insert(id, &vector.data, Some(&metadata_bytes))?;
                 }
-
-                let batch_items: Vec<(usize, String, Vec<f32>, serde_json::Value)> = inserts
-                    .into_iter()
-                    .zip(slots.iter())
-                    .map(|((id, vector, metadata), &slot)| {
-                        (slot as usize, id, vector.data, metadata)
-                    })
-                    .collect();
-
-                storage.put_batch(batch_items)?;
             }
 
             result_indices.extend(slots.iter().map(|&s| s as usize));
+        }
+
+        // Sync WAL once at end of batch for durability
+        if let Some(ref mut storage) = self.storage {
+            storage.wal_sync()?;
         }
 
         Ok(result_indices)
@@ -2264,6 +2254,12 @@ impl VectorStore {
     /// Uses RecordStore as single source of truth (no duplicated state in OmenFile).
     pub fn flush(&mut self) -> Result<()> {
         if let Some(ref mut storage) = self.storage {
+            // Ensure dimensions are set in storage header
+            let dims = self.records.dimensions();
+            if dims > 0 {
+                storage.set_dimensions(dims);
+            }
+
             // Persist HNSW parameters to header
             storage.set_hnsw_params(
                 self.hnsw_m as u16,
