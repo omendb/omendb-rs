@@ -335,7 +335,8 @@ impl OmenFile {
             header.metric = metric;
 
             let mmap = Some(unsafe { MmapMut::map_mut(&file)? });
-            let mut db = Self {
+            // Note: WAL replay happens at VectorStore level, not here (Phase 5 architecture)
+            let db = Self {
                 path: omen_path,
                 file: Some(file),
                 mmap,
@@ -345,9 +346,6 @@ impl OmenFile {
                 hnsw_index_bytes,
                 manifest,
             };
-
-            // Replay WAL
-            db.recover()?;
 
             return Ok(db);
         }
@@ -373,7 +371,8 @@ impl OmenFile {
         header.hnsw_ef_search = hnsw_ef_search;
         header.metric = metric;
 
-        let mut db = Self {
+        // Note: WAL replay happens at VectorStore level, not here (Phase 5 architecture)
+        let db = Self {
             path: omen_path,
             file: Some(file),
             mmap: None,
@@ -383,9 +382,6 @@ impl OmenFile {
             hnsw_index_bytes: None,
             manifest,
         };
-
-        // Replay WAL
-        db.recover()?;
 
         Ok(db)
     }
@@ -1739,6 +1735,8 @@ mod tests {
 
     #[test]
     fn test_wal_recovery() {
+        // Phase 5 architecture: WAL replay happens at VectorStore level
+        // This test verifies pending_wal_entries() returns correct data
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.omen");
 
@@ -1749,11 +1747,15 @@ mod tests {
         }
 
         {
-            let db = OmenFile::open(&db_path).unwrap();
-            // Should recover from WAL
-            let results = db.search(&[1.0, 2.0, 3.0], 1);
-            assert_eq!(results.len(), 1);
-            assert_eq!(results[0].0, "vec1");
+            let mut db = OmenFile::open(&db_path).unwrap();
+            // WAL replay now happens externally - verify entries are available
+            let entries = db.pending_wal_entries().unwrap();
+            assert_eq!(entries.len(), 1);
+
+            // Parse and verify the entry
+            let insert_data = parse_wal_insert(&entries[0].data).unwrap();
+            assert_eq!(insert_data.id, "vec1");
+            assert_eq!(insert_data.vector, vec![1.0, 2.0, 3.0]);
         }
     }
 
