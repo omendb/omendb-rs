@@ -854,6 +854,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "tantivy",
+ "tantivy-columnar",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -1190,6 +1191,7 @@ checksum = "f08d6a905edb32d74a5d5737a0c9d7e950c312f3c46cb0ca0a2ca09ea11878a0"
 dependencies = [
  "bytemuck",
  "byteorder",
+ "serde",
 ]
 
 [[package]]

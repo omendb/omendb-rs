@@ -44,9 +44,10 @@ module-name = "omendb.omendb"
 python-source = "."
 
 [tool.pytest.ini_options]
+addopts = "-m 'not soak'"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "soak: marks tests as soak tests (long-running, deselect with '-m \"not soak\"')",
+    "soak: marks tests as soak tests (long-running, skip by default, run with '-m soak')",
 ]
 
 [dependency-groups]

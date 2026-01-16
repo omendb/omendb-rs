@@ -2,6 +2,7 @@
 //!
 //! Implements Trailer-based persistence and Manifest-based node mapping.
 
+use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 /// Omen v2 Footer (64 bytes)
@@ -130,6 +131,9 @@ pub struct OmenManifest {
     pub prev_manifest: Option<u64>,
     /// Highest NodeID in this manifest
     pub max_node_id: u32,
+    /// Deleted node indices (persisted as RoaringBitmap)
+    #[serde(default)]
+    pub deleted: RoaringBitmap,
 
     // V2: Persist mappings in manifest for Foundation phase
     // In Phase 2 these will move to columnar storage
@@ -146,11 +150,20 @@ impl OmenManifest {
             nodes: Vec::new(),
             prev_manifest: None,
             max_node_id: 0,
+            deleted: RoaringBitmap::new(),
             id_to_index: std::collections::HashMap::new(),
             index_to_id: std::collections::HashMap::new(),
             metadata: std::collections::HashMap::new(),
             config: std::collections::HashMap::new(),
         }
+    }
+
+    /// Returns the count of live (non-deleted) vectors
+    #[must_use]
+    pub fn live_count(&self) -> u64 {
+        let total = self.id_to_index.len() as u64;
+        let deleted = self.deleted.len();
+        total.saturating_sub(deleted)
     }
 }
 
