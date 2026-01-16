@@ -1090,7 +1090,7 @@ impl VectorStore {
 
     /// Hybrid search combining vector similarity and BM25 text relevance
     pub fn hybrid_search(
-        &mut self,
+        &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
@@ -1101,7 +1101,7 @@ impl VectorStore {
 
     /// Hybrid search with configurable RRF k constant
     pub fn hybrid_search_with_rrf_k(
-        &mut self,
+        &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
@@ -1146,7 +1146,7 @@ impl VectorStore {
 
     /// Hybrid search with filter
     pub fn hybrid_search_with_filter(
-        &mut self,
+        &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
@@ -1158,7 +1158,7 @@ impl VectorStore {
 
     /// Hybrid search with filter and configurable RRF k constant
     pub fn hybrid_search_with_filter_rrf_k(
-        &mut self,
+        &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
@@ -1231,7 +1231,7 @@ impl VectorStore {
     /// Returns [`HybridResult`] with `keyword_score` (BM25) and `semantic_score` (vector distance)
     /// for each result, enabling custom post-processing or debugging.
     pub fn hybrid_search_with_subscores(
-        &mut self,
+        &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
@@ -1276,7 +1276,7 @@ impl VectorStore {
 
     /// Hybrid search with filter returning separate keyword and semantic scores.
     pub fn hybrid_search_with_filter_subscores(
-        &mut self,
+        &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
@@ -1729,18 +1729,22 @@ impl VectorStore {
     // ============================================================================
 
     /// K-nearest neighbors search using HNSW
-    pub fn knn_search(&mut self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
-        self.knn_search_with_ef(query, k, None)
+    ///
+    /// Takes `&self` for concurrent read access. Index initialization happens
+    /// on first insert, not first search.
+    pub fn knn_search(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
+        self.knn_search_readonly(query, k, None)
     }
 
     /// K-nearest neighbors search with optional ef override
+    ///
+    /// Takes `&self` for concurrent read access.
     pub fn knn_search_with_ef(
-        &mut self,
+        &self,
         query: &Vector,
         k: usize,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
-        self.ensure_index_ready()?;
         self.knn_search_readonly(query, k, ef)
     }
 
@@ -1846,25 +1850,27 @@ impl VectorStore {
     }
 
     /// K-nearest neighbors search with metadata filtering
+    ///
+    /// Takes `&self` for concurrent read access.
     pub fn knn_search_with_filter(
-        &mut self,
+        &self,
         query: &Vector,
         k: usize,
         filter: &MetadataFilter,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.ensure_index_ready()?;
         self.knn_search_with_filter_ef_readonly(query, k, filter, None)
     }
 
     /// K-nearest neighbors search with metadata filtering and optional ef override
+    ///
+    /// Takes `&self` for concurrent read access.
     pub fn knn_search_with_filter_ef(
-        &mut self,
+        &self,
         query: &Vector,
         k: usize,
         filter: &MetadataFilter,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.ensure_index_ready()?;
         self.knn_search_with_filter_ef_readonly(query, k, filter, ef)
     }
 
@@ -1956,36 +1962,41 @@ impl VectorStore {
     }
 
     /// Search with optional filter (convenience method)
+    ///
+    /// Takes `&self` for concurrent read access.
     pub fn search(
-        &mut self,
+        &self,
         query: &Vector,
         k: usize,
         filter: Option<&MetadataFilter>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.search_with_options(query, k, filter, None, None)
+        self.search_with_options_readonly(query, k, filter, None, None)
     }
 
     /// Search with optional filter and ef override
+    ///
+    /// Takes `&self` for concurrent read access.
     pub fn search_with_ef(
-        &mut self,
+        &self,
         query: &Vector,
         k: usize,
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.search_with_options(query, k, filter, ef, None)
+        self.search_with_options_readonly(query, k, filter, ef, None)
     }
 
     /// Search with all options: filter, ef override, and max_distance
+    ///
+    /// Takes `&self` for concurrent read access.
     pub fn search_with_options(
-        &mut self,
+        &self,
         query: &Vector,
         k: usize,
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
         max_distance: Option<f32>,
     ) -> Result<Vec<(usize, f32, JsonValue)>> {
-        self.ensure_index_ready()?;
         self.search_with_options_readonly(query, k, filter, ef, max_distance)
     }
 

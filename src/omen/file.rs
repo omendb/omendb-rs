@@ -5,7 +5,7 @@
 use crate::omen::{
     align_to_page,
     header::{OmenHeader, HEADER_SIZE},
-    wal::{Wal, WalEntry, WalEntryType},
+    wal::{Wal, WalEntry},
     NodeLocation, OmenFooter, OmenManifest, SegmentType,
 };
 use anyhow::Result;
@@ -384,92 +384,6 @@ impl OmenFile {
         };
 
         Ok(db)
-    }
-
-    /// Recover from WAL
-    fn recover(&mut self) -> io::Result<()> {
-        let entries = self.wal.entries_after_checkpoint()?;
-
-        for entry in entries {
-            if !entry.verify() {
-                // Log and skip corrupted entries
-                tracing::warn!(
-                    entry_type = ?entry.header.entry_type,
-                    timestamp = entry.header.timestamp,
-                    "Skipping corrupted WAL entry during recovery"
-                );
-                continue;
-            }
-
-            match entry.header.entry_type {
-                WalEntryType::InsertNode => {
-                    self.replay_insert(&entry.data)?;
-                }
-                WalEntryType::DeleteNode => {
-                    self.replay_delete(&entry.data)?;
-                }
-                WalEntryType::UpdateNeighbors => {
-                    self.replay_neighbors(&entry.data)?;
-                }
-                WalEntryType::UpdateMetadata | WalEntryType::Checkpoint => {
-                    // No-op: metadata updates tracked in cloud-4uv, checkpoint is marker only
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn replay_insert(&mut self, data: &[u8]) -> io::Result<()> {
-        let mut cursor = std::io::Cursor::new(data);
-        let string_id = read_string_id(&mut cursor)?;
-
-        let mut buf = [0u8; 4];
-
-        // Skip level byte (HNSW graph managed by HNSWIndex)
-        cursor.read_exact(&mut buf[..1])?;
-
-        // Read vector
-        cursor.read_exact(&mut buf)?;
-        let vec_len = u32::from_le_bytes(buf) as usize;
-        let mut vec_bytes = vec![0u8; vec_len * 4];
-        cursor.read_exact(&mut vec_bytes)?;
-        let vector = read_vector_from_bytes(&vec_bytes, vec_len);
-
-        // Read metadata
-        cursor.read_exact(&mut buf)?;
-        let meta_len = u32::from_le_bytes(buf) as usize;
-        let mut metadata = vec![0u8; meta_len];
-        cursor.read_exact(&mut metadata)?;
-
-        let index = self.state.vectors.len() as u32;
-        self.state.vectors.push(vector);
-        self.state.id_to_index.insert(string_id.clone(), index);
-        self.state.index_to_id.insert(index, string_id);
-        if !metadata.is_empty() {
-            self.state.metadata.insert(index, metadata);
-        }
-
-        Ok(())
-    }
-
-    fn replay_delete(&mut self, data: &[u8]) -> io::Result<()> {
-        let mut cursor = std::io::Cursor::new(data);
-        let string_id = read_string_id(&mut cursor)?;
-
-        if let Some(&index) = self.state.id_to_index.get(&string_id) {
-            self.state.deleted.insert(index, true);
-        }
-
-        Ok(())
-    }
-
-    /// Replay neighbors update from WAL (no-op: graph managed by `HNSWIndex`)
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    fn replay_neighbors(&mut self, _data: &[u8]) -> io::Result<()> {
-        // Neighbor updates are consumed from WAL but not stored.
-        // HNSWIndex rebuilds graph from vectors on recovery.
-        Ok(())
     }
 
     /// Insert a vector

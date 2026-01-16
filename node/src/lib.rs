@@ -384,9 +384,9 @@ impl VectorDatabase {
         if !inner.cache_valid {
             inner.index_to_id_cache = inner
                 .store
-                .id_to_index
-                .iter()
-                .map(|(id, &idx)| (idx, id.clone()))
+                .id_to_index_mapping()
+                .into_iter()
+                .map(|(id, idx)| (idx, id))
                 .collect();
             inner.cache_valid = true;
         }
@@ -455,9 +455,9 @@ impl VectorDatabase {
             if !inner.cache_valid {
                 inner.index_to_id_cache = inner
                     .store
-                    .id_to_index
-                    .iter()
-                    .map(|(id, &idx)| (idx, id.clone()))
+                    .id_to_index_mapping()
+                    .into_iter()
+                    .map(|(id, idx)| (idx, id))
                     .collect();
                 inner.cache_valid = true;
             }
@@ -977,7 +977,7 @@ impl VectorDatabase {
         let alpha_f32 = alpha.map(|a| a as f32);
         let rrf_k_usize = rrf_k.map(|k| k as usize);
 
-        let mut inner = self.inner.write();
+        let inner = self.inner.read();
 
         // Use subscores path when requested
         if subscores.unwrap_or(false) {
