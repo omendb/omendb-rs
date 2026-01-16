@@ -280,6 +280,11 @@ impl OmenFile {
             .get("hnsw_ef_search")
             .copied()
             .unwrap_or(u64::from(header.hnsw_ef_search)) as u32;
+        let metric = manifest
+            .config
+            .get("metric")
+            .map(|&v| crate::omen::header::Metric::from(v as u8))
+            .unwrap_or(header.metric);
 
         if let Some(ref mmap) = mmap {
             // Load vectors from manifest using dimensions from manifest.config
@@ -327,6 +332,7 @@ impl OmenFile {
             header.hnsw_m = hnsw_m;
             header.hnsw_ef_construction = hnsw_ef_construction;
             header.hnsw_ef_search = hnsw_ef_search;
+            header.metric = metric;
 
             let mmap = Some(unsafe { MmapMut::map_mut(&file)? });
             let mut db = Self {
@@ -365,6 +371,7 @@ impl OmenFile {
         header.hnsw_m = hnsw_m;
         header.hnsw_ef_construction = hnsw_ef_construction;
         header.hnsw_ef_search = hnsw_ef_search;
+        header.metric = metric;
 
         let mut db = Self {
             path: omen_path,
@@ -700,6 +707,9 @@ impl OmenFile {
             "hnsw_ef_search".to_string(),
             u64::from(self.header.hnsw_ef_search),
         );
+        self.state
+            .config
+            .insert("metric".to_string(), self.header.metric as u64);
         self.header.count = vector_count;
 
         // Build new manifest
