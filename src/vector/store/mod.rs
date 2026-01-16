@@ -21,7 +21,7 @@ use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
 use super::QuantizationMode;
 use crate::distance::l2_distance;
-use crate::omen::{MetadataIndex, OmenFile};
+use crate::omen::{parse_wal_delete, parse_wal_insert, MetadataIndex, OmenFile, WalEntryType};
 use crate::text::{
     weighted_reciprocal_rank_fusion, weighted_reciprocal_rank_fusion_with_subscores, HybridResult,
     TextIndex, TextSearchConfig, DEFAULT_RRF_K,
@@ -373,15 +373,15 @@ impl VectorStore {
 
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
-        let storage = if omen_path.exists() {
+        let mut storage = if omen_path.exists() {
             OmenFile::open(path)?
         } else {
             OmenFile::create(path, 0)?
         };
 
-        // Load snapshot from storage
-        let snapshot = storage.load_snapshot()?;
-        let dimensions = snapshot.dimensions as usize;
+        // Load persisted snapshot (checkpoint data only, not WAL)
+        let snapshot = storage.load_persisted_snapshot()?;
+        let mut dimensions = snapshot.dimensions as usize;
 
         // Get HNSW parameters from header
         let header = storage.header();
@@ -396,7 +396,7 @@ impl VectorStore {
             quantization_mode_from_id(storage.get_quantization_mode()?.unwrap_or(0));
 
         // Build RecordStore from snapshot
-        let deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
+        let mut deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
         let mut slots: Vec<Option<Record>> = Vec::with_capacity(snapshot.vectors.len());
 
         for (slot, vec_opt) in snapshot.vectors.iter().enumerate() {
@@ -422,7 +422,58 @@ impl VectorStore {
             }
         }
 
-        let records = RecordStore::from_snapshot(slots, deleted_bitmap.clone(), dimensions as u32);
+        let mut records =
+            RecordStore::from_snapshot(slots, deleted_bitmap.clone(), dimensions as u32);
+
+        // Replay WAL entries directly into RecordStore (Phase 5 architecture)
+        let wal_entries = storage.pending_wal_entries()?;
+        for entry in wal_entries {
+            if !entry.verify() {
+                tracing::warn!(
+                    entry_type = ?entry.header.entry_type,
+                    "Skipping corrupted WAL entry during recovery"
+                );
+                continue;
+            }
+
+            match entry.header.entry_type {
+                WalEntryType::InsertNode => {
+                    if let Ok(insert_data) = parse_wal_insert(&entry.data) {
+                        // Infer dimensions from first WAL vector if needed
+                        if dimensions == 0 && !insert_data.vector.is_empty() {
+                            dimensions = insert_data.vector.len();
+                            records = RecordStore::from_snapshot(
+                                Vec::new(),
+                                RoaringBitmap::new(),
+                                dimensions as u32,
+                            );
+                        }
+
+                        // Parse metadata
+                        let metadata: Option<JsonValue> = insert_data
+                            .metadata
+                            .as_ref()
+                            .and_then(|bytes| serde_json::from_slice(bytes).ok());
+
+                        // Upsert into RecordStore
+                        records.upsert(insert_data.id, insert_data.vector, metadata)?;
+                    }
+                }
+                WalEntryType::DeleteNode => {
+                    if let Ok(delete_data) = parse_wal_delete(&entry.data) {
+                        records.delete(&delete_data.id);
+                    }
+                }
+                WalEntryType::UpdateNeighbors
+                | WalEntryType::UpdateMetadata
+                | WalEntryType::Checkpoint => {
+                    // No-op: neighbors managed by HNSW, metadata/checkpoint are markers
+                }
+            }
+        }
+
+        // Update deleted bitmap after WAL replay
+        deleted_bitmap = records.deleted_bitmap().clone();
 
         // Build HNSW index - must maintain slot index correspondence
         let slot_count = records.slot_count() as usize;

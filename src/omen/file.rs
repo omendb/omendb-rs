@@ -1277,6 +1277,74 @@ impl OmenFile {
         self.wal.sync()
     }
 
+    /// Get pending WAL entries (entries after last checkpoint)
+    ///
+    /// These entries have not been persisted to the checkpoint yet.
+    /// VectorStore uses this to replay WAL directly into RecordStore.
+    pub fn pending_wal_entries(&mut self) -> io::Result<Vec<WalEntry>> {
+        self.wal.entries_after_checkpoint()
+    }
+
+    /// Load snapshot from persisted data only (manifest + mmap)
+    ///
+    /// Does NOT include WAL entries - caller must replay WAL separately.
+    /// This is the Phase 5 API where state is managed externally by RecordStore.
+    pub fn load_persisted_snapshot(&self) -> io::Result<OmenSnapshot> {
+        let dim = self.header.dimensions as usize;
+        let mut snapshot = OmenSnapshot {
+            dimensions: self.header.dimensions,
+            ..Default::default()
+        };
+
+        // Load vectors from mmap using manifest locations
+        if let Some(ref mmap) = self.mmap {
+            for (idx, location) in self.manifest.nodes.iter().enumerate() {
+                if location.segment_type == SegmentType::Vectors {
+                    while snapshot.vectors.len() <= idx {
+                        snapshot.vectors.push(None);
+                    }
+                    let start = location.offset as usize;
+                    let end = start + location.length as usize;
+                    if end <= mmap.len() {
+                        let vec = read_vector_from_bytes(&mmap[start..end], dim);
+                        // Infer dimensions from first vector if header says 0
+                        if snapshot.dimensions == 0 && !vec.is_empty() {
+                            snapshot.dimensions = vec.len() as u32;
+                        }
+                        snapshot.vectors[idx] = Some(vec);
+                    }
+                }
+            }
+
+            // Load HNSW index bytes
+            for location in &self.manifest.nodes {
+                if location.segment_type == SegmentType::IndexMetadata {
+                    let start = location.offset as usize;
+                    let end = start + location.length as usize;
+                    if end <= mmap.len() {
+                        snapshot.hnsw_bytes = Some(mmap[start..end].to_vec());
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Load ID mappings from manifest
+        snapshot.id_to_slot = self.manifest.id_to_index.clone();
+
+        // Load deleted bitmap from manifest (RoaringBitmap -> Vec<u32>)
+        snapshot.deleted = self.manifest.deleted.iter().collect();
+
+        // Load metadata from manifest (bytes -> JsonValue)
+        for (&idx, bytes) in &self.manifest.metadata {
+            if let Ok(json) = serde_json::from_slice(bytes) {
+                snapshot.metadata.insert(idx, json);
+            }
+        }
+
+        Ok(snapshot)
+    }
+
     /// Load snapshot from storage
     ///
     /// Returns all persisted data for initializing RecordStore. Does not modify internal state.
@@ -1553,6 +1621,70 @@ fn read_vector_from_bytes(bytes: &[u8], dimensions: usize) -> Vec<f32> {
         .take(dimensions)
         .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap_or([0; 4])))
         .collect()
+}
+
+// ============================================================================
+// WAL Entry Parsing (Phase 5 API)
+// ============================================================================
+
+/// Parsed insert data from a WAL entry
+#[derive(Debug, Clone)]
+pub struct WalInsertData {
+    pub id: String,
+    pub vector: Vec<f32>,
+    pub metadata: Option<Vec<u8>>,
+}
+
+/// Parsed delete data from a WAL entry
+#[derive(Debug, Clone)]
+pub struct WalDeleteData {
+    pub id: String,
+}
+
+/// Parse WAL insert entry data
+///
+/// Returns parsed ID, vector, and optional metadata bytes.
+pub fn parse_wal_insert(data: &[u8]) -> io::Result<WalInsertData> {
+    let mut cursor = std::io::Cursor::new(data);
+    let string_id = read_string_id(&mut cursor)?;
+
+    let mut buf = [0u8; 4];
+
+    // Skip level byte (HNSW graph managed by HNSWIndex)
+    cursor.read_exact(&mut buf[..1])?;
+
+    // Read vector
+    cursor.read_exact(&mut buf)?;
+    let vec_len = u32::from_le_bytes(buf) as usize;
+    let mut vec_bytes = vec![0u8; vec_len * 4];
+    cursor.read_exact(&mut vec_bytes)?;
+    let vector = read_vector_from_bytes(&vec_bytes, vec_len);
+
+    // Read metadata
+    cursor.read_exact(&mut buf)?;
+    let meta_len = u32::from_le_bytes(buf) as usize;
+    let metadata = if meta_len > 0 {
+        let mut meta_bytes = vec![0u8; meta_len];
+        cursor.read_exact(&mut meta_bytes)?;
+        Some(meta_bytes)
+    } else {
+        None
+    };
+
+    Ok(WalInsertData {
+        id: string_id,
+        vector,
+        metadata,
+    })
+}
+
+/// Parse WAL delete entry data
+///
+/// Returns parsed ID.
+pub fn parse_wal_delete(data: &[u8]) -> io::Result<WalDeleteData> {
+    let mut cursor = std::io::Cursor::new(data);
+    let id = read_string_id(&mut cursor)?;
+    Ok(WalDeleteData { id })
 }
 
 #[cfg(test)]
