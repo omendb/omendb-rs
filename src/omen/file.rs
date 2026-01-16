@@ -1237,6 +1237,295 @@ impl OmenFile {
     }
 }
 
+// ============================================================================
+// V3 Pure I/O API (no internal state mutation)
+// ============================================================================
+
+/// Snapshot data loaded from OmenFile for V3 architecture
+#[derive(Debug, Default)]
+pub struct OmenSnapshot {
+    /// Vectors loaded from storage
+    pub vectors: Vec<Option<Vec<f32>>>,
+    /// ID to slot mappings
+    pub id_to_slot: HashMap<String, u32>,
+    /// Deleted slot bitmap (as Vec for compatibility)
+    pub deleted: Vec<u32>,
+    /// Metadata by slot
+    pub metadata: HashMap<u32, serde_json::Value>,
+    /// Vector dimensions
+    pub dimensions: u32,
+    /// HNSW index bytes (if persisted)
+    pub hnsw_bytes: Option<Vec<u8>>,
+}
+
+impl OmenFile {
+    // =========================================================================
+    // V3 Pure I/O Methods
+    // =========================================================================
+
+    /// Append insert entry to WAL without updating internal state
+    ///
+    /// V3 Architecture: WAL-only, no state mutation.
+    /// State is managed by RecordStore in VectorStore.
+    pub fn wal_append_insert(
+        &mut self,
+        id: &str,
+        vector: &[f32],
+        metadata: Option<&[u8]>,
+    ) -> io::Result<()> {
+        let metadata_bytes = metadata.unwrap_or(b"{}");
+        let entry = WalEntry::insert_node(0, id, 0, vector, metadata_bytes);
+        self.wal.append(entry)?;
+        self.wal.sync()?;
+        Ok(())
+    }
+
+    /// Append delete entry to WAL without updating internal state
+    ///
+    /// V3 Architecture: WAL-only, no state mutation.
+    /// State is managed by RecordStore in VectorStore.
+    pub fn wal_append_delete(&mut self, id: &str) -> io::Result<()> {
+        self.wal.append(WalEntry::delete_node(0, id))?;
+        self.wal.sync()?;
+        Ok(())
+    }
+
+    /// Load snapshot for V3 architecture
+    ///
+    /// Returns all persisted data in a format suitable for initializing RecordStore.
+    /// Does not modify internal state.
+    pub fn load_snapshot(&self) -> io::Result<OmenSnapshot> {
+        let mut snapshot = OmenSnapshot {
+            dimensions: self.header.dimensions,
+            ..Default::default()
+        };
+
+        // Load vectors from state or mmap
+        let dim = self.header.dimensions as usize;
+        for (idx, vec) in self.state.vectors.iter().enumerate() {
+            while snapshot.vectors.len() <= idx {
+                snapshot.vectors.push(None);
+            }
+            if !vec.is_empty() {
+                snapshot.vectors[idx] = Some(vec.clone());
+            }
+        }
+
+        // Load from mmap if we have persisted data
+        if let Some(ref mmap) = self.mmap {
+            for (idx, location) in self.manifest.nodes.iter().enumerate() {
+                if location.segment_type == SegmentType::Vectors {
+                    while snapshot.vectors.len() <= idx {
+                        snapshot.vectors.push(None);
+                    }
+                    if snapshot.vectors[idx].is_none() {
+                        let start = location.offset as usize;
+                        let end = start + location.length as usize;
+                        if end <= mmap.len() {
+                            snapshot.vectors[idx] =
+                                Some(read_vector_from_bytes(&mmap[start..end], dim));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Copy mappings
+        snapshot.id_to_slot = self
+            .state
+            .id_to_index
+            .iter()
+            .map(|(k, &v)| (k.clone(), v))
+            .collect();
+
+        // Copy deleted
+        snapshot.deleted = self.state.deleted.keys().copied().collect();
+
+        // Copy metadata (converting from bytes to JsonValue)
+        for (&idx, bytes) in &self.state.metadata {
+            if let Ok(json) = serde_json::from_slice(bytes) {
+                snapshot.metadata.insert(idx, json);
+            }
+        }
+
+        // Copy HNSW bytes if present
+        snapshot.hnsw_bytes = self.hnsw_index_bytes.clone();
+
+        Ok(snapshot)
+    }
+
+    /// Checkpoint from external RecordStore (V3 pure I/O)
+    ///
+    /// Writes vectors, metadata, and mappings from the provided snapshot.
+    /// Does not read from internal state.
+    pub fn checkpoint_from_snapshot(
+        &mut self,
+        vectors: &[Option<Vec<f32>>],
+        id_to_slot: &HashMap<String, u32>,
+        deleted: &[u32],
+        metadata: &HashMap<u32, serde_json::Value>,
+        hnsw_bytes: Option<&[u8]>,
+    ) -> io::Result<()> {
+        // Drop mmap before writing
+        self.mmap = None;
+
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("File not open"))?;
+
+        // Find append point
+        let file_len = file.metadata()?.len();
+        let append_offset = if file_len > (HEADER_SIZE + OmenFooter::SIZE) as u64 {
+            file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
+            let mut footer_buf = [0u8; OmenFooter::SIZE];
+            file.read_exact(&mut footer_buf)?;
+            let old_footer = OmenFooter::from_bytes(&footer_buf);
+            if old_footer.verify() {
+                self.manifest
+                    .nodes
+                    .iter()
+                    .filter(|n| {
+                        n.segment_type == SegmentType::Vectors
+                            || n.segment_type == SegmentType::IndexMetadata
+                    })
+                    .map(|n| n.offset + n.length as u64)
+                    .max()
+                    .unwrap_or(HEADER_SIZE as u64)
+            } else {
+                HEADER_SIZE as u64
+            }
+        } else {
+            HEADER_SIZE as u64
+        };
+
+        let mut writer = SegmentWriter::new(file, append_offset);
+
+        // Count of vectors already persisted
+        let persisted_count = self
+            .manifest
+            .nodes
+            .iter()
+            .filter(|n| n.segment_type == SegmentType::Vectors)
+            .count();
+
+        // Clone existing vector locations
+        let mut new_nodes: Vec<NodeLocation> = self
+            .manifest
+            .nodes
+            .iter()
+            .filter(|n| n.segment_type == SegmentType::Vectors)
+            .copied()
+            .collect();
+
+        // Append only NEW vectors
+        let dim = self.header.dimensions as usize;
+        let vec_size = (dim * 4) as u32;
+        let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
+
+        for (idx, vec_opt) in vectors.iter().enumerate().skip(persisted_count) {
+            let to_write = if deleted_set.contains(&(idx as u32)) {
+                vec![0.0f32; dim]
+            } else {
+                vec_opt.clone().unwrap_or_else(|| vec![0.0f32; dim])
+            };
+
+            writer.current_offset = align_to_page(writer.current_offset as usize) as u64;
+            writer.file.seek(SeekFrom::Start(writer.current_offset))?;
+            for &val in &to_write {
+                writer.file.write_all(&val.to_le_bytes())?;
+            }
+
+            new_nodes.push(NodeLocation {
+                offset: writer.current_offset,
+                length: vec_size,
+                segment_type: SegmentType::Vectors,
+            });
+
+            writer.current_offset += vec_size as u64;
+        }
+
+        // Write HNSW index if provided
+        if let Some(hnsw_data) = hnsw_bytes {
+            let location = writer.write_aligned(hnsw_data, SegmentType::IndexMetadata)?;
+            new_nodes.push(location);
+        }
+
+        // Build new manifest
+        let mut manifest = OmenManifest::new();
+        manifest.nodes = new_nodes;
+        manifest.max_node_id = (vectors.len() as u32).saturating_sub(1);
+
+        // Build index_to_id from id_to_slot
+        let index_to_id: HashMap<u32, String> = id_to_slot
+            .iter()
+            .map(|(id, &slot)| (slot, id.clone()))
+            .collect();
+
+        manifest.id_to_index = id_to_slot.clone();
+        manifest.index_to_id = index_to_id;
+        manifest.deleted = deleted.iter().copied().collect();
+
+        // Convert metadata to bytes
+        let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
+        for (&idx, json) in metadata {
+            if !deleted_set.contains(&idx) {
+                if let Ok(bytes) = serde_json::to_vec(json) {
+                    metadata_bytes.insert(idx, bytes);
+                }
+            }
+        }
+        manifest.metadata = metadata_bytes;
+
+        // Update config
+        let live_count = vectors.len() - deleted.len();
+        manifest
+            .config
+            .insert("count".to_string(), live_count as u64);
+        manifest
+            .config
+            .insert("dimensions".to_string(), u64::from(self.header.dimensions));
+
+        // Write Manifest
+        let manifest_bytes = postcard::to_allocvec(&manifest)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let manifest_location = writer.write_aligned(&manifest_bytes, SegmentType::Manifest)?;
+
+        // Write Footer
+        let total_len = writer.file.stream_position()?;
+        let footer = OmenFooter::new(manifest_location.offset, total_len);
+        writer.file.write_all(&footer.to_bytes())?;
+
+        // Truncate and sync
+        let final_len = writer.file.stream_position()?;
+        writer.file.set_len(final_len)?;
+        writer.file.sync_all()?;
+
+        // Update in-memory manifest
+        self.manifest = manifest;
+
+        // Truncate WAL
+        self.wal.truncate()?;
+        self.wal.append(WalEntry::checkpoint(0))?;
+        self.wal.sync()?;
+
+        // Re-establish mmap
+        let file = self.file.as_ref().unwrap();
+        self.mmap = Some(unsafe { MmapMut::map_mut(file)? });
+
+        // Update header count
+        self.header.count = live_count as u64;
+
+        Ok(())
+    }
+
+    /// Get WAL length (for determining if checkpoint needed)
+    #[must_use]
+    pub fn wal_len(&self) -> u64 {
+        self.wal.len()
+    }
+}
+
 fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
@@ -1523,5 +1812,171 @@ mod tests {
         assert!(meta.is_some());
         let meta_json = meta.unwrap();
         assert_eq!(meta_json["key"], "keep");
+    }
+
+    // =========================================================================
+    // V3 Pure I/O Tests
+    // =========================================================================
+
+    #[test]
+    fn test_v3_wal_append_insert() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_v3_wal.omen");
+
+        let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+        // Use V3 pure I/O: WAL only, no state mutation
+        db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
+            .unwrap();
+        db.wal_append_insert("vec2", &[4.0, 5.0, 6.0], Some(br#"{"key":"value"}"#))
+            .unwrap();
+
+        // WAL should have entries, but state is NOT updated
+        assert!(db.wal_len() > 0);
+        // Internal state should be empty since we only wrote to WAL
+        assert_eq!(db.len(), 0);
+    }
+
+    #[test]
+    fn test_v3_load_snapshot() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_v3_snapshot.omen");
+
+        // Create and populate using old API
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+            db.insert("vec1", &[1.0, 2.0, 3.0], Some(br#"{"k":"v1"}"#))
+                .unwrap();
+            db.insert("vec2", &[4.0, 5.0, 6.0], Some(br#"{"k":"v2"}"#))
+                .unwrap();
+            db.delete("vec1").unwrap();
+            db.checkpoint().unwrap();
+        }
+
+        // Open and load snapshot using V3 API
+        {
+            let db = OmenFile::open(&db_path).unwrap();
+            let snapshot = db.load_snapshot().unwrap();
+
+            assert_eq!(snapshot.dimensions, 3);
+            assert_eq!(snapshot.id_to_slot.len(), 1); // Only vec2 in mapping
+            assert!(snapshot.id_to_slot.contains_key("vec2"));
+            assert!(!snapshot.id_to_slot.contains_key("vec1")); // Deleted
+
+            // vec2's slot should have vector data
+            let slot = snapshot.id_to_slot["vec2"] as usize;
+            assert!(snapshot.vectors[slot].is_some());
+            let vec_data = snapshot.vectors[slot].as_ref().unwrap();
+            assert_eq!(vec_data, &[4.0, 5.0, 6.0]);
+
+            // Metadata should be present
+            assert!(snapshot.metadata.contains_key(&(slot as u32)));
+        }
+    }
+
+    #[test]
+    fn test_v3_checkpoint_from_snapshot() {
+        use std::collections::HashMap;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_v3_checkpoint.omen");
+
+        // Create empty DB
+        let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+        // Build snapshot data externally (simulating RecordStore)
+        let vectors: Vec<Option<Vec<f32>>> = vec![
+            Some(vec![1.0, 2.0, 3.0]),
+            Some(vec![4.0, 5.0, 6.0]),
+            Some(vec![7.0, 8.0, 9.0]),
+        ];
+        let mut id_to_slot: HashMap<String, u32> = HashMap::new();
+        id_to_slot.insert("vec1".to_string(), 0);
+        id_to_slot.insert("vec2".to_string(), 1);
+        // vec3 at slot 2 is deleted
+
+        let deleted: Vec<u32> = vec![2]; // Slot 2 is deleted
+
+        let mut metadata: HashMap<u32, serde_json::Value> = HashMap::new();
+        metadata.insert(0, serde_json::json!({"key": "value1"}));
+        metadata.insert(1, serde_json::json!({"key": "value2"}));
+
+        // Checkpoint from external snapshot
+        db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None)
+            .unwrap();
+
+        // Verify internal state was updated
+        assert_eq!(db.len(), 2);
+
+        drop(db);
+
+        // Reopen and verify
+        let db2 = OmenFile::open(&db_path).unwrap();
+        assert_eq!(db2.len(), 2);
+
+        // Search should find vec1 and vec2
+        let results = db2.search(&[1.0, 2.0, 3.0], 2);
+        assert_eq!(results.len(), 2);
+
+        // vec1 should be closest to query
+        assert_eq!(results[0].0, "vec1");
+    }
+
+    #[test]
+    fn test_v3_delete_round_trip() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_v3_delete_rt.omen");
+
+        // Phase 1: Create and populate
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+            db.insert("vec1", &[1.0, 0.0, 0.0], None).unwrap();
+            db.insert("vec2", &[0.0, 1.0, 0.0], None).unwrap();
+            db.insert("vec3", &[0.0, 0.0, 1.0], None).unwrap();
+            db.checkpoint().unwrap();
+        }
+
+        // Phase 2: Reopen and delete using V3 WAL-only
+        {
+            let mut db = OmenFile::open(&db_path).unwrap();
+            assert_eq!(db.len(), 3);
+
+            // V3: WAL-only delete (simulating RecordStore-based deletion)
+            db.wal_append_delete("vec2").unwrap();
+
+            // Checkpoint with updated deleted set
+            let snapshot = db.load_snapshot().unwrap();
+
+            // Convert snapshot to checkpoint format, adding vec2's slot to deleted
+            let mut deleted: Vec<u32> = snapshot.deleted;
+            if let Some(&slot) = snapshot.id_to_slot.get("vec2") {
+                deleted.push(slot);
+            }
+
+            // Remove vec2 from id_to_slot
+            let mut id_to_slot = snapshot.id_to_slot.clone();
+            id_to_slot.remove("vec2");
+
+            // Build vectors slice
+            let vectors: Vec<Option<Vec<f32>>> = snapshot.vectors;
+
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &snapshot.metadata, None)
+                .unwrap();
+        }
+
+        // Phase 3: Reopen and verify deletion persisted
+        {
+            let db = OmenFile::open(&db_path).unwrap();
+            assert_eq!(db.len(), 2);
+
+            // Search should only find vec1 and vec3
+            let results = db.search(&[0.0, 1.0, 0.0], 3);
+            assert_eq!(results.len(), 2);
+
+            // vec2 should NOT be in results (it was deleted)
+            for (id, _) in &results {
+                assert_ne!(id, "vec2", "vec2 should have been deleted");
+            }
+        }
     }
 }

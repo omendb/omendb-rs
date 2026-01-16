@@ -23,7 +23,7 @@ mod metadata;
 mod vectors;
 mod wal;
 
-pub use file::OmenFile;
+pub use file::{OmenFile, OmenSnapshot};
 pub use graph::GraphSection;
 pub use header::{Metric, OmenHeader, HEADER_SIZE, MAGIC, VERSION_MAJOR, VERSION_MINOR};
 pub use manifest::{NodeLocation, OmenFooter, OmenManifest, SegmentType};
