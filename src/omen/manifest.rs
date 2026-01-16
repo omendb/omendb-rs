@@ -34,6 +34,7 @@ impl OmenFooter {
     pub const VERSION: u32 = 1;
 
     /// Create a new footer
+    #[must_use] 
     pub fn new(manifest_offset: u64, total_len: u64) -> Self {
         let mut footer = Self {
             magic: Self::MAGIC,
@@ -49,6 +50,7 @@ impl OmenFooter {
     }
 
     /// Compute CRC32 of footer data
+    #[must_use] 
     pub fn compute_crc(&self) -> u32 {
         let mut hasher = crc32fast::Hasher::new();
         hasher.update(&self.magic.to_le_bytes());
@@ -61,11 +63,13 @@ impl OmenFooter {
     }
 
     /// Verify footer magic and checksum
+    #[must_use] 
     pub fn verify(&self) -> bool {
         self.magic == Self::MAGIC && self.crc == self.compute_crc()
     }
 
     /// Serialize to 64-byte array
+    #[must_use] 
     pub fn to_bytes(&self) -> [u8; 64] {
         let mut bytes = [0u8; 64];
         bytes[0..4].copy_from_slice(&self.magic.to_le_bytes());
@@ -79,6 +83,7 @@ impl OmenFooter {
     }
 
     /// Deserialize from 64-byte array
+    #[must_use] 
     pub fn from_bytes(bytes: &[u8; 64]) -> Self {
         Self {
             magic: u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
@@ -143,6 +148,7 @@ pub struct OmenManifest {
 }
 
 impl OmenManifest {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),

@@ -91,44 +91,6 @@ impl<'a> SegmentWriter<'a> {
         self.current_offset += data.len() as u64;
         Ok(location)
     }
-
-    /// Write multiple items as a single segment and return their locations
-    fn write_vectors_aligned(
-        &mut self,
-        vectors: &[Vec<f32>],
-        deleted: &HashMap<u32, bool>,
-        dimensions: usize,
-    ) -> io::Result<Vec<NodeLocation>> {
-        self.current_offset = align_to_page(self.current_offset as usize) as u64;
-        self.file.seek(SeekFrom::Start(self.current_offset))?;
-
-        let mut locations = Vec::with_capacity(vectors.len());
-        let vec_size = (dimensions * 4) as u32;
-        let zero_vec = vec![0.0f32; dimensions];
-
-        for (idx, vector) in vectors.iter().enumerate() {
-            let start_offset = self.current_offset;
-            let to_write = if deleted.contains_key(&(idx as u32)) {
-                &zero_vec
-            } else {
-                vector
-            };
-
-            for &val in to_write {
-                self.file.write_all(&val.to_le_bytes())?;
-            }
-
-            locations.push(NodeLocation {
-                offset: start_offset,
-                length: vec_size,
-                segment_type: SegmentType::Vectors,
-            });
-
-            self.current_offset += vec_size as u64;
-        }
-
-        Ok(locations)
-    }
 }
 
 /// Checkpoint threshold (number of WAL entries before compaction)
@@ -197,10 +159,10 @@ impl OmenFile {
         // Write initial empty Manifest and Footer
         let manifest = OmenManifest::new();
         let manifest_bytes = postcard::to_allocvec(&manifest).unwrap();
-        let manifest_offset = file.seek(SeekFrom::Current(0))?;
+        let manifest_offset = file.stream_position()?;
         file.write_all(&manifest_bytes)?;
 
-        let total_len = file.seek(SeekFrom::Current(0))?;
+        let total_len = file.stream_position()?;
         let footer = OmenFooter::new(manifest_offset, total_len);
         file.write_all(&footer.to_bytes())?;
 
@@ -289,15 +251,39 @@ impl OmenFile {
         let id_to_index = manifest.id_to_index.clone();
         let index_to_id = manifest.index_to_id.clone();
         let metadata_mem = manifest.metadata.clone();
-        let mut config = manifest.config.clone();
+        let config = manifest.config.clone();
 
-        // Ensure dimensions and count are synced from header
-        config.insert("dimensions".to_string(), u64::from(header.dimensions));
-        config.insert("count".to_string(), header.count);
+        // Config values from manifest (source of truth for append-only)
+        let count = manifest
+            .config
+            .get("count")
+            .copied()
+            .unwrap_or(manifest.id_to_index.len() as u64);
+        let dimensions = manifest
+            .config
+            .get("dimensions")
+            .copied()
+            .unwrap_or(u64::from(header.dimensions)) as u32;
+        let hnsw_m = manifest
+            .config
+            .get("hnsw_m")
+            .copied()
+            .unwrap_or(u64::from(header.hnsw_m)) as u32;
+        let hnsw_ef_construction = manifest
+            .config
+            .get("hnsw_ef_construction")
+            .copied()
+            .unwrap_or(u64::from(header.hnsw_ef_construction))
+            as u32;
+        let hnsw_ef_search = manifest
+            .config
+            .get("hnsw_ef_search")
+            .copied()
+            .unwrap_or(u64::from(header.hnsw_ef_search)) as u32;
 
         if let Some(ref mmap) = mmap {
-            // Load vectors from manifest
-            let dim = header.dimensions as usize;
+            // Load vectors from manifest using dimensions from manifest.config
+            let dim = dimensions as usize;
             for location in &manifest.nodes {
                 if location.segment_type == SegmentType::Vectors {
                     let start = location.offset as usize;
@@ -334,6 +320,14 @@ impl OmenFile {
                 deleted,
             };
 
+            // Update header from manifest (source of truth for append-only)
+            let mut header = header;
+            header.count = count;
+            header.dimensions = dimensions;
+            header.hnsw_m = hnsw_m;
+            header.hnsw_ef_construction = hnsw_ef_construction;
+            header.hnsw_ef_search = hnsw_ef_search;
+
             let mmap = Some(unsafe { MmapMut::map_mut(&file)? });
             let mut db = Self {
                 path: omen_path,
@@ -363,6 +357,14 @@ impl OmenFile {
             config,
             deleted,
         };
+
+        // Update header from manifest (source of truth for append-only)
+        let mut header = header;
+        header.count = count;
+        header.dimensions = dimensions;
+        header.hnsw_m = hnsw_m;
+        header.hnsw_ef_construction = hnsw_ef_construction;
+        header.hnsw_ef_search = hnsw_ef_search;
 
         let mut db = Self {
             path: omen_path,
@@ -579,113 +581,171 @@ impl OmenFile {
         self.header.dimensions
     }
 
-    /// Checkpoint - compact WAL into main file (atomic via temp-file-rename)
+    /// Checkpoint - append-only persistence (O(1) for metadata-only changes)
     ///
-    /// Uses write-to-temp-then-rename pattern for crash safety:
-    /// 1. Write complete file to `.omen.tmp`
-    /// 2. Fsync temp file
-    /// 3. Rename temp to actual (atomic on POSIX)
-    /// 4. Fsync directory
-    /// 5. Truncate WAL
+    /// Append-only design:
+    /// 1. Compute append point (end of last data segment)
+    /// 2. Append only NEW vectors (not already in manifest)
+    /// 3. Append new manifest with updated locations + deleted bitmap
+    /// 4. Append footer
+    /// 5. Fsync
+    /// 6. Truncate WAL
     pub fn checkpoint(&mut self) -> io::Result<()> {
         if self.state.vectors.is_empty() && self.hnsw_index_bytes.is_none() {
             return Ok(());
         }
 
-        // Create temp file path
-        let temp_path = {
-            let mut p = self.path.as_os_str().to_os_string();
-            p.push(".tmp");
-            PathBuf::from(p)
+        // Drop mmap before writing (required for file modification)
+        self.mmap = None;
+
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("File not open"))?;
+
+        // Find append point: end of last data segment (before old manifest/footer)
+        // This is the manifest_offset from the current file layout
+        let file_len = file.metadata()?.len();
+        let append_offset = if file_len > (HEADER_SIZE + OmenFooter::SIZE) as u64 {
+            // Read current footer to find where to append
+            file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
+            let mut footer_buf = [0u8; OmenFooter::SIZE];
+            file.read_exact(&mut footer_buf)?;
+            let old_footer = OmenFooter::from_bytes(&footer_buf);
+            if old_footer.verify() {
+                // Append after last data, before old manifest
+                // Find end of vector data from manifest.nodes
+                let data_end = self
+                    .manifest
+                    .nodes
+                    .iter()
+                    .filter(|n| {
+                        n.segment_type == SegmentType::Vectors
+                            || n.segment_type == SegmentType::IndexMetadata
+                    })
+                    .map(|n| n.offset + n.length as u64)
+                    .max()
+                    .unwrap_or(HEADER_SIZE as u64);
+                data_end
+            } else {
+                HEADER_SIZE as u64
+            }
+        } else {
+            HEADER_SIZE as u64
         };
 
-        // Write to temp file
-        {
-            let mut opts = OpenOptions::new();
-            opts.write(true).create(true).truncate(true);
-            configure_open_options(&mut opts);
-            let mut temp_file = opts.open(&temp_path)?;
+        let mut writer = SegmentWriter::new(file, append_offset);
 
-            // 1. Write header
-            temp_file.write_all(&self.header.to_bytes())?;
+        // Count of vectors already persisted
+        let persisted_count = self
+            .manifest
+            .nodes
+            .iter()
+            .filter(|n| n.segment_type == SegmentType::Vectors)
+            .count();
 
-            let mut writer = SegmentWriter::new(&mut temp_file, HEADER_SIZE as u64);
-            let mut manifest = OmenManifest::new();
+        // Clone existing vector locations
+        let mut new_nodes: Vec<NodeLocation> = self
+            .manifest
+            .nodes
+            .iter()
+            .filter(|n| n.segment_type == SegmentType::Vectors)
+            .copied()
+            .collect();
 
-            // 2. Write vectors
-            manifest.nodes = writer.write_vectors_aligned(
-                &self.state.vectors,
-                &self.state.deleted,
-                self.header.dimensions as usize,
-            )?;
+        // Append only NEW vectors (those not yet persisted)
+        let dim = self.header.dimensions as usize;
+        let vec_size = (dim * 4) as u32;
 
-            // 3. Write HNSW index (if present)
-            if let Some(ref hnsw_bytes) = self.hnsw_index_bytes {
-                let location = writer.write_aligned(hnsw_bytes, SegmentType::IndexMetadata)?;
-                manifest.nodes.push(location);
+        for (idx, vector) in self.state.vectors.iter().enumerate().skip(persisted_count) {
+            // Skip deleted vectors - write zeros
+            let to_write = if self.state.deleted.contains_key(&(idx as u32)) {
+                vec![0.0f32; dim]
+            } else {
+                vector.clone()
+            };
+
+            writer.current_offset = align_to_page(writer.current_offset as usize) as u64;
+            writer.file.seek(SeekFrom::Start(writer.current_offset))?;
+            for &val in &to_write {
+                writer.file.write_all(&val.to_le_bytes())?;
             }
 
-            // 4. Update manifest state
-            manifest.max_node_id = (self.state.vectors.len() as u32).saturating_sub(1);
-            manifest.id_to_index = self.state.id_to_index.clone();
-            manifest.index_to_id = self.state.index_to_id.clone();
+            new_nodes.push(NodeLocation {
+                offset: writer.current_offset,
+                length: vec_size,
+                segment_type: SegmentType::Vectors,
+            });
 
-            // Persist deleted bitmap in manifest (LanceDB pattern)
-            manifest.deleted = self.state.deleted.keys().copied().collect();
-
-            // Filter deleted from metadata before persisting
-            let mut metadata = self.state.metadata.clone();
-            metadata.retain(|k, _| !self.state.deleted.contains_key(k));
-            manifest.metadata = metadata;
-            manifest.config = self.state.config.clone();
-
-            // 5. Write Manifest
-            let manifest_bytes = postcard::to_allocvec(&manifest)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            let manifest_location = writer.write_aligned(&manifest_bytes, SegmentType::Manifest)?;
-
-            // 6. Write Footer (Absolute end)
-            let total_len = temp_file.seek(SeekFrom::Current(0))?;
-            let footer = OmenFooter::new(manifest_location.offset, total_len);
-            temp_file.write_all(&footer.to_bytes())?;
-
-            // Update in-memory manifest and header count
-            self.manifest = manifest;
-            self.header.count = self.state.vectors.len() as u64;
-
-            temp_file.sync_all()?;
+            writer.current_offset += vec_size as u64;
         }
 
-        // Drop mmap and file handle before rename (required for Windows compatibility)
-        self.mmap = None;
-        self.file = None;
-
-        // Atomic rename (POSIX guarantees atomicity for same-filesystem rename)
-        std::fs::rename(&temp_path, &self.path)?;
-
-        // Fsync directory to ensure rename is durable
-        #[cfg(unix)]
-        if let Some(parent) = self.path.parent() {
-            if let Ok(dir) = File::open(parent) {
-                let _ = dir.sync_all();
-            }
+        // Write HNSW index (if present and changed)
+        if let Some(ref hnsw_bytes) = self.hnsw_index_bytes {
+            let location = writer.write_aligned(hnsw_bytes, SegmentType::IndexMetadata)?;
+            new_nodes.push(location);
         }
 
-        let mut opts = OpenOptions::new();
-        opts.read(true).write(true);
-        configure_open_options(&mut opts);
-        let file = opts.open(&self.path)?;
-        lock_exclusive(&file)?;
+        // Update config before building manifest (source of truth for append-only)
+        let vector_count = self.state.vectors.len() as u64;
+        self.state.config.insert("count".to_string(), vector_count);
+        self.state
+            .config
+            .insert("hnsw_m".to_string(), u64::from(self.header.hnsw_m));
+        self.state.config.insert(
+            "hnsw_ef_construction".to_string(),
+            u64::from(self.header.hnsw_ef_construction),
+        );
+        self.state.config.insert(
+            "hnsw_ef_search".to_string(),
+            u64::from(self.header.hnsw_ef_search),
+        );
+        self.header.count = vector_count;
 
-        // The file now contains the Footer and Manifest from temp_file
+        // Build new manifest
+        let mut manifest = OmenManifest::new();
+        manifest.nodes = new_nodes;
+        manifest.max_node_id = (self.state.vectors.len() as u32).saturating_sub(1);
+        manifest.id_to_index = self.state.id_to_index.clone();
+        manifest.index_to_id = self.state.index_to_id.clone();
+        manifest.deleted = self.state.deleted.keys().copied().collect();
 
+        // Filter deleted from metadata
+        let mut metadata = self.state.metadata.clone();
+        metadata.retain(|k, _| !self.state.deleted.contains_key(k));
+        manifest.metadata = metadata;
+        manifest.config = self.state.config.clone();
+
+        // Write Manifest
+        let manifest_bytes = postcard::to_allocvec(&manifest)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let manifest_location = writer.write_aligned(&manifest_bytes, SegmentType::Manifest)?;
+
+        // Write Footer at new file end
+        let total_len = writer.file.stream_position()?;
+        let footer = OmenFooter::new(manifest_location.offset, total_len);
+        writer.file.write_all(&footer.to_bytes())?;
+
+        // Truncate file to remove any trailing garbage from old layout
+        let final_len = writer.file.stream_position()?;
+        writer.file.set_len(final_len)?;
+
+        // Fsync
+        writer.file.sync_all()?;
+
+        // Update in-memory manifest
+        self.manifest = manifest;
+
+        // Truncate WAL and write checkpoint marker
         self.wal.truncate()?;
         self.wal.append(WalEntry::checkpoint(0))?;
         self.wal.sync()?;
-        self.mmap = Some(unsafe { MmapMut::map_mut(&file)? });
-        self.file = Some(file);
 
-        // Purge deleted vectors from memory after successful checkpoint
+        // Re-establish mmap
+        let file = self.file.as_ref().unwrap();
+        self.mmap = Some(unsafe { MmapMut::map_mut(file)? });
+
+        // Purge deleted vectors from memory
         for (idx, vector) in self.state.vectors.iter_mut().enumerate() {
             if self.state.deleted.contains_key(&(idx as u32)) {
                 vector.clear();

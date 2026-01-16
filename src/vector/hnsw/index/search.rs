@@ -164,7 +164,7 @@ where
     m: usize,
 }
 
-impl<'a, F> NeighborCollector for AcornCollector<'a, F>
+impl<F> NeighborCollector for AcornCollector<'_, F>
 where
     F: Fn(u32) -> bool,
 {
