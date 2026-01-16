@@ -1823,23 +1823,13 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // Rescore candidates with exact L2 distance
+        // Rescore candidates with exact L2 distance from RecordStore (source of truth)
         let mut rescored: Vec<(usize, f32)> = candidates
             .iter()
             .filter_map(|&(id, _quantized_dist)| {
-                // Storage path: get_vector returns owned Vec
-                // Memory path: compute distance directly from RecordStore
-                if let Some(ref storage) = self.storage {
-                    storage
-                        .get_vector(id)
-                        .ok()
-                        .flatten()
-                        .map(|data| (id, l2_distance(&query.data, &data)))
-                } else {
-                    self.records
-                        .get_vector(id as u32)
-                        .map(|v| (id, l2_distance(&query.data, v)))
-                }
+                self.records
+                    .get_vector(id as u32)
+                    .map(|v| (id, l2_distance(&query.data, v)))
             })
             .collect();
 

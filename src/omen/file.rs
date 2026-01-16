@@ -38,25 +38,8 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
     })
 }
 
-/// In-memory state of the database before persistence
-#[derive(Default)]
-pub struct DatabaseState {
-    pub vectors: Vec<Vec<f32>>,
-    pub id_to_index: HashMap<String, u32>,
-    pub index_to_id: HashMap<u32, String>,
-    pub metadata: HashMap<u32, Vec<u8>>,
-    pub deleted: HashMap<u32, bool>,
-    pub config: HashMap<String, u64>,
-}
-
-impl DatabaseState {
-    pub fn new(dimensions: u32) -> Self {
-        Self {
-            config: HashMap::from([("dimensions".to_string(), u64::from(dimensions))]),
-            ..Default::default()
-        }
-    }
-}
+// Note: DatabaseState removed in Phase 5 - state now managed by RecordStore at VectorStore level.
+// OmenFile is pure I/O: WAL append + checkpoint_from_snapshot.
 
 /// Helper for writing aligned segments to an Omen file
 struct SegmentWriter<'a> {
@@ -93,9 +76,6 @@ impl<'a> SegmentWriter<'a> {
     }
 }
 
-/// Checkpoint threshold (number of WAL entries before compaction)
-const CHECKPOINT_THRESHOLD: u64 = 1000;
-
 /// `OmenFile` - single-file vector database
 ///
 /// Storage layer for vectors, metadata, and serialized HNSW index.
@@ -106,8 +86,8 @@ pub struct OmenFile {
     mmap: Option<MmapMut>,
     header: OmenHeader,
 
-    // In-memory state (for writes before checkpoint)
-    state: DatabaseState,
+    // Configuration (dimensions, quantization mode, etc.)
+    config: HashMap<String, u64>,
 
     // WAL for durability
     wal: Wal,
@@ -173,7 +153,7 @@ impl OmenFile {
             file: Some(file),
             mmap: None,
             header,
-            state: DatabaseState::new(dimensions),
+            config: HashMap::from([("dimensions".to_string(), u64::from(dimensions))]),
             wal: Wal::open(&wal_path)?,
             hnsw_index_bytes: None,
             manifest,
@@ -247,10 +227,8 @@ impl OmenFile {
             }
         }
 
-        let mut vectors_mem = Vec::new();
-        let id_to_index = manifest.id_to_index.clone();
-        let index_to_id = manifest.index_to_id.clone();
-        let metadata_mem = manifest.metadata.clone();
+        // Note: vectors, id_to_index, index_to_id, metadata are now managed by RecordStore.
+        // Only config is loaded into OmenFile.
         let config = manifest.config.clone();
 
         // Config values from manifest (source of truth for append-only)
@@ -287,17 +265,8 @@ impl OmenFile {
             .unwrap_or(header.metric);
 
         if let Some(ref mmap) = mmap {
-            // Load vectors from manifest using dimensions from manifest.config
-            let dim = dimensions as usize;
-            for location in &manifest.nodes {
-                if location.segment_type == SegmentType::Vectors {
-                    let start = location.offset as usize;
-                    let end = start + location.length as usize;
-                    if end <= mmap.len() {
-                        vectors_mem.push(read_vector_from_bytes(&mmap[start..end], dim));
-                    }
-                }
-            }
+            // Note: Vectors are loaded by VectorStore via load_persisted_snapshot()
+            // Here we only load HNSW index bytes and set up config.
 
             // Load HNSW index bytes from manifest
             let mut hnsw_index_bytes = None;
@@ -312,19 +281,6 @@ impl OmenFile {
                 }
             }
 
-            // Restore deleted bitmap from manifest (LanceDB pattern)
-            let deleted: HashMap<u32, bool> =
-                manifest.deleted.iter().map(|idx| (idx, true)).collect();
-
-            let state = DatabaseState {
-                vectors: vectors_mem,
-                id_to_index,
-                index_to_id,
-                metadata: metadata_mem,
-                config,
-                deleted,
-            };
-
             // Update header from manifest (source of truth for append-only)
             let mut header = header;
             header.count = count;
@@ -336,12 +292,13 @@ impl OmenFile {
 
             let mmap = Some(unsafe { MmapMut::map_mut(&file)? });
             // Note: WAL replay happens at VectorStore level, not here (Phase 5 architecture)
+            // State (vectors, ids, deleted) is managed by RecordStore via load_persisted_snapshot()
             let db = Self {
                 path: omen_path,
                 file: Some(file),
                 mmap,
                 header,
-                state,
+                config,
                 wal,
                 hnsw_index_bytes,
                 manifest,
@@ -349,18 +306,6 @@ impl OmenFile {
 
             return Ok(db);
         }
-
-        // Restore deleted bitmap from manifest (LanceDB pattern)
-        let deleted: HashMap<u32, bool> = manifest.deleted.iter().map(|idx| (idx, true)).collect();
-
-        let state = DatabaseState {
-            vectors: vectors_mem,
-            id_to_index,
-            index_to_id,
-            metadata: metadata_mem,
-            config,
-            deleted,
-        };
 
         // Update header from manifest (source of truth for append-only)
         let mut header = header;
@@ -372,12 +317,13 @@ impl OmenFile {
         header.metric = metric;
 
         // Note: WAL replay happens at VectorStore level, not here (Phase 5 architecture)
+        // State (vectors, ids, deleted) is managed by RecordStore via load_persisted_snapshot()
         let db = Self {
             path: omen_path,
             file: Some(file),
             mmap: None,
             header,
-            state,
+            config,
             wal,
             hnsw_index_bytes: None,
             manifest,
@@ -386,97 +332,13 @@ impl OmenFile {
         Ok(db)
     }
 
-    /// Insert a vector
-    ///
-    /// Note: Graph management (HNSW) is handled by `HNSWIndex` in the vector layer.
-    /// This method only handles storage: WAL, vectors, metadata.
-    pub fn insert(&mut self, id: &str, vector: &[f32], metadata: Option<&[u8]>) -> io::Result<()> {
-        if vector.len() != self.header.dimensions as usize {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "Vector dimensions mismatch: expected {}, got {}",
-                    self.header.dimensions,
-                    vector.len()
-                ),
-            ));
-        }
-
-        let metadata_bytes = metadata.unwrap_or(b"{}");
-
-        // 1. Append to WAL (durable)
-        // Level 0 is placeholder - actual HNSW levels managed by HNSWIndex
-        let entry = WalEntry::insert_node(0, id, 0, vector, metadata_bytes);
-        self.wal.append(entry)?;
-        self.wal.sync()?;
-
-        // 2. Update in-memory state
-        let index = self.state.vectors.len() as u32;
-        self.state.vectors.push(vector.to_vec());
-        self.state.id_to_index.insert(id.to_string(), index);
-        self.state.index_to_id.insert(index, id.to_string());
-        if metadata_bytes != b"{}" {
-            self.state.metadata.insert(index, metadata_bytes.to_vec());
-        }
-
-        self.header.count += 1;
-
-        // 3. Periodic checkpoint
-        if self.wal.len() > CHECKPOINT_THRESHOLD {
-            self.checkpoint()?;
-        }
-
-        Ok(())
-    }
-
-    fn find_nearest(&self, query: &[f32], k: usize) -> Vec<u32> {
-        let mut distances: Vec<(u32, f32)> = self
-            .state
-            .vectors
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !self.state.deleted.contains_key(&(*i as u32)))
-            .map(|(i, v)| (i as u32, l2_distance(query, v)))
-            .collect();
-
-        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
-        distances.truncate(k);
-        distances.into_iter().map(|(id, _)| id).collect()
-    }
-
-    /// Search for k nearest neighbors
-    #[must_use]
-    pub fn search(&self, query: &[f32], k: usize) -> Vec<(String, f32)> {
-        if query.len() != self.header.dimensions as usize {
-            return Vec::new();
-        }
-
-        let indices = self.find_nearest(query, k);
-
-        indices
-            .into_iter()
-            .filter_map(|idx| {
-                let id = self.state.index_to_id.get(&idx)?;
-                let vector = self.state.vectors.get(idx as usize)?;
-                let distance = l2_distance(query, vector);
-                Some((id.clone(), distance))
-            })
-            .collect()
-    }
+    // Note: insert(), find_nearest(), search() removed in Phase 5.
+    // VectorStore uses wal_append_insert() for inserts and RecordStore for search.
 
     pub fn delete(&mut self, id: &str) -> io::Result<bool> {
-        // Write delete to WAL unconditionally - existence check is done at VectorStore level
-        // (RecordStore.delete returns None if not found, so we only get here for valid deletes)
+        // Write delete to WAL - existence check is done at VectorStore level
         self.wal.append(WalEntry::delete_node(0, id))?;
         self.wal.sync()?;
-
-        // Update legacy state for compatibility (will be removed in Phase 5)
-        if let Some(&index) = self.state.id_to_index.get(id) {
-            self.state.deleted.insert(index, true);
-            self.state.id_to_index.remove(id);
-            self.state.index_to_id.remove(&index);
-        }
-
         Ok(true)
     }
 
@@ -498,285 +360,33 @@ impl OmenFile {
         self.header.dimensions
     }
 
-    /// Checkpoint - append-only persistence (O(1) for metadata-only changes)
-    ///
-    /// Append-only design:
-    /// 1. Compute append point (end of last data segment)
-    /// 2. Append only NEW vectors (not already in manifest)
-    /// 3. Append new manifest with updated locations + deleted bitmap
-    /// 4. Append footer
-    /// 5. Fsync
-    /// 6. Truncate WAL
-    pub fn checkpoint(&mut self) -> io::Result<()> {
-        if self.state.vectors.is_empty() && self.hnsw_index_bytes.is_none() {
-            return Ok(());
-        }
-
-        // Drop mmap before writing (required for file modification)
-        self.mmap = None;
-
-        let file = self
-            .file
-            .as_mut()
-            .ok_or_else(|| io::Error::other("File not open"))?;
-
-        // Find append point: end of last data segment (before old manifest/footer)
-        // This is the manifest_offset from the current file layout
-        let file_len = file.metadata()?.len();
-        let append_offset = if file_len > (HEADER_SIZE + OmenFooter::SIZE) as u64 {
-            // Read current footer to find where to append
-            file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
-            let mut footer_buf = [0u8; OmenFooter::SIZE];
-            file.read_exact(&mut footer_buf)?;
-            let old_footer = OmenFooter::from_bytes(&footer_buf);
-            if old_footer.verify() {
-                // Append after last data, before old manifest
-                // Find end of vector data from manifest.nodes
-                let data_end = self
-                    .manifest
-                    .nodes
-                    .iter()
-                    .filter(|n| {
-                        n.segment_type == SegmentType::Vectors
-                            || n.segment_type == SegmentType::IndexMetadata
-                    })
-                    .map(|n| n.offset + n.length as u64)
-                    .max()
-                    .unwrap_or(HEADER_SIZE as u64);
-                data_end
-            } else {
-                HEADER_SIZE as u64
-            }
-        } else {
-            HEADER_SIZE as u64
-        };
-
-        let mut writer = SegmentWriter::new(file, append_offset);
-
-        // Count of vectors already persisted
-        let persisted_count = self
-            .manifest
-            .nodes
-            .iter()
-            .filter(|n| n.segment_type == SegmentType::Vectors)
-            .count();
-
-        // Clone existing vector locations
-        let mut new_nodes: Vec<NodeLocation> = self
-            .manifest
-            .nodes
-            .iter()
-            .filter(|n| n.segment_type == SegmentType::Vectors)
-            .copied()
-            .collect();
-
-        // Append only NEW vectors (those not yet persisted)
-        let dim = self.header.dimensions as usize;
-        let vec_size = (dim * 4) as u32;
-
-        for (idx, vector) in self.state.vectors.iter().enumerate().skip(persisted_count) {
-            // Skip deleted vectors - write zeros
-            let to_write = if self.state.deleted.contains_key(&(idx as u32)) {
-                vec![0.0f32; dim]
-            } else {
-                vector.clone()
-            };
-
-            writer.current_offset = align_to_page(writer.current_offset as usize) as u64;
-            writer.file.seek(SeekFrom::Start(writer.current_offset))?;
-            for &val in &to_write {
-                writer.file.write_all(&val.to_le_bytes())?;
-            }
-
-            new_nodes.push(NodeLocation {
-                offset: writer.current_offset,
-                length: vec_size,
-                segment_type: SegmentType::Vectors,
-            });
-
-            writer.current_offset += vec_size as u64;
-        }
-
-        // Write HNSW index (if present and changed)
-        if let Some(ref hnsw_bytes) = self.hnsw_index_bytes {
-            let location = writer.write_aligned(hnsw_bytes, SegmentType::IndexMetadata)?;
-            new_nodes.push(location);
-        }
-
-        // Update config before building manifest (source of truth for append-only)
-        let vector_count = self.state.vectors.len() as u64;
-        self.state.config.insert("count".to_string(), vector_count);
-        self.state
-            .config
-            .insert("hnsw_m".to_string(), u64::from(self.header.hnsw_m));
-        self.state.config.insert(
-            "hnsw_ef_construction".to_string(),
-            u64::from(self.header.hnsw_ef_construction),
-        );
-        self.state.config.insert(
-            "hnsw_ef_search".to_string(),
-            u64::from(self.header.hnsw_ef_search),
-        );
-        self.state
-            .config
-            .insert("metric".to_string(), self.header.metric as u64);
-        self.header.count = vector_count;
-
-        // Build new manifest
-        let mut manifest = OmenManifest::new();
-        manifest.nodes = new_nodes;
-        manifest.max_node_id = (self.state.vectors.len() as u32).saturating_sub(1);
-        manifest.id_to_index = self.state.id_to_index.clone();
-        manifest.index_to_id = self.state.index_to_id.clone();
-        manifest.deleted = self.state.deleted.keys().copied().collect();
-
-        // Filter deleted from metadata
-        let mut metadata = self.state.metadata.clone();
-        metadata.retain(|k, _| !self.state.deleted.contains_key(k));
-        manifest.metadata = metadata;
-        manifest.config = self.state.config.clone();
-
-        // Write Manifest
-        let manifest_bytes = postcard::to_allocvec(&manifest)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let manifest_location = writer.write_aligned(&manifest_bytes, SegmentType::Manifest)?;
-
-        // Write Footer at new file end
-        let total_len = writer.file.stream_position()?;
-        let footer = OmenFooter::new(manifest_location.offset, total_len);
-        writer.file.write_all(&footer.to_bytes())?;
-
-        // Truncate file to remove any trailing garbage from old layout
-        let final_len = writer.file.stream_position()?;
-        writer.file.set_len(final_len)?;
-
-        // Fsync
-        writer.file.sync_all()?;
-
-        // Update in-memory manifest
-        self.manifest = manifest;
-
-        // Truncate WAL and write checkpoint marker
-        self.wal.truncate()?;
-        self.wal.append(WalEntry::checkpoint(0))?;
-        self.wal.sync()?;
-
-        // Re-establish mmap
-        let file = self.file.as_ref().unwrap();
-        self.mmap = Some(unsafe { MmapMut::map_mut(file)? });
-
-        // Purge deleted vectors from memory
-        for (idx, vector) in self.state.vectors.iter_mut().enumerate() {
-            if self.state.deleted.contains_key(&(idx as u32)) {
-                vector.clear();
-                vector.shrink_to_fit();
-            }
-        }
-        self.state.deleted.clear();
-
-        Ok(())
-    }
+    // Note: checkpoint() removed in Phase 5.
+    // VectorStore uses checkpoint_from_snapshot() which takes data from RecordStore.
 }
 
 // ============================================================================
 // Storage API for VectorStore
 // ============================================================================
 
+// Note: Many methods removed in Phase 5. VectorStore uses RecordStore for state.
+// OmenFile is now pure I/O: WAL + checkpoint_from_snapshot.
+
 impl OmenFile {
-    /// Store a vector by internal index
-    ///
-    /// Note: This is a no-op. VectorStore owns vector data via RecordStore.
-    /// Persistence happens via checkpoint_from_snapshot which reads from RecordStore.
+    /// Store a vector by internal index (no-op, RecordStore is source of truth)
     #[allow(clippy::unused_self)]
     pub fn put_vector(&mut self, _id: usize, _vector: &[f32]) -> Result<()> {
-        // No-op: RecordStore is source of truth, checkpoint reads from it
         Ok(())
     }
 
-    pub fn get_vector(&self, id: usize) -> Result<Option<Vec<f32>>> {
-        if id < self.state.vectors.len() && !self.state.vectors[id].is_empty() {
-            return Ok(Some(self.state.vectors[id].clone()));
-        }
-
-        let Some(ref mmap) = self.mmap else {
-            return Ok(None);
-        };
-
-        // Use Manifest to locate vector on disk
-        let Some(location) = self.manifest.nodes.get(id) else {
-            return Ok(None);
-        };
-
-        if location.segment_type != SegmentType::Vectors {
-            return Ok(None);
-        }
-
-        let dim = self.header.dimensions as usize;
-        let start = location.offset as usize;
-        let end = start + location.length as usize;
-
-        if end <= mmap.len() {
-            Ok(Some(read_vector_from_bytes(&mmap[start..end], dim)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Store metadata for a vector (as JSON)
-    ///
-    /// Note: This is a no-op. VectorStore owns metadata via RecordStore.
-    /// Persistence happens via checkpoint_from_snapshot which reads from RecordStore.
+    /// Store metadata for a vector (no-op, RecordStore is source of truth)
     #[allow(clippy::unused_self)]
     pub fn put_metadata(&mut self, _id: usize, _metadata: &JsonValue) -> Result<()> {
-        // No-op: RecordStore is source of truth, checkpoint reads from it
-        Ok(())
-    }
-
-    pub fn get_metadata(&self, id: usize) -> Result<Option<JsonValue>> {
-        self.state
-            .metadata
-            .get(&(id as u32))
-            .map(|bytes| serde_json::from_slice(bytes))
-            .transpose()
-            .map_err(Into::into)
-    }
-
-    /// Store string ID to internal index mapping
-    ///
-    /// Note: This is a no-op. VectorStore owns ID mappings via RecordStore.
-    /// Persistence happens via checkpoint_from_snapshot which reads from RecordStore.
-    #[allow(clippy::unused_self)]
-    pub fn put_id_mapping(&mut self, _string_id: &str, _index: usize) -> Result<()> {
-        // No-op: RecordStore is source of truth, checkpoint reads from it
-        Ok(())
-    }
-
-    /// Get internal index for a string ID
-    pub fn get_id_mapping(&self, string_id: &str) -> Result<Option<usize>> {
-        Ok(self
-            .state
-            .id_to_index
-            .get(string_id)
-            .map(|&idx| idx as usize))
-    }
-
-    /// Get string ID for an internal index (reverse lookup)
-    pub fn get_string_id(&self, index: usize) -> Result<Option<String>> {
-        Ok(self.state.index_to_id.get(&(index as u32)).cloned())
-    }
-
-    /// Delete string ID mapping
-    pub fn delete_id_mapping(&mut self, string_id: &str) -> Result<()> {
-        if let Some(&index) = self.state.id_to_index.get(string_id) {
-            self.state.index_to_id.remove(&index);
-        }
-        self.state.id_to_index.remove(string_id);
         Ok(())
     }
 
     /// Store configuration value
     pub fn put_config(&mut self, key: &str, value: u64) -> Result<()> {
-        self.state.config.insert(key.to_string(), value);
+        self.config.insert(key.to_string(), value);
         // Sync to header
         match key {
             "dimensions" => self.header.dimensions = value as u32,
@@ -790,35 +400,7 @@ impl OmenFile {
 
     /// Get configuration value
     pub fn get_config(&self, key: &str) -> Result<Option<u64>> {
-        Ok(self.state.config.get(key).copied())
-    }
-
-    /// Load all vectors from storage
-    pub fn load_all_vectors(&self) -> Result<Vec<(usize, Vec<f32>)>> {
-        Ok(self
-            .state
-            .vectors
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| !v.is_empty())
-            .map(|(id, v)| (id, v.clone()))
-            .collect())
-    }
-
-    /// Increment vector count in storage
-    pub fn increment_count(&mut self) -> Result<usize> {
-        let count = self.state.config.get("count").copied().unwrap_or(0) as usize;
-        let new_count = count + 1;
-        self.state
-            .config
-            .insert("count".to_string(), new_count as u64);
-        self.header.count = new_count as u64;
-        Ok(new_count)
-    }
-
-    /// Get current vector count
-    pub fn get_count(&self) -> Result<usize> {
-        Ok(self.state.config.get("count").copied().unwrap_or(0) as usize)
+        Ok(self.config.get(key).copied())
     }
 
     /// Store quantization mode
@@ -840,54 +422,9 @@ impl OmenFile {
         Ok(self.get_quantization_mode()?.unwrap_or(0) > 0)
     }
 
-    pub fn load_all_metadata(&self) -> Result<HashMap<usize, JsonValue>> {
-        Ok(self
-            .state
-            .metadata
-            .iter()
-            .filter_map(|(&id, bytes)| {
-                serde_json::from_slice(bytes)
-                    .ok()
-                    .map(|meta| (id as usize, meta))
-            })
-            .collect())
-    }
-
-    /// Load all ID mappings from storage
-    pub fn load_all_id_mappings(&self) -> Result<HashMap<String, usize>> {
-        Ok(self
-            .state
-            .id_to_index
-            .iter()
-            .map(|(id, &idx)| (id.clone(), idx as usize))
-            .collect())
-    }
-
-    /// Mark a vector as deleted (tombstone)
-    pub fn put_deleted(&mut self, id: usize) -> Result<()> {
-        self.state.deleted.insert(id as u32, true);
-        Ok(())
-    }
-
-    pub fn is_deleted(&self, id: usize) -> Result<bool> {
-        Ok(self.state.deleted.contains_key(&(id as u32)))
-    }
-
-    /// Remove deleted marker (for re-insertion)
-    pub fn remove_deleted(&mut self, id: usize) -> Result<()> {
-        self.state.deleted.remove(&(id as u32));
-        Ok(())
-    }
-
-    /// Load all deleted IDs from storage
-    pub fn load_all_deleted(&self) -> Result<HashMap<usize, bool>> {
-        Ok(self
-            .state
-            .deleted
-            .iter()
-            .map(|(&id, &v)| (id as usize, v))
-            .collect())
-    }
+    // Note: load_all_metadata, load_all_id_mappings, put_deleted, is_deleted,
+    // remove_deleted, load_all_deleted removed in Phase 5.
+    // VectorStore uses RecordStore for state, loads via load_persisted_snapshot().
 
     /// Store serialized HNSW index bytes
     ///
@@ -940,199 +477,13 @@ impl OmenFile {
         &self.header
     }
 
-    /// Flush all pending writes to disk
-    pub fn flush(&mut self) -> Result<()> {
-        self.checkpoint()?;
-        Ok(())
-    }
+    // Note: flush(), delete_ratio(), needs_compaction(), compact() removed in Phase 5.
+    // VectorStore handles flushing via checkpoint_from_snapshot().
+    // Compaction will be implemented at VectorStore level using RecordStore data.
 
-    /// Returns the ratio of deleted vectors to total vectors (0.0 to 1.0)
-    #[must_use]
-    pub fn delete_ratio(&self) -> f64 {
-        let total = self.state.vectors.len();
-        if total == 0 {
-            return 0.0;
-        }
-        self.state.deleted.len() as f64 / total as f64
-    }
-
-    /// Check if compaction is recommended (delete ratio > 20%)
-    #[must_use]
-    pub fn needs_compaction(&self) -> bool {
-        self.delete_ratio() > 0.20
-    }
-
-    /// Compact the database by rewriting only live vectors
-    ///
-    /// This reclaims space from deleted vectors by:
-    /// 1. Creating a new file with only live data
-    /// 2. Rebuilding all mappings with new sequential indices
-    /// 3. Atomically swapping the new file for the old one
-    ///
-    /// Note: The caller (VectorStore) should rebuild the HNSW index after
-    /// compaction since internal indices change.
-    ///
-    /// Returns the number of vectors removed (space reclaimed).
-    pub fn compact(&mut self) -> io::Result<usize> {
-        let deleted_count = self.state.deleted.len();
-        if deleted_count == 0 {
-            return Ok(0);
-        }
-
-        // 1. Checkpoint current state first (ensure WAL is flushed)
-        self.checkpoint()?;
-
-        // 2. Create temporary path for compacted data
-        // Use .compact suffix on base path (without .omen) so create() adds .omen correctly
-        let base_path = self.path.with_extension(""); // Remove .omen
-        let temp_base = base_path.with_extension("compact"); // Add .compact
-        let temp_omen_path = Self::compute_omen_path(&temp_base); // -> .compact.omen
-        let wal_path = Self::compute_wal_path(&self.path);
-
-        // Close current file
-        self.mmap = None;
-        self.file = None;
-
-        // Create new compacted file (this will create temp_base.omen)
-        let mut new_db = OmenFile::create(&temp_base, self.header.dimensions)?;
-
-        // Copy HNSW params and metric
-        new_db.header.hnsw_m = self.header.hnsw_m;
-        new_db.header.hnsw_ef_construction = self.header.hnsw_ef_construction;
-        new_db.header.hnsw_ef_search = self.header.hnsw_ef_search;
-        new_db.header.metric = self.header.metric;
-
-        // Copy config (except count which will be recalculated)
-        for (k, v) in &self.state.config {
-            if k != "count" {
-                new_db.state.config.insert(k.clone(), *v);
-            }
-        }
-
-        // 3. Copy only live vectors with new sequential indices
-        let mut old_to_new: HashMap<u32, u32> = HashMap::new();
-        let mut new_index = 0u32;
-
-        for (old_idx, vector) in self.state.vectors.iter().enumerate() {
-            let old_idx = old_idx as u32;
-
-            // Skip deleted vectors
-            if self.state.deleted.contains_key(&old_idx) {
-                continue;
-            }
-
-            // Skip empty vectors (already cleared)
-            if vector.is_empty() {
-                continue;
-            }
-
-            // Get string ID for this index
-            let Some(string_id) = self.state.index_to_id.get(&old_idx) else {
-                continue;
-            };
-
-            // Copy vector to new file
-            new_db.state.vectors.push(vector.clone());
-            new_db
-                .state
-                .id_to_index
-                .insert(string_id.clone(), new_index);
-            new_db
-                .state
-                .index_to_id
-                .insert(new_index, string_id.clone());
-
-            // Copy metadata if exists
-            if let Some(meta) = self.state.metadata.get(&old_idx) {
-                new_db.state.metadata.insert(new_index, meta.clone());
-            }
-
-            old_to_new.insert(old_idx, new_index);
-            new_index += 1;
-        }
-
-        // Update count
-        new_db.header.count = new_index as u64;
-        new_db
-            .state
-            .config
-            .insert("count".to_string(), new_index as u64);
-
-        // 4. Checkpoint the new file
-        new_db.checkpoint()?;
-
-        // Close new file before swap
-        drop(new_db);
-
-        // 5. Atomic swap: rename compacted file to original path
-        // First remove old file
-        std::fs::remove_file(&self.path)?;
-
-        // Move compacted file to original path
-        std::fs::rename(&temp_omen_path, &self.path)?;
-
-        // Clean up temp WAL if it exists
-        let temp_wal = Self::compute_wal_path(&temp_base);
-        let _ = std::fs::remove_file(&temp_wal);
-
-        // 6. Reopen the compacted file
-        let mut opts = OpenOptions::new();
-        opts.read(true).write(true);
-        configure_open_options(&mut opts);
-        let mut file = opts.open(&self.path)?;
-        lock_exclusive(&file)?;
-
-        // Read footer
-        file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
-        let mut footer_buf = [0u8; OmenFooter::SIZE];
-        file.read_exact(&mut footer_buf)?;
-        let footer = OmenFooter::from_bytes(&footer_buf);
-
-        // Read manifest
-        let mmap = unsafe { MmapMut::map_mut(&file)? };
-        let manifest_bytes = &mmap[footer.manifest_offset as usize..footer.total_len as usize];
-        let manifest: OmenManifest = postcard::from_bytes(manifest_bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        // Load vectors from manifest
-        let dim = self.header.dimensions as usize;
-        let mut vectors = Vec::new();
-        for location in &manifest.nodes {
-            if location.segment_type == SegmentType::Vectors {
-                let start = location.offset as usize;
-                let end = start + location.length as usize;
-                if end <= mmap.len() {
-                    vectors.push(read_vector_from_bytes(&mmap[start..end], dim));
-                }
-            }
-        }
-
-        // Update self with compacted state
-        self.file = Some(file);
-        self.mmap = Some(mmap);
-        self.manifest = manifest.clone();
-        self.state = DatabaseState {
-            vectors,
-            id_to_index: manifest.id_to_index,
-            index_to_id: manifest.index_to_id,
-            metadata: manifest.metadata,
-            deleted: HashMap::new(), // No deleted after compaction
-            config: manifest.config,
-        };
-        self.header.count = new_index as u64;
-        self.wal = Wal::open(&wal_path)?;
-        self.hnsw_index_bytes = None; // HNSW must be rebuilt by caller
-
-        Ok(deleted_count)
-    }
-
-    /// Batch set vectors with metadata and ID mappings
-    ///
-    /// Note: This is a no-op. VectorStore owns all data via RecordStore.
-    /// Persistence happens via checkpoint_from_snapshot which reads from RecordStore.
+    /// Batch set vectors with metadata and ID mappings (no-op, RecordStore is source of truth)
     #[allow(clippy::unused_self)]
     pub fn put_batch(&mut self, _items: Vec<(usize, String, Vec<f32>, JsonValue)>) -> Result<()> {
-        // No-op: RecordStore is source of truth, checkpoint reads from it
         Ok(())
     }
 }
@@ -1255,73 +606,7 @@ impl OmenFile {
         Ok(snapshot)
     }
 
-    /// Load snapshot from storage
-    ///
-    /// Returns all persisted data for initializing RecordStore. Does not modify internal state.
-    pub fn load_snapshot(&self) -> io::Result<OmenSnapshot> {
-        let mut snapshot = OmenSnapshot {
-            dimensions: self.header.dimensions,
-            ..Default::default()
-        };
-
-        // Load vectors from state
-        for (idx, vec) in self.state.vectors.iter().enumerate() {
-            while snapshot.vectors.len() <= idx {
-                snapshot.vectors.push(None);
-            }
-            if !vec.is_empty() {
-                snapshot.vectors[idx] = Some(vec.clone());
-                // Infer dimensions from first vector if header says 0
-                if snapshot.dimensions == 0 {
-                    snapshot.dimensions = vec.len() as u32;
-                }
-            }
-        }
-
-        let dim = snapshot.dimensions as usize;
-
-        // Load from mmap if we have persisted data
-        if let Some(ref mmap) = self.mmap {
-            for (idx, location) in self.manifest.nodes.iter().enumerate() {
-                if location.segment_type == SegmentType::Vectors {
-                    while snapshot.vectors.len() <= idx {
-                        snapshot.vectors.push(None);
-                    }
-                    if snapshot.vectors[idx].is_none() {
-                        let start = location.offset as usize;
-                        let end = start + location.length as usize;
-                        if end <= mmap.len() {
-                            snapshot.vectors[idx] =
-                                Some(read_vector_from_bytes(&mmap[start..end], dim));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Copy mappings
-        snapshot.id_to_slot = self
-            .state
-            .id_to_index
-            .iter()
-            .map(|(k, &v)| (k.clone(), v))
-            .collect();
-
-        // Copy deleted
-        snapshot.deleted = self.state.deleted.keys().copied().collect();
-
-        // Copy metadata (converting from bytes to JsonValue)
-        for (&idx, bytes) in &self.state.metadata {
-            if let Ok(json) = serde_json::from_slice(bytes) {
-                snapshot.metadata.insert(idx, json);
-            }
-        }
-
-        // Copy HNSW bytes if present
-        snapshot.hnsw_bytes = self.hnsw_index_bytes.clone();
-
-        Ok(snapshot)
-    }
+    // Note: load_snapshot() removed in Phase 5. VectorStore uses load_persisted_snapshot().
 
     /// Checkpoint from external snapshot
     ///
@@ -1508,14 +793,6 @@ impl OmenFile {
     }
 }
 
-fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (x - y).powi(2))
-        .sum::<f32>()
-        .sqrt()
-}
-
 fn read_string_id(cursor: &mut std::io::Cursor<&[u8]>) -> io::Result<String> {
     let mut len_buf = [0u8; 4];
     cursor.read_exact(&mut len_buf)?;
@@ -1603,60 +880,55 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_create_and_insert() {
+    fn test_create_and_open() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.omen");
 
-        let mut db = OmenFile::create(&db_path, 3).unwrap();
-        db.insert("vec1", &[1.0, 2.0, 3.0], None).unwrap();
-        db.insert("vec2", &[4.0, 5.0, 6.0], None).unwrap();
-
-        assert_eq!(db.len(), 2);
-    }
-
-    #[test]
-    fn test_search() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.omen");
-
-        let mut db = OmenFile::create(&db_path, 3).unwrap();
-        db.insert("vec1", &[1.0, 0.0, 0.0], None).unwrap();
-        db.insert("vec2", &[0.0, 1.0, 0.0], None).unwrap();
-        db.insert("vec3", &[0.0, 0.0, 1.0], None).unwrap();
-
-        let results = db.search(&[1.0, 0.0, 0.0], 1);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, "vec1");
-    }
-
-    #[test]
-    fn test_checkpoint_and_reopen() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.omen");
-
+        // Create empty file
         {
-            let mut db = OmenFile::create(&db_path, 3).unwrap();
-            db.insert("vec1", &[1.0, 2.0, 3.0], None).unwrap();
-            db.insert("vec2", &[4.0, 5.0, 6.0], None).unwrap();
-            db.checkpoint().unwrap();
+            let db = OmenFile::create(&db_path, 3).unwrap();
+            assert_eq!(db.len(), 0);
+            assert_eq!(db.dimensions(), 3);
         }
 
+        // Reopen
         {
             let db = OmenFile::open(&db_path).unwrap();
-            assert_eq!(db.len(), 2);
+            assert_eq!(db.len(), 0);
+            assert_eq!(db.dimensions(), 3);
         }
+    }
+
+    #[test]
+    fn test_wal_append_insert() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_wal_append.omen");
+
+        let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+        // WAL only, no state mutation
+        db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
+            .unwrap();
+        db.wal_append_insert("vec2", &[4.0, 5.0, 6.0], Some(br#"{"key":"value"}"#))
+            .unwrap();
+
+        // WAL should have entries
+        assert!(db.wal_len() > 0);
+        // Header count not updated by WAL-only writes
+        assert_eq!(db.len(), 0);
     }
 
     #[test]
     fn test_wal_recovery() {
-        // Phase 5 architecture: WAL replay happens at VectorStore level
+        // Phase 5: WAL replay happens at VectorStore level
         // This test verifies pending_wal_entries() returns correct data
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.omen");
 
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
-            db.insert("vec1", &[1.0, 2.0, 3.0], None).unwrap();
+            db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
+                .unwrap();
             // Don't checkpoint - data is only in WAL
         }
 
@@ -1674,251 +946,29 @@ mod tests {
     }
 
     #[test]
-    fn test_footer_recovery() {
+    fn test_wal_delete_recovery() {
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_footer.omen");
+        let db_path = dir.path().join("test.omen");
 
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
-            db.insert("vec1", &[1.0, 2.0, 3.0], None).unwrap();
-            db.checkpoint().unwrap();
-
-            // Check that footer is there
-            let file = File::open(&db_path).unwrap();
-            let len = file.metadata().unwrap().len();
-            assert!(len > (HEADER_SIZE + OmenFooter::SIZE) as u64);
+            db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
+                .unwrap();
+            db.wal_append_delete("vec1").unwrap();
         }
 
         {
-            // Open and check if manifest was recovered
-            let db = OmenFile::open(&db_path).unwrap();
-            assert_eq!(db.len(), 1);
-            assert!(!db.manifest.nodes.is_empty());
-            assert_eq!(db.manifest.nodes[0].segment_type, SegmentType::Vectors);
+            let mut db = OmenFile::open(&db_path).unwrap();
+            let entries = db.pending_wal_entries().unwrap();
+            assert_eq!(entries.len(), 2);
 
-            let results = db.search(&[1.0, 2.0, 3.0], 1);
-            assert_eq!(results.len(), 1);
-            assert_eq!(results[0].0, "vec1");
-        }
-    }
+            // First entry is insert
+            let insert_data = parse_wal_insert(&entries[0].data).unwrap();
+            assert_eq!(insert_data.id, "vec1");
 
-    #[test]
-    fn test_delete_ratio() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_ratio.omen");
-
-        let mut db = OmenFile::create(&db_path, 3).unwrap();
-
-        // Empty db has 0 ratio
-        assert_eq!(db.delete_ratio(), 0.0);
-        assert!(!db.needs_compaction());
-
-        // Insert 10 vectors
-        for i in 0..10 {
-            db.insert(&format!("vec{i}"), &[i as f32, 0.0, 0.0], None)
-                .unwrap();
-        }
-        assert_eq!(db.delete_ratio(), 0.0);
-
-        // Delete 2 vectors (20%)
-        db.delete("vec0").unwrap();
-        db.delete("vec1").unwrap();
-        assert!((db.delete_ratio() - 0.2).abs() < 0.01);
-        assert!(!db.needs_compaction()); // exactly 20% doesn't trigger
-
-        // Delete one more (30%)
-        db.delete("vec2").unwrap();
-        assert!((db.delete_ratio() - 0.3).abs() < 0.01);
-        assert!(db.needs_compaction()); // > 20% triggers
-    }
-
-    #[test]
-    fn test_compact_basic() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_compact.omen");
-
-        let mut db = OmenFile::create(&db_path, 3).unwrap();
-
-        // Insert 10 vectors
-        for i in 0..10 {
-            db.insert(&format!("vec{i}"), &[i as f32, 0.0, 0.0], None)
-                .unwrap();
-        }
-        db.checkpoint().unwrap();
-
-        // Delete 5 vectors
-        for i in 0..5 {
-            db.delete(&format!("vec{i}")).unwrap();
-        }
-        assert_eq!(db.delete_ratio(), 0.5);
-
-        // Compact
-        let removed = db.compact().unwrap();
-        assert_eq!(removed, 5);
-
-        // Verify state after compaction
-        assert_eq!(db.len(), 5);
-        assert_eq!(db.delete_ratio(), 0.0);
-        assert!(!db.needs_compaction());
-
-        // Verify live vectors are searchable
-        let results = db.search(&[5.0, 0.0, 0.0], 1);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, "vec5");
-
-        // Verify deleted vectors are gone
-        let results = db.search(&[0.0, 0.0, 0.0], 5);
-        for (id, _) in &results {
-            assert!(!id.starts_with("vec0"));
-            assert!(!id.starts_with("vec1"));
-            assert!(!id.starts_with("vec2"));
-            assert!(!id.starts_with("vec3"));
-            assert!(!id.starts_with("vec4"));
-        }
-    }
-
-    #[test]
-    fn test_compact_persistence() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_compact_persist.omen");
-
-        {
-            let mut db = OmenFile::create(&db_path, 3).unwrap();
-
-            // Insert 10 vectors
-            for i in 0..10 {
-                db.insert(&format!("vec{i}"), &[i as f32, 0.0, 0.0], None)
-                    .unwrap();
-            }
-
-            // Delete 5 vectors
-            for i in 0..5 {
-                db.delete(&format!("vec{i}")).unwrap();
-            }
-
-            // Compact
-            let removed = db.compact().unwrap();
-            assert_eq!(removed, 5);
-        }
-
-        // Reopen and verify
-        {
-            let db = OmenFile::open(&db_path).unwrap();
-            assert_eq!(db.len(), 5);
-
-            // Verify live vectors
-            let results = db.search(&[7.0, 0.0, 0.0], 5);
-            assert_eq!(results.len(), 5);
-
-            // All results should be vec5-vec9
-            for (id, _) in &results {
-                let num: i32 = id.strip_prefix("vec").unwrap().parse().unwrap();
-                assert!(num >= 5 && num <= 9, "Expected vec5-vec9, got {id}");
-            }
-        }
-    }
-
-    #[test]
-    fn test_compact_no_deletes() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_compact_noop.omen");
-
-        let mut db = OmenFile::create(&db_path, 3).unwrap();
-
-        // Insert without deleting
-        for i in 0..5 {
-            db.insert(&format!("vec{i}"), &[i as f32, 0.0, 0.0], None)
-                .unwrap();
-        }
-        db.checkpoint().unwrap();
-
-        // Compact should be no-op
-        let removed = db.compact().unwrap();
-        assert_eq!(removed, 0);
-        assert_eq!(db.len(), 5);
-    }
-
-    #[test]
-    fn test_compact_preserves_metadata() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_compact_meta.omen");
-
-        let mut db = OmenFile::create(&db_path, 3).unwrap();
-
-        // Insert with metadata
-        db.insert("vec0", &[0.0, 0.0, 0.0], Some(br#"{"key":"delete_me"}"#))
-            .unwrap();
-        db.insert("vec1", &[1.0, 0.0, 0.0], Some(br#"{"key":"keep"}"#))
-            .unwrap();
-        db.checkpoint().unwrap();
-
-        // Delete vec0
-        db.delete("vec0").unwrap();
-
-        // Compact
-        db.compact().unwrap();
-
-        // Verify metadata preserved for vec1
-        // vec1 was at index 1, now should be at index 0
-        let meta = db.get_metadata(0).unwrap();
-        assert!(meta.is_some());
-        let meta_json = meta.unwrap();
-        assert_eq!(meta_json["key"], "keep");
-    }
-
-    #[test]
-    fn test_wal_append_insert() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_wal_append.omen");
-
-        let mut db = OmenFile::create(&db_path, 3).unwrap();
-
-        // WAL only, no state mutation
-        db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
-            .unwrap();
-        db.wal_append_insert("vec2", &[4.0, 5.0, 6.0], Some(br#"{"key":"value"}"#))
-            .unwrap();
-
-        // WAL should have entries, but state is NOT updated
-        assert!(db.wal_len() > 0);
-        // Internal state should be empty since we only wrote to WAL
-        assert_eq!(db.len(), 0);
-    }
-
-    #[test]
-    fn test_load_snapshot() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_snapshot.omen");
-
-        // Create and populate using old API
-        {
-            let mut db = OmenFile::create(&db_path, 3).unwrap();
-            db.insert("vec1", &[1.0, 2.0, 3.0], Some(br#"{"k":"v1"}"#))
-                .unwrap();
-            db.insert("vec2", &[4.0, 5.0, 6.0], Some(br#"{"k":"v2"}"#))
-                .unwrap();
-            db.delete("vec1").unwrap();
-            db.checkpoint().unwrap();
-        }
-
-        // Open and load snapshot
-        {
-            let db = OmenFile::open(&db_path).unwrap();
-            let snapshot = db.load_snapshot().unwrap();
-
-            assert_eq!(snapshot.dimensions, 3);
-            assert_eq!(snapshot.id_to_slot.len(), 1); // Only vec2 in mapping
-            assert!(snapshot.id_to_slot.contains_key("vec2"));
-            assert!(!snapshot.id_to_slot.contains_key("vec1")); // Deleted
-
-            // vec2's slot should have vector data
-            let slot = snapshot.id_to_slot["vec2"] as usize;
-            assert!(snapshot.vectors[slot].is_some());
-            let vec_data = snapshot.vectors[slot].as_ref().unwrap();
-            assert_eq!(vec_data, &[4.0, 5.0, 6.0]);
-
-            // Metadata should be present
-            assert!(snapshot.metadata.contains_key(&(slot as u32)));
+            // Second entry is delete
+            let delete_data = parse_wal_delete(&entries[1].data).unwrap();
+            assert_eq!(delete_data.id, "vec1");
         }
     }
 
@@ -1953,78 +1003,169 @@ mod tests {
         db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None)
             .unwrap();
 
-        // Verify internal state was updated
+        // Verify header count updated
         assert_eq!(db.len(), 2);
 
         drop(db);
 
-        // Reopen and verify
+        // Reopen and verify count persisted
         let db2 = OmenFile::open(&db_path).unwrap();
         assert_eq!(db2.len(), 2);
-
-        // Search should find vec1 and vec2
-        let results = db2.search(&[1.0, 2.0, 3.0], 2);
-        assert_eq!(results.len(), 2);
-
-        // vec1 should be closest to query
-        assert_eq!(results[0].0, "vec1");
     }
 
     #[test]
-    fn test_delete_round_trip() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_delete_rt.omen");
+    fn test_load_persisted_snapshot() {
+        use std::collections::HashMap;
 
-        // Phase 1: Create and populate
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_snapshot.omen");
+
+        // Create and checkpoint with data
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
-            db.insert("vec1", &[1.0, 0.0, 0.0], None).unwrap();
-            db.insert("vec2", &[0.0, 1.0, 0.0], None).unwrap();
-            db.insert("vec3", &[0.0, 0.0, 1.0], None).unwrap();
-            db.checkpoint().unwrap();
-        }
 
-        // Phase 2: Reopen and delete using WAL-only
-        {
-            let mut db = OmenFile::open(&db_path).unwrap();
-            assert_eq!(db.len(), 3);
+            let vectors: Vec<Option<Vec<f32>>> = vec![
+                Some(vec![1.0, 2.0, 3.0]),
+                Some(vec![4.0, 5.0, 6.0]),
+                None, // Slot 2 deleted
+            ];
+            let mut id_to_slot: HashMap<String, u32> = HashMap::new();
+            id_to_slot.insert("vec1".to_string(), 0);
+            id_to_slot.insert("vec2".to_string(), 1);
 
-            // WAL-only delete (RecordStore-based deletion)
-            db.wal_append_delete("vec2").unwrap();
+            let deleted: Vec<u32> = vec![2];
 
-            // Checkpoint with updated deleted set
-            let snapshot = db.load_snapshot().unwrap();
+            let mut metadata: HashMap<u32, serde_json::Value> = HashMap::new();
+            metadata.insert(0, serde_json::json!({"k":"v1"}));
+            metadata.insert(1, serde_json::json!({"k":"v2"}));
 
-            // Convert snapshot to checkpoint format, adding vec2's slot to deleted
-            let mut deleted: Vec<u32> = snapshot.deleted;
-            if let Some(&slot) = snapshot.id_to_slot.get("vec2") {
-                deleted.push(slot);
-            }
-
-            // Remove vec2 from id_to_slot
-            let mut id_to_slot = snapshot.id_to_slot.clone();
-            id_to_slot.remove("vec2");
-
-            // Build vectors slice
-            let vectors: Vec<Option<Vec<f32>>> = snapshot.vectors;
-
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &snapshot.metadata, None)
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None)
                 .unwrap();
         }
 
-        // Phase 3: Reopen and verify deletion persisted
+        // Reopen and load snapshot
         {
             let db = OmenFile::open(&db_path).unwrap();
-            assert_eq!(db.len(), 2);
+            let snapshot = db.load_persisted_snapshot().unwrap();
 
-            // Search should only find vec1 and vec3
-            let results = db.search(&[0.0, 1.0, 0.0], 3);
-            assert_eq!(results.len(), 2);
+            assert_eq!(snapshot.dimensions, 3);
+            assert_eq!(snapshot.id_to_slot.len(), 2);
+            assert!(snapshot.id_to_slot.contains_key("vec1"));
+            assert!(snapshot.id_to_slot.contains_key("vec2"));
 
-            // vec2 should NOT be in results (it was deleted)
-            for (id, _) in &results {
-                assert_ne!(id, "vec2", "vec2 should have been deleted");
-            }
+            // Check vectors loaded correctly
+            let slot0 = snapshot.id_to_slot["vec1"] as usize;
+            let slot1 = snapshot.id_to_slot["vec2"] as usize;
+
+            assert!(snapshot.vectors[slot0].is_some());
+            assert!(snapshot.vectors[slot1].is_some());
+            assert_eq!(snapshot.vectors[slot0].as_ref().unwrap(), &[1.0, 2.0, 3.0]);
+            assert_eq!(snapshot.vectors[slot1].as_ref().unwrap(), &[4.0, 5.0, 6.0]);
+
+            // Check deleted bitmap
+            assert!(snapshot.deleted.contains(&2));
+
+            // Check metadata
+            assert!(snapshot.metadata.contains_key(&0));
+            assert!(snapshot.metadata.contains_key(&1));
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_clears_wal() {
+        use std::collections::HashMap;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_wal_clear.omen");
+
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+            // Write to WAL
+            db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
+                .unwrap();
+            assert!(db.wal_len() > 0);
+
+            // Checkpoint should clear WAL (leaves 1 checkpoint marker)
+            let vectors: Vec<Option<Vec<f32>>> = vec![Some(vec![1.0, 2.0, 3.0])];
+            let mut id_to_slot: HashMap<String, u32> = HashMap::new();
+            id_to_slot.insert("vec1".to_string(), 0);
+            let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
+
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None)
+                .unwrap();
+
+            // WAL has 1 entry (checkpoint marker)
+            assert_eq!(db.wal_len(), 1);
+        }
+
+        // After reopen, no pending WAL entries (checkpoint marker is not returned)
+        {
+            let mut db = OmenFile::open(&db_path).unwrap();
+            let entries = db.pending_wal_entries().unwrap();
+            assert!(entries.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_footer_recovery() {
+        use std::collections::HashMap;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_footer.omen");
+
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+            let vectors: Vec<Option<Vec<f32>>> = vec![Some(vec![1.0, 2.0, 3.0])];
+            let mut id_to_slot: HashMap<String, u32> = HashMap::new();
+            id_to_slot.insert("vec1".to_string(), 0);
+            let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
+
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None)
+                .unwrap();
+
+            // Check that footer is there
+            let file = File::open(&db_path).unwrap();
+            let len = file.metadata().unwrap().len();
+            assert!(len > (HEADER_SIZE + OmenFooter::SIZE) as u64);
+        }
+
+        {
+            // Open and check if manifest was recovered
+            let db = OmenFile::open(&db_path).unwrap();
+            assert_eq!(db.len(), 1);
+            assert!(!db.manifest.nodes.is_empty());
+            assert_eq!(db.manifest.nodes[0].segment_type, SegmentType::Vectors);
+        }
+    }
+
+    #[test]
+    fn test_config_persistence() {
+        use std::collections::HashMap;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_config.omen");
+
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+            // Set dimensions (in-memory only)
+            db.set_dimensions(128);
+            assert_eq!(db.dimensions(), 128);
+
+            // Checkpoint to persist header changes
+            let vectors: Vec<Option<Vec<f32>>> = vec![];
+            let id_to_slot: HashMap<String, u32> = HashMap::new();
+            let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
+
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None)
+                .unwrap();
+        }
+
+        {
+            let db = OmenFile::open(&db_path).unwrap();
+            assert_eq!(db.dimensions(), 128);
         }
     }
 }
