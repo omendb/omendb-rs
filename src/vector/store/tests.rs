@@ -1484,3 +1484,304 @@ fn test_set_writes_to_wal() {
         assert_eq!(store.len(), 1, "Should have 1 vector after WAL replay");
     }
 }
+
+// ============================================================================
+// Persistence Round-Trip Property Tests (tk-xvf9)
+// ============================================================================
+
+mod persistence_proptest {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Generate random f32 vector data
+    fn arb_vector_data(dim: usize) -> impl Strategy<Value = Vec<f32>> {
+        proptest::collection::vec(-100.0f32..100.0f32, dim)
+    }
+
+    /// Generate valid ID strings (alphanumeric, no special chars that could break parsing)
+    #[allow(dead_code)]
+    fn arb_id() -> impl Strategy<Value = String> {
+        "[a-zA-Z][a-zA-Z0-9_]{0,15}".prop_map(|s| s)
+    }
+
+    proptest! {
+        /// WAL recovery without flush - data survives via WAL replay
+        #[test]
+        fn wal_recovery_no_flush(
+            num_vectors in 1usize..20,
+            dim in 4usize..32
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("wal_recovery.omen");
+
+            let mut expected_vectors = Vec::new();
+
+            // Insert without flush
+            {
+                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+
+                for i in 0..num_vectors {
+                    let data: Vec<f32> = (0..dim).map(|j| (i * 100 + j) as f32 * 0.01).collect();
+                    let id = format!("v{}", i);
+                    store.set(id.clone(), Vector::new(data.clone()), serde_json::json!({"i": i})).unwrap();
+                    expected_vectors.push((id, data, i));
+                }
+                // NO flush - data should survive via WAL
+            }
+
+            // Reopen and verify WAL recovery
+            {
+                let store = VectorStore::open(&path).unwrap();
+                prop_assert_eq!(store.len(), num_vectors, "WAL recovery should restore all vectors");
+
+                for (id, expected_data, idx) in &expected_vectors {
+                    prop_assert!(store.contains(id), "ID not found after WAL recovery");
+                    let (vec, meta) = store.get(id).unwrap();
+                    prop_assert_eq!(&vec.data, expected_data, "Vector data mismatch");
+                    prop_assert_eq!(meta["i"].as_u64().unwrap() as usize, *idx, "Metadata mismatch");
+                }
+            }
+        }
+
+        /// Mixed insert + delete with WAL recovery
+        #[test]
+        fn wal_recovery_with_deletes(
+            num_inserts in 5usize..30,
+            delete_ratio in 0.1f64..0.5
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("wal_delete.omen");
+
+            let dim = 8;
+            let num_deletes = ((num_inserts as f64) * delete_ratio) as usize;
+
+            // Insert then delete without flush
+            {
+                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+
+                for i in 0..num_inserts {
+                    let data: Vec<f32> = (0..dim).map(|j| (i + j) as f32).collect();
+                    store.set(format!("v{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                }
+
+                // Delete first N vectors
+                for i in 0..num_deletes {
+                    store.delete(&format!("v{}", i)).unwrap();
+                }
+                // NO flush
+            }
+
+            // Reopen and verify
+            {
+                let store = VectorStore::open(&path).unwrap();
+                let expected_count = num_inserts - num_deletes;
+                prop_assert_eq!(store.len(), expected_count);
+
+                // Deleted vectors should not exist
+                for i in 0..num_deletes {
+                    let id = format!("v{}", i);
+                    prop_assert!(!store.contains(&id), "Deleted vector should not exist");
+                }
+
+                // Remaining vectors should exist
+                for i in num_deletes..num_inserts {
+                    let id = format!("v{}", i);
+                    prop_assert!(store.contains(&id), "Vector should exist");
+                }
+            }
+        }
+
+        /// Flush + WAL recovery: data persisted via checkpoint, then more via WAL
+        #[test]
+        fn checkpoint_plus_wal(
+            checkpoint_count in 5usize..20,
+            wal_count in 1usize..10
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("checkpoint_wal.omen");
+            let dim = 8;
+
+            // Insert, flush, insert more (no flush)
+            {
+                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+
+                // First batch - will be checkpointed
+                for i in 0..checkpoint_count {
+                    let data: Vec<f32> = (0..dim).map(|j| (i + j) as f32).collect();
+                    store.set(format!("cp{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                }
+                store.flush().unwrap();
+
+                // Second batch - only in WAL
+                for i in 0..wal_count {
+                    let data: Vec<f32> = (0..dim).map(|j| (i + j + 1000) as f32).collect();
+                    store.set(format!("wal{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                }
+                // NO flush for second batch
+            }
+
+            // Reopen - should have both checkpoint and WAL data
+            {
+                let store = VectorStore::open(&path).unwrap();
+                prop_assert_eq!(store.len(), checkpoint_count + wal_count);
+
+                for i in 0..checkpoint_count {
+                    let id = format!("cp{}", i);
+                    prop_assert!(store.contains(&id));
+                }
+                for i in 0..wal_count {
+                    let id = format!("wal{}", i);
+                    prop_assert!(store.contains(&id));
+                }
+            }
+        }
+
+        /// Vector data integrity - exact float values preserved
+        #[test]
+        fn vector_data_integrity(
+            values in arb_vector_data(16)
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("data_integrity.omen");
+
+            // Store exact values
+            {
+                let mut store = VectorStore::open_with_dimensions(&path, 16).unwrap();
+                store.set("test".to_string(), Vector::new(values.clone()), serde_json::json!({})).unwrap();
+                store.flush().unwrap();
+            }
+
+            // Verify exact match after reload
+            {
+                let store = VectorStore::open(&path).unwrap();
+                let (vec, _) = store.get("test").unwrap();
+                prop_assert_eq!(vec.data.len(), values.len());
+                for (i, (got, expected)) in vec.data.iter().zip(values.iter()).enumerate() {
+                    prop_assert!(
+                        (got - expected).abs() < f32::EPSILON,
+                        "Float mismatch at index {i}: got {got}, expected {expected}"
+                    );
+                }
+            }
+        }
+
+        /// Metadata types integrity - various JSON values roundtrip
+        #[test]
+        fn metadata_types_roundtrip(
+            int_val in -1000i64..1000,
+            float_val in -100.0f64..100.0,
+            bool_val in proptest::bool::ANY,
+            str_len in 1usize..20
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("meta_types.omen");
+
+            let string_val: String = (0..str_len).map(|i| ((i % 26) as u8 + b'a') as char).collect();
+
+            let metadata = serde_json::json!({
+                "int": int_val,
+                "float": float_val,
+                "bool": bool_val,
+                "string": string_val,
+                "null": null,
+                "array": [1, 2, 3],
+                "nested": {"a": 1, "b": "two"}
+            });
+
+            // Store
+            {
+                let mut store = VectorStore::open_with_dimensions(&path, 4).unwrap();
+                store.set("test".to_string(), Vector::new(vec![1.0, 2.0, 3.0, 4.0]), metadata.clone()).unwrap();
+                store.flush().unwrap();
+            }
+
+            // Verify
+            {
+                let store = VectorStore::open(&path).unwrap();
+                let (_, loaded_meta) = store.get("test").unwrap();
+                prop_assert_eq!(loaded_meta["int"].as_i64().unwrap(), int_val);
+                prop_assert_eq!(loaded_meta["bool"].as_bool().unwrap(), bool_val);
+                prop_assert_eq!(loaded_meta["string"].as_str().unwrap(), string_val);
+                prop_assert!(loaded_meta["null"].is_null());
+                prop_assert_eq!(loaded_meta["array"].as_array().unwrap().len(), 3);
+                prop_assert_eq!(loaded_meta["nested"]["a"].as_i64().unwrap(), 1);
+                prop_assert_eq!(loaded_meta["nested"]["b"].as_str().unwrap(), "two");
+            }
+        }
+
+        /// Upsert semantics - overwriting vector persists correctly
+        #[test]
+        fn upsert_persistence(
+            num_updates in 2usize..5
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("upsert.omen");
+            let dim = 4;
+            let last_update = num_updates - 1;
+
+            // Expected: last update's data (update index = num_updates - 1)
+            let final_data: Vec<f32> = (0..dim).map(|i| (last_update * 100 + i) as f32).collect();
+
+            // Insert then update multiple times
+            {
+                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+
+                for update in 0..num_updates {
+                    let data: Vec<f32> = (0..dim).map(|i| (update * 100 + i) as f32).collect();
+                    store.set("same_id".to_string(), Vector::new(data), serde_json::json!({"version": update})).unwrap();
+                }
+                store.flush().unwrap();
+            }
+
+            // Should have latest version
+            {
+                let store = VectorStore::open(&path).unwrap();
+                prop_assert_eq!(store.len(), 1);
+                let (vec, meta) = store.get("same_id").unwrap();
+                prop_assert_eq!(vec.data, final_data);
+                prop_assert_eq!(meta["version"].as_u64().unwrap() as usize, last_update);
+            }
+        }
+
+        /// Batch insert persistence
+        #[test]
+        fn batch_persistence(
+            num_batches in 2usize..5,
+            batch_size in 5usize..15
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("batch.omen");
+            let dim = 8;
+
+            let total = num_batches * batch_size;
+
+            // Insert in batches
+            {
+                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+
+                for batch_idx in 0..num_batches {
+                    let items: Vec<_> = (0..batch_size).map(|i| {
+                        let idx = batch_idx * batch_size + i;
+                        let data: Vec<f32> = (0..dim).map(|j| (idx * 10 + j) as f32).collect();
+                        (format!("b{}_i{}", batch_idx, i), Vector::new(data), serde_json::json!({"batch": batch_idx, "i": i}))
+                    }).collect();
+                    store.set_batch(items).unwrap();
+                }
+                store.flush().unwrap();
+            }
+
+            // Verify all
+            {
+                let store = VectorStore::open(&path).unwrap();
+                prop_assert_eq!(store.len(), total);
+
+                for batch_idx in 0..num_batches {
+                    for i in 0..batch_size {
+                        let id = format!("b{}_i{}", batch_idx, i);
+                        prop_assert!(store.contains(&id), "Missing ID");
+                    }
+                }
+            }
+        }
+    }
+}

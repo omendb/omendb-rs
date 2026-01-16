@@ -555,17 +555,17 @@ impl OmenFile {
     }
 
     pub fn delete(&mut self, id: &str) -> io::Result<bool> {
-        let Some(&index) = self.state.id_to_index.get(id) else {
-            return Ok(false);
-        };
-
+        // Write delete to WAL unconditionally - existence check is done at VectorStore level
+        // (RecordStore.delete returns None if not found, so we only get here for valid deletes)
         self.wal.append(WalEntry::delete_node(0, id))?;
         self.wal.sync()?;
-        self.state.deleted.insert(index, true);
 
-        // Remove mapping so it can be re-inserted later
-        self.state.id_to_index.remove(id);
-        self.state.index_to_id.remove(&index);
+        // Update legacy state for compatibility (will be removed in Phase 5)
+        if let Some(&index) = self.state.id_to_index.get(id) {
+            self.state.deleted.insert(index, true);
+            self.state.id_to_index.remove(id);
+            self.state.index_to_id.remove(&index);
+        }
 
         Ok(true)
     }
