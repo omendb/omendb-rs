@@ -1238,10 +1238,10 @@ impl OmenFile {
 }
 
 // ============================================================================
-// V3 Pure I/O API (no internal state mutation)
+// Pure I/O API
 // ============================================================================
 
-/// Snapshot data loaded from OmenFile for V3 architecture
+/// Snapshot data loaded from OmenFile
 #[derive(Debug, Default)]
 pub struct OmenSnapshot {
     /// Vectors loaded from storage
@@ -1259,14 +1259,9 @@ pub struct OmenSnapshot {
 }
 
 impl OmenFile {
-    // =========================================================================
-    // V3 Pure I/O Methods
-    // =========================================================================
-
     /// Append insert entry to WAL without updating internal state
     ///
-    /// V3 Architecture: WAL-only, no state mutation.
-    /// State is managed by RecordStore in VectorStore.
+    /// WAL-only, no state mutation. State is managed by RecordStore.
     pub fn wal_append_insert(
         &mut self,
         id: &str,
@@ -1282,18 +1277,16 @@ impl OmenFile {
 
     /// Append delete entry to WAL without updating internal state
     ///
-    /// V3 Architecture: WAL-only, no state mutation.
-    /// State is managed by RecordStore in VectorStore.
+    /// WAL-only, no state mutation. State is managed by RecordStore.
     pub fn wal_append_delete(&mut self, id: &str) -> io::Result<()> {
         self.wal.append(WalEntry::delete_node(0, id))?;
         self.wal.sync()?;
         Ok(())
     }
 
-    /// Load snapshot for V3 architecture
+    /// Load snapshot from storage
     ///
-    /// Returns all persisted data in a format suitable for initializing RecordStore.
-    /// Does not modify internal state.
+    /// Returns all persisted data for initializing RecordStore. Does not modify internal state.
     pub fn load_snapshot(&self) -> io::Result<OmenSnapshot> {
         let mut snapshot = OmenSnapshot {
             dimensions: self.header.dimensions,
@@ -1354,10 +1347,9 @@ impl OmenFile {
         Ok(snapshot)
     }
 
-    /// Checkpoint from external RecordStore (V3 pure I/O)
+    /// Checkpoint from external snapshot
     ///
-    /// Writes vectors, metadata, and mappings from the provided snapshot.
-    /// Does not read from internal state.
+    /// Writes vectors, metadata, and mappings from the provided data. Does not read from internal state.
     pub fn checkpoint_from_snapshot(
         &mut self,
         vectors: &[Option<Vec<f32>>],
@@ -1814,18 +1806,14 @@ mod tests {
         assert_eq!(meta_json["key"], "keep");
     }
 
-    // =========================================================================
-    // V3 Pure I/O Tests
-    // =========================================================================
-
     #[test]
-    fn test_v3_wal_append_insert() {
+    fn test_wal_append_insert() {
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_v3_wal.omen");
+        let db_path = dir.path().join("test_wal_append.omen");
 
         let mut db = OmenFile::create(&db_path, 3).unwrap();
 
-        // Use V3 pure I/O: WAL only, no state mutation
+        // WAL only, no state mutation
         db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
             .unwrap();
         db.wal_append_insert("vec2", &[4.0, 5.0, 6.0], Some(br#"{"key":"value"}"#))
@@ -1838,9 +1826,9 @@ mod tests {
     }
 
     #[test]
-    fn test_v3_load_snapshot() {
+    fn test_load_snapshot() {
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_v3_snapshot.omen");
+        let db_path = dir.path().join("test_snapshot.omen");
 
         // Create and populate using old API
         {
@@ -1853,7 +1841,7 @@ mod tests {
             db.checkpoint().unwrap();
         }
 
-        // Open and load snapshot using V3 API
+        // Open and load snapshot
         {
             let db = OmenFile::open(&db_path).unwrap();
             let snapshot = db.load_snapshot().unwrap();
@@ -1875,11 +1863,11 @@ mod tests {
     }
 
     #[test]
-    fn test_v3_checkpoint_from_snapshot() {
+    fn test_checkpoint_from_snapshot() {
         use std::collections::HashMap;
 
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_v3_checkpoint.omen");
+        let db_path = dir.path().join("test_ext_checkpoint.omen");
 
         // Create empty DB
         let mut db = OmenFile::create(&db_path, 3).unwrap();
@@ -1923,9 +1911,9 @@ mod tests {
     }
 
     #[test]
-    fn test_v3_delete_round_trip() {
+    fn test_delete_round_trip() {
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_v3_delete_rt.omen");
+        let db_path = dir.path().join("test_delete_rt.omen");
 
         // Phase 1: Create and populate
         {
@@ -1936,12 +1924,12 @@ mod tests {
             db.checkpoint().unwrap();
         }
 
-        // Phase 2: Reopen and delete using V3 WAL-only
+        // Phase 2: Reopen and delete using WAL-only
         {
             let mut db = OmenFile::open(&db_path).unwrap();
             assert_eq!(db.len(), 3);
 
-            // V3: WAL-only delete (simulating RecordStore-based deletion)
+            // WAL-only delete (RecordStore-based deletion)
             db.wal_append_delete("vec2").unwrap();
 
             // Checkpoint with updated deleted set

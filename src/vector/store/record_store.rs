@@ -1,9 +1,8 @@
 //! RecordStore - Single source of truth for vector records
 //!
-//! V3 Architecture: One struct owns each piece of state.
 //! RecordStore owns: vectors, ids, deleted bitmap, metadata.
-//! HNSW owns: graph structure only (references RecordStore via closures).
-//! OmenFile: pure I/O only (no state duplication).
+//! HNSW owns: graph structure only.
+//! OmenFile: pure I/O (no state duplication).
 
 use roaring::RoaringBitmap;
 use rustc_hash::FxHashMap;
