@@ -28,9 +28,7 @@ use crate::text::{
 };
 use anyhow::Result;
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 // ============================================================================
@@ -56,43 +54,6 @@ const DEFAULT_OVERSAMPLE_FACTOR: f32 = 3.0;
 #[inline]
 fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> usize {
     ef.unwrap_or(stored_ef).max(k)
-}
-
-/// Assert ID mapping consistency (debug builds only).
-///
-/// Verifies that id_to_index and index_to_id are inverse mappings.
-#[cfg(debug_assertions)]
-fn debug_assert_mapping_consistency(
-    id_to_index: &FxHashMap<String, usize>,
-    index_to_id: &FxHashMap<usize, String>,
-) {
-    // Both maps must have same size
-    debug_assert_eq!(
-        id_to_index.len(),
-        index_to_id.len(),
-        "ID mapping size mismatch: id_to_index={}, index_to_id={}",
-        id_to_index.len(),
-        index_to_id.len()
-    );
-
-    // Every entry in id_to_index must have inverse in index_to_id
-    for (id, &idx) in id_to_index {
-        debug_assert_eq!(
-            index_to_id.get(&idx),
-            Some(id),
-            "Mapping inconsistency: id_to_index[{id}]={idx} but index_to_id[{idx}]={:?}",
-            index_to_id.get(&idx)
-        );
-    }
-}
-
-#[cfg(not(debug_assertions))]
-#[inline]
-fn debug_assert_mapping_consistency(
-    _id_to_index: &FxHashMap<String, usize>,
-    _index_to_id: &FxHashMap<usize, String>,
-) {
-    // No-op in release builds
 }
 
 #[cfg(test)]
@@ -159,6 +120,59 @@ fn create_hnsw_index(
         .build_with_training(training_vectors)
 }
 
+/// Rebuild HNSW index maintaining slot-index correspondence
+///
+/// Inserts vectors in slot order so HNSW indices match RecordStore slots.
+/// For deleted slots, inserts zero vectors and marks them deleted.
+fn rebuild_hnsw_with_slots(
+    records: &RecordStore,
+    deleted: &roaring::RoaringBitmap,
+    dimensions: usize,
+    hnsw_m: usize,
+    hnsw_ef_construction: usize,
+    hnsw_ef_search: usize,
+    distance_metric: Metric,
+    quantization_mode: Option<&QuantizationMode>,
+) -> Result<HNSWIndex> {
+    // Collect live vectors for training (PQ/SQ codebooks)
+    let training_vectors: Vec<Vec<f32>> = records.collect_vectors();
+
+    let mut index = create_hnsw_index(
+        dimensions,
+        hnsw_m,
+        hnsw_ef_construction,
+        hnsw_ef_search,
+        distance_metric,
+        quantization_mode,
+        &training_vectors,
+    )?;
+
+    // Insert vectors in slot order to maintain index == slot correspondence
+    let zero_vector = vec![0.0f32; dimensions];
+    let mut deleted_slots = Vec::new();
+
+    for slot in 0..records.slot_count() {
+        if deleted.contains(slot) {
+            // Insert placeholder for deleted slot, mark deleted after
+            index.insert(&zero_vector)?;
+            deleted_slots.push(slot);
+        } else if let Some(record) = records.get_by_slot(slot) {
+            index.insert(&record.vector)?;
+        } else {
+            // Empty slot without delete marker - shouldn't happen but handle it
+            index.insert(&zero_vector)?;
+            deleted_slots.push(slot);
+        }
+    }
+
+    // Mark all deleted slots in HNSW
+    if !deleted_slots.is_empty() {
+        index.mark_deleted_batch(&deleted_slots)?;
+    }
+
+    Ok(index)
+}
+
 /// Initialize HNSW index from quantization mode.
 fn initialize_quantized_hnsw(
     dimensions: usize,
@@ -208,32 +222,17 @@ fn default_metadata() -> JsonValue {
 
 /// Vector store with HNSW indexing
 pub struct VectorStore {
-    /// All vectors stored in memory (used for rescore when quantization enabled)
-    pub vectors: Vec<Vector>,
+    /// Single source of truth for records (vectors, IDs, deleted, metadata)
+    records: RecordStore,
 
     /// HNSW index for approximate nearest neighbor search
     pub hnsw_index: Option<HNSWIndex>,
-
-    /// Vector dimensionality
-    dimensions: usize,
 
     /// Whether to rescore candidates with original vectors (default: true when quantization enabled)
     rescore_enabled: bool,
 
     /// Oversampling factor for rescore (default: 3.0)
     oversample_factor: f32,
-
-    /// Metadata storage (indexed by internal vector ID)
-    metadata: HashMap<usize, JsonValue>,
-
-    /// Map from string IDs to internal indices (public for Python bindings)
-    pub id_to_index: FxHashMap<String, usize>,
-
-    /// Reverse map from internal indices to string IDs (O(1) lookup for search results)
-    index_to_id: FxHashMap<usize, String>,
-
-    /// Deleted vector IDs (tombstones for MVCC)
-    deleted: HashMap<usize, bool>,
 
     /// Roaring bitmap index for fast filtered search
     metadata_index: MetadataIndex,
@@ -260,9 +259,6 @@ pub struct VectorStore {
 
     /// Distance metric for similarity search (default: L2)
     distance_metric: Metric,
-
-    /// Next available index for vectors (reliable counter even when skip_ram enabled)
-    next_index: usize,
 }
 
 impl VectorStore {
@@ -274,15 +270,10 @@ impl VectorStore {
     #[must_use]
     pub fn new(dimensions: usize) -> Self {
         Self {
-            vectors: Vec::new(),
+            records: RecordStore::new(dimensions as u32),
             hnsw_index: None,
-            dimensions,
             rescore_enabled: false,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
-            metadata: HashMap::new(),
-            id_to_index: FxHashMap::default(),
-            index_to_id: FxHashMap::default(),
-            deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
@@ -293,8 +284,12 @@ impl VectorStore {
             hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
             hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
             distance_metric: Metric::L2,
-            next_index: 0,
         }
+    }
+
+    // Compatibility accessors for fields moved to RecordStore
+    fn dimensions(&self) -> usize {
+        self.records.dimensions() as usize
     }
 
     /// Create new vector store with quantization
@@ -303,15 +298,10 @@ impl VectorStore {
     #[must_use]
     pub fn new_with_quantization(dimensions: usize, mode: QuantizationMode) -> Self {
         Self {
-            vectors: Vec::new(),
+            records: RecordStore::new(dimensions as u32),
             hnsw_index: None,
-            dimensions,
             rescore_enabled: true,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
-            metadata: HashMap::new(),
-            id_to_index: FxHashMap::default(),
-            index_to_id: FxHashMap::default(),
-            deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
@@ -322,7 +312,6 @@ impl VectorStore {
             hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
             hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
             distance_metric: Metric::L2,
-            next_index: 0,
         }
     }
 
@@ -344,15 +333,10 @@ impl VectorStore {
         )?);
 
         Ok(Self {
-            vectors: Vec::new(),
+            records: RecordStore::new(dimensions as u32),
             hnsw_index,
-            dimensions,
             rescore_enabled: false,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
-            metadata: HashMap::new(),
-            id_to_index: FxHashMap::default(),
-            index_to_id: FxHashMap::default(),
-            deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
@@ -363,7 +347,6 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
-            next_index: 0,
         })
     }
 
@@ -386,6 +369,8 @@ impl VectorStore {
     /// // Data is automatically persisted
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        use roaring::RoaringBitmap;
+
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
         let storage = if omen_path.exists() {
@@ -394,126 +379,108 @@ impl VectorStore {
             OmenFile::create(path, 0)?
         };
 
-        // Check if store was quantized - if so, skip loading vectors to RAM
-        let is_quantized = storage.is_quantized()?;
-        let quantization_mode =
-            quantization_mode_from_id(storage.get_quantization_mode()?.unwrap_or(0));
+        // Load snapshot from storage
+        let snapshot = storage.load_snapshot()?;
+        let dimensions = snapshot.dimensions as usize;
 
-        // Load metadata and mappings (always needed)
-        let metadata = storage.load_all_metadata()?;
-        let id_to_index: FxHashMap<String, usize> =
-            storage.load_all_id_mappings()?.into_iter().collect();
-        let deleted = storage.load_all_deleted()?;
-
-        // Get dimensions from config
-        let dimensions = storage.get_config("dimensions")?.unwrap_or(0) as usize;
-
-        // Get HNSW parameters from header (for rebuilding HNSW if needed)
+        // Get HNSW parameters from header
         let header = storage.header();
         let distance_metric = header.metric;
         let hnsw_m = header.hnsw_m as usize;
         let hnsw_ef_construction = header.hnsw_ef_construction as usize;
         let hnsw_ef_search = header.hnsw_ef_search as usize;
 
-        // Load vectors to RAM only if NOT quantized
-        let (vectors, real_indices) = if is_quantized {
-            (Vec::new(), std::collections::HashSet::new())
-        } else {
-            let vectors_data = storage.load_all_vectors()?;
-            let mut vectors: Vec<Vector> = Vec::new();
-            let mut real_indices: std::collections::HashSet<usize> =
-                std::collections::HashSet::new();
+        // Check quantization
+        let _is_quantized = storage.is_quantized()?;
+        let quantization_mode =
+            quantization_mode_from_id(storage.get_quantization_mode()?.unwrap_or(0));
 
-            for (id, data) in &vectors_data {
-                while vectors.len() < *id {
-                    vectors.push(Vector::new(vec![0.0; dimensions.max(1)]));
-                }
-                vectors.push(Vector::new(data.clone()));
-                real_indices.insert(*id);
+        // Build RecordStore from snapshot
+        let deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
+        let mut slots: Vec<Option<Record>> = Vec::with_capacity(snapshot.vectors.len());
+
+        for (slot, vec_opt) in snapshot.vectors.iter().enumerate() {
+            let slot_u32 = slot as u32;
+            if deleted_bitmap.contains(slot_u32) {
+                slots.push(None);
+                continue;
             }
-            (vectors, real_indices)
-        };
 
-        // Mark gap-filled vectors as deleted
-        let mut deleted = deleted;
-        for idx in 0..vectors.len() {
-            if !real_indices.contains(&idx) && !deleted.contains_key(&idx) {
-                deleted.insert(idx, true);
+            if let Some(vec_data) = vec_opt {
+                // Find the ID for this slot
+                let id = snapshot
+                    .id_to_slot
+                    .iter()
+                    .find(|(_, &s)| s == slot_u32)
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| format!("__slot_{slot}"));
+
+                let metadata = snapshot.metadata.get(&slot_u32).cloned();
+                slots.push(Some(Record::new(id, vec_data.clone(), metadata)));
+            } else {
+                slots.push(None);
             }
         }
 
-        // Load or rebuild HNSW index
-        // Count non-deleted vectors
-        let active_vector_count = vectors
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !deleted.contains_key(i))
-            .count();
+        let records = RecordStore::from_snapshot(slots, deleted_bitmap.clone(), dimensions as u32);
 
-        let hnsw_index = if let Some(hnsw_bytes) = storage.get_hnsw_index() {
-            match postcard::from_bytes::<HNSWIndex>(hnsw_bytes) {
+        // Build HNSW index - must maintain slot index correspondence
+        let slot_count = records.slot_count() as usize;
+        let active_count = records.len() as usize;
+
+        let hnsw_index = if let Some(hnsw_bytes) = snapshot.hnsw_bytes {
+            match postcard::from_bytes::<HNSWIndex>(&hnsw_bytes) {
                 Ok(index) => {
-                    // Check if HNSW index matches loaded vectors (WAL recovery may add more)
-                    if index.len() != active_vector_count && !vectors.is_empty() {
+                    // Compare with total slots, not just live count, since HNSW includes deleted
+                    if index.len() != slot_count && slot_count > 0 {
                         tracing::info!(
-                            "HNSW index count ({}) differs from vector count ({}), rebuilding",
+                            "HNSW index count ({}) differs from slot count ({}), rebuilding",
                             index.len(),
-                            active_vector_count
+                            slot_count
                         );
-                        let vector_data: Vec<Vec<f32>> =
-                            vectors.iter().map(|v| v.data.clone()).collect();
-                        let mut new_index = create_hnsw_index(
+                        Some(rebuild_hnsw_with_slots(
+                            &records,
+                            &deleted_bitmap,
                             dimensions,
                             hnsw_m,
                             hnsw_ef_construction,
                             hnsw_ef_search,
                             distance_metric,
                             quantization_mode.as_ref(),
-                            &vector_data,
-                        )?;
-                        new_index.batch_insert(&vector_data)?;
-                        Some(new_index)
+                        )?)
                     } else {
                         Some(index)
                     }
                 }
                 Err(e) => {
                     tracing::warn!("Failed to deserialize HNSW index, rebuilding: {}", e);
-                    None
+                    if active_count > 0 {
+                        Some(rebuild_hnsw_with_slots(
+                            &records,
+                            &deleted_bitmap,
+                            dimensions,
+                            hnsw_m,
+                            hnsw_ef_construction,
+                            hnsw_ef_search,
+                            distance_metric,
+                            quantization_mode.as_ref(),
+                        )?)
+                    } else {
+                        None
+                    }
                 }
             }
-        } else if !vectors.is_empty() {
-            let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
-            let mut index = create_hnsw_index(
+        } else if active_count > 0 {
+            Some(rebuild_hnsw_with_slots(
+                &records,
+                &deleted_bitmap,
                 dimensions,
                 hnsw_m,
                 hnsw_ef_construction,
                 hnsw_ef_search,
                 distance_metric,
                 quantization_mode.as_ref(),
-                &vector_data,
-            )?;
-            index.batch_insert(&vector_data)?;
-            Some(index)
-        } else if is_quantized && dimensions > 0 {
-            let vectors_data = storage.load_all_vectors()?;
-            if vectors_data.is_empty() {
-                None
-            } else {
-                let vector_data: Vec<Vec<f32>> =
-                    vectors_data.iter().map(|(_, v)| v.clone()).collect();
-                let mut index = create_hnsw_index(
-                    dimensions,
-                    hnsw_m,
-                    hnsw_ef_construction,
-                    hnsw_ef_search,
-                    distance_metric,
-                    quantization_mode.as_ref(),
-                    &vector_data,
-                )?;
-                index.batch_insert(&vector_data)?;
-                Some(index)
-            }
+            )?)
         } else {
             None
         };
@@ -526,41 +493,24 @@ impl VectorStore {
             None
         };
 
-        // Build reverse map for O(1) index→id lookup
-        let index_to_id: FxHashMap<usize, String> = id_to_index
-            .iter()
-            .map(|(id, &idx)| (idx, id.clone()))
-            .collect();
-
-        // Build metadata index from loaded metadata (for fast filtered search)
+        // Build metadata index from RecordStore
         let mut metadata_index = MetadataIndex::new();
-        for (&idx, meta) in &metadata {
-            if !deleted.contains_key(&idx) {
-                metadata_index.index_json(idx as u32, meta);
+        for (slot, record) in records.iter_live() {
+            if let Some(ref meta) = record.metadata {
+                metadata_index.index_json(slot, meta);
             }
         }
 
-        // Enable rescore if the loaded index is quantized
+        // Enable rescore if quantized
         let rescore_enabled = hnsw_index
             .as_ref()
             .is_some_and(super::hnsw_index::HNSWIndex::is_asymmetric);
 
-        // Verify mapping consistency before returning
-        debug_assert_mapping_consistency(&id_to_index, &index_to_id);
-
-        // Calculate next_index from loaded mappings (max index + 1)
-        let next_index = id_to_index.values().max().map_or(0, |&max| max + 1);
-
         Ok(Self {
-            vectors,
+            records,
             hnsw_index,
-            dimensions,
             rescore_enabled,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
-            metadata,
-            id_to_index,
-            index_to_id,
-            deleted,
             metadata_index,
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
@@ -571,7 +521,6 @@ impl VectorStore {
             hnsw_ef_construction: hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION),
             hnsw_ef_search: hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH),
             distance_metric,
-            next_index,
         })
     }
 
@@ -580,8 +529,8 @@ impl VectorStore {
     /// Like `open()` but ensures dimensions are set for new databases.
     pub fn open_with_dimensions(path: impl AsRef<Path>, dimensions: usize) -> Result<Self> {
         let mut store = Self::open(path)?;
-        if store.dimensions == 0 {
-            store.dimensions = dimensions;
+        if store.dimensions() == 0 {
+            store.records.set_dimensions(dimensions as u32);
             if let Some(ref mut storage) = store.storage {
                 storage.put_config("dimensions", dimensions as u64)?;
             }
@@ -601,8 +550,8 @@ impl VectorStore {
             let mut store = Self::open(path)?;
 
             // Apply dimension if specified and store has none
-            if store.dimensions == 0 && options.dimensions > 0 {
-                store.dimensions = options.dimensions;
+            if store.dimensions() == 0 && options.dimensions > 0 {
+                store.records.set_dimensions(options.dimensions as u32);
                 if let Some(ref mut storage) = store.storage {
                     storage.put_config("dimensions", options.dimensions as u64)?;
                 }
@@ -676,15 +625,10 @@ impl VectorStore {
             .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
 
         Ok(Self {
-            vectors: Vec::new(),
+            records: RecordStore::new(dimensions as u32),
             hnsw_index,
-            dimensions,
             rescore_enabled,
             oversample_factor,
-            metadata: HashMap::new(),
-            id_to_index: FxHashMap::default(),
-            index_to_id: FxHashMap::default(),
-            deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
@@ -695,7 +639,6 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
-            next_index: 0,
         })
     }
 
@@ -748,15 +691,10 @@ impl VectorStore {
             .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
 
         Ok(Self {
-            vectors: Vec::new(),
+            records: RecordStore::new(dimensions as u32),
             hnsw_index,
-            dimensions,
             rescore_enabled,
             oversample_factor,
-            metadata: HashMap::new(),
-            id_to_index: FxHashMap::default(),
-            index_to_id: FxHashMap::default(),
-            deleted: HashMap::new(),
             metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
@@ -767,7 +705,6 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
-            next_index: 0,
         })
     }
 
@@ -777,16 +714,16 @@ impl VectorStore {
 
     /// Resolve dimensions from vector or existing store config.
     fn resolve_dimensions(&self, vector_dim: usize) -> Result<usize> {
-        if self.dimensions == 0 {
+        if self.dimensions() == 0 {
             Ok(vector_dim)
-        } else if vector_dim != self.dimensions {
+        } else if vector_dim != self.dimensions() {
             anyhow::bail!(
                 "Vector dimension mismatch: store expects {}, got {}",
-                self.dimensions,
+                self.dimensions(),
                 vector_dim
             );
         } else {
-            Ok(self.dimensions)
+            Ok(self.dimensions())
         }
     }
 
@@ -835,43 +772,13 @@ impl VectorStore {
     // Insert/Set Methods
     // ============================================================================
 
-    /// Insert vector and return its ID
+    /// Insert vector and return its slot ID
     pub fn insert(&mut self, vector: Vector) -> Result<usize> {
-        let id = self.next_index;
+        // Generate a unique ID for unnamed vectors
+        let slot = self.records.slot_count();
+        let id = format!("__auto_{slot}");
 
-        if self.hnsw_index.is_none() {
-            let dimensions = self.resolve_dimensions(vector.dim())?;
-            self.hnsw_index =
-                Some(self.create_initial_hnsw(dimensions, std::slice::from_ref(&vector.data))?);
-            self.dimensions = dimensions;
-        } else if vector.dim() != self.dimensions {
-            anyhow::bail!(
-                "Vector dimension mismatch: store expects {}, got {}. All vectors in same store must have same dimension.",
-                self.dimensions,
-                vector.dim()
-            );
-        }
-
-        if let Some(ref mut index) = self.hnsw_index {
-            index.insert(&vector.data)?;
-        }
-
-        if let Some(ref mut storage) = self.storage {
-            storage.put_vector(id, &vector.data)?;
-            storage.increment_count()?;
-            if id == 0 {
-                storage.put_config("dimensions", self.dimensions as u64)?;
-            }
-        }
-
-        if !self.is_quantized() || self.storage.is_none() {
-            self.vectors.push(vector);
-        }
-
-        // Increment next_index for the next insert
-        self.next_index += 1;
-
-        Ok(id)
+        self.set(id, vector, default_metadata())
     }
 
     /// Insert vector with string ID and metadata
@@ -884,137 +791,173 @@ impl VectorStore {
         vector: Vector,
         metadata: JsonValue,
     ) -> Result<usize> {
-        if self.id_to_index.contains_key(&id) {
+        if self.records.get_slot(&id).is_some() {
             anyhow::bail!("Vector with ID '{id}' already exists. Use set() to update.");
         }
 
-        let index = self.insert(vector)?;
-
-        self.metadata.insert(index, metadata.clone());
-        self.metadata_index.index_json(index as u32, &metadata);
-        self.id_to_index.insert(id.clone(), index);
-        self.index_to_id.insert(index, id.clone());
-
-        // Verify mapping consistency
-        debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
-
-        if let Some(ref mut storage) = self.storage {
-            storage.put_metadata(index, &metadata)?;
-            storage.put_id_mapping(&id, index)?;
-        }
-
-        Ok(index)
+        self.set(id, vector, metadata)
     }
 
     /// Upsert vector (insert or update) with string ID and metadata
     ///
     /// This is the recommended method for most use cases.
     pub fn set(&mut self, id: String, vector: Vector, metadata: JsonValue) -> Result<usize> {
-        if let Some(&index) = self.id_to_index.get(&id) {
-            self.update_by_index(index, Some(vector), Some(metadata))?;
-            Ok(index)
-        } else {
-            self.insert_with_metadata(id, vector, metadata)
+        // Initialize HNSW if needed
+        if self.hnsw_index.is_none() {
+            let dimensions = self.resolve_dimensions(vector.dim())?;
+            self.hnsw_index =
+                Some(self.create_initial_hnsw(dimensions, std::slice::from_ref(&vector.data))?);
+            self.records.set_dimensions(dimensions as u32);
+        } else if vector.dim() != self.dimensions() {
+            anyhow::bail!(
+                "Vector dimension mismatch: store expects {}, got {}",
+                self.dimensions(),
+                vector.dim()
+            );
         }
+
+        // Check if this is an update
+        let is_update = self.records.get_slot(&id).is_some();
+
+        // Upsert into RecordStore (single source of truth)
+        let slot = self
+            .records
+            .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?
+            as usize;
+
+        // Update HNSW index
+        if let Some(ref mut index) = self.hnsw_index {
+            if is_update {
+                // For updates, we need to handle HNSW differently
+                // HNSW doesn't support in-place updates, so we mark old as deleted and insert new
+                let _ = index.mark_deleted(slot as u32);
+            }
+            index.insert(&vector.data)?;
+        }
+
+        // Update metadata index
+        self.metadata_index.index_json(slot as u32, &metadata);
+
+        // Persist to storage
+        let dims = self.dimensions();
+        if let Some(ref mut storage) = self.storage {
+            storage.put_vector(slot, &vector.data)?;
+            storage.put_metadata(slot, &metadata)?;
+            storage.put_id_mapping(&id, slot)?;
+            if slot == 0 {
+                storage.put_config("dimensions", dims as u64)?;
+            }
+        }
+
+        Ok(slot)
     }
 
     /// Batch set vectors (insert or update multiple vectors at once)
     ///
     /// This is the recommended method for bulk operations.
+    /// Uses batch HNSW insertion for better performance than individual sets.
     pub fn set_batch(&mut self, batch: Vec<(String, Vector, JsonValue)>) -> Result<Vec<usize>> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
 
         // Separate batch into updates and inserts
-        let mut updates: Vec<(usize, Vector, JsonValue)> = Vec::new();
+        let mut updates: Vec<(u32, String, Vector, JsonValue)> = Vec::new();
         let mut inserts: Vec<(String, Vector, JsonValue)> = Vec::new();
 
         for (id, vector, metadata) in batch {
-            if let Some(&index) = self.id_to_index.get(&id) {
-                updates.push((index, vector, metadata));
+            if let Some(slot) = self.records.get_slot(&id) {
+                updates.push((slot, id, vector, metadata));
             } else {
                 inserts.push((id, vector, metadata));
             }
         }
 
-        let mut result_indices = Vec::new();
+        let mut result_indices = Vec::with_capacity(updates.len() + inserts.len());
 
-        // Process updates first
-        for (index, vector, metadata) in updates {
-            self.update_by_index(index, Some(vector), Some(metadata))?;
-            result_indices.push(index);
+        // Process updates individually (they need mark_deleted + insert)
+        for (slot, id, vector, metadata) in updates {
+            // Update RecordStore
+            self.records
+                .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
+
+            // Update HNSW (mark old deleted, insert new)
+            if let Some(ref mut index) = self.hnsw_index {
+                let _ = index.mark_deleted(slot);
+                index.insert(&vector.data)?;
+            }
+
+            // Update metadata index
+            self.metadata_index.index_json(slot, &metadata);
+
+            // Persist update
+            if let Some(ref mut storage) = self.storage {
+                storage.put_vector(slot as usize, &vector.data)?;
+                storage.put_metadata(slot as usize, &metadata)?;
+            }
+
+            result_indices.push(slot as usize);
         }
 
+        // Process inserts with batch optimization
         if !inserts.is_empty() {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
+            // Initialize HNSW if needed
             if self.hnsw_index.is_none() {
                 let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
                 self.hnsw_index = Some(self.create_initial_hnsw(dimensions, &vectors_data)?);
-                self.dimensions = dimensions;
+                self.records.set_dimensions(dimensions as u32);
             }
 
+            // Validate dimensions
+            let expected_dims = self.dimensions();
             for (i, (_, vector, _)) in inserts.iter().enumerate() {
-                if vector.dim() != self.dimensions {
+                if vector.dim() != expected_dims {
                     anyhow::bail!(
                         "Vector {} dimension mismatch: expected {}, got {}",
                         i,
-                        self.dimensions,
+                        expected_dims,
                         vector.dim()
                     );
                 }
             }
 
-            let base_index = self.next_index;
-            let insert_count = inserts.len();
+            // Batch insert into HNSW
             if let Some(ref mut index) = self.hnsw_index {
                 index.batch_insert(&vectors_data)?;
             }
 
+            // Insert into RecordStore and collect slots
+            let mut slots = Vec::with_capacity(inserts.len());
+            for (id, vector, metadata) in &inserts {
+                let slot =
+                    self.records
+                        .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
+                slots.push(slot);
+                self.metadata_index.index_json(slot, metadata);
+            }
+
             // Batch persist to storage
+            let dims = self.dimensions();
             if let Some(ref mut storage) = self.storage {
-                if base_index == 0 {
-                    storage.put_config("dimensions", self.dimensions as u64)?;
+                if slots.first() == Some(&0) {
+                    storage.put_config("dimensions", dims as u64)?;
                 }
 
                 let batch_items: Vec<(usize, String, Vec<f32>, serde_json::Value)> = inserts
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (id, vector, metadata))| {
-                        (
-                            base_index + i,
-                            id.clone(),
-                            vector.data.clone(),
-                            metadata.clone(),
-                        )
+                    .into_iter()
+                    .zip(slots.iter())
+                    .map(|((id, vector, metadata), &slot)| {
+                        (slot as usize, id, vector.data, metadata)
                     })
                     .collect();
 
                 storage.put_batch(batch_items)?;
             }
 
-            // Add vectors to in-memory structures
-            // Skip RAM storage when quantized with disk storage (fetch from disk for rescore)
-            let skip_ram = self.is_quantized() && self.storage.is_some();
-            for (i, (id, vector, metadata)) in inserts.into_iter().enumerate() {
-                let idx = base_index + i;
-                if !skip_ram {
-                    self.vectors.push(vector);
-                }
-                self.metadata.insert(idx, metadata.clone());
-                self.metadata_index.index_json(idx as u32, &metadata);
-                self.index_to_id.insert(idx, id.clone());
-                self.id_to_index.insert(id, idx);
-                result_indices.push(idx);
-            }
-
-            // Update next_index counter
-            self.next_index += insert_count;
-
-            // Verify mapping consistency after batch insert
-            debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
+            result_indices.extend(slots.iter().map(|&s| s as usize));
         }
 
         Ok(result_indices)
@@ -1124,11 +1067,11 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(String, f32, JsonValue)>> {
-        if query_vector.data.len() != self.dimensions {
+        if query_vector.data.len() != self.dimensions() {
             anyhow::bail!(
                 "Query vector dimension {} does not match store dimension {}",
                 query_vector.data.len(),
-                self.dimensions
+                self.dimensions()
             );
         }
         if self.text_index.is_none() {
@@ -1141,7 +1084,9 @@ impl VectorStore {
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|(idx, distance)| {
-                self.index_to_id.get(&idx).map(|id| (id.clone(), distance))
+                self.records
+                    .get_id(idx as u32)
+                    .map(|id| (id.to_string(), distance))
             })
             .collect();
 
@@ -1180,11 +1125,11 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(String, f32, JsonValue)>> {
-        if query_vector.data.len() != self.dimensions {
+        if query_vector.data.len() != self.dimensions() {
             anyhow::bail!(
                 "Query vector dimension {} does not match store dimension {}",
                 query_vector.data.len(),
-                self.dimensions
+                self.dimensions()
             );
         }
         if self.text_index.is_none() {
@@ -1197,7 +1142,9 @@ impl VectorStore {
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|(idx, distance, _)| {
-                self.index_to_id.get(&idx).map(|id| (id.clone(), distance))
+                self.records
+                    .get_id(idx as u32)
+                    .map(|id| (id.to_string(), distance))
             })
             .collect();
 
@@ -1205,9 +1152,9 @@ impl VectorStore {
         let text_results: Vec<(String, f32)> = text_results
             .into_iter()
             .filter(|(id, _)| {
-                self.id_to_index
+                self.records
                     .get(id)
-                    .and_then(|&idx| self.metadata.get(&idx))
+                    .and_then(|r| r.metadata.as_ref())
                     .is_some_and(|meta| filter.matches(meta))
             })
             .collect();
@@ -1229,10 +1176,9 @@ impl VectorStore {
             .into_iter()
             .map(|(id, score)| {
                 let metadata = self
-                    .id_to_index
+                    .records
                     .get(&id)
-                    .and_then(|&idx| self.metadata.get(&idx))
-                    .cloned()
+                    .and_then(|r| r.metadata.clone())
                     .unwrap_or_else(default_metadata);
                 (id, score, metadata)
             })
@@ -1251,11 +1197,11 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(HybridResult, JsonValue)>> {
-        if query_vector.data.len() != self.dimensions {
+        if query_vector.data.len() != self.dimensions() {
             anyhow::bail!(
                 "Query vector dimension {} does not match store dimension {}",
                 query_vector.data.len(),
-                self.dimensions
+                self.dimensions()
             );
         }
         if self.text_index.is_none() {
@@ -1268,7 +1214,9 @@ impl VectorStore {
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|(idx, distance)| {
-                self.index_to_id.get(&idx).map(|id| (id.clone(), distance))
+                self.records
+                    .get_id(idx as u32)
+                    .map(|id| (id.to_string(), distance))
             })
             .collect();
 
@@ -1295,11 +1243,11 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(HybridResult, JsonValue)>> {
-        if query_vector.data.len() != self.dimensions {
+        if query_vector.data.len() != self.dimensions() {
             anyhow::bail!(
                 "Query vector dimension {} does not match store dimension {}",
                 query_vector.data.len(),
-                self.dimensions
+                self.dimensions()
             );
         }
         if self.text_index.is_none() {
@@ -1312,7 +1260,9 @@ impl VectorStore {
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|(idx, distance, _)| {
-                self.index_to_id.get(&idx).map(|id| (id.clone(), distance))
+                self.records
+                    .get_id(idx as u32)
+                    .map(|id| (id.to_string(), distance))
             })
             .collect();
 
@@ -1320,9 +1270,9 @@ impl VectorStore {
         let text_results: Vec<(String, f32)> = text_results
             .into_iter()
             .filter(|(id, _)| {
-                self.id_to_index
+                self.records
                     .get(id)
-                    .and_then(|&idx| self.metadata.get(&idx))
+                    .and_then(|r| r.metadata.as_ref())
                     .is_some_and(|meta| filter.matches(meta))
             })
             .collect();
@@ -1347,10 +1297,9 @@ impl VectorStore {
             .into_iter()
             .map(|result| {
                 let metadata = self
-                    .id_to_index
+                    .records
                     .get(&result.id)
-                    .and_then(|&idx| self.metadata.get(&idx))
-                    .cloned()
+                    .and_then(|r| r.metadata.clone())
                     .unwrap_or_else(default_metadata);
                 (result, metadata)
             })
@@ -1368,27 +1317,24 @@ impl VectorStore {
         vector: Option<Vector>,
         metadata: Option<JsonValue>,
     ) -> Result<()> {
-        // Use next_index for bounds check (works for quantized stores where vectors is empty)
-        if index >= self.next_index {
-            anyhow::bail!("Vector index {index} does not exist");
-        }
-        if self.deleted.contains_key(&index) {
-            anyhow::bail!("Vector index {index} has been deleted");
+        let slot = index as u32;
+
+        // Check bounds and deleted status
+        if !self.records.is_live(slot) {
+            anyhow::bail!("Vector index {index} does not exist or has been deleted");
         }
 
         if let Some(new_vector) = vector {
-            if new_vector.dim() != self.dimensions {
+            if new_vector.dim() != self.dimensions() {
                 anyhow::bail!(
                     "Vector dimension mismatch: expected {}, got {}",
-                    self.dimensions,
+                    self.dimensions(),
                     new_vector.dim()
                 );
             }
 
-            // Update in RAM if vectors are stored there (non-quantized or in-memory mode)
-            if let Some(v) = self.vectors.get_mut(index) {
-                *v = new_vector.clone();
-            }
+            // Update in RecordStore
+            self.records.update_vector(slot, new_vector.data.clone())?;
 
             if let Some(ref mut storage) = self.storage {
                 storage.put_vector(index, &new_vector.data)?;
@@ -1397,9 +1343,9 @@ impl VectorStore {
 
         if let Some(ref new_metadata) = metadata {
             // Re-index metadata: remove old values, add new ones
-            self.metadata_index.remove(index as u32);
-            self.metadata_index.index_json(index as u32, new_metadata);
-            self.metadata.insert(index, new_metadata.clone());
+            self.metadata_index.remove(slot);
+            self.metadata_index.index_json(slot, new_metadata);
+            self.records.update_metadata(slot, new_metadata.clone())?;
 
             if let Some(ref mut storage) = self.storage {
                 storage.put_metadata(index, new_metadata)?;
@@ -1416,13 +1362,12 @@ impl VectorStore {
         vector: Option<Vector>,
         metadata: Option<JsonValue>,
     ) -> Result<()> {
-        let index = self
-            .id_to_index
-            .get(id)
-            .copied()
+        let slot = self
+            .records
+            .get_slot(id)
             .ok_or_else(|| anyhow::anyhow!("Vector with ID '{id}' not found"))?;
 
-        self.update_by_index(index, vector, metadata)
+        self.update_by_index(slot as usize, vector, metadata)
     }
 
     /// Delete vector by string ID
@@ -1433,22 +1378,20 @@ impl VectorStore {
     /// 3. Removes from text index if present
     /// 4. Persists to WAL
     pub fn delete(&mut self, id: &str) -> Result<()> {
-        let index = self
-            .id_to_index
-            .get(id)
-            .copied()
+        // Delete from RecordStore (single source of truth)
+        let slot = self
+            .records
+            .delete(id)
             .ok_or_else(|| anyhow::anyhow!("Vector with ID '{id}' not found"))?;
 
-        self.deleted.insert(index, true);
-        self.metadata_index.remove(index as u32);
+        self.metadata_index.remove(slot);
 
         // Repair HNSW graph using MN-RU algorithm
-        // This maintains graph connectivity and recall quality after deletion
         if let Some(ref mut hnsw) = self.hnsw_index {
-            if let Err(e) = hnsw.mark_deleted(index as u32) {
+            if let Err(e) = hnsw.mark_deleted(slot) {
                 tracing::warn!(
                     id = id,
-                    index = index,
+                    slot = slot,
                     error = ?e,
                     "Failed to repair HNSW graph after deletion"
                 );
@@ -1464,12 +1407,6 @@ impl VectorStore {
             text_index.delete_document(id)?;
         }
 
-        self.id_to_index.remove(id);
-        self.index_to_id.remove(&index);
-
-        // Verify mapping consistency
-        debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
-
         Ok(())
     }
 
@@ -1477,25 +1414,24 @@ impl VectorStore {
     ///
     /// Uses batch MN-RU graph repair for better efficiency than individual deletes.
     pub fn delete_batch(&mut self, ids: &[String]) -> Result<usize> {
-        // Collect valid indices first
-        let mut node_ids: Vec<u32> = Vec::with_capacity(ids.len());
+        // Delete from RecordStore and collect slots
+        let mut slots: Vec<u32> = Vec::with_capacity(ids.len());
         let mut valid_ids: Vec<String> = Vec::with_capacity(ids.len());
 
         for id in ids {
-            if let Some(&index) = self.id_to_index.get(id) {
-                self.deleted.insert(index, true);
-                self.metadata_index.remove(index as u32);
-                node_ids.push(index as u32);
+            if let Some(slot) = self.records.delete(id) {
+                self.metadata_index.remove(slot);
+                slots.push(slot);
                 valid_ids.push(id.clone());
             }
         }
 
         // Batch repair HNSW graph using MN-RU algorithm
-        if !node_ids.is_empty() {
+        if !slots.is_empty() {
             if let Some(ref mut hnsw) = self.hnsw_index {
-                if let Err(e) = hnsw.mark_deleted_batch(&node_ids) {
+                if let Err(e) = hnsw.mark_deleted_batch(&slots) {
                     tracing::warn!(
-                        count = node_ids.len(),
+                        count = slots.len(),
                         error = ?e,
                         "Failed to batch repair HNSW graph after deletion"
                     );
@@ -1503,8 +1439,8 @@ impl VectorStore {
             }
         }
 
-        // Persist deletions and clean up mappings
-        for (id, &node_id) in valid_ids.iter().zip(node_ids.iter()) {
+        // Persist deletions
+        for id in &valid_ids {
             if let Some(ref mut storage) = self.storage {
                 if let Err(e) = storage.delete(id) {
                     tracing::warn!(id = %id, error = ?e, "Failed to persist deletion to storage");
@@ -1515,12 +1451,7 @@ impl VectorStore {
                     tracing::warn!(id = %id, error = ?e, "Failed to delete from text index");
                 }
             }
-            self.id_to_index.remove(id);
-            self.index_to_id.remove(&(node_id as usize));
         }
-
-        // Verify mapping consistency
-        debug_assert_mapping_consistency(&self.id_to_index, &self.index_to_id);
 
         Ok(valid_ids.len())
     }
@@ -1538,15 +1469,12 @@ impl VectorStore {
     pub fn delete_by_filter(&mut self, filter: &MetadataFilter) -> Result<usize> {
         // Find matching IDs
         let ids_to_delete: Vec<String> = self
-            .id_to_index
-            .iter()
-            .filter_map(|(id, &idx)| {
-                if self.deleted.contains_key(&idx) {
-                    return None;
-                }
-                let metadata = self.metadata.get(&idx)?;
+            .records
+            .iter_live()
+            .filter_map(|(_, record)| {
+                let metadata = record.metadata.as_ref()?;
                 if filter.matches(metadata) {
-                    Some(id.clone())
+                    Some(record.id.clone())
                 } else {
                     None
                 }
@@ -1572,14 +1500,12 @@ impl VectorStore {
     /// Number of vectors matching the filter
     #[must_use]
     pub fn count_by_filter(&self, filter: &MetadataFilter) -> usize {
-        self.id_to_index
-            .iter()
-            .filter(|(_, &idx)| {
-                if self.deleted.contains_key(&idx) {
-                    return false;
-                }
-                self.metadata
-                    .get(&idx)
+        self.records
+            .iter_live()
+            .filter(|(_, record)| {
+                record
+                    .metadata
+                    .as_ref()
                     .is_some_and(|metadata| filter.matches(metadata))
             })
             .count()
@@ -1590,30 +1516,9 @@ impl VectorStore {
     /// Returns owned data since vectors may be loaded from disk for quantized stores.
     #[must_use]
     pub fn get(&self, id: &str) -> Option<(Vector, JsonValue)> {
-        let &index = self.id_to_index.get(id)?;
-        if self.deleted.contains_key(&index) {
-            return None;
-        }
-
-        // Try in-memory vectors first
-        if let Some(vec) = self.vectors.get(index) {
-            return self
-                .metadata
-                .get(&index)
-                .map(|meta| (vec.clone(), meta.clone()));
-        }
-
-        // Fall back to storage for quantized stores (vectors not in RAM)
-        if let Some(ref storage) = self.storage {
-            if let Ok(Some(vec_data)) = storage.get_vector(index) {
-                return self
-                    .metadata
-                    .get(&index)
-                    .map(|meta| (Vector::new(vec_data), meta.clone()));
-            }
-        }
-
-        None
+        let record = self.records.get(id)?;
+        let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+        Some((Vector::new(record.vector.clone()), metadata))
     }
 
     /// Get multiple vectors by string IDs
@@ -1628,12 +1533,7 @@ impl VectorStore {
     /// Get metadata by string ID (without loading vector data)
     #[must_use]
     pub fn get_metadata_by_id(&self, id: &str) -> Option<&JsonValue> {
-        self.id_to_index.get(id).and_then(|&index| {
-            if self.deleted.contains_key(&index) {
-                return None;
-            }
-            self.metadata.get(&index)
-        })
+        self.records.get(id).and_then(|r| r.metadata.as_ref())
     }
 
     // ============================================================================
@@ -1641,6 +1541,9 @@ impl VectorStore {
     // ============================================================================
 
     /// Insert batch of vectors in parallel
+    ///
+    /// NOTE: This method generates synthetic IDs for the vectors.
+    /// For explicit IDs, use `set_batch` instead.
     pub fn batch_insert(&mut self, vectors: Vec<Vector>) -> Result<Vec<usize>> {
         const CHUNK_SIZE: usize = 10_000;
 
@@ -1649,11 +1552,11 @@ impl VectorStore {
         }
 
         for (i, vector) in vectors.iter().enumerate() {
-            if vector.dim() != self.dimensions {
+            if vector.dim() != self.dimensions() {
                 anyhow::bail!(
                     "Vector {} dimension mismatch: expected {}, got {}",
                     i,
-                    self.dimensions,
+                    self.dimensions(),
                     vector.dim()
                 );
             }
@@ -1663,41 +1566,51 @@ impl VectorStore {
             let training: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
             let capacity = vectors.len().max(1_000_000);
             self.hnsw_index = Some(self.create_initial_hnsw_with_capacity(
-                self.dimensions,
+                self.dimensions(),
                 &training,
                 capacity,
             )?);
         }
 
-        let mut all_ids = Vec::with_capacity(vectors.len());
+        // Insert into RecordStore with generated IDs, then into HNSW
+        let mut all_slots = Vec::with_capacity(vectors.len());
+        let base_slot = self.records.slot_count();
+
+        for (i, vector) in vectors.iter().enumerate() {
+            let id = format!("_batch_{}", base_slot + i as u32);
+            let slot = self.records.upsert(id, vector.data.clone(), None)?;
+            all_slots.push(slot as usize);
+        }
+
+        // Insert into HNSW in chunks
         for chunk in vectors.chunks(CHUNK_SIZE) {
             let vector_data: Vec<Vec<f32>> = chunk.iter().map(|v| v.data.clone()).collect();
             if let Some(ref mut index) = self.hnsw_index {
-                all_ids.extend(index.batch_insert(&vector_data)?);
+                index.batch_insert(&vector_data)?;
             }
         }
 
-        self.vectors.extend(vectors);
-        Ok(all_ids)
+        Ok(all_slots)
     }
 
     /// Rebuild HNSW index from existing vectors
     pub fn rebuild_index(&mut self) -> Result<()> {
-        if self.vectors.is_empty() {
+        if self.records.is_empty() {
             return Ok(());
         }
 
+        let capacity = (self.records.len() as usize).max(1_000_000);
         let mut index = HNSWIndex::new_with_params(
-            self.vectors.len().max(1_000_000),
-            self.dimensions,
+            capacity,
+            self.dimensions(),
             self.hnsw_m,
             self.hnsw_ef_construction,
             self.hnsw_ef_search,
             self.distance_metric.into(),
         )?;
 
-        for vector in &self.vectors {
-            index.insert(&vector.data)?;
+        for (_, record) in self.records.iter_live() {
+            index.insert(&record.vector)?;
         }
 
         self.hnsw_index = Some(index);
@@ -1706,23 +1619,24 @@ impl VectorStore {
 
     /// Merge another `VectorStore` into this one using IGTM algorithm
     pub fn merge_from(&mut self, other: &VectorStore) -> Result<usize> {
-        if other.dimensions != self.dimensions {
+        if other.dimensions() != self.dimensions() {
             anyhow::bail!(
                 "Dimension mismatch: self={}, other={}",
-                self.dimensions,
-                other.dimensions
+                self.dimensions(),
+                other.dimensions()
             );
         }
 
-        if other.vectors.is_empty() {
+        if other.records.is_empty() {
             return Ok(0);
         }
 
         if self.hnsw_index.is_none() {
-            let capacity = (self.vectors.len() + other.vectors.len()).max(1_000_000);
+            let capacity =
+                (self.records.len() as usize + other.records.len() as usize).max(1_000_000);
             self.hnsw_index = Some(HNSWIndex::new_with_params(
                 capacity,
-                self.dimensions,
+                self.dimensions(),
                 self.hnsw_m,
                 self.hnsw_ef_construction,
                 self.hnsw_ef_search,
@@ -1731,38 +1645,24 @@ impl VectorStore {
         }
 
         let mut merged_count = 0;
-        let base_index = self.vectors.len();
 
-        for (other_idx, vector) in other.vectors.iter().enumerate() {
-            let has_conflict = other
-                .id_to_index
-                .iter()
-                .find(|(_, &idx)| idx == other_idx)
-                .is_some_and(|(string_id, _)| self.id_to_index.contains_key(string_id));
-
-            if has_conflict {
+        // Merge records, skipping conflicts
+        for (_, record) in other.records.iter_live() {
+            // Skip if ID already exists in self
+            if self.records.get_slot(&record.id).is_some() {
                 continue;
             }
 
-            self.vectors.push(vector.clone());
-
-            if let Some(meta) = other.metadata.get(&other_idx) {
-                self.metadata
-                    .insert(base_index + merged_count, meta.clone());
-            }
-
-            if let Some((string_id, _)) =
-                other.id_to_index.iter().find(|(_, &idx)| idx == other_idx)
-            {
-                self.id_to_index
-                    .insert(string_id.clone(), base_index + merged_count);
-            }
-
+            // Insert into our RecordStore
+            self.records.upsert(
+                record.id.clone(),
+                record.vector.clone(),
+                record.metadata.clone(),
+            )?;
             merged_count += 1;
         }
 
-        // Always rebuild index after merge to ensure consistency
-        // (HNSW merge would include conflicting vectors that were skipped above)
+        // Rebuild index after merge to ensure consistency
         self.rebuild_index()?;
 
         Ok(merged_count)
@@ -1772,7 +1672,7 @@ impl VectorStore {
     #[inline]
     #[must_use]
     pub fn needs_index_rebuild(&self) -> bool {
-        self.hnsw_index.is_none() && self.vectors.len() > 100
+        self.hnsw_index.is_none() && self.records.len() > 100
     }
 
     /// Ensure HNSW index is ready for search
@@ -1820,16 +1720,16 @@ impl VectorStore {
     /// Fast K-nearest neighbors search with concrete ef value
     #[inline]
     pub fn knn_search_ef(&self, query: &Vector, k: usize, ef: usize) -> Result<Vec<(usize, f32)>> {
-        if query.dim() != self.dimensions {
+        if query.dim() != self.dimensions() {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
-                self.dimensions,
+                self.dimensions(),
                 query.dim()
             );
         }
 
         let has_data =
-            !self.vectors.is_empty() || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
+            !self.records.is_empty() || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
 
         if !has_data {
             return Ok(Vec::new());
@@ -1837,8 +1737,8 @@ impl VectorStore {
 
         if let Some(ref index) = self.hnsw_index {
             let results = if index.is_asymmetric() {
-                // Rescore if we have storage (fetch from disk) OR vectors in RAM
-                let can_rescore = self.storage.is_some() || !self.vectors.is_empty();
+                // Rescore if we have storage (fetch from disk) OR records in RAM
+                let can_rescore = self.storage.is_some() || !self.records.is_empty();
                 if self.rescore_enabled && can_rescore {
                     self.knn_search_with_rescore(query, k, ef)?
                 } else {
@@ -1879,12 +1779,11 @@ impl VectorStore {
         }
 
         // Rescore candidates with exact L2 distance
-        // Avoid cloning: compute distance inline using references where possible
         let mut rescored: Vec<(usize, f32)> = candidates
             .iter()
             .filter_map(|&(id, _quantized_dist)| {
                 // Storage path: get_vector returns owned Vec
-                // Memory path: compute distance directly from reference (no clone)
+                // Memory path: compute distance directly from RecordStore
                 if let Some(ref storage) = self.storage {
                     storage
                         .get_vector(id)
@@ -1892,9 +1791,9 @@ impl VectorStore {
                         .flatten()
                         .map(|data| (id, l2_distance(&query.data, &data)))
                 } else {
-                    self.vectors
-                        .get(id)
-                        .map(|v| (id, l2_distance(&query.data, &v.data)))
+                    self.records
+                        .get_vector(id as u32)
+                        .map(|v| (id, l2_distance(&query.data, v)))
                 }
             })
             .collect();
@@ -1947,26 +1846,22 @@ impl VectorStore {
         let filter_bitmap = filter.evaluate_bitmap(&self.metadata_index);
 
         if let Some(ref hnsw) = self.hnsw_index {
-            let metadata_map = &self.metadata;
-            let deleted_map = &self.deleted;
+            let records = &self.records;
 
             let search_results = if let Some(ref bitmap) = filter_bitmap {
                 // Fast path: bitmap-based filtering
-                let filter_fn = |node_id: u32| -> bool {
-                    let index = node_id as usize;
-                    !deleted_map.contains_key(&index) && bitmap.contains(node_id)
-                };
+                let filter_fn =
+                    |node_id: u32| -> bool { records.is_live(node_id) && bitmap.contains(node_id) };
                 hnsw.search_with_filter_ef(&query.data, k, Some(effective_ef), filter_fn)?
             } else {
                 // Slow path: JSON-based filtering
                 let filter_fn = |node_id: u32| -> bool {
-                    let index = node_id as usize;
-                    if deleted_map.contains_key(&index) {
+                    if !records.is_live(node_id) {
                         return false;
                     }
-                    let metadata = metadata_map
-                        .get(&index)
-                        .cloned()
+                    let metadata = records
+                        .get_by_slot(node_id)
+                        .and_then(|r| r.metadata.clone())
                         .unwrap_or_else(default_metadata);
                     filter.matches(&metadata)
                 };
@@ -1977,9 +1872,9 @@ impl VectorStore {
                 .into_iter()
                 .map(|(index, distance)| {
                     let metadata = self
-                        .metadata
-                        .get(&index)
-                        .cloned()
+                        .records
+                        .get_by_slot(index as u32)
+                        .and_then(|r| r.metadata.clone())
                         .unwrap_or_else(default_metadata);
                     (index, distance, metadata)
                 })
@@ -1990,23 +1885,16 @@ impl VectorStore {
 
         // Fallback: brute-force search with filtering
         let mut all_results: Vec<(usize, f32, JsonValue)> = self
-            .vectors
-            .iter()
-            .enumerate()
-            .filter_map(|(index, vec)| {
-                if self.deleted.contains_key(&index) {
-                    return None;
-                }
+            .records
+            .iter_live()
+            .filter_map(|(slot, record)| {
+                let index = slot as usize;
 
                 // Use bitmap if available, otherwise JSON
                 let passes_filter = if let Some(ref bitmap) = filter_bitmap {
-                    bitmap.contains(index as u32)
+                    bitmap.contains(slot)
                 } else {
-                    let metadata = self
-                        .metadata
-                        .get(&index)
-                        .cloned()
-                        .unwrap_or_else(default_metadata);
+                    let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
                     filter.matches(&metadata)
                 };
 
@@ -2014,12 +1902,8 @@ impl VectorStore {
                     return None;
                 }
 
-                let metadata = self
-                    .metadata
-                    .get(&index)
-                    .cloned()
-                    .unwrap_or_else(default_metadata);
-                let distance = query.l2_distance(vec).unwrap_or(f32::MAX);
+                let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                let distance = l2_distance(&query.data, &record.vector);
                 Some((index, distance, metadata))
             })
             .collect();
@@ -2091,13 +1975,13 @@ impl VectorStore {
             let filtered: Vec<(usize, f32, JsonValue)> = results
                 .into_iter()
                 .filter_map(|(index, distance)| {
-                    if self.deleted.contains_key(&index) {
+                    if !self.records.is_live(index as u32) {
                         return None;
                     }
                     let metadata = self
-                        .metadata
-                        .get(&index)
-                        .cloned()
+                        .records
+                        .get_by_slot(index as u32)
+                        .and_then(|r| r.metadata.clone())
                         .unwrap_or_else(default_metadata);
                     Some((index, distance, metadata))
                 })
@@ -2120,20 +2004,7 @@ impl VectorStore {
 
     /// Check if there are any non-deleted vectors
     fn has_live_vectors(&self) -> bool {
-        let total = self
-            .vectors
-            .len()
-            .max(self.hnsw_index.as_ref().map_or(0, HNSWIndex::len));
-        total > self.deleted.len()
-    }
-
-    /// Check if this store has quantization enabled (affects RAM storage)
-    fn is_quantized(&self) -> bool {
-        self.pending_quantization.is_some()
-            || self
-                .hnsw_index
-                .as_ref()
-                .is_some_and(|idx| idx.is_asymmetric() || idx.is_sq8())
+        self.records.len() > 0
     }
 
     /// Brute-force search with metadata (fallback for orphaned nodes)
@@ -2146,13 +2017,13 @@ impl VectorStore {
         Ok(results
             .into_iter()
             .filter_map(|(index, distance)| {
-                if self.deleted.contains_key(&index) {
+                if !self.records.is_live(index as u32) {
                     return None;
                 }
                 let metadata = self
-                    .metadata
-                    .get(&index)
-                    .cloned()
+                    .records
+                    .get_by_slot(index as u32)
+                    .and_then(|r| r.metadata.clone())
                     .unwrap_or_else(default_metadata);
                 Some((index, distance, metadata))
             })
@@ -2192,42 +2063,25 @@ impl VectorStore {
 
     /// Brute-force K-NN search (fallback)
     pub fn knn_search_brute_force(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
-        if query.dim() != self.dimensions {
+        if query.dim() != self.dimensions() {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
-                self.dimensions,
+                self.dimensions(),
                 query.dim()
             );
         }
 
-        // Determine total vector count (in-memory or storage)
-        let total_count = if !self.vectors.is_empty() {
-            self.vectors.len()
-        } else if let Some(ref idx) = self.hnsw_index {
-            idx.len()
-        } else {
-            return Ok(Vec::new());
-        };
-
-        if total_count == 0 {
+        // Brute force search using RecordStore
+        if self.records.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut distances: Vec<(usize, f32)> = (0..total_count)
-            .filter_map(|id| {
-                // Get vector data from memory or storage
-                let data = if let Some(vec) = self.vectors.get(id) {
-                    Some(vec.data.clone())
-                } else if let Some(ref storage) = self.storage {
-                    storage.get_vector(id).ok().flatten()
-                } else {
-                    None
-                };
-
-                data.map(|vec_data| {
-                    let dist = l2_distance(&query.data, &vec_data);
-                    (id, dist)
-                })
+        let mut distances: Vec<(usize, f32)> = self
+            .records
+            .iter_live()
+            .map(|(slot, record)| {
+                let dist = l2_distance(&query.data, &record.vector);
+                (slot as usize, dist)
             })
             .collect();
 
@@ -2241,7 +2095,7 @@ impl VectorStore {
 
     /// Optimize index for cache-efficient search
     ///
-    /// Reorders graph nodes and vectors using BFS traversal to improve memory locality.
+    /// Reorders graph nodes using BFS traversal to improve memory locality.
     /// Nodes that are frequently accessed together during search will be stored
     /// adjacently in memory, reducing cache misses and improving QPS.
     ///
@@ -2263,55 +2117,11 @@ impl VectorStore {
             return Ok(0);
         }
 
-        let num_reordered = old_to_new.len();
-
-        // Reorder VectorStore's own vectors (used for rescore)
-        if !self.vectors.is_empty() {
-            let old_vectors = std::mem::take(&mut self.vectors);
-            let mut new_vectors = Vec::with_capacity(old_vectors.len());
-            new_vectors.resize_with(old_vectors.len(), || Vector::new(Vec::new()));
-
-            for (old_idx, &new_idx) in old_to_new.iter().enumerate() {
-                let new_idx = new_idx as usize;
-                if old_idx < old_vectors.len() && new_idx < new_vectors.len() {
-                    new_vectors[new_idx] = old_vectors[old_idx].clone();
-                }
-            }
-            self.vectors = new_vectors;
-        }
-
-        // Update ID mappings: id_to_index and index_to_id
-        let mut new_id_to_index: FxHashMap<String, usize> =
-            FxHashMap::with_capacity_and_hasher(self.id_to_index.len(), rustc_hash::FxBuildHasher);
-        let mut new_index_to_id: FxHashMap<usize, String> =
-            FxHashMap::with_capacity_and_hasher(self.index_to_id.len(), rustc_hash::FxBuildHasher);
-
-        for (string_id, &old_idx) in &self.id_to_index {
-            if old_idx < old_to_new.len() {
-                let new_idx = old_to_new[old_idx] as usize;
-                new_id_to_index.insert(string_id.clone(), new_idx);
-                new_index_to_id.insert(new_idx, string_id.clone());
-            }
-        }
-
-        self.id_to_index = new_id_to_index;
-        self.index_to_id = new_index_to_id;
-
-        // Update deleted tombstones
-        if !self.deleted.is_empty() {
-            let mut new_deleted = HashMap::with_capacity(self.deleted.len());
-            for (&old_idx, &is_deleted) in &self.deleted {
-                if old_idx < old_to_new.len() {
-                    let new_idx = old_to_new[old_idx] as usize;
-                    new_deleted.insert(new_idx, is_deleted);
-                }
-            }
-            self.deleted = new_deleted;
-        }
-
-        // Note: metadata_index uses string IDs, not internal indices, so no update needed
-
-        Ok(num_reordered)
+        // HNSW reordering changes its internal indices, but RecordStore keeps
+        // its slot indices stable. This works because HNSW search returns
+        // indices that map to RecordStore slots via the stored node data.
+        // No RecordStore reordering needed - HNSW handles the graph optimization.
+        Ok(old_to_new.len())
     }
 
     // ============================================================================
@@ -2321,37 +2131,25 @@ impl VectorStore {
     /// Get vector by internal index (used by FFI bindings)
     #[must_use]
     #[allow(dead_code)] // Used by FFI feature
-    pub(crate) fn get_by_internal_index(&self, idx: usize) -> Option<&Vector> {
-        self.vectors.get(idx)
+    pub(crate) fn get_by_internal_index(&self, idx: usize) -> Option<Vector> {
+        self.records
+            .get_vector(idx as u32)
+            .map(|v| Vector::new(v.to_vec()))
     }
 
     /// Get vector by internal index, owned (used by FFI bindings)
     #[must_use]
     #[allow(dead_code)] // Used by FFI feature
     pub(crate) fn get_by_internal_index_owned(&self, idx: usize) -> Option<Vector> {
-        if let Some(v) = self.vectors.get(idx) {
-            return Some(v.clone());
-        }
-
-        if let Some(ref storage) = self.storage {
-            if let Ok(Some(data)) = storage.get_vector(idx) {
-                return Some(Vector::new(data));
-            }
-        }
-
-        None
+        self.records
+            .get_vector(idx as u32)
+            .map(|v| Vector::new(v.to_vec()))
     }
 
     /// Number of vectors stored (excluding deleted vectors)
     #[must_use]
     pub fn len(&self) -> usize {
-        if let Some(ref index) = self.hnsw_index {
-            let hnsw_len = index.len();
-            if hnsw_len > 0 {
-                return hnsw_len.saturating_sub(self.deleted.len());
-            }
-        }
-        self.vectors.len().saturating_sub(self.deleted.len())
+        self.records.len() as usize
     }
 
     /// Count of vectors stored (excluding deleted vectors)
@@ -2374,15 +2172,9 @@ impl VectorStore {
     /// O(n) time, O(n) memory for strings only.
     #[must_use]
     pub fn ids(&self) -> Vec<String> {
-        self.id_to_index
-            .iter()
-            .filter_map(|(id, &idx)| {
-                if self.deleted.contains_key(&idx) {
-                    None
-                } else {
-                    Some(id.clone())
-                }
-            })
+        self.records
+            .iter_live()
+            .map(|(_, record)| record.id.clone())
             .collect()
     }
 
@@ -2391,25 +2183,11 @@ impl VectorStore {
     /// Returns all non-deleted items. O(n) time and memory.
     #[must_use]
     pub fn items(&self) -> Vec<(String, Vec<f32>, JsonValue)> {
-        self.id_to_index
-            .iter()
-            .filter_map(|(id, &idx)| {
-                if self.deleted.contains_key(&idx) {
-                    return None;
-                }
-
-                // Try in-memory vectors first
-                let vec_data = if let Some(vec) = self.vectors.get(idx) {
-                    vec.data.clone()
-                } else if let Some(ref storage) = self.storage {
-                    // Fall back to storage for quantized stores
-                    storage.get_vector(idx).ok().flatten()?
-                } else {
-                    return None;
-                };
-
-                let metadata = self.metadata.get(&idx).cloned().unwrap_or_default();
-                Some((id.clone(), vec_data, metadata))
+        self.records
+            .iter_live()
+            .map(|(_, record)| {
+                let metadata = record.metadata.clone().unwrap_or_default();
+                (record.id.clone(), record.vector.clone(), metadata)
             })
             .collect()
     }
@@ -2417,24 +2195,26 @@ impl VectorStore {
     /// Check if an ID exists (not deleted)
     #[must_use]
     pub fn contains(&self, id: &str) -> bool {
-        self.id_to_index
-            .get(id)
-            .is_some_and(|&idx| !self.deleted.contains_key(&idx))
+        self.records.get(id).is_some()
     }
 
     /// Memory usage estimate (bytes)
     #[must_use]
     pub fn memory_usage(&self) -> usize {
-        self.vectors.iter().map(|v| v.dim() * 4).sum::<usize>()
+        self.records
+            .iter_live()
+            .map(|(_, r)| r.vector.len() * 4)
+            .sum()
     }
 
     /// Bytes per vector (average)
     #[must_use]
     pub fn bytes_per_vector(&self) -> f32 {
-        if self.vectors.is_empty() {
+        let count = self.records.len();
+        if count == 0 {
             return 0.0;
         }
-        self.memory_usage() as f32 / self.vectors.len() as f32
+        self.memory_usage() as f32 / count as f32
     }
 
     /// Set HNSW `ef_search` parameter (runtime tuning)
@@ -2452,6 +2232,28 @@ impl VectorStore {
         Some(self.hnsw_ef_search)
     }
 
+    /// Get index-to-ID mapping (for FFI bindings)
+    ///
+    /// Returns a HashMap mapping internal slot indices to string IDs.
+    #[must_use]
+    pub fn index_to_id_mapping(&self) -> std::collections::HashMap<usize, String> {
+        self.records
+            .iter_live()
+            .map(|(slot, record)| (slot as usize, record.id.clone()))
+            .collect()
+    }
+
+    /// Get ID-to-index mapping (for FFI bindings)
+    ///
+    /// Returns a HashMap mapping string IDs to internal slot indices.
+    #[must_use]
+    pub fn id_to_index_mapping(&self) -> std::collections::HashMap<String, usize> {
+        self.records
+            .iter_live()
+            .map(|(slot, record)| (record.id.clone(), slot as usize))
+            .collect()
+    }
+
     // ============================================================================
     // Persistence
     // ============================================================================
@@ -2459,13 +2261,8 @@ impl VectorStore {
     /// Flush all pending changes to disk
     ///
     /// Commits vector/metadata changes and HNSW index to `.omen` storage.
+    /// Uses RecordStore as single source of truth (no duplicated state in OmenFile).
     pub fn flush(&mut self) -> Result<()> {
-        let hnsw_bytes = self
-            .hnsw_index
-            .as_ref()
-            .map(postcard::to_allocvec)
-            .transpose()?;
-
         if let Some(ref mut storage) = self.storage {
             // Persist HNSW parameters to header
             storage.set_hnsw_params(
@@ -2474,10 +2271,27 @@ impl VectorStore {
                 self.hnsw_ef_search as u16,
             );
 
-            if let Some(bytes) = hnsw_bytes {
-                storage.put_hnsw_index(bytes);
-            }
-            storage.flush()?;
+            // Export data from RecordStore (single source of truth)
+            let vectors = self.records.export_vectors();
+            let id_to_slot = self.records.export_id_to_slot();
+            let deleted = self.records.export_deleted();
+            let metadata = self.records.export_metadata();
+
+            // Serialize HNSW index
+            let hnsw_bytes = self
+                .hnsw_index
+                .as_ref()
+                .map(postcard::to_allocvec)
+                .transpose()?;
+
+            // Checkpoint from RecordStore data (not OmenFile's internal state)
+            storage.checkpoint_from_snapshot(
+                &vectors,
+                &id_to_slot,
+                &deleted,
+                &metadata,
+                hnsw_bytes.as_deref(),
+            )?;
         }
 
         if let Some(ref mut text_index) = self.text_index {

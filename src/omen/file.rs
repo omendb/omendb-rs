@@ -774,12 +774,12 @@ impl OmenFile {
 
 impl OmenFile {
     /// Store a vector by internal index
-    pub fn put_vector(&mut self, id: usize, vector: &[f32]) -> Result<()> {
-        let new_len = id + 1;
-        if self.state.vectors.len() < new_len {
-            self.state.vectors.resize_with(new_len, Vec::new);
-        }
-        self.state.vectors[id] = vector.to_vec();
+    ///
+    /// Note: This is a no-op. VectorStore owns vector data via RecordStore.
+    /// Persistence happens via checkpoint_from_snapshot which reads from RecordStore.
+    #[allow(clippy::unused_self)]
+    pub fn put_vector(&mut self, _id: usize, _vector: &[f32]) -> Result<()> {
+        // No-op: RecordStore is source of truth, checkpoint reads from it
         Ok(())
     }
 
@@ -813,9 +813,12 @@ impl OmenFile {
     }
 
     /// Store metadata for a vector (as JSON)
-    pub fn put_metadata(&mut self, id: usize, metadata: &JsonValue) -> Result<()> {
-        let bytes = serde_json::to_vec(metadata)?;
-        self.state.metadata.insert(id as u32, bytes);
+    ///
+    /// Note: This is a no-op. VectorStore owns metadata via RecordStore.
+    /// Persistence happens via checkpoint_from_snapshot which reads from RecordStore.
+    #[allow(clippy::unused_self)]
+    pub fn put_metadata(&mut self, _id: usize, _metadata: &JsonValue) -> Result<()> {
+        // No-op: RecordStore is source of truth, checkpoint reads from it
         Ok(())
     }
 
@@ -829,13 +832,12 @@ impl OmenFile {
     }
 
     /// Store string ID to internal index mapping
-    pub fn put_id_mapping(&mut self, string_id: &str, index: usize) -> Result<()> {
-        self.state
-            .id_to_index
-            .insert(string_id.to_string(), index as u32);
-        self.state
-            .index_to_id
-            .insert(index as u32, string_id.to_string());
+    ///
+    /// Note: This is a no-op. VectorStore owns ID mappings via RecordStore.
+    /// Persistence happens via checkpoint_from_snapshot which reads from RecordStore.
+    #[allow(clippy::unused_self)]
+    pub fn put_id_mapping(&mut self, _string_id: &str, _index: usize) -> Result<()> {
+        // No-op: RecordStore is source of truth, checkpoint reads from it
         Ok(())
     }
 
@@ -1208,31 +1210,12 @@ impl OmenFile {
     }
 
     /// Batch set vectors with metadata and ID mappings
-    pub fn put_batch(&mut self, items: Vec<(usize, String, Vec<f32>, JsonValue)>) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        for (idx, string_id, vector, metadata) in items {
-            self.put_vector(idx, &vector)?;
-            self.put_metadata(idx, &metadata)?;
-            self.put_id_mapping(&string_id, idx)?;
-        }
-
-        // Update count
-        let current_count = self.get_count()?;
-        let new_count = self
-            .state
-            .vectors
-            .iter()
-            .filter(|v: &&Vec<f32>| !v.is_empty())
-            .count()
-            .max(current_count);
-        self.state
-            .config
-            .insert("count".to_string(), new_count as u64);
-        self.header.count = new_count as u64;
-
+    ///
+    /// Note: This is a no-op. VectorStore owns all data via RecordStore.
+    /// Persistence happens via checkpoint_from_snapshot which reads from RecordStore.
+    #[allow(clippy::unused_self)]
+    pub fn put_batch(&mut self, _items: Vec<(usize, String, Vec<f32>, JsonValue)>) -> Result<()> {
+        // No-op: RecordStore is source of truth, checkpoint reads from it
         Ok(())
     }
 }
@@ -1477,6 +1460,20 @@ impl OmenFile {
         manifest
             .config
             .insert("dimensions".to_string(), u64::from(self.header.dimensions));
+        manifest
+            .config
+            .insert("hnsw_m".to_string(), u64::from(self.header.hnsw_m));
+        manifest.config.insert(
+            "hnsw_ef_construction".to_string(),
+            u64::from(self.header.hnsw_ef_construction),
+        );
+        manifest.config.insert(
+            "hnsw_ef_search".to_string(),
+            u64::from(self.header.hnsw_ef_search),
+        );
+        manifest
+            .config
+            .insert("metric".to_string(), self.header.metric as u64);
 
         // Write Manifest
         let manifest_bytes = postcard::to_allocvec(&manifest)

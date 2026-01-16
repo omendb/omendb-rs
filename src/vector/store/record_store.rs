@@ -334,9 +334,67 @@ impl RecordStore {
         Ok(())
     }
 
+    /// Update vector for a record by slot
+    pub fn update_vector(&mut self, slot: u32, vector: Vec<f32>) -> anyhow::Result<()> {
+        if vector.len() != self.dimensions as usize {
+            anyhow::bail!(
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimensions,
+                vector.len()
+            );
+        }
+
+        let record = self
+            .slots
+            .get_mut(slot as usize)
+            .and_then(|r| r.as_mut())
+            .ok_or_else(|| anyhow::anyhow!("Slot {} not found", slot))?;
+
+        record.vector = vector;
+        Ok(())
+    }
+
     /// Check if needs compaction (delete ratio > 20%)
     pub fn needs_compaction(&self) -> bool {
         self.delete_ratio() > 0.20
+    }
+
+    // =========================================================================
+    // Checkpoint Export
+    // =========================================================================
+
+    /// Export vectors for checkpoint (slot-indexed)
+    pub fn export_vectors(&self) -> Vec<Option<Vec<f32>>> {
+        self.slots
+            .iter()
+            .map(|opt| opt.as_ref().map(|r| r.vector.clone()))
+            .collect()
+    }
+
+    /// Export ID mappings for checkpoint
+    pub fn export_id_to_slot(&self) -> std::collections::HashMap<String, u32> {
+        self.id_to_slot
+            .iter()
+            .map(|(k, &v)| (k.clone(), v))
+            .collect()
+    }
+
+    /// Export deleted slots for checkpoint
+    pub fn export_deleted(&self) -> Vec<u32> {
+        self.deleted.iter().collect()
+    }
+
+    /// Export metadata for checkpoint
+    pub fn export_metadata(&self) -> std::collections::HashMap<u32, JsonValue> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, opt)| {
+                opt.as_ref()
+                    .and_then(|r| r.metadata.clone())
+                    .map(|m| (slot as u32, m))
+            })
+            .collect()
     }
 
     /// Compact the store - removes deleted records and reassigns slots

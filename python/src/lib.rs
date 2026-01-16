@@ -549,12 +549,7 @@ impl VectorDatabase {
                 let mut inner = self.inner.write();
                 inner.store.ensure_index_ready().map_err(convert_error)?;
                 if !inner.cache_valid {
-                    inner.index_to_id_cache = inner
-                        .store
-                        .id_to_index
-                        .iter()
-                        .map(|(id, &idx)| (idx, id.clone()))
-                        .collect();
+                    inner.index_to_id_cache = inner.store.index_to_id_mapping();
                     inner.cache_valid = true;
                 }
             }
@@ -598,12 +593,7 @@ impl VectorDatabase {
             let mut inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
             if !inner.cache_valid {
-                inner.index_to_id_cache = inner
-                    .store
-                    .id_to_index
-                    .iter()
-                    .map(|(id, &idx)| (idx, id.clone()))
-                    .collect();
+                inner.index_to_id_cache = inner.store.index_to_id_mapping();
                 inner.cache_valid = true;
             }
         }
@@ -725,12 +715,7 @@ impl VectorDatabase {
             let mut inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
             if !inner.cache_valid {
-                inner.index_to_id_cache = inner
-                    .store
-                    .id_to_index
-                    .iter()
-                    .map(|(id, &idx)| (idx, id.clone()))
-                    .collect();
+                inner.index_to_id_cache = inner.store.index_to_id_mapping();
                 inner.cache_valid = true;
             }
         }
