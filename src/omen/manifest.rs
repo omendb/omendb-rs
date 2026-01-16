@@ -1,11 +1,11 @@
-//! Omen v2 Storage Structures
+//! Omen Storage Structures
 //!
 //! Implements Trailer-based persistence and Manifest-based node mapping.
 
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
-/// Omen v2 Footer (64 bytes)
+/// Omen Footer (64 bytes)
 ///
 /// Written at the absolute end of the file.
 /// Points to the active Manifest segment.
@@ -99,7 +99,7 @@ pub enum SegmentType {
     Vectors = 1,
     /// HNSW neighbor lists
     Neighbors = 2,
-    /// Interleaved [Vector | Neighbors] (v2 optimal)
+    /// Interleaved [Vector | Neighbors]
     InterleavedNode = 3,
     /// Columnar metadata (tantivy-columnar)
     Metadata = 4,
@@ -120,7 +120,7 @@ pub struct NodeLocation {
     pub segment_type: SegmentType,
 }
 
-/// Omen v2 Manifest
+/// Omen Manifest
 ///
 /// Maps NodeID to its location. Implicitly indexed by NodeID.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -135,8 +135,6 @@ pub struct OmenManifest {
     #[serde(default)]
     pub deleted: RoaringBitmap,
 
-    // V2: Persist mappings in manifest for Foundation phase
-    // In Phase 2 these will move to columnar storage
     pub id_to_index: std::collections::HashMap<String, u32>,
     pub index_to_id: std::collections::HashMap<u32, String>,
     pub metadata: std::collections::HashMap<u32, Vec<u8>>,

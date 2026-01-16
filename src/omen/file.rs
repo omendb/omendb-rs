@@ -153,7 +153,7 @@ pub struct OmenFile {
     // Serialized HNSW index (persisted on checkpoint, loaded on open)
     hnsw_index_bytes: Option<Vec<u8>>,
 
-    // Omen v2 Manifest
+    // Omen Manifest
     manifest: OmenManifest,
 }
 
@@ -194,7 +194,7 @@ impl OmenFile {
         let header = OmenHeader::new(dimensions);
         file.write_all(&header.to_bytes())?;
 
-        // Write initial empty V2 Manifest and Footer
+        // Write initial empty Manifest and Footer
         let manifest = OmenManifest::new();
         let manifest_bytes = postcard::to_allocvec(&manifest).unwrap();
         let manifest_offset = file.seek(SeekFrom::Current(0))?;
@@ -229,7 +229,7 @@ impl OmenFile {
         let mut file = opts.open(&omen_path)?;
         lock_exclusive(&file)?;
 
-        // Try to read footer from the end of the file (v2)
+        // Try to read footer from the end of the file
         let file_len = file.metadata()?.len();
         let mut footer = None;
         if file_len >= (HEADER_SIZE + OmenFooter::SIZE) as u64 {
@@ -266,7 +266,7 @@ impl OmenFile {
 
         let mut manifest = OmenManifest::new();
 
-        // Load manifest (Mandatory in V2)
+        // Load manifest
         if let Some(ref mmap) = mmap {
             let manifest_offset = footer.manifest_offset as usize;
             if manifest_offset < mmap.len() {
@@ -274,7 +274,7 @@ impl OmenFile {
                 manifest = postcard::from_bytes::<OmenManifest>(manifest_bytes).map_err(|e| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!("Failed to decode V2 manifest: {e}"),
+                        format!("Failed to decode manifest: {e}"),
                     )
                 })?;
             } else {
@@ -296,7 +296,7 @@ impl OmenFile {
         config.insert("count".to_string(), header.count);
 
         if let Some(ref mmap) = mmap {
-            // V2: Load vectors from manifest (Primary path)
+            // Load vectors from manifest
             let dim = header.dimensions as usize;
             for location in &manifest.nodes {
                 if location.segment_type == SegmentType::Vectors {
@@ -1083,9 +1083,9 @@ mod tests {
     }
 
     #[test]
-    fn test_v2_footer_recovery() {
+    fn test_footer_recovery() {
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_v2.omen");
+        let db_path = dir.path().join("test_footer.omen");
 
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
