@@ -128,7 +128,8 @@ impl HNSWIndex {
                 )?;
 
                 // Clear and reset neighbors
-                self.neighbors.set_neighbors(neighbor_id, level, pruned.clone());
+                self.neighbors
+                    .set_neighbors(neighbor_id, level, pruned.clone());
                 self.nodes[neighbor_id as usize].set_neighbor_count(level, pruned.len());
             }
         }

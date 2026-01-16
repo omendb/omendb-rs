@@ -7,7 +7,7 @@ pub mod types;
 
 // Re-export main types
 pub use hnsw_index::{HNSWIndex, HNSWIndexBuilder, HNSWQuantization};
-pub use store::{MetadataFilter, VectorStore, VectorStoreOptions};
+pub use store::{MetadataFilter, ThreadSafeVectorStore, VectorStore, VectorStoreOptions};
 pub use types::Vector;
 
 /// Quantization mode for vector storage.

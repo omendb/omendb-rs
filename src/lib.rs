@@ -102,7 +102,7 @@ pub use types::{
     CompactionStats, CompressionTier, DistanceMetric, OmenDBError, Result, SearchResult,
     StorageTier, VectorID,
 };
-pub use vector::{MetadataFilter, Vector, VectorStore, VectorStoreOptions};
+pub use vector::{MetadataFilter, ThreadSafeVectorStore, Vector, VectorStore, VectorStoreOptions};
 
 // Re-export storage types
 pub use config::StorageConfig;

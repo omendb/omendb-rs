@@ -10,11 +10,13 @@
 mod filter;
 mod options;
 mod record_store;
+mod thread_safe;
 
 pub use crate::omen::Metric;
 pub use filter::MetadataFilter;
 pub use options::VectorStoreOptions;
 pub use record_store::{Record, RecordStore};
+pub use thread_safe::ThreadSafeVectorStore;
 
 use super::hnsw::HNSWParams;
 use super::hnsw_index::HNSWIndex;

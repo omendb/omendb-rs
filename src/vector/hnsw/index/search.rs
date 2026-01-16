@@ -6,9 +6,7 @@ use super::HNSWIndex;
 use crate::compression::scalar::QueryPrep;
 use crate::distance::norm_squared;
 use crate::vector::hnsw::error::{HNSWError, Result};
-use crate::vector::hnsw::types::{
-    Candidate, Distance, DistanceFunction, SearchResult,
-};
+use crate::vector::hnsw::types::{Candidate, Distance, DistanceFunction, SearchResult};
 use ordered_float::OrderedFloat;
 use tracing::{debug, error, instrument, warn};
 
@@ -27,7 +25,11 @@ struct DistanceContext<'a> {
 
 impl<'a> DistanceContext<'a> {
     /// Create a new distance context for the current search
-    fn new<D: Distance>(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
+    fn new<D: Distance>(
+        query: &'a [f32],
+        index: &'a HNSWIndex,
+        force_full_precision: bool,
+    ) -> Self {
         let use_l2_decomposition =
             index.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
         let query_norm = if use_l2_decomposition {
@@ -66,9 +68,9 @@ impl<'a> DistanceContext<'a> {
 
         // L2 decomposition path
         if self.use_l2_decomposition {
-            if let Some(dist) = self
-                .vectors
-                .distance_l2_decomposed(self.query, self.query_norm, node_id)
+            if let Some(dist) =
+                self.vectors
+                    .distance_l2_decomposed(self.query, self.query_norm, node_id)
             {
                 return Ok(dist);
             }
@@ -127,13 +129,14 @@ impl NeighborCollector for StandardCollector<'_> {
         output: &mut Vec<u32>,
     ) {
         output.clear();
-        self.neighbors.with_neighbors(node_id, level, |neighbor_list| {
-            for &id in neighbor_list {
-                if !visited.contains(id) {
-                    output.push(id);
+        self.neighbors
+            .with_neighbors(node_id, level, |neighbor_list| {
+                for &id in neighbor_list {
+                    if !visited.contains(id) {
+                        output.push(id);
+                    }
                 }
-            }
-        });
+            });
     }
 
     #[inline(always)]
