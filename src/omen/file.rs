@@ -1027,6 +1027,186 @@ impl OmenFile {
         Ok(())
     }
 
+    /// Returns the ratio of deleted vectors to total vectors (0.0 to 1.0)
+    #[must_use]
+    pub fn delete_ratio(&self) -> f64 {
+        let total = self.state.vectors.len();
+        if total == 0 {
+            return 0.0;
+        }
+        self.state.deleted.len() as f64 / total as f64
+    }
+
+    /// Check if compaction is recommended (delete ratio > 20%)
+    #[must_use]
+    pub fn needs_compaction(&self) -> bool {
+        self.delete_ratio() > 0.20
+    }
+
+    /// Compact the database by rewriting only live vectors
+    ///
+    /// This reclaims space from deleted vectors by:
+    /// 1. Creating a new file with only live data
+    /// 2. Rebuilding all mappings with new sequential indices
+    /// 3. Atomically swapping the new file for the old one
+    ///
+    /// Note: The caller (VectorStore) should rebuild the HNSW index after
+    /// compaction since internal indices change.
+    ///
+    /// Returns the number of vectors removed (space reclaimed).
+    pub fn compact(&mut self) -> io::Result<usize> {
+        let deleted_count = self.state.deleted.len();
+        if deleted_count == 0 {
+            return Ok(0);
+        }
+
+        // 1. Checkpoint current state first (ensure WAL is flushed)
+        self.checkpoint()?;
+
+        // 2. Create temporary path for compacted data
+        // Use .compact suffix on base path (without .omen) so create() adds .omen correctly
+        let base_path = self.path.with_extension(""); // Remove .omen
+        let temp_base = base_path.with_extension("compact"); // Add .compact
+        let temp_omen_path = Self::compute_omen_path(&temp_base); // -> .compact.omen
+        let wal_path = Self::compute_wal_path(&self.path);
+
+        // Close current file
+        self.mmap = None;
+        self.file = None;
+
+        // Create new compacted file (this will create temp_base.omen)
+        let mut new_db = OmenFile::create(&temp_base, self.header.dimensions)?;
+
+        // Copy HNSW params and metric
+        new_db.header.hnsw_m = self.header.hnsw_m;
+        new_db.header.hnsw_ef_construction = self.header.hnsw_ef_construction;
+        new_db.header.hnsw_ef_search = self.header.hnsw_ef_search;
+        new_db.header.metric = self.header.metric;
+
+        // Copy config (except count which will be recalculated)
+        for (k, v) in &self.state.config {
+            if k != "count" {
+                new_db.state.config.insert(k.clone(), *v);
+            }
+        }
+
+        // 3. Copy only live vectors with new sequential indices
+        let mut old_to_new: HashMap<u32, u32> = HashMap::new();
+        let mut new_index = 0u32;
+
+        for (old_idx, vector) in self.state.vectors.iter().enumerate() {
+            let old_idx = old_idx as u32;
+
+            // Skip deleted vectors
+            if self.state.deleted.contains_key(&old_idx) {
+                continue;
+            }
+
+            // Skip empty vectors (already cleared)
+            if vector.is_empty() {
+                continue;
+            }
+
+            // Get string ID for this index
+            let Some(string_id) = self.state.index_to_id.get(&old_idx) else {
+                continue;
+            };
+
+            // Copy vector to new file
+            new_db.state.vectors.push(vector.clone());
+            new_db
+                .state
+                .id_to_index
+                .insert(string_id.clone(), new_index);
+            new_db
+                .state
+                .index_to_id
+                .insert(new_index, string_id.clone());
+
+            // Copy metadata if exists
+            if let Some(meta) = self.state.metadata.get(&old_idx) {
+                new_db.state.metadata.insert(new_index, meta.clone());
+            }
+
+            old_to_new.insert(old_idx, new_index);
+            new_index += 1;
+        }
+
+        // Update count
+        new_db.header.count = new_index as u64;
+        new_db
+            .state
+            .config
+            .insert("count".to_string(), new_index as u64);
+
+        // 4. Checkpoint the new file
+        new_db.checkpoint()?;
+
+        // Close new file before swap
+        drop(new_db);
+
+        // 5. Atomic swap: rename compacted file to original path
+        // First remove old file
+        std::fs::remove_file(&self.path)?;
+
+        // Move compacted file to original path
+        std::fs::rename(&temp_omen_path, &self.path)?;
+
+        // Clean up temp WAL if it exists
+        let temp_wal = Self::compute_wal_path(&temp_base);
+        let _ = std::fs::remove_file(&temp_wal);
+
+        // 6. Reopen the compacted file
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true);
+        configure_open_options(&mut opts);
+        let mut file = opts.open(&self.path)?;
+        lock_exclusive(&file)?;
+
+        // Read footer
+        file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
+        let mut footer_buf = [0u8; OmenFooter::SIZE];
+        file.read_exact(&mut footer_buf)?;
+        let footer = OmenFooter::from_bytes(&footer_buf);
+
+        // Read manifest
+        let mmap = unsafe { MmapMut::map_mut(&file)? };
+        let manifest_bytes = &mmap[footer.manifest_offset as usize..footer.total_len as usize];
+        let manifest: OmenManifest = postcard::from_bytes(manifest_bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        // Load vectors from manifest
+        let dim = self.header.dimensions as usize;
+        let mut vectors = Vec::new();
+        for location in &manifest.nodes {
+            if location.segment_type == SegmentType::Vectors {
+                let start = location.offset as usize;
+                let end = start + location.length as usize;
+                if end <= mmap.len() {
+                    vectors.push(read_vector_from_bytes(&mmap[start..end], dim));
+                }
+            }
+        }
+
+        // Update self with compacted state
+        self.file = Some(file);
+        self.mmap = Some(mmap);
+        self.manifest = manifest.clone();
+        self.state = DatabaseState {
+            vectors,
+            id_to_index: manifest.id_to_index,
+            index_to_id: manifest.index_to_id,
+            metadata: manifest.metadata,
+            deleted: HashMap::new(), // No deleted after compaction
+            config: manifest.config,
+        };
+        self.header.count = new_index as u64;
+        self.wal = Wal::open(&wal_path)?;
+        self.hnsw_index_bytes = None; // HNSW must be rebuilt by caller
+
+        Ok(deleted_count)
+    }
+
     /// Batch set vectors with metadata and ID mappings
     pub fn put_batch(&mut self, items: Vec<(usize, String, Vec<f32>, JsonValue)>) -> Result<()> {
         if items.is_empty() {
@@ -1179,5 +1359,169 @@ mod tests {
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].0, "vec1");
         }
+    }
+
+    #[test]
+    fn test_delete_ratio() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_ratio.omen");
+
+        let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+        // Empty db has 0 ratio
+        assert_eq!(db.delete_ratio(), 0.0);
+        assert!(!db.needs_compaction());
+
+        // Insert 10 vectors
+        for i in 0..10 {
+            db.insert(&format!("vec{i}"), &[i as f32, 0.0, 0.0], None)
+                .unwrap();
+        }
+        assert_eq!(db.delete_ratio(), 0.0);
+
+        // Delete 2 vectors (20%)
+        db.delete("vec0").unwrap();
+        db.delete("vec1").unwrap();
+        assert!((db.delete_ratio() - 0.2).abs() < 0.01);
+        assert!(!db.needs_compaction()); // exactly 20% doesn't trigger
+
+        // Delete one more (30%)
+        db.delete("vec2").unwrap();
+        assert!((db.delete_ratio() - 0.3).abs() < 0.01);
+        assert!(db.needs_compaction()); // > 20% triggers
+    }
+
+    #[test]
+    fn test_compact_basic() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_compact.omen");
+
+        let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+        // Insert 10 vectors
+        for i in 0..10 {
+            db.insert(&format!("vec{i}"), &[i as f32, 0.0, 0.0], None)
+                .unwrap();
+        }
+        db.checkpoint().unwrap();
+
+        // Delete 5 vectors
+        for i in 0..5 {
+            db.delete(&format!("vec{i}")).unwrap();
+        }
+        assert_eq!(db.delete_ratio(), 0.5);
+
+        // Compact
+        let removed = db.compact().unwrap();
+        assert_eq!(removed, 5);
+
+        // Verify state after compaction
+        assert_eq!(db.len(), 5);
+        assert_eq!(db.delete_ratio(), 0.0);
+        assert!(!db.needs_compaction());
+
+        // Verify live vectors are searchable
+        let results = db.search(&[5.0, 0.0, 0.0], 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "vec5");
+
+        // Verify deleted vectors are gone
+        let results = db.search(&[0.0, 0.0, 0.0], 5);
+        for (id, _) in &results {
+            assert!(!id.starts_with("vec0"));
+            assert!(!id.starts_with("vec1"));
+            assert!(!id.starts_with("vec2"));
+            assert!(!id.starts_with("vec3"));
+            assert!(!id.starts_with("vec4"));
+        }
+    }
+
+    #[test]
+    fn test_compact_persistence() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_compact_persist.omen");
+
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+            // Insert 10 vectors
+            for i in 0..10 {
+                db.insert(&format!("vec{i}"), &[i as f32, 0.0, 0.0], None)
+                    .unwrap();
+            }
+
+            // Delete 5 vectors
+            for i in 0..5 {
+                db.delete(&format!("vec{i}")).unwrap();
+            }
+
+            // Compact
+            let removed = db.compact().unwrap();
+            assert_eq!(removed, 5);
+        }
+
+        // Reopen and verify
+        {
+            let db = OmenFile::open(&db_path).unwrap();
+            assert_eq!(db.len(), 5);
+
+            // Verify live vectors
+            let results = db.search(&[7.0, 0.0, 0.0], 5);
+            assert_eq!(results.len(), 5);
+
+            // All results should be vec5-vec9
+            for (id, _) in &results {
+                let num: i32 = id.strip_prefix("vec").unwrap().parse().unwrap();
+                assert!(num >= 5 && num <= 9, "Expected vec5-vec9, got {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_compact_no_deletes() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_compact_noop.omen");
+
+        let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+        // Insert without deleting
+        for i in 0..5 {
+            db.insert(&format!("vec{i}"), &[i as f32, 0.0, 0.0], None)
+                .unwrap();
+        }
+        db.checkpoint().unwrap();
+
+        // Compact should be no-op
+        let removed = db.compact().unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(db.len(), 5);
+    }
+
+    #[test]
+    fn test_compact_preserves_metadata() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_compact_meta.omen");
+
+        let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+        // Insert with metadata
+        db.insert("vec0", &[0.0, 0.0, 0.0], Some(br#"{"key":"delete_me"}"#))
+            .unwrap();
+        db.insert("vec1", &[1.0, 0.0, 0.0], Some(br#"{"key":"keep"}"#))
+            .unwrap();
+        db.checkpoint().unwrap();
+
+        // Delete vec0
+        db.delete("vec0").unwrap();
+
+        // Compact
+        db.compact().unwrap();
+
+        // Verify metadata preserved for vec1
+        // vec1 was at index 1, now should be at index 0
+        let meta = db.get_metadata(0).unwrap();
+        assert!(meta.is_some());
+        let meta_json = meta.unwrap();
+        assert_eq!(meta_json["key"], "keep");
     }
 }
