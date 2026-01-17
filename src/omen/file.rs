@@ -138,7 +138,8 @@ impl OmenFile {
 
         // Write initial empty Manifest with header and Footer
         let manifest = OmenManifest::new();
-        let manifest_bytes = postcard::to_allocvec(&manifest).unwrap();
+        let manifest_bytes = postcard::to_allocvec(&manifest)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let manifest_header = ManifestHeader::new(&manifest_bytes);
         let manifest_offset = file.stream_position()?;
         file.write_all(&manifest_header.to_bytes())?;
@@ -214,7 +215,11 @@ impl OmenFile {
         // Load manifest with CRC validation
         if let Some(ref mmap) = mmap {
             let manifest_offset = footer.manifest_offset as usize;
-            let header_end = manifest_offset + ManifestHeader::SIZE;
+            let header_end = manifest_offset
+                .checked_add(ManifestHeader::SIZE)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "Manifest offset overflow")
+                })?;
 
             if header_end > mmap.len() {
                 return Err(io::Error::new(
@@ -224,7 +229,11 @@ impl OmenFile {
             }
 
             let manifest_header = ManifestHeader::from_bytes(&mmap[manifest_offset..header_end])?;
-            let data_end = header_end + manifest_header.length as usize;
+            let data_end = header_end
+                .checked_add(manifest_header.length as usize)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "Manifest length overflow")
+                })?;
 
             if data_end > mmap.len() {
                 return Err(io::Error::new(
@@ -762,7 +771,7 @@ impl OmenFile {
         manifest.metadata_index = metadata_index_bytes.map(<[u8]>::to_vec);
 
         // Update config
-        let live_count = vectors.len() - deleted.len();
+        let live_count = vectors.len().saturating_sub(deleted.len());
         manifest
             .config
             .insert("count".to_string(), live_count as u64);
@@ -831,10 +840,23 @@ impl OmenFile {
     }
 }
 
+/// Maximum string ID length (64KB) - prevents DoS via malicious length field
+const MAX_STRING_ID_LEN: usize = 65536;
+/// Maximum vector dimensions (1M) - prevents DoS via malicious length field
+const MAX_VECTOR_DIM: usize = 1 << 20;
+/// Maximum metadata length (16MB) - prevents DoS via malicious length field
+const MAX_METADATA_LEN: usize = 16 << 20;
+
 fn read_string_id(cursor: &mut std::io::Cursor<&[u8]>) -> io::Result<String> {
     let mut len_buf = [0u8; 4];
     cursor.read_exact(&mut len_buf)?;
     let id_len = u32::from_le_bytes(len_buf) as usize;
+    if id_len > MAX_STRING_ID_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("String ID length {id_len} exceeds maximum {MAX_STRING_ID_LEN}"),
+        ));
+    }
     let mut id_buf = vec![0u8; id_len];
     cursor.read_exact(&mut id_buf)?;
     String::from_utf8(id_buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -881,7 +903,16 @@ pub fn parse_wal_insert(data: &[u8]) -> io::Result<WalInsertData> {
     // Read vector
     cursor.read_exact(&mut buf)?;
     let vec_len = u32::from_le_bytes(buf) as usize;
-    let mut vec_bytes = vec![0u8; vec_len * 4];
+    if vec_len > MAX_VECTOR_DIM {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Vector dimension {vec_len} exceeds maximum {MAX_VECTOR_DIM}"),
+        ));
+    }
+    let byte_len = vec_len
+        .checked_mul(4)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Vector byte size overflow"))?;
+    let mut vec_bytes = vec![0u8; byte_len];
     cursor.read_exact(&mut vec_bytes)?;
     let vector = read_vector_from_bytes(&vec_bytes, vec_len);
 
@@ -889,6 +920,12 @@ pub fn parse_wal_insert(data: &[u8]) -> io::Result<WalInsertData> {
     cursor.read_exact(&mut buf)?;
     let meta_len = u32::from_le_bytes(buf) as usize;
     let metadata = if meta_len > 0 {
+        if meta_len > MAX_METADATA_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Metadata length {meta_len} exceeds maximum {MAX_METADATA_LEN}"),
+            ));
+        }
         let mut meta_bytes = vec![0u8; meta_len];
         cursor.read_exact(&mut meta_bytes)?;
         Some(meta_bytes)
