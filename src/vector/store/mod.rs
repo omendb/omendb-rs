@@ -900,6 +900,16 @@ impl VectorStore {
     /// Upsert vector (insert or update) with string ID and metadata
     ///
     /// This is the recommended method for most use cases.
+    ///
+    /// # Durability
+    ///
+    /// Individual writes are buffered in the WAL but NOT synced to disk immediately.
+    /// For guaranteed durability, call [`flush()`](Self::flush) after critical writes.
+    /// Batch operations ([`set_batch`](Self::set_batch)) sync the WAL at batch end.
+    ///
+    /// Without explicit flush:
+    /// - Data is recoverable after normal shutdown
+    /// - Data may be lost on crash/power failure between set() and next flush/batch
     pub fn set(&mut self, id: String, vector: Vector, metadata: JsonValue) -> Result<usize> {
         // Initialize HNSW if needed
         if self.hnsw_index.is_none() {
@@ -915,10 +925,11 @@ impl VectorStore {
             );
         }
 
-        // Check if this is an update
-        let is_update = self.records.get_slot(&id).is_some();
+        // Check if this is an update (need old slot for HNSW mark_deleted)
+        let old_slot = self.records.get_slot(&id);
 
-        // Upsert into RecordStore (single source of truth)
+        // Upsert into RecordStore - creates new slot (both for insert and update)
+        // RecordStore marks old slot deleted internally to maintain slot == HNSW node ID
         let slot = self
             .records
             .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?
@@ -926,15 +937,19 @@ impl VectorStore {
 
         // Update HNSW index
         if let Some(ref mut index) = self.hnsw_index {
-            if is_update {
-                // For updates, we need to handle HNSW differently
-                // HNSW doesn't support in-place updates, so we mark old as deleted and insert new
-                let _ = index.mark_deleted(slot as u32);
+            if let Some(old) = old_slot {
+                // Mark old HNSW node as deleted (same slot that RecordStore marked deleted)
+                let _ = index.mark_deleted(old);
             }
+            // Insert new vector - gets new node ID that matches new RecordStore slot
             index.insert(&vector.data)?;
         }
 
         // Update metadata index
+        if let Some(old) = old_slot {
+            // Remove old slot's index entries
+            self.metadata_index.remove(old);
+        }
         self.metadata_index.index_json(slot as u32, &metadata);
 
         // WAL for crash durability
@@ -970,19 +985,21 @@ impl VectorStore {
         let mut result_indices = Vec::with_capacity(updates.len() + inserts.len());
 
         // Process updates individually (they need mark_deleted + insert)
-        for (slot, id, vector, metadata) in updates {
-            // Update RecordStore
-            self.records
-                .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
+        for (old_slot, id, vector, metadata) in updates {
+            // Update RecordStore - creates new slot, marks old as deleted
+            let new_slot =
+                self.records
+                    .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
 
             // Update HNSW (mark old deleted, insert new)
             if let Some(ref mut index) = self.hnsw_index {
-                let _ = index.mark_deleted(slot);
+                let _ = index.mark_deleted(old_slot);
                 index.insert(&vector.data)?;
             }
 
-            // Update metadata index
-            self.metadata_index.index_json(slot, &metadata);
+            // Update metadata index (remove old, add new)
+            self.metadata_index.remove(old_slot);
+            self.metadata_index.index_json(new_slot, &metadata);
 
             // WAL for crash durability
             if let Some(ref mut storage) = self.storage {
@@ -990,7 +1007,7 @@ impl VectorStore {
                 storage.wal_append_insert(&id, &vector.data, Some(&metadata_bytes))?;
             }
 
-            result_indices.push(slot as usize);
+            result_indices.push(new_slot as usize);
         }
 
         // Process inserts with batch optimization
@@ -2336,16 +2353,22 @@ impl VectorStore {
     ///
     /// Returns the number of deleted records that were removed.
     ///
+    /// # Persistence
+    ///
+    /// **Important:** Compaction modifies in-memory state only. You MUST call
+    /// [`flush()`](Self::flush) after compact() to persist the compacted state.
+    /// Without flush, a crash will recover the pre-compaction state from disk.
+    ///
     /// # Example
     /// ```ignore
     /// // After deleting many records
     /// db.delete_batch(&old_ids)?;
     ///
-    /// // Reclaim space
+    /// // Reclaim space (in-memory only)
     /// let removed = db.compact()?;
     /// println!("Removed {} deleted records", removed);
     ///
-    /// // Persist the compacted state
+    /// // REQUIRED: Persist the compacted state
     /// db.flush()?;
     /// ```
     ///

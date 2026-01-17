@@ -334,7 +334,7 @@ fn test_set_update() {
         )
         .unwrap();
 
-    // Upsert with same ID should update
+    // Upsert with same ID - creates new slot (to maintain slot == HNSW node ID)
     let index = store
         .set(
             "doc1".to_string(),
@@ -343,8 +343,8 @@ fn test_set_update() {
         )
         .unwrap();
 
-    assert_eq!(index, 0);
-    assert_eq!(store.len(), 1); // Still only 1 vector
+    assert_eq!(index, 1); // New slot (old slot 0 marked deleted)
+    assert_eq!(store.len(), 1); // Still only 1 live vector
     assert_eq!(
         store
             .get_metadata_by_id("doc1")

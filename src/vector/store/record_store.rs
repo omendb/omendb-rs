@@ -130,17 +130,19 @@ impl RecordStore {
         }
 
         // Check for existing record (update case)
-        if let Some(&slot) = self.id_to_slot.get(&id) {
-            // Update existing slot
-            self.slots[slot as usize] = Some(Record::new(id, vector, metadata));
-            // If it was marked deleted, undelete it
-            if self.deleted.remove(slot) {
-                self.live_count += 1;
+        // IMPORTANT: We do NOT reuse slots on update to maintain HNSW node ID == RecordStore slot.
+        // HNSW assigns sequential node IDs, so RecordStore must do the same.
+        // On update: mark old slot deleted, insert at new slot.
+        if let Some(&old_slot) = self.id_to_slot.get(&id) {
+            // Mark old slot as deleted (don't clear data yet - compaction handles that)
+            if !self.deleted.contains(old_slot) {
+                self.deleted.insert(old_slot);
+                self.live_count -= 1;
             }
-            return Ok(slot);
+            // Fall through to insert at new slot
         }
 
-        // Insert new record
+        // Insert at new slot (both new records and updates)
         let slot = self.slots.len() as u32;
         self.slots
             .push(Some(Record::new(id.clone(), vector, metadata)));
@@ -470,16 +472,19 @@ mod tests {
             .unwrap();
         assert_eq!(slot1, 0);
 
-        // Update same ID
+        // Update same ID - creates new slot (to maintain slot == HNSW node ID)
         let slot2 = store
             .upsert("vec1".to_string(), vec![7.0, 8.0, 9.0], None)
             .unwrap();
-        assert_eq!(slot2, 0); // Same slot
-        assert_eq!(store.len(), 1); // Still 1 record
+        assert_eq!(slot2, 1); // New slot (old slot 0 is marked deleted)
+        assert_eq!(store.len(), 1); // Still 1 live record
 
-        // Check updated vector
-        let vec = store.get_vector(0).unwrap();
+        // Check updated vector at new slot
+        let vec = store.get_vector(1).unwrap();
         assert_eq!(vec, &[7.0, 8.0, 9.0]);
+
+        // Old slot is deleted (get_by_slot respects deleted bitmap)
+        assert!(store.get_by_slot(0).is_none());
     }
 
     #[test]
