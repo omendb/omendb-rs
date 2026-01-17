@@ -5,7 +5,7 @@
 //! OmenFile: pure I/O (no state duplication).
 
 use roaring::RoaringBitmap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -68,7 +68,7 @@ impl RecordStore {
         Self {
             slots: Vec::with_capacity(capacity),
             deleted: RoaringBitmap::new(),
-            id_to_slot: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            id_to_slot: FxHashMap::with_capacity_and_hasher(capacity, FxBuildHasher),
             live_count: 0,
             dimensions,
         }
@@ -330,7 +330,7 @@ impl RecordStore {
             .slots
             .get_mut(slot as usize)
             .and_then(|r| r.as_mut())
-            .ok_or_else(|| anyhow::anyhow!("Slot {} not found", slot))?;
+            .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
 
         record.metadata = Some(metadata);
         Ok(())
@@ -350,7 +350,7 @@ impl RecordStore {
             .slots
             .get_mut(slot as usize)
             .and_then(|r| r.as_mut())
-            .ok_or_else(|| anyhow::anyhow!("Slot {} not found", slot))?;
+            .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
 
         record.vector = vector;
         Ok(())

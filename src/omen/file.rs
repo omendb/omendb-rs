@@ -176,6 +176,7 @@ impl OmenFile {
         let mut footer = None;
         if file_len >= (HEADER_SIZE + OmenFooter::SIZE) as u64 {
             // Seek to absolute end - Footer size
+            #[allow(clippy::cast_possible_wrap)]
             file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
             let mut footer_buf = [0u8; OmenFooter::SIZE];
             file.read_exact(&mut footer_buf)?;
@@ -258,11 +259,9 @@ impl OmenFile {
             .get("hnsw_ef_search")
             .copied()
             .unwrap_or(u64::from(header.hnsw_ef_search)) as u32;
-        let metric = manifest
-            .config
-            .get("metric")
-            .map(|&v| crate::omen::header::Metric::from(v as u8))
-            .unwrap_or(header.metric);
+        let metric = manifest.config.get("metric").map_or(header.metric, |&v| {
+            crate::omen::header::Metric::from(v as u8)
+        });
 
         if let Some(ref mmap) = mmap {
             // Note: Vectors are loaded by VectorStore via load_persisted_snapshot()
@@ -593,7 +592,7 @@ impl OmenFile {
         }
 
         // Load ID mappings from manifest
-        snapshot.id_to_slot = self.manifest.id_to_index.clone();
+        snapshot.id_to_slot.clone_from(&self.manifest.id_to_index);
 
         // Load deleted bitmap from manifest (RoaringBitmap -> Vec<u32>)
         snapshot.deleted = self.manifest.deleted.iter().collect();
@@ -606,7 +605,9 @@ impl OmenFile {
         }
 
         // Load serialized MetadataIndex if available
-        snapshot.metadata_index_bytes = self.manifest.metadata_index.clone();
+        snapshot
+            .metadata_index_bytes
+            .clone_from(&self.manifest.metadata_index);
 
         Ok(snapshot)
     }
@@ -635,6 +636,7 @@ impl OmenFile {
 
         // Find append point
         let file_len = file.metadata()?.len();
+        #[allow(clippy::cast_possible_wrap)] // Footer size is 64 bytes, safe to negate
         let append_offset = if file_len > (HEADER_SIZE + OmenFooter::SIZE) as u64 {
             file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
             let mut footer_buf = [0u8; OmenFooter::SIZE];
@@ -721,7 +723,7 @@ impl OmenFile {
             .map(|(id, &slot)| (slot, id.clone()))
             .collect();
 
-        manifest.id_to_index = id_to_slot.clone();
+        manifest.id_to_index.clone_from(id_to_slot);
         manifest.index_to_id = index_to_id;
         manifest.deleted = deleted.iter().copied().collect();
 
@@ -735,7 +737,7 @@ impl OmenFile {
             }
         }
         manifest.metadata = metadata_bytes;
-        manifest.metadata_index = metadata_index_bytes.map(|b| b.to_vec());
+        manifest.metadata_index = metadata_index_bytes.map(<[u8]>::to_vec);
 
         // Update config
         let live_count = vectors.len() - deleted.len();

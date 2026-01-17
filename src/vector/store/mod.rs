@@ -128,6 +128,7 @@ fn create_hnsw_index(
 ///
 /// Inserts vectors in slot order so HNSW indices match RecordStore slots.
 /// For deleted slots, inserts zero vectors and marks them deleted.
+#[allow(clippy::too_many_arguments)]
 fn rebuild_hnsw_with_slots(
     records: &RecordStore,
     deleted: &roaring::RoaringBitmap,
@@ -439,8 +440,7 @@ impl VectorStore {
                     .id_to_slot
                     .iter()
                     .find(|(_, &s)| s == slot_u32)
-                    .map(|(id, _)| id.clone())
-                    .unwrap_or_else(|| format!("__slot_{slot}"));
+                    .map_or_else(|| format!("__slot_{slot}"), |(id, _)| id.clone());
 
                 let metadata = snapshot.metadata.get(&slot_u32).cloned();
                 slots.push(Some(Record::new(id, vec_data.clone(), metadata)));
@@ -500,7 +500,7 @@ impl VectorStore {
         }
 
         // Update deleted bitmap after WAL replay
-        deleted_bitmap = records.deleted_bitmap().clone();
+        deleted_bitmap.clone_from(records.deleted_bitmap());
 
         // Build HNSW index - must maintain slot index correspondence
         let slot_count = records.slot_count() as usize;
@@ -2095,7 +2095,7 @@ impl VectorStore {
 
     /// Check if there are any non-deleted vectors
     fn has_live_vectors(&self) -> bool {
-        self.records.len() > 0
+        !self.records.is_empty()
     }
 
     /// Brute-force search with metadata (fallback for orphaned nodes)
@@ -2388,10 +2388,10 @@ impl VectorStore {
         let _old_to_new = self.records.compact();
 
         // Rebuild HNSW index with new contiguous slots
-        if self.records.len() > 0 {
-            self.rebuild_index()?;
-        } else {
+        if self.records.is_empty() {
             self.hnsw_index = None;
+        } else {
+            self.rebuild_index()?;
         }
 
         // Rebuild metadata index from compacted records

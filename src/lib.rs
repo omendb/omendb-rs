@@ -15,18 +15,22 @@
     // Documentation - errors/panics are clear from context
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
-    clippy::doc_markdown,              // Math notation in docs doesn't need backticks
+    clippy::doc_markdown, // Math notation in docs doesn't need backticks
     // Design choices
     clippy::unsafe_derive_deserialize, // Serde derive is safe, unsafe methods are for SIMD/RNG
-    clippy::too_many_lines,            // Complex functions (batch_insert, load_from_disk) are well-structured
-    clippy::needless_pass_by_value,    // Public API takes owned values for clarity and storage
-    clippy::inline_always,             // Hot path functions are intentionally force-inlined
-    clippy::items_after_statements,    // Local items near usage improve readability
-    clippy::ptr_as_ptr,                // Raw pointer casts in SIMD code are intentional
-    clippy::borrow_as_ptr,             // Borrowing as raw pointer is intentional in prefetch code
-    clippy::manual_let_else,           // Match pattern is clearer in some contexts
-    clippy::ref_as_ptr,                // Reference to raw pointer is intentional in prefetch code
-    clippy::needless_borrow            // Explicit borrows clarify ownership in some contexts
+    clippy::too_many_lines,   // Complex functions (batch_insert, load_from_disk) are well-structured
+    clippy::needless_pass_by_value, // Public API takes owned values for clarity and storage
+    clippy::inline_always,    // Hot path functions are intentionally force-inlined
+    clippy::items_after_statements, // Local items near usage improve readability
+    clippy::ptr_as_ptr,       // Raw pointer casts in SIMD code are intentional
+    clippy::borrow_as_ptr,    // Borrowing as raw pointer is intentional in prefetch code
+    clippy::manual_let_else,  // Match pattern is clearer in some contexts
+    clippy::ref_as_ptr,       // Reference to raw pointer is intentional in prefetch code
+    clippy::needless_borrow,  // Explicit borrows clarify ownership in some contexts
+    clippy::must_use_candidate, // Not all getters need #[must_use]
+    // Struct design - repr(C) reserved fields
+    clippy::pub_underscore_fields, // Reserved fields in repr(C) structs need underscore
+    clippy::used_underscore_binding // Reserved fields are used in CRC computation
 )]
 
 //! Fast embedded vector database with HNSW indexing.

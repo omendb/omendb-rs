@@ -30,7 +30,7 @@ pub struct OmenFooter {
 
 impl OmenFooter {
     pub const SIZE: usize = 64;
-    pub const MAGIC: u32 = 0x0DEDB002;
+    pub const MAGIC: u32 = 0x0DED_B002;
     pub const VERSION: u32 = 1;
 
     /// Create a new footer

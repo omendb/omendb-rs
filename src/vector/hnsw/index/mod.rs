@@ -368,8 +368,7 @@ impl HNSWIndex {
         Ok(self.distance_fn.distance(query, vec))
     }
 
-    /// Check if L2 decomposition optimization is available
-
+    /// Check if L2 decomposition optimization is available.
     ///
     /// Returns true if storage supports L2 decomposition AND distance function is L2.
     #[inline]
