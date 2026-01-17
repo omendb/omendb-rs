@@ -294,19 +294,48 @@ impl OmenFile {
             crate::omen::header::Metric::from(v as u8)
         });
 
-        // Load HNSW index bytes from manifest (if mmap exists)
-        let hnsw_index_bytes = mmap.as_ref().and_then(|m| {
-            manifest.nodes.iter().find_map(|location| {
+        if let Some(ref mmap) = mmap {
+            // Note: Vectors are loaded by VectorStore via load_persisted_snapshot()
+            // Here we only load HNSW index bytes and set up config.
+
+            // Load HNSW index bytes from manifest
+            let mut hnsw_index_bytes = None;
+            for location in &manifest.nodes {
                 if location.segment_type == SegmentType::IndexMetadata {
                     let start = location.offset as usize;
                     let end = start + location.length as usize;
-                    if end <= m.len() {
-                        return Some(m[start..end].to_vec());
+                    if end <= mmap.len() {
+                        hnsw_index_bytes = Some(mmap[start..end].to_vec());
+                        break;
                     }
                 }
-                None
-            })
-        });
+            }
+
+            // Update header from manifest (source of truth for append-only)
+            let mut header = header;
+            header.count = count;
+            header.dimensions = dimensions;
+            header.hnsw_m = hnsw_m;
+            header.hnsw_ef_construction = hnsw_ef_construction;
+            header.hnsw_ef_search = hnsw_ef_search;
+            header.metric = metric;
+
+            let mmap = Some(unsafe { MmapMut::map_mut(&file)? });
+            // Note: WAL replay happens at VectorStore level, not here (Phase 5 architecture)
+            // State (vectors, ids, deleted) is managed by RecordStore via load_persisted_snapshot()
+            let db = Self {
+                path: omen_path,
+                file: Some(file),
+                mmap,
+                header,
+                config,
+                wal,
+                hnsw_index_bytes,
+                manifest,
+            };
+
+            return Ok(db);
+        }
 
         // Update header from manifest (source of truth for append-only)
         let mut header = header;
@@ -319,16 +348,18 @@ impl OmenFile {
 
         // Note: WAL replay happens at VectorStore level, not here (Phase 5 architecture)
         // State (vectors, ids, deleted) is managed by RecordStore via load_persisted_snapshot()
-        Ok(Self {
+        let db = Self {
             path: omen_path,
             file: Some(file),
-            mmap,
+            mmap: None,
             header,
             config,
             wal,
-            hnsw_index_bytes,
+            hnsw_index_bytes: None,
             manifest,
-        })
+        };
+
+        Ok(db)
     }
 
     // Note: insert(), find_nearest(), search() removed in Phase 5.
