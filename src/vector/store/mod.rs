@@ -2299,6 +2299,66 @@ impl VectorStore {
     }
 
     // ============================================================================
+    // Compaction
+    // ============================================================================
+
+    /// Compact the database by removing deleted records and reclaiming space.
+    ///
+    /// This operation:
+    /// 1. Removes all tombstoned (deleted) records from storage
+    /// 2. Reassigns slot indices to be contiguous
+    /// 3. Rebuilds the HNSW index with new slot assignments
+    /// 4. Rebuilds the metadata index
+    ///
+    /// Returns the number of deleted records that were removed.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // After deleting many records
+    /// db.delete_batch(&old_ids)?;
+    ///
+    /// // Reclaim space
+    /// let removed = db.compact()?;
+    /// println!("Removed {} deleted records", removed);
+    ///
+    /// // Persist the compacted state
+    /// db.flush()?;
+    /// ```
+    ///
+    /// # Performance
+    /// Compaction rebuilds the HNSW index, which is O(n log n) where n is the
+    /// number of live records. Call periodically after bulk deletes, not after
+    /// every delete.
+    pub fn compact(&mut self) -> Result<usize> {
+        // Count tombstones before compacting
+        let removed_count = self.records.deleted_count() as usize;
+
+        if removed_count == 0 {
+            return Ok(0);
+        }
+
+        // Compact RecordStore - reassigns slots, clears tombstones
+        let _old_to_new = self.records.compact();
+
+        // Rebuild HNSW index with new contiguous slots
+        if self.records.len() > 0 {
+            self.rebuild_index()?;
+        } else {
+            self.hnsw_index = None;
+        }
+
+        // Rebuild metadata index from compacted records
+        self.metadata_index = MetadataIndex::new();
+        for (slot, record) in self.records.iter_live() {
+            if let Some(ref meta) = record.metadata {
+                self.metadata_index.index_json(slot, meta);
+            }
+        }
+
+        Ok(removed_count)
+    }
+
+    // ============================================================================
     // Persistence
     // ============================================================================
 

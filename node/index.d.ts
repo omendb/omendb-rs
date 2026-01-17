@@ -147,6 +147,24 @@ export declare class VectorDatabase {
    */
   flush(): void
   /**
+   * Compact the database by removing deleted records and reclaiming space.
+   *
+   * This operation removes tombstoned records, reassigns indices to be
+   * contiguous, and rebuilds the search index. Call after bulk deletes
+   * to reclaim memory and improve search performance.
+   *
+   * @returns Number of deleted records that were removed
+   *
+   * @example
+   * ```typescript
+   * // After bulk delete
+   * db.delete(staleIds);
+   * const removed = db.compact();
+   * console.log(`Removed ${removed} deleted records`);
+   * ```
+   */
+  compact(): number
+  /**
    * Close the database and release file locks.
    *
    * After calling close(), the database is no longer usable.

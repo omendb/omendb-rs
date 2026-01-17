@@ -116,6 +116,89 @@ fn test_rebuild_index() {
 }
 
 #[test]
+fn test_compact_basic() {
+    let mut store = VectorStore::new(128);
+
+    // Insert 100 vectors
+    for i in 0..100 {
+        store
+            .set(
+                format!("vec{i}"),
+                random_vector(128, i),
+                serde_json::json!({"idx": i}),
+            )
+            .unwrap();
+    }
+    assert_eq!(store.len(), 100);
+
+    // Delete 30 vectors
+    for i in 0..30 {
+        store.delete(&format!("vec{i}")).unwrap();
+    }
+    assert_eq!(store.len(), 70);
+
+    // Compact - should remove 30 tombstones
+    let removed = store.compact().unwrap();
+    assert_eq!(removed, 30);
+    assert_eq!(store.len(), 70);
+
+    // Verify search still works
+    let query = random_vector(128, 50);
+    let results = store.knn_search(&query, 10).unwrap();
+    assert_eq!(results.len(), 10);
+
+    // Verify remaining vectors accessible by ID
+    for i in 30..100 {
+        assert!(store.contains(&format!("vec{i}")));
+    }
+
+    // Verify deleted vectors gone
+    for i in 0..30 {
+        assert!(!store.contains(&format!("vec{i}")));
+    }
+}
+
+#[test]
+fn test_compact_empty() {
+    let mut store = VectorStore::new(128);
+
+    // Insert some vectors but don't delete any
+    for i in 0..10 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Compact with no deletions - should return 0
+    let removed = store.compact().unwrap();
+    assert_eq!(removed, 0);
+    assert_eq!(store.len(), 10);
+}
+
+#[test]
+fn test_compact_all_deleted() {
+    let mut store = VectorStore::new(128);
+
+    // Insert and delete all
+    for i in 0..10 {
+        store
+            .set(
+                format!("vec{i}"),
+                random_vector(128, i),
+                serde_json::json!({}),
+            )
+            .unwrap();
+    }
+    for i in 0..10 {
+        store.delete(&format!("vec{i}")).unwrap();
+    }
+    assert_eq!(store.len(), 0);
+
+    // Compact - should remove all tombstones
+    let removed = store.compact().unwrap();
+    assert_eq!(removed, 10);
+    assert_eq!(store.len(), 0);
+}
+
+#[test]
 fn test_quantization_insert() {
     use crate::vector::QuantizationMode;
 

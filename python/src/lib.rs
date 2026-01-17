@@ -1655,6 +1655,39 @@ impl VectorDatabase {
         inner.store.flush().map_err(convert_error)
     }
 
+    /// Compact the database by removing deleted records and reclaiming space.
+    ///
+    /// This operation removes tombstoned records, reassigns indices to be
+    /// contiguous, and rebuilds the search index. Call after bulk deletes
+    /// to reclaim memory and improve search performance.
+    ///
+    /// Returns:
+    ///     int: Number of deleted records that were removed
+    ///
+    /// Examples:
+    ///     After bulk delete:
+    ///
+    ///     >>> db.delete(stale_ids)
+    ///     >>> removed = db.compact()
+    ///     >>> print(f"Removed {removed} deleted records")
+    ///
+    ///     Periodic maintenance:
+    ///
+    ///     >>> removed = db.compact()
+    ///     >>> if removed > 0:
+    ///     ...     db.flush()  # Persist compacted state
+    ///
+    /// Performance:
+    ///     Compaction rebuilds the HNSW index, which is O(n log n).
+    ///     Call periodically after bulk deletes, not after every delete.
+    fn compact(&self) -> PyResult<usize> {
+        let mut inner = self.inner.write();
+        let removed = inner.store.compact().map_err(convert_error)?;
+        // Invalidate cache since indices changed
+        inner.cache_valid = false;
+        Ok(removed)
+    }
+
     // =========================================================================
     // Merge Methods
     // =========================================================================
