@@ -7,6 +7,31 @@ use roaring::RoaringBitmap;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
+// Deserialization limits to prevent DoS from malformed files
+const MAX_STRING_LEN: usize = 64 * 1024; // 64KB for field names/values
+const MAX_BITMAP_LEN: usize = 16 * 1024 * 1024; // 16MB for bitmaps
+const MAX_ENTRIES: usize = 100_000_000; // 100M entries
+const MAX_FIELD_COUNT: usize = 10_000; // 10K fields
+
+fn check_len(len: usize, max: usize, what: &str) -> io::Result<()> {
+    if len > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{what} too large: {len} > {max}"),
+        ));
+    }
+    Ok(())
+}
+
+fn to_u32(len: usize, what: &str) -> io::Result<u32> {
+    u32::try_from(len).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{what} exceeds u32::MAX: {len}"),
+        )
+    })
+}
+
 /// Field types for metadata indexing
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,17 +108,17 @@ impl KeywordIndex {
     /// Serialize to bytes
     pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         // Write term count
-        writer.write_all(&(self.terms.len() as u32).to_le_bytes())?;
+        writer.write_all(&to_u32(self.terms.len(), "term count")?.to_le_bytes())?;
 
         for (term, bitmap) in &self.terms {
             // Write term (length-prefixed)
-            writer.write_all(&(term.len() as u32).to_le_bytes())?;
+            writer.write_all(&to_u32(term.len(), "term length")?.to_le_bytes())?;
             writer.write_all(term.as_bytes())?;
 
             // Write bitmap (use native serialization)
             let mut bitmap_bytes = Vec::new();
             bitmap.serialize_into(&mut bitmap_bytes)?;
-            writer.write_all(&(bitmap_bytes.len() as u32).to_le_bytes())?;
+            writer.write_all(&to_u32(bitmap_bytes.len(), "bitmap length")?.to_le_bytes())?;
             writer.write_all(&bitmap_bytes)?;
         }
 
@@ -105,13 +130,15 @@ impl KeywordIndex {
         let mut len_buf = [0u8; 4];
         reader.read_exact(&mut len_buf)?;
         let term_count = u32::from_le_bytes(len_buf) as usize;
+        check_len(term_count, MAX_ENTRIES, "term count")?;
 
-        let mut terms = HashMap::with_capacity(term_count);
+        let mut terms = HashMap::with_capacity(term_count.min(1024));
 
         for _ in 0..term_count {
             // Read term
             reader.read_exact(&mut len_buf)?;
             let term_len = u32::from_le_bytes(len_buf) as usize;
+            check_len(term_len, MAX_STRING_LEN, "term length")?;
             let mut term_buf = vec![0u8; term_len];
             reader.read_exact(&mut term_buf)?;
             let term = String::from_utf8(term_buf)
@@ -120,6 +147,7 @@ impl KeywordIndex {
             // Read bitmap
             reader.read_exact(&mut len_buf)?;
             let bitmap_len = u32::from_le_bytes(len_buf) as usize;
+            check_len(bitmap_len, MAX_BITMAP_LEN, "bitmap length")?;
             let mut bitmap_buf = vec![0u8; bitmap_len];
             reader.read_exact(&mut bitmap_buf)?;
             let bitmap = RoaringBitmap::deserialize_from(&bitmap_buf[..])
@@ -181,13 +209,13 @@ impl BooleanIndex {
         // Write true_docs bitmap
         let mut true_bytes = Vec::new();
         self.true_docs.serialize_into(&mut true_bytes)?;
-        writer.write_all(&(true_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(&to_u32(true_bytes.len(), "true bitmap")?.to_le_bytes())?;
         writer.write_all(&true_bytes)?;
 
         // Write false_docs bitmap
         let mut false_bytes = Vec::new();
         self.false_docs.serialize_into(&mut false_bytes)?;
-        writer.write_all(&(false_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(&to_u32(false_bytes.len(), "false bitmap")?.to_le_bytes())?;
         writer.write_all(&false_bytes)?;
 
         Ok(())
@@ -200,6 +228,7 @@ impl BooleanIndex {
         // Read true_docs bitmap
         reader.read_exact(&mut len_buf)?;
         let true_len = u32::from_le_bytes(len_buf) as usize;
+        check_len(true_len, MAX_BITMAP_LEN, "true bitmap")?;
         let mut true_buf = vec![0u8; true_len];
         reader.read_exact(&mut true_buf)?;
         let true_docs = RoaringBitmap::deserialize_from(&true_buf[..])
@@ -208,6 +237,7 @@ impl BooleanIndex {
         // Read false_docs bitmap
         reader.read_exact(&mut len_buf)?;
         let false_len = u32::from_le_bytes(len_buf) as usize;
+        check_len(false_len, MAX_BITMAP_LEN, "false bitmap")?;
         let mut false_buf = vec![0u8; false_len];
         reader.read_exact(&mut false_buf)?;
         let false_docs = RoaringBitmap::deserialize_from(&false_buf[..])
@@ -331,19 +361,19 @@ impl NumericIndex {
     /// Serialize to bytes
     pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         // Write entries count and data
-        writer.write_all(&(self.entries.len() as u32).to_le_bytes())?;
+        writer.write_all(&to_u32(self.entries.len(), "entries count")?.to_le_bytes())?;
         for (value, doc_id) in &self.entries {
             writer.write_all(&value.to_le_bytes())?;
             writer.write_all(&doc_id.to_le_bytes())?;
         }
 
         // Write common_values count and data
-        writer.write_all(&(self.common_values.len() as u32).to_le_bytes())?;
+        writer.write_all(&to_u32(self.common_values.len(), "common values")?.to_le_bytes())?;
         for (int_val, bitmap) in &self.common_values {
             writer.write_all(&int_val.to_le_bytes())?;
             let mut bitmap_bytes = Vec::new();
             bitmap.serialize_into(&mut bitmap_bytes)?;
-            writer.write_all(&(bitmap_bytes.len() as u32).to_le_bytes())?;
+            writer.write_all(&to_u32(bitmap_bytes.len(), "bitmap length")?.to_le_bytes())?;
             writer.write_all(&bitmap_bytes)?;
         }
 
@@ -358,7 +388,8 @@ impl NumericIndex {
         // Read entries
         reader.read_exact(&mut buf4)?;
         let entries_len = u32::from_le_bytes(buf4) as usize;
-        let mut entries = Vec::with_capacity(entries_len);
+        check_len(entries_len, MAX_ENTRIES, "entries count")?;
+        let mut entries = Vec::with_capacity(entries_len.min(1024));
         for _ in 0..entries_len {
             reader.read_exact(&mut buf8)?;
             let value = f64::from_le_bytes(buf8);
@@ -370,12 +401,14 @@ impl NumericIndex {
         // Read common_values
         reader.read_exact(&mut buf4)?;
         let common_len = u32::from_le_bytes(buf4) as usize;
-        let mut common_values = HashMap::with_capacity(common_len);
+        check_len(common_len, MAX_ENTRIES, "common values count")?;
+        let mut common_values = HashMap::with_capacity(common_len.min(1024));
         for _ in 0..common_len {
             reader.read_exact(&mut buf8)?;
             let int_val = i64::from_le_bytes(buf8);
             reader.read_exact(&mut buf4)?;
             let bitmap_len = u32::from_le_bytes(buf4) as usize;
+            check_len(bitmap_len, MAX_BITMAP_LEN, "bitmap length")?;
             let mut bitmap_buf = vec![0u8; bitmap_len];
             reader.read_exact(&mut bitmap_buf)?;
             let bitmap = RoaringBitmap::deserialize_from(&bitmap_buf[..])
@@ -604,12 +637,12 @@ impl MetadataIndex {
     /// Serialize to bytes
     pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         // Write field count
-        writer.write_all(&(self.fields.len() as u32).to_le_bytes())?;
+        writer.write_all(&to_u32(self.fields.len(), "field count")?.to_le_bytes())?;
 
         // Write each field
         for (name, index) in &self.fields {
             // Write field name (length-prefixed)
-            writer.write_all(&(name.len() as u32).to_le_bytes())?;
+            writer.write_all(&to_u32(name.len(), "field name")?.to_le_bytes())?;
             writer.write_all(name.as_bytes())?;
 
             // Write field index
@@ -631,6 +664,7 @@ impl MetadataIndex {
         let mut len_buf = [0u8; 4];
         reader.read_exact(&mut len_buf)?;
         let field_count = u32::from_le_bytes(len_buf) as usize;
+        check_len(field_count, MAX_FIELD_COUNT, "field count")?;
 
         let mut fields = HashMap::with_capacity(field_count);
 
@@ -638,6 +672,7 @@ impl MetadataIndex {
             // Read field name
             reader.read_exact(&mut len_buf)?;
             let name_len = u32::from_le_bytes(len_buf) as usize;
+            check_len(name_len, MAX_STRING_LEN, "field name length")?;
             let mut name_buf = vec![0u8; name_len];
             reader.read_exact(&mut name_buf)?;
             let name = String::from_utf8(name_buf)

@@ -64,9 +64,9 @@ fn convert_error(err: anyhow::Error) -> Error {
 
 /// Parse a numeric comparison operator ($gt, $gte, $lt, $lte)
 fn parse_numeric_op(op: &str, key: &str, value: &JsonValue) -> Result<MetadataFilter> {
-    let num = value.as_f64().ok_or_else(|| {
-        Error::new(Status::InvalidArg, format!("{} requires a number", op))
-    })?;
+    let num = value
+        .as_f64()
+        .ok_or_else(|| Error::new(Status::InvalidArg, format!("{} requires a number", op)))?;
     Ok(match op {
         "$gt" => MetadataFilter::Gt(key.to_string(), num),
         "$gte" => MetadataFilter::Gte(key.to_string(), num),
@@ -413,9 +413,10 @@ impl VectorDatabase {
         // Run CPU-intensive search on blocking thread pool
         let output = tokio::task::spawn_blocking(move || {
             let inner = inner_arc.read();
-            let all_results = inner
-                .store
-                .search_batch_with_metadata(&query_vecs, k_usize, ef_usize);
+            let all_results =
+                inner
+                    .store
+                    .search_batch_with_metadata(&query_vecs, k_usize, ef_usize);
 
             // Convert results
             let mut output = Vec::with_capacity(all_results.len());
@@ -460,7 +461,7 @@ impl VectorDatabase {
     pub fn delete(&self, ids: Vec<String>) -> Result<u32> {
         let mut inner = self.inner.write();
         let result = inner.store.delete_batch(&ids).map_err(convert_error)?;
-                Ok(result as u32)
+        Ok(result as u32)
     }
 
     /// Delete vectors matching a metadata filter.
@@ -495,9 +496,6 @@ impl VectorDatabase {
             .delete_by_filter(&parsed_filter)
             .map_err(convert_error)?;
 
-        if result > 0 {
-                    }
-
         Ok(result as u32)
     }
 
@@ -523,8 +521,7 @@ impl VectorDatabase {
     #[napi(js_name = "count")]
     pub fn count_method(
         &self,
-        #[napi(ts_arg_type = "Record<string, unknown> | undefined")]
-        filter: Option<JsonValue>,
+        #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
     ) -> Result<u32> {
         let inner = self.inner.read();
         match filter {
@@ -550,7 +547,7 @@ impl VectorDatabase {
             .store
             .update(&id, vec, metadata)
             .map_err(convert_error)?;
-                Ok(())
+        Ok(())
     }
 
     /// Get number of vectors in database.
@@ -815,13 +812,18 @@ impl VectorDatabase {
 
             let index = inner
                 .store
-                .set_with_text(item.id, Vector::new(item.vector.to_vec()), &item.text, metadata)
+                .set_with_text(
+                    item.id,
+                    Vector::new(item.vector.to_vec()),
+                    &item.text,
+                    metadata,
+                )
                 .map_err(convert_error)?;
 
             results.push(index as u32);
         }
 
-                Ok(results)
+        Ok(results)
     }
 
     /// Search using text only (BM25 scoring).
@@ -923,7 +925,13 @@ impl VectorDatabase {
             } else {
                 inner
                     .store
-                    .hybrid_search_with_subscores(&query_vec, &query_text, k as usize, alpha_f32, rrf_k_usize)
+                    .hybrid_search_with_subscores(
+                        &query_vec,
+                        &query_text,
+                        k as usize,
+                        alpha_f32,
+                        rrf_k_usize,
+                    )
                     .map_err(convert_error)?
             };
 
@@ -955,7 +963,13 @@ impl VectorDatabase {
         } else {
             inner
                 .store
-                .hybrid_search_with_rrf_k(&query_vec, &query_text, k as usize, alpha_f32, rrf_k_usize)
+                .hybrid_search_with_rrf_k(
+                    &query_vec,
+                    &query_text,
+                    k as usize,
+                    alpha_f32,
+                    rrf_k_usize,
+                )
                 .map_err(convert_error)?
         };
 
@@ -999,7 +1013,7 @@ impl VectorDatabase {
     pub fn compact(&self) -> Result<u32> {
         let mut inner = self.inner.write();
         let removed = inner.store.compact().map_err(convert_error)?;
-                Ok(removed as u32)
+        Ok(removed as u32)
     }
 
     /// Close the database and release file locks.
@@ -1051,7 +1065,7 @@ impl VectorDatabase {
             .store
             .merge_from(&other_inner.store)
             .map_err(convert_error)?;
-        
+
         Ok(count as u32)
     }
 
@@ -1266,7 +1280,10 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
             _ => {
                 return Err(Error::new(
                     Status::InvalidArg,
-                    format!("Unknown metric: '{}'. Valid: l2, euclidean, cosine, dot, ip", m),
+                    format!(
+                        "Unknown metric: '{}'. Valid: l2, euclidean, cosine, dot, ip",
+                        m
+                    ),
                 ));
             }
         }
@@ -1294,15 +1311,18 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         store_options = store_options.oversample(oversample_val as f32);
     }
     if let Some(ref metric_str) = opts.metric {
-        store_options = store_options.metric(metric_str).map_err(|e| {
-            Error::new(Status::InvalidArg, e)
-        })?;
+        store_options = store_options
+            .metric(metric_str)
+            .map_err(|e| Error::new(Status::InvalidArg, e))?;
     }
 
     // Handle :memory: for in-memory database
     if path == ":memory:" {
         let store = store_options.build().map_err(|e| {
-            Error::new(Status::GenericFailure, format!("Failed to create store: {}", e))
+            Error::new(
+                Status::GenericFailure,
+                format!("Failed to create store: {}", e),
+            )
         })?;
 
         return Ok(VectorDatabase {

@@ -112,17 +112,6 @@ pub enum DistanceMetric {
     InnerProduct,
 }
 
-/// Search result from vector database
-#[derive(Debug, Clone, PartialEq)]
-pub struct SearchResult {
-    /// Vector ID
-    pub id: VectorID,
-    /// Distance to query vector
-    pub distance: f32,
-    /// Optional metadata
-    pub metadata: Option<Vec<u8>>,
-}
-
 /// Statistics for compaction operation
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompactionStats {
