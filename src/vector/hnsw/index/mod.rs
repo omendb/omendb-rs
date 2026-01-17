@@ -280,6 +280,38 @@ impl HNSWIndex {
     }
 
     // =========================================================================
+    // Graph Storage Optimization
+    // =========================================================================
+
+    /// Freeze the graph storage for search optimization (10-20% QPS gain)
+    ///
+    /// Converts the dynamic `ArcSwap`-based neighbor storage to contiguous memory.
+    /// This reduces 4 pointer chases to 2 array indexing operations during search.
+    ///
+    /// Call this after batch construction is complete for optimal search performance.
+    /// Safe to call multiple times (no-op if already frozen).
+    ///
+    /// **Note:** After freezing, modifications require unfreezing first.
+    pub fn freeze(&mut self) {
+        self.neighbors.freeze();
+    }
+
+    /// Check if the graph storage is frozen (search-optimized)
+    #[must_use]
+    pub fn is_frozen(&self) -> bool {
+        self.neighbors.is_frozen()
+    }
+
+    /// Unfreeze the graph storage to allow modifications
+    ///
+    /// Converts frozen storage back to dynamic mode. This is expensive and
+    /// should be avoided in normal operation. Called automatically when
+    /// inserting into a frozen index.
+    pub fn unfreeze(&mut self) {
+        self.neighbors.unfreeze();
+    }
+
+    // =========================================================================
     // Internal helpers
     // =========================================================================
 

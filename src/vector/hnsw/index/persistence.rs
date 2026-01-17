@@ -101,7 +101,9 @@ impl HNSWIndex {
         }
 
         // Write neighbor lists (length-prefixed postcard)
-        let neighbors_bytes = postcard::to_allocvec(&self.neighbors)?;
+        // Extract NeighborLists for backwards-compatible serialization
+        let neighbor_lists = self.neighbors.get_neighbor_lists_for_save();
+        let neighbors_bytes = postcard::to_allocvec(&neighbor_lists)?;
         writer.write_all(&(neighbors_bytes.len() as u32).to_le_bytes())?;
         writer.write_all(&neighbors_bytes)?;
 
