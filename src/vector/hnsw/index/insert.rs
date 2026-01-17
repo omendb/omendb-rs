@@ -42,6 +42,9 @@ impl HNSWIndex {
         let node = HNSWNode::new(node_id, level);
         self.nodes.push(node);
 
+        // Allocate neighbor storage for this node
+        self.neighbors.allocate_node(node_id, level);
+
         Ok((node_id, level))
     }
 
@@ -324,10 +327,8 @@ impl HNSWIndex {
 
         // Pre-allocate neighbor storage for all new nodes (required for parallel access)
         for &node_id in &node_ids {
-            // Pre-allocate empty neighbor lists for all levels
-            for level in 0..self.params.max_level {
-                self.neighbors.set_neighbors(node_id, level, Vec::new());
-            }
+            let level = self.nodes[node_id as usize].level;
+            self.neighbors.allocate_node(node_id, level);
         }
 
         // Phase 2: Build graph in parallel (the key optimization!)

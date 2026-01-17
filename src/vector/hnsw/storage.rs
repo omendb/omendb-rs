@@ -93,6 +93,12 @@ impl NeighborLists {
         self.neighbors.is_empty()
     }
 
+    /// Get max levels
+    #[must_use]
+    pub fn max_levels(&self) -> usize {
+        self.max_levels
+    }
+
     /// Get neighbors for a node at a specific level (lock-free)
     ///
     /// Returns a cloned Vec. For iteration without allocation, use `with_neighbors`.
@@ -1499,7 +1505,7 @@ impl VectorStorage {
 ///
 /// Key insight: `AtomicU32::load(Ordering::Relaxed)` compiles to a plain load
 /// instruction on x86 and ARM. Zero overhead compared to non-atomic access.
-#[allow(dead_code)] // Used in Phase 7.1.2
+#[derive(Debug)]
 pub struct Level0Storage {
     /// Dense neighbor data: node_id * max_m0 + slot_idx
     data: Vec<AtomicU32>,
@@ -1543,6 +1549,8 @@ impl Level0Storage {
     /// Uses only atomic loads. On x86/ARM, Relaxed loads compile
     /// to plain load instructions with zero overhead.
     #[inline(always)]
+    #[allow(clippy::needless_range_loop)] // Intentional: reading from one array, writing to another
+    #[allow(dead_code)] // Reserved for future hot-path optimization
     pub fn get_neighbors_buf(&self, node_id: u32, buf: &mut [u32; 64]) -> usize {
         let idx = node_id as usize;
         if idx >= self.counts.len() {
@@ -1560,6 +1568,7 @@ impl Level0Storage {
 
     /// Execute closure with neighbors - API compatibility
     #[inline(always)]
+    #[allow(clippy::needless_range_loop)] // Intentional: reading from one array, writing to another
     pub fn with_neighbors<F, R>(&self, node_id: u32, f: F) -> R
     where
         F: FnOnce(&[u32]) -> R,
@@ -1612,6 +1621,7 @@ impl Level0Storage {
     }
 
     /// Add a single neighbor - O(1) per neighbor
+    #[allow(dead_code)] // Used by single-insert path (not batch)
     pub fn add_neighbor(&self, node_id: u32, neighbor: u32) -> bool {
         let idx = node_id as usize;
         if idx >= self.write_locks.len() {
@@ -1708,7 +1718,7 @@ impl Level0Storage {
 }
 
 /// Upper level links for a single node (levels 1..=max_level)
-#[allow(dead_code)] // Used in Phase 7.1.2
+#[derive(Debug)]
 pub struct UpperNodeLinks {
     /// All levels in one allocation: [l1_neighbors][l2_neighbors]...
     data: Vec<AtomicU32>,
@@ -1723,7 +1733,7 @@ pub struct UpperNodeLinks {
 ///
 /// Only ~5-10% of nodes have upper levels. Uses per-node allocation
 /// with atomic operations.
-#[allow(dead_code)] // Used in Phase 7.1.2
+#[derive(Debug)]
 pub struct UpperLevelStorage {
     /// Per-node upper level data (None for level-0-only nodes)
     nodes: Vec<Option<UpperNodeLinks>>,
@@ -1770,6 +1780,7 @@ impl UpperLevelStorage {
 
     /// Get neighbors at upper level (level >= 1) - LOCK-FREE
     #[inline]
+    #[allow(clippy::needless_range_loop)] // Intentional: reading from one array, writing to another
     pub fn with_neighbors<F, R>(&self, node_id: u32, level: u8, f: F) -> R
     where
         F: FnOnce(&[u32]) -> R,
@@ -1820,6 +1831,7 @@ impl UpperLevelStorage {
     }
 
     /// Add neighbor at upper level
+    #[allow(dead_code)] // Used by single-insert path (not batch)
     pub fn add_neighbor(&self, node_id: u32, level: u8, neighbor: u32) -> bool {
         let idx = node_id as usize;
         if idx >= self.locks.len() {
@@ -1921,18 +1933,15 @@ impl UpperLevelStorage {
         self.nodes
             .get(node_id as usize)
             .and_then(|opt| opt.as_ref())
-            .map(|links| links.max_level)
-            .unwrap_or(0)
+            .map_or(0, |links| links.max_level)
     }
 
     pub fn memory_usage(&self) -> usize {
         let mut total = self.nodes.len() * std::mem::size_of::<Option<UpperNodeLinks>>();
         total += self.locks.len() * std::mem::size_of::<Mutex<()>>();
-        for node in &self.nodes {
-            if let Some(links) = node {
-                total += links.data.len() * 4; // AtomicU32
-                total += links.counts.len(); // AtomicU8
-            }
+        for links in self.nodes.iter().flatten() {
+            total += links.data.len() * 4; // AtomicU32
+            total += links.counts.len(); // AtomicU8
         }
         total
     }
@@ -1943,7 +1952,7 @@ impl UpperLevelStorage {
 /// - Lock-free reads for search performance
 /// - Per-node locking for parallel construction
 /// - Dense level 0, sparse upper levels
-#[allow(dead_code)] // Used in Phase 7.1.2
+#[derive(Debug)]
 pub struct NeighborStorage {
     level0: Level0Storage,
     upper: UpperLevelStorage,
@@ -1955,10 +1964,14 @@ pub struct NeighborStorage {
 impl NeighborStorage {
     pub fn new(max_levels: usize, m: usize) -> Self {
         let max_m = m;
-        let max_m0 = m * 2;
+        // Use M*32 for level 0 to handle construction overflow before pruning
+        // During parallel construction, nodes can accumulate many neighbors before pruning
+        // (the old unbounded Vec allowed this, so we need enough capacity to match)
+        // Memory: 32*M*4 bytes/node = 2KB/node at level 0 during construction, pruned to M*2*4=128B after
+        let max_m0 = m * 32;
         Self {
             level0: Level0Storage::with_capacity(0, max_m0),
-            upper: UpperLevelStorage::new(max_m),
+            upper: UpperLevelStorage::new(max_m * 8), // Upper levels also need overflow room
             max_m,
             max_m0,
             max_levels,
@@ -1968,10 +1981,10 @@ impl NeighborStorage {
     /// Create with pre-allocated capacity
     pub fn with_capacity(num_nodes: usize, max_levels: usize, m: usize) -> Self {
         let max_m = m;
-        let max_m0 = m * 2;
+        let max_m0 = m * 32;
         Self {
             level0: Level0Storage::with_capacity(num_nodes, max_m0),
-            upper: UpperLevelStorage::new(max_m),
+            upper: UpperLevelStorage::new(max_m * 8),
             max_m,
             max_m0,
             max_levels,
@@ -2076,16 +2089,23 @@ impl NeighborStorage {
         self.level0.prefetch(node_id);
     }
 
-    /// Get M_max (max neighbors per node at level 0)
+    /// Get M_max (max neighbors per node at level 0 after pruning)
+    /// Note: actual slot capacity is larger for construction overflow
     #[must_use]
     pub fn m_max(&self) -> usize {
-        self.max_m0
+        self.max_m * 2 // Return pruned M_max, not construction overflow
     }
 
     /// Get M (max neighbors per node at upper levels)
     #[must_use]
     pub fn m(&self) -> usize {
         self.max_m
+    }
+
+    /// Get max levels
+    #[must_use]
+    pub fn max_levels(&self) -> usize {
+        self.max_levels
     }
 
     /// Get number of nodes

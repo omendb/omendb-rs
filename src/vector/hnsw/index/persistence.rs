@@ -1,4 +1,8 @@
 //! HNSW index persistence (save/load)
+//!
+//! Format versions:
+//! - v2: Original postcard format with NeighborLists
+//! - v3: New format with GraphStorage (atomic slot storage)
 
 use super::HNSWIndex;
 use crate::vector::hnsw::error::{HNSWError, Result};
@@ -9,6 +13,9 @@ use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use tracing::{error, info, instrument};
+
+/// Current persistence format version
+const FORMAT_VERSION: u32 = 3;
 
 /// Configure OpenOptions for cross-platform compatibility.
 /// On Windows, enables full file sharing to avoid "Access is denied" errors.
@@ -56,8 +63,8 @@ impl HNSWIndex {
         // Write magic bytes
         writer.write_all(b"HNSWIDX\0")?;
 
-        // Write version (2 = postcard format, 1 = bincode format)
-        writer.write_all(&2u32.to_le_bytes())?;
+        // Write version (3 = GraphStorage format, 2 = NeighborLists format)
+        writer.write_all(&FORMAT_VERSION.to_le_bytes())?;
 
         // Write dimensions
         writer.write_all(&(self.dimensions() as u32).to_le_bytes())?;
@@ -145,13 +152,13 @@ impl HNSWIndex {
         let mut version_bytes = [0u8; 4];
         reader.read_exact(&mut version_bytes)?;
         let version = u32::from_le_bytes(version_bytes);
-        if version != 2 {
+        if version != 2 && version != 3 {
             error!(
                 version,
-                "Unsupported index file version (expected v2 postcard format)"
+                "Unsupported index file version (expected v2 or v3)"
             );
             return Err(HNSWError::Storage(format!(
-                "Unsupported version: {version} (expected 2)"
+                "Unsupported version: {version} (expected 2 or 3)"
             )));
         }
 
@@ -208,14 +215,20 @@ impl HNSWIndex {
             reader.read_exact(nodes_bytes)?;
         }
 
-        // Read neighbor lists (length-prefixed postcard, always Memory mode when loading)
+        // Read neighbors (length-prefixed postcard)
         let mut len_bytes = [0u8; 4];
         reader.read_exact(&mut len_bytes)?;
         let neighbors_len = u32::from_le_bytes(len_bytes) as usize;
         let mut neighbors_bytes = vec![0u8; neighbors_len];
         reader.read_exact(&mut neighbors_bytes)?;
-        let neighbor_lists: NeighborLists = postcard::from_bytes(&neighbors_bytes)?;
-        let neighbors = GraphStorage::from_neighbor_lists(neighbor_lists);
+
+        // Handle v2 (NeighborLists) and v3 (GraphStorage) formats
+        let neighbors = if version == 2 {
+            let neighbor_lists: NeighborLists = postcard::from_bytes(&neighbors_bytes)?;
+            GraphStorage::from_neighbor_lists(neighbor_lists)
+        } else {
+            postcard::from_bytes(&neighbors_bytes)?
+        };
 
         // Read vectors (length-prefixed postcard)
         reader.read_exact(&mut len_bytes)?;
