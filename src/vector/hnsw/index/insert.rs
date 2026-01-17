@@ -69,17 +69,8 @@ impl HNSWIndex {
     /// Insert a vector into the index
     ///
     /// Returns the node ID assigned to this vector.
-    ///
-    /// **Note:** If the index was frozen (after batch_insert), this will
-    /// automatically unfreeze it for modification.
     #[instrument(skip(self, vector), fields(dimensions = vector.len(), index_size = self.len()))]
     pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
-        // Auto-unfreeze if needed for modifications
-        if self.neighbors.is_frozen() {
-            debug!("Unfreezing graph storage for incremental insert");
-            self.neighbors.unfreeze();
-        }
-
         self.validate_insert_vector(vector)?;
         let (node_id, level) = self.store_and_create_node(vector)?;
 
@@ -255,12 +246,6 @@ impl HNSWIndex {
 
         if vectors.is_empty() {
             return Ok(Vec::new());
-        }
-
-        // Auto-unfreeze if needed for modifications
-        if self.neighbors.is_frozen() {
-            debug!("Unfreezing graph storage for batch insert");
-            self.neighbors.unfreeze();
         }
 
         let batch_size = vectors.len();
@@ -505,11 +490,6 @@ impl HNSWIndex {
             rate_vec_per_sec = final_rate as u64,
             "Parallel batch insertion complete"
         );
-
-        // Freeze graph storage for optimized search (10-20% QPS gain)
-        // Converts ArcSwap-based storage to contiguous memory layout
-        self.neighbors.freeze();
-        debug!("Graph storage frozen for search optimization");
 
         Ok(node_ids)
     }

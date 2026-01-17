@@ -24,7 +24,7 @@ pub use types::{Cosine, Distance, NegDot, L2};
 // Re-export SIMD-enabled distance functions (single source of truth)
 pub use crate::distance::{cosine_distance, dot_product, l2_distance};
 
-pub use storage::{FrozenNeighborLists, NeighborLists, VectorStorage};
+pub use storage::{NeighborLists, VectorStorage};
 
 pub use graph_storage::GraphStorage;
 
