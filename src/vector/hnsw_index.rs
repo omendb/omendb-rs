@@ -752,31 +752,33 @@ impl HNSWIndex {
         &mut self.index
     }
 
-    /// Mark a node as deleted and repair the graph using MN-RU algorithm
+    /// Mark a node as deleted (lazy delete, O(1))
     ///
-    /// This method repairs the HNSW graph structure after a node is deleted,
-    /// maintaining recall quality by reconnecting orphaned edges.
+    /// The node is marked as deleted but remains in the graph. Deleted nodes
+    /// are filtered during search. Call `compact()` on VectorStore to rebuild
+    /// the index and reclaim space.
     ///
     /// # Arguments
     /// * `node_id` - The node ID to mark as deleted
     ///
     /// # Returns
-    /// Number of edges repaired across all levels
+    /// Always returns 0 (no graph repair performed)
     pub fn mark_deleted(&mut self, node_id: u32) -> Result<usize> {
         self.index
             .mark_deleted(node_id)
             .map_err(|e| anyhow::anyhow!(e))
     }
 
-    /// Batch mark multiple nodes as deleted with graph repair
+    /// Batch mark multiple nodes as deleted (lazy delete, O(n))
     ///
-    /// More efficient than individual deletions when deleting many nodes.
+    /// Marks nodes as deleted without graph repair. Deleted nodes are filtered
+    /// during search. Call `compact()` on VectorStore to rebuild the index.
     ///
     /// # Arguments
     /// * `node_ids` - Node IDs to delete
     ///
     /// # Returns
-    /// Total number of edges repaired
+    /// Always returns 0 (no graph repair performed)
     pub fn mark_deleted_batch(&mut self, node_ids: &[u32]) -> Result<usize> {
         self.index
             .mark_deleted_batch(node_ids)

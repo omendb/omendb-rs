@@ -1413,13 +1413,15 @@ impl VectorStore {
         self.update_by_index(slot as usize, vector, metadata)
     }
 
-    /// Delete vector by string ID
+    /// Delete vector by string ID (lazy delete)
     ///
     /// This method:
-    /// 1. Marks the vector as deleted (soft delete)
-    /// 2. Repairs the HNSW graph using MN-RU algorithm to maintain recall quality
+    /// 1. Marks the vector as deleted in bitmap (O(1) soft delete)
+    /// 2. Marks node as deleted in HNSW (filtered during search)
     /// 3. Removes from text index if present
     /// 4. Persists to WAL
+    ///
+    /// Deleted vectors are filtered during search. Call `compact()` to reclaim space.
     pub fn delete(&mut self, id: &str) -> Result<()> {
         // Delete from RecordStore (single source of truth)
         let slot = self
@@ -1429,14 +1431,14 @@ impl VectorStore {
 
         self.metadata_index.remove(slot);
 
-        // Repair HNSW graph using MN-RU algorithm
+        // Mark as deleted in HNSW (lazy - no graph repair, filtered during search)
         if let Some(ref mut hnsw) = self.hnsw_index {
             if let Err(e) = hnsw.mark_deleted(slot) {
                 tracing::warn!(
                     id = id,
                     slot = slot,
                     error = ?e,
-                    "Failed to repair HNSW graph after deletion"
+                    "Failed to mark node as deleted in HNSW"
                 );
             }
         }
@@ -1453,9 +1455,10 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Delete multiple vectors by string IDs
+    /// Delete multiple vectors by string IDs (lazy delete)
     ///
-    /// Uses batch MN-RU graph repair for better efficiency than individual deletes.
+    /// Marks vectors as deleted in bitmap. Deleted vectors are filtered during search.
+    /// Call `compact()` to reclaim space after bulk deletes.
     pub fn delete_batch(&mut self, ids: &[String]) -> Result<usize> {
         // Delete from RecordStore and collect slots
         let mut slots: Vec<u32> = Vec::with_capacity(ids.len());
@@ -1469,14 +1472,14 @@ impl VectorStore {
             }
         }
 
-        // Batch repair HNSW graph using MN-RU algorithm
+        // Mark as deleted in HNSW (lazy - filtered during search)
         if !slots.is_empty() {
             if let Some(ref mut hnsw) = self.hnsw_index {
                 if let Err(e) = hnsw.mark_deleted_batch(&slots) {
                     tracing::warn!(
                         count = slots.len(),
                         error = ?e,
-                        "Failed to batch repair HNSW graph after deletion"
+                        "Failed to batch mark nodes as deleted in HNSW"
                     );
                 }
             }
