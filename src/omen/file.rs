@@ -6,7 +6,7 @@ use crate::omen::{
     align_to_page,
     header::{OmenHeader, HEADER_SIZE},
     wal::{Wal, WalEntry},
-    NodeLocation, OmenFooter, OmenManifest, SegmentType,
+    ManifestHeader, NodeLocation, OmenFooter, OmenManifest, SegmentType,
 };
 use anyhow::Result;
 use fs2::FileExt;
@@ -136,10 +136,12 @@ impl OmenFile {
         let header = OmenHeader::new(dimensions);
         file.write_all(&header.to_bytes())?;
 
-        // Write initial empty Manifest and Footer
+        // Write initial empty Manifest with header and Footer
         let manifest = OmenManifest::new();
         let manifest_bytes = postcard::to_allocvec(&manifest).unwrap();
+        let manifest_header = ManifestHeader::new(&manifest_bytes);
         let manifest_offset = file.stream_position()?;
+        file.write_all(&manifest_header.to_bytes())?;
         file.write_all(&manifest_bytes)?;
 
         let total_len = file.stream_position()?;
@@ -209,23 +211,43 @@ impl OmenFile {
 
         let mut manifest = OmenManifest::new();
 
-        // Load manifest
+        // Load manifest with CRC validation
         if let Some(ref mmap) = mmap {
             let manifest_offset = footer.manifest_offset as usize;
-            if manifest_offset < mmap.len() {
-                let manifest_bytes = &mmap[manifest_offset..footer.total_len as usize];
-                manifest = postcard::from_bytes::<OmenManifest>(manifest_bytes).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Failed to decode manifest: {e}"),
-                    )
-                })?;
-            } else {
+            let header_end = manifest_offset + ManifestHeader::SIZE;
+
+            if header_end > mmap.len() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "Manifest offset out of bounds",
+                    "Manifest header out of bounds",
                 ));
             }
+
+            let manifest_header = ManifestHeader::from_bytes(&mmap[manifest_offset..header_end])?;
+            let data_end = header_end + manifest_header.length as usize;
+
+            if data_end > mmap.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Manifest data out of bounds",
+                ));
+            }
+
+            let manifest_bytes = &mmap[header_end..data_end];
+
+            if !manifest_header.verify(manifest_bytes) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Manifest CRC mismatch - data may be corrupted",
+                ));
+            }
+
+            manifest = postcard::from_bytes::<OmenManifest>(manifest_bytes).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Failed to decode manifest: {e}"),
+                )
+            })?;
         }
 
         // Note: vectors, id_to_index, index_to_id, metadata are now managed by RecordStore.
@@ -762,14 +784,21 @@ impl OmenFile {
             .config
             .insert("metric".to_string(), self.header.metric as u64);
 
-        // Write Manifest
+        // Write Manifest with CRC header
         let manifest_bytes = postcard::to_allocvec(&manifest)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let manifest_location = writer.write_aligned(&manifest_bytes, SegmentType::Manifest)?;
+        let manifest_header = ManifestHeader::new(&manifest_bytes);
+
+        // Write header + data at page-aligned offset
+        writer.current_offset = align_to_page(writer.current_offset as usize) as u64;
+        let manifest_offset = writer.current_offset;
+        writer.file.seek(SeekFrom::Start(writer.current_offset))?;
+        writer.file.write_all(&manifest_header.to_bytes())?;
+        writer.file.write_all(&manifest_bytes)?;
 
         // Write Footer
         let total_len = writer.file.stream_position()?;
-        let footer = OmenFooter::new(manifest_location.offset, total_len);
+        let footer = OmenFooter::new(manifest_offset, total_len);
         writer.file.write_all(&footer.to_bytes())?;
 
         // Truncate and sync
@@ -1175,6 +1204,74 @@ mod tests {
         {
             let db = OmenFile::open(&db_path).unwrap();
             assert_eq!(db.dimensions(), 128);
+        }
+    }
+
+    #[test]
+    fn test_manifest_crc_validation() {
+        use std::collections::HashMap;
+        use std::io::Write;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_crc.omen");
+
+        // Create a valid file
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+
+            let vectors: Vec<Option<Vec<f32>>> = vec![Some(vec![1.0, 2.0, 3.0])];
+            let mut id_to_slot: HashMap<String, u32> = HashMap::new();
+            id_to_slot.insert("vec1".to_string(), 0);
+            let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
+
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None, None)
+                .unwrap();
+        }
+
+        // Verify it opens successfully
+        {
+            let db = OmenFile::open(&db_path).unwrap();
+            assert_eq!(db.len(), 1);
+        }
+
+        // Corrupt the manifest data (after header, before footer)
+        {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&db_path)
+                .unwrap();
+            let len = file.metadata().unwrap().len();
+
+            // Read footer to get manifest offset
+            #[allow(clippy::cast_possible_wrap)]
+            file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))
+                .unwrap();
+            let mut footer_buf = [0u8; OmenFooter::SIZE];
+            file.read_exact(&mut footer_buf).unwrap();
+            let footer = OmenFooter::from_bytes(&footer_buf);
+
+            // Corrupt one byte of manifest data (after the 8-byte header)
+            let corrupt_offset = footer.manifest_offset + 8 + 1; // Skip header, corrupt second byte
+            if corrupt_offset < len - OmenFooter::SIZE as u64 {
+                file.seek(SeekFrom::Start(corrupt_offset)).unwrap();
+                file.write_all(&[0xFF]).unwrap();
+                file.sync_all().unwrap();
+            }
+        }
+
+        // Verify it fails to open with CRC error
+        {
+            let result = OmenFile::open(&db_path);
+            match result {
+                Ok(_) => panic!("Expected CRC error, but file opened successfully"),
+                Err(e) => {
+                    assert!(
+                        e.to_string().contains("CRC mismatch"),
+                        "Expected CRC error, got: {e}"
+                    );
+                }
+            }
         }
     }
 }

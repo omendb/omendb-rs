@@ -4,6 +4,61 @@
 
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
+use std::io;
+
+/// Manifest segment header (8 bytes)
+///
+/// Written immediately before manifest data to provide integrity checking.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ManifestHeader {
+    /// Length of manifest data (excluding this header)
+    pub length: u32,
+    /// CRC32 of manifest data
+    pub crc: u32,
+}
+
+impl ManifestHeader {
+    pub const SIZE: usize = 8;
+
+    /// Create a new header for the given manifest bytes
+    #[must_use]
+    pub fn new(manifest_bytes: &[u8]) -> Self {
+        Self {
+            length: manifest_bytes.len() as u32,
+            crc: crc32fast::hash(manifest_bytes),
+        }
+    }
+
+    /// Serialize to 8-byte array
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; 8] {
+        let mut bytes = [0u8; 8];
+        bytes[0..4].copy_from_slice(&self.length.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.crc.to_le_bytes());
+        bytes
+    }
+
+    /// Deserialize from bytes
+    pub fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
+        if bytes.len() < Self::SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Manifest header too short",
+            ));
+        }
+        Ok(Self {
+            length: u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
+            crc: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+        })
+    }
+
+    /// Verify CRC against manifest bytes
+    #[must_use]
+    pub fn verify(&self, manifest_bytes: &[u8]) -> bool {
+        manifest_bytes.len() == self.length as usize && crc32fast::hash(manifest_bytes) == self.crc
+    }
+}
 
 /// Omen Footer (64 bytes)
 ///
