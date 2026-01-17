@@ -5,7 +5,7 @@
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use omendb_lib::text::TextSearchConfig;
 use omendb_lib::vector::{
-    MetadataFilter, QuantizationMode, Vector, VectorStore, VectorStoreOptions,
+    MetadataFilter, QuantizationMode, SearchResult, Vector, VectorStore, VectorStoreOptions,
 };
 use parking_lot::RwLock;
 use pyo3::conversion::IntoPyObject;
@@ -158,8 +158,6 @@ fn build_store_options(
 /// Internal state for VectorDatabase
 struct VectorDatabaseInner {
     store: VectorStore,
-    index_to_id_cache: HashMap<usize, String>,
-    cache_valid: bool,
 }
 
 /// High-performance embedded vector database.
@@ -275,28 +273,18 @@ impl VectorDatabaseIterator {
 }
 
 /// Convert search results to Python list of dicts
-fn results_to_py(
-    py: Python<'_>,
-    results: &[(usize, f32, JsonValue)],
-    index_to_id: &HashMap<usize, String>,
-) -> PyResult<Vec<Py<PyDict>>> {
+fn results_to_py(py: Python<'_>, results: &[SearchResult]) -> PyResult<Vec<Py<PyDict>>> {
     let mut py_results = Vec::with_capacity(results.len());
 
-    for (idx, distance, metadata) in results {
+    for result in results {
         let dict = PyDict::new(py);
 
-        // Look up ID from cache
-        let id = index_to_id
-            .get(idx)
-            .map(|s| s.as_str())
-            .unwrap_or("unknown");
-
         // Use interned strings for dict keys (hot path optimization)
-        dict.set_item(pyo3::intern!(py, "id"), id)?;
-        dict.set_item(pyo3::intern!(py, "distance"), *distance)?;
+        dict.set_item(pyo3::intern!(py, "id"), &result.id)?;
+        dict.set_item(pyo3::intern!(py, "distance"), result.distance)?;
 
         // Convert metadata to Python dict
-        let metadata_dict = json_to_pyobject(py, metadata)?;
+        let metadata_dict = json_to_pyobject(py, &result.metadata)?;
         dict.set_item(pyo3::intern!(py, "metadata"), metadata_dict)?;
 
         py_results.push(dict.unbind());
@@ -397,9 +385,7 @@ impl VectorDatabase {
             let inner_arc = Arc::clone(&self.inner);
             let result = py.detach(|| {
                 let mut inner = inner_arc.write();
-                let result = inner.store.set_batch(batch).map_err(convert_error);
-                inner.cache_valid = false;
-                result
+                inner.store.set_batch(batch).map_err(convert_error)
             })?;
             return Ok(result.len());
         }
@@ -419,7 +405,6 @@ impl VectorDatabase {
                     .store
                     .set(id_str, Vector::new(vec_data), meta)
                     .map_err(convert_error)?;
-                inner.cache_valid = false;
                 return Ok(1);
             }
 
@@ -468,7 +453,6 @@ impl VectorDatabase {
                         inner.store.set_batch(batch).map_err(convert_error)?
                     };
 
-                    inner.cache_valid = false;
                     Ok(results.len())
                 })?;
                 return Ok(count);
@@ -538,20 +522,13 @@ impl VectorDatabase {
         let query_vec = Vector::new(extract_query_vector(query)?);
         let rust_filter = filter.map(parse_filter).transpose()?;
 
-        // Ensure index and cache are ready before releasing GIL
+        // Ensure index is ready before releasing GIL
         {
-            let needs_rebuild = {
-                let inner = self.inner.read();
-                !inner.cache_valid || inner.store.needs_index_rebuild()
-            };
-
-            if needs_rebuild {
+            let inner = self.inner.read();
+            if inner.store.needs_index_rebuild() {
+                drop(inner);
                 let mut inner = self.inner.write();
                 inner.store.ensure_index_ready().map_err(convert_error)?;
-                if !inner.cache_valid {
-                    inner.index_to_id_cache = inner.store.index_to_id_mapping();
-                    inner.cache_valid = true;
-                }
             }
         }
 
@@ -573,8 +550,7 @@ impl VectorDatabase {
         let results = results.map_err(convert_error)?;
 
         // Convert to Python (needs GIL)
-        let inner = self.inner.read();
-        results_to_py(py, &results, &inner.index_to_id_cache)
+        results_to_py(py, &results)
     }
 
     /// Debug timing search - returns timing breakdown in microseconds
@@ -592,10 +568,6 @@ impl VectorDatabase {
         {
             let mut inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
-            if !inner.cache_valid {
-                inner.index_to_id_cache = inner.store.index_to_id_mapping();
-                inner.cache_valid = true;
-            }
         }
 
         let inner_arc = Arc::clone(&self.inner);
@@ -714,24 +686,19 @@ impl VectorDatabase {
         {
             let mut inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
-            if !inner.cache_valid {
-                inner.index_to_id_cache = inner.store.index_to_id_mapping();
-                inner.cache_valid = true;
-            }
         }
 
         // Release GIL and search in parallel
-        let all_results: Vec<Result<Vec<(usize, f32, JsonValue)>, _>> = py.detach(|| {
+        let all_results: Vec<Result<Vec<SearchResult>, _>> = py.detach(|| {
             let inner = self.inner.read();
             inner.store.search_batch_with_metadata(&query_vecs, k, ef)
         });
 
         // Convert to Python
-        let inner = self.inner.read();
         let mut py_all_results = Vec::with_capacity(all_results.len());
         for result in all_results {
             let results = result.map_err(convert_error)?;
-            py_all_results.push(results_to_py(py, &results, &inner.index_to_id_cache)?);
+            py_all_results.push(results_to_py(py, &results)?);
         }
 
         Ok(py_all_results)
@@ -747,13 +714,7 @@ impl VectorDatabase {
     ///     0
     fn delete(&self, ids: Vec<String>) -> PyResult<usize> {
         let mut inner = self.inner.write();
-
-        let result = inner.store.delete_batch(&ids).map_err(convert_error)?;
-
-        // Invalidate cache since id_to_index changed
-        inner.cache_valid = false;
-
-        Ok(result)
+        inner.store.delete_batch(&ids).map_err(convert_error)
     }
 
     /// Delete vectors matching a metadata filter.
@@ -787,18 +748,10 @@ impl VectorDatabase {
         let parsed_filter = parse_filter(filter)?;
 
         let mut inner = self.inner.write();
-
-        let result = inner
+        inner
             .store
             .delete_by_filter(&parsed_filter)
-            .map_err(convert_error)?;
-
-        // Invalidate cache since id_to_index changed
-        if result > 0 {
-            inner.cache_valid = false;
-        }
-
-        Ok(result)
+            .map_err(convert_error)
     }
 
     /// Count vectors, optionally filtered by metadata.
@@ -922,7 +875,6 @@ impl VectorDatabase {
                     .set(id, final_vec, final_meta)
                     .map_err(convert_error)?;
             }
-            inner.cache_valid = false;
             return Ok(());
         }
 
@@ -1108,10 +1060,7 @@ impl VectorDatabase {
     ///     >>> db.search(...)  # Faster queries
     fn optimize(&mut self) -> PyResult<usize> {
         let mut inner = self.inner.write();
-        let result = inner.store.optimize().map_err(convert_error)?;
-        // Invalidate cache since internal indices have been remapped
-        inner.cache_valid = false;
-        Ok(result)
+        inner.store.optimize().map_err(convert_error)
     }
 
     /// Number of vectors in database (Pythonic).
@@ -1365,11 +1314,7 @@ impl VectorDatabase {
         };
 
         let collection_db = VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner {
-                store,
-                index_to_id_cache: HashMap::new(),
-                cache_valid: false,
-            })),
+            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path: collection_path.to_string_lossy().to_string(),
             dimensions: self.dimensions,
             is_persistent: true,
@@ -1682,10 +1627,7 @@ impl VectorDatabase {
     ///     Call periodically after bulk deletes, not after every delete.
     fn compact(&self) -> PyResult<usize> {
         let mut inner = self.inner.write();
-        let removed = inner.store.compact().map_err(convert_error)?;
-        // Invalidate cache since indices changed
-        inner.cache_valid = false;
-        Ok(removed)
+        inner.store.compact().map_err(convert_error)
     }
 
     // =========================================================================
@@ -1707,16 +1649,10 @@ impl VectorDatabase {
     fn merge_from(&self, other: &VectorDatabase) -> PyResult<usize> {
         let mut inner = self.inner.write();
         let other_inner = other.inner.read();
-
-        let count = inner
+        inner
             .store
             .merge_from(&other_inner.store)
-            .map_err(convert_error)?;
-
-        // Invalidate cache since id_to_index changed
-        inner.cache_valid = false;
-
-        Ok(count)
+            .map_err(convert_error)
     }
 
     /// Delete a collection from this database.
@@ -1895,11 +1831,7 @@ fn open(
             .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
 
         return Ok(VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner {
-                store,
-                index_to_id_cache: HashMap::new(),
-                cache_valid: true,
-            })),
+            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
             dimensions: effective_dims,
             is_persistent: false,
@@ -1969,11 +1901,7 @@ fn open(
         let store = options.open(&path).map_err(convert_error)?;
 
         return Ok(VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner {
-                store,
-                index_to_id_cache: HashMap::new(),
-                cache_valid: false,
-            })),
+            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
             dimensions: effective_dims,
             is_persistent: true,
@@ -1998,11 +1926,7 @@ fn open(
         .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
 
     Ok(VectorDatabase {
-        inner: Arc::new(RwLock::new(VectorDatabaseInner {
-            store,
-            index_to_id_cache: HashMap::new(),
-            cache_valid: true,
-        })),
+        inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
         path,
         dimensions: effective_dims,
         is_persistent: false,

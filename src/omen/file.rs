@@ -507,6 +507,8 @@ pub struct OmenSnapshot {
     pub dimensions: u32,
     /// HNSW index bytes (if persisted)
     pub hnsw_bytes: Option<Vec<u8>>,
+    /// Serialized MetadataIndex (if persisted)
+    pub metadata_index_bytes: Option<Vec<u8>>,
 }
 
 impl OmenFile {
@@ -603,6 +605,9 @@ impl OmenFile {
             }
         }
 
+        // Load serialized MetadataIndex if available
+        snapshot.metadata_index_bytes = self.manifest.metadata_index.clone();
+
         Ok(snapshot)
     }
 
@@ -618,6 +623,7 @@ impl OmenFile {
         deleted: &[u32],
         metadata: &HashMap<u32, serde_json::Value>,
         hnsw_bytes: Option<&[u8]>,
+        metadata_index_bytes: Option<&[u8]>,
     ) -> io::Result<()> {
         // Drop mmap before writing
         self.mmap = None;
@@ -729,6 +735,7 @@ impl OmenFile {
             }
         }
         manifest.metadata = metadata_bytes;
+        manifest.metadata_index = metadata_index_bytes.map(|b| b.to_vec());
 
         // Update config
         let live_count = vectors.len() - deleted.len();
@@ -1000,7 +1007,7 @@ mod tests {
         metadata.insert(1, serde_json::json!({"key": "value2"}));
 
         // Checkpoint from external snapshot
-        db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None)
+        db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None, None)
             .unwrap();
 
         // Verify header count updated
@@ -1039,7 +1046,7 @@ mod tests {
             metadata.insert(0, serde_json::json!({"k":"v1"}));
             metadata.insert(1, serde_json::json!({"k":"v2"}));
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None)
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None, None)
                 .unwrap();
         }
 
@@ -1092,7 +1099,7 @@ mod tests {
             id_to_slot.insert("vec1".to_string(), 0);
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None)
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None, None)
                 .unwrap();
 
             // WAL has 1 entry (checkpoint marker)
@@ -1122,7 +1129,7 @@ mod tests {
             id_to_slot.insert("vec1".to_string(), 0);
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None)
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None, None)
                 .unwrap();
 
             // Check that footer is there
@@ -1159,7 +1166,7 @@ mod tests {
             let id_to_slot: HashMap<String, u32> = HashMap::new();
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None)
+            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None, None)
                 .unwrap();
         }
 

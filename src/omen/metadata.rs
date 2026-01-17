@@ -413,6 +413,40 @@ impl FieldIndex {
     pub fn numeric() -> Self {
         Self::Numeric(NumericIndex::new())
     }
+
+    /// Serialize to bytes (type tag + index data)
+    pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        match self {
+            Self::Keyword(idx) => {
+                writer.write_all(&[0u8])?;
+                idx.serialize(writer)
+            }
+            Self::Boolean(idx) => {
+                writer.write_all(&[1u8])?;
+                idx.serialize(writer)
+            }
+            Self::Numeric(idx) => {
+                writer.write_all(&[2u8])?;
+                idx.serialize(writer)
+            }
+        }
+    }
+
+    /// Deserialize from bytes
+    pub fn deserialize<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let mut type_tag = [0u8; 1];
+        reader.read_exact(&mut type_tag)?;
+
+        match type_tag[0] {
+            0 => Ok(Self::Keyword(KeywordIndex::deserialize(reader)?)),
+            1 => Ok(Self::Boolean(BooleanIndex::deserialize(reader)?)),
+            2 => Ok(Self::Numeric(NumericIndex::deserialize(reader)?)),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Unknown field index type: {}", type_tag[0]),
+            )),
+        }
+    }
 }
 
 /// Metadata index - collection of field indexes
@@ -565,6 +599,63 @@ impl MetadataIndex {
             Some(FieldIndex::Numeric(idx)) => idx.matches_range(doc_id, f64::NEG_INFINITY, value),
             _ => false,
         }
+    }
+
+    /// Serialize to bytes
+    pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        // Write field count
+        writer.write_all(&(self.fields.len() as u32).to_le_bytes())?;
+
+        // Write each field
+        for (name, index) in &self.fields {
+            // Write field name (length-prefixed)
+            writer.write_all(&(name.len() as u32).to_le_bytes())?;
+            writer.write_all(name.as_bytes())?;
+
+            // Write field index
+            index.serialize(writer)?;
+        }
+
+        Ok(())
+    }
+
+    /// Serialize to bytes (convenience)
+    pub fn to_bytes(&self) -> io::Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        self.serialize(&mut buf)?;
+        Ok(buf)
+    }
+
+    /// Deserialize from bytes
+    pub fn deserialize<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let mut len_buf = [0u8; 4];
+        reader.read_exact(&mut len_buf)?;
+        let field_count = u32::from_le_bytes(len_buf) as usize;
+
+        let mut fields = HashMap::with_capacity(field_count);
+
+        for _ in 0..field_count {
+            // Read field name
+            reader.read_exact(&mut len_buf)?;
+            let name_len = u32::from_le_bytes(len_buf) as usize;
+            let mut name_buf = vec![0u8; name_len];
+            reader.read_exact(&mut name_buf)?;
+            let name = String::from_utf8(name_buf)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+            // Read field index
+            let index = FieldIndex::deserialize(reader)?;
+
+            fields.insert(name, index);
+        }
+
+        Ok(Self { fields })
+    }
+
+    /// Deserialize from bytes (convenience)
+    pub fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
+        let mut reader = std::io::Cursor::new(bytes);
+        Self::deserialize(&mut reader)
     }
 }
 

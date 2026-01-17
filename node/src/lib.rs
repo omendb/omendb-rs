@@ -248,10 +248,6 @@ pub struct StatsResult {
 
 struct VectorDatabaseInner {
     store: VectorStore,
-    /// Cached reverse index (index -> id) for fast lookups during search
-    index_to_id_cache: HashMap<usize, String>,
-    /// Track if cache is valid (invalidated on set/delete)
-    cache_valid: bool,
 }
 
 // ============================================================================
@@ -300,8 +296,6 @@ impl VectorDatabase {
 
         let mut inner = self.inner.write();
         let result = inner.store.set_batch(batch).map_err(convert_error)?;
-        inner.cache_valid = false;
-
         Ok(result.into_iter().map(|x| x as u32).collect())
     }
 
@@ -344,53 +338,17 @@ impl VectorDatabase {
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
         let max_dist_f32 = max_distance.map(|d| d as f32);
 
-        // Fast path: read lock when cache is valid
+        // Ensure index is ready
         {
             let inner = self.inner.read();
-            if inner.cache_valid && !inner.store.needs_index_rebuild() {
-                let results = inner
-                    .store
-                    .search_with_options_readonly(
-                        &query_vec,
-                        k as usize,
-                        metadata_filter.as_ref(),
-                        ef_usize,
-                        max_dist_f32,
-                    )
-                    .map_err(convert_error)?;
-
-                return Ok(results
-                    .into_iter()
-                    .map(|(idx, dist, meta)| {
-                        let id = inner
-                            .index_to_id_cache
-                            .get(&idx)
-                            .cloned()
-                            .unwrap_or_else(|| idx.to_string());
-                        SearchResult {
-                            id,
-                            distance: dist as f64,
-                            metadata: meta,
-                        }
-                    })
-                    .collect());
+            if inner.store.needs_index_rebuild() {
+                drop(inner);
+                let mut inner = self.inner.write();
+                inner.store.ensure_index_ready().map_err(convert_error)?;
             }
         }
 
-        // Slow path: rebuild cache if needed
-        let mut inner = self.inner.write();
-        inner.store.ensure_index_ready().map_err(convert_error)?;
-
-        if !inner.cache_valid {
-            inner.index_to_id_cache = inner
-                .store
-                .id_to_index_mapping()
-                .into_iter()
-                .map(|(id, idx)| (idx, id))
-                .collect();
-            inner.cache_valid = true;
-        }
-
+        let inner = self.inner.read();
         let results = inner
             .store
             .search_with_options_readonly(
@@ -404,17 +362,10 @@ impl VectorDatabase {
 
         Ok(results
             .into_iter()
-            .map(|(idx, dist, meta)| {
-                let id = inner
-                    .index_to_id_cache
-                    .get(&idx)
-                    .cloned()
-                    .unwrap_or_else(|| idx.to_string());
-                SearchResult {
-                    id,
-                    distance: dist as f64,
-                    metadata: meta,
-                }
+            .map(|r| SearchResult {
+                id: r.id,
+                distance: r.distance as f64,
+                metadata: r.metadata,
             })
             .collect())
     }
@@ -448,19 +399,10 @@ impl VectorDatabase {
             .map(|q| Vector::new(extract_query_vector(q)))
             .collect();
 
-        // Ensure index and cache are ready (may block briefly)
+        // Ensure index is ready (may block briefly)
         {
             let mut inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
-            if !inner.cache_valid {
-                inner.index_to_id_cache = inner
-                    .store
-                    .id_to_index_mapping()
-                    .into_iter()
-                    .map(|(id, idx)| (idx, id))
-                    .collect();
-                inner.cache_valid = true;
-            }
         }
 
         // Clone Arc for spawn_blocking
@@ -482,17 +424,10 @@ impl VectorDatabase {
                 output.push(
                     results
                         .into_iter()
-                        .map(|(idx, dist, meta)| {
-                            let id = inner
-                                .index_to_id_cache
-                                .get(&idx)
-                                .cloned()
-                                .unwrap_or_else(|| idx.to_string());
-                            SearchResult {
-                                id,
-                                distance: dist as f64,
-                                metadata: meta,
-                            }
+                        .map(|r| SearchResult {
+                            id: r.id,
+                            distance: r.distance as f64,
+                            metadata: r.metadata,
                         })
                         .collect(),
                 );
@@ -525,8 +460,7 @@ impl VectorDatabase {
     pub fn delete(&self, ids: Vec<String>) -> Result<u32> {
         let mut inner = self.inner.write();
         let result = inner.store.delete_batch(&ids).map_err(convert_error)?;
-        inner.cache_valid = false;
-        Ok(result as u32)
+                Ok(result as u32)
     }
 
     /// Delete vectors matching a metadata filter.
@@ -562,8 +496,7 @@ impl VectorDatabase {
             .map_err(convert_error)?;
 
         if result > 0 {
-            inner.cache_valid = false;
-        }
+                    }
 
         Ok(result as u32)
     }
@@ -617,8 +550,7 @@ impl VectorDatabase {
             .store
             .update(&id, vec, metadata)
             .map_err(convert_error)?;
-        inner.cache_valid = false;
-        Ok(())
+                Ok(())
     }
 
     /// Get number of vectors in database.
@@ -742,11 +674,7 @@ impl VectorDatabase {
                 .map_err(convert_error)?
         };
 
-        let inner = Arc::new(RwLock::new(VectorDatabaseInner {
-            store,
-            index_to_id_cache: HashMap::new(),
-            cache_valid: false,
-        }));
+        let inner = Arc::new(RwLock::new(VectorDatabaseInner { store }));
 
         // Cache and return
         cache.insert(name, Arc::clone(&inner));
@@ -893,8 +821,7 @@ impl VectorDatabase {
             results.push(index as u32);
         }
 
-        inner.cache_valid = false;
-        Ok(results)
+                Ok(results)
     }
 
     /// Search using text only (BM25 scoring).
@@ -1072,8 +999,7 @@ impl VectorDatabase {
     pub fn compact(&self) -> Result<u32> {
         let mut inner = self.inner.write();
         let removed = inner.store.compact().map_err(convert_error)?;
-        inner.cache_valid = false;
-        Ok(removed as u32)
+                Ok(removed as u32)
     }
 
     /// Close the database and release file locks.
@@ -1095,8 +1021,6 @@ impl VectorDatabase {
             .build()
             .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
         inner.store = dummy_store;
-        inner.cache_valid = false;
-        inner.index_to_id_cache.clear();
         Ok(())
     }
 
@@ -1110,7 +1034,6 @@ impl VectorDatabase {
     pub fn optimize(&self) -> Result<u32> {
         let mut inner = self.inner.write();
         let result = inner.store.optimize().map_err(convert_error)?;
-        inner.cache_valid = false;
         Ok(result as u32)
     }
 
@@ -1128,8 +1051,7 @@ impl VectorDatabase {
             .store
             .merge_from(&other_inner.store)
             .map_err(convert_error)?;
-        inner.cache_valid = false;
-
+        
         Ok(count as u32)
     }
 
@@ -1384,11 +1306,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         })?;
 
         return Ok(VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner {
-                store,
-                index_to_id_cache: HashMap::new(),
-                cache_valid: true,
-            })),
+            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
             dimensions: dimensions as u32,
             is_persistent: false,
@@ -1412,11 +1330,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let store = store_options.open(&path).map_err(convert_error)?;
 
     Ok(VectorDatabase {
-        inner: Arc::new(RwLock::new(VectorDatabaseInner {
-            store,
-            index_to_id_cache: HashMap::new(),
-            cache_valid: false,
-        })),
+        inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
         path,
         dimensions: dimensions as u32,
         is_persistent: true,

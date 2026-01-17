@@ -22,7 +22,7 @@
 //! store.write().set("id1".to_string(), vec, metadata).unwrap();
 //! ```
 
-use super::{VectorStore, VectorStoreOptions};
+use super::{SearchResult, VectorStore, VectorStoreOptions};
 use crate::vector::types::Vector;
 use anyhow::Result;
 use parking_lot::RwLock;
@@ -122,8 +122,8 @@ impl ThreadSafeVectorStore {
     // Basic Read Operations (shared lock)
     // ========================================================================
 
-    /// Search for k nearest neighbors (returns index, distance, metadata)
-    pub fn search(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32, JsonValue)>> {
+    /// Search for k nearest neighbors
+    pub fn search(&self, query: &Vector, k: usize) -> Result<Vec<SearchResult>> {
         self.inner.read().search(query, k, None)
     }
 

@@ -18,6 +18,8 @@ pub use options::VectorStoreOptions;
 pub use record_store::{Record, RecordStore};
 pub use thread_safe::ThreadSafeVectorStore;
 
+// SearchResult is defined in this module and re-exported from lib.rs
+
 use super::hnsw::HNSWParams;
 use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
@@ -220,6 +222,29 @@ fn initialize_standard_hnsw(
 #[inline]
 fn default_metadata() -> JsonValue {
     serde_json::json!({})
+}
+
+/// Search result with user ID, distance, and metadata
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    /// User-provided document ID
+    pub id: String,
+    /// Distance from query (lower = more similar for L2)
+    pub distance: f32,
+    /// Document metadata
+    pub metadata: JsonValue,
+}
+
+impl SearchResult {
+    /// Create a new search result
+    #[inline]
+    pub fn new(id: String, distance: f32, metadata: JsonValue) -> Self {
+        Self {
+            id,
+            distance,
+            metadata,
+        }
+    }
 }
 
 /// Vector store with HNSW indexing
@@ -546,13 +571,34 @@ impl VectorStore {
             None
         };
 
-        // Build metadata index from RecordStore
-        let mut metadata_index = MetadataIndex::new();
-        for (slot, record) in records.iter_live() {
-            if let Some(ref meta) = record.metadata {
-                metadata_index.index_json(slot, meta);
+        // Load or rebuild metadata index
+        let metadata_index = if let Some(ref bytes) = snapshot.metadata_index_bytes {
+            match MetadataIndex::from_bytes(bytes) {
+                Ok(index) => {
+                    tracing::debug!("Loaded MetadataIndex from disk");
+                    index
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to deserialize MetadataIndex, rebuilding: {}", e);
+                    let mut index = MetadataIndex::new();
+                    for (slot, record) in records.iter_live() {
+                        if let Some(ref meta) = record.metadata {
+                            index.index_json(slot, meta);
+                        }
+                    }
+                    index
+                }
             }
-        }
+        } else {
+            // No persisted index, build from scratch
+            let mut index = MetadataIndex::new();
+            for (slot, record) in records.iter_live() {
+                if let Some(ref meta) = record.metadata {
+                    index.index_json(slot, meta);
+                }
+            }
+            index
+        };
 
         // Enable rescore if quantized
         let rescore_enabled = hnsw_index
@@ -1184,11 +1230,7 @@ impl VectorStore {
         let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
-            .filter_map(|(idx, distance, _)| {
-                self.records
-                    .get_id(idx as u32)
-                    .map(|id| (id.to_string(), distance))
-            })
+            .map(|r| (r.id, r.distance))
             .collect();
 
         let text_results = self.text_search(query_text, fetch_k)?;
@@ -1302,11 +1344,7 @@ impl VectorStore {
         let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
         let vector_results: Vec<(String, f32)> = vector_results
             .into_iter()
-            .filter_map(|(idx, distance, _)| {
-                self.records
-                    .get_id(idx as u32)
-                    .map(|id| (id.to_string(), distance))
-            })
+            .map(|r| (r.id, r.distance))
             .collect();
 
         let text_results = self.text_search(query_text, fetch_k)?;
@@ -1852,7 +1890,7 @@ impl VectorStore {
         query: &Vector,
         k: usize,
         filter: &MetadataFilter,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         self.knn_search_with_filter_ef_readonly(query, k, filter, None)
     }
 
@@ -1865,7 +1903,7 @@ impl VectorStore {
         k: usize,
         filter: &MetadataFilter,
         ef: Option<usize>,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         self.knn_search_with_filter_ef_readonly(query, k, filter, ef)
     }
 
@@ -1879,7 +1917,7 @@ impl VectorStore {
         k: usize,
         filter: &MetadataFilter,
         ef: Option<usize>,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         // Use provided ef, or fall back to stored hnsw_ef_search
         // Ensure ef >= k (HNSW requirement)
         let effective_ef = compute_effective_ef(ef, self.hnsw_ef_search, k);
@@ -1910,15 +1948,12 @@ impl VectorStore {
                 hnsw.search_with_filter_ef(&query.data, k, Some(effective_ef), filter_fn)?
             };
 
-            let filtered_results: Vec<(usize, f32, JsonValue)> = search_results
+            let filtered_results: Vec<SearchResult> = search_results
                 .into_iter()
-                .map(|(index, distance)| {
-                    let metadata = self
-                        .records
-                        .get_by_slot(index as u32)
-                        .and_then(|r| r.metadata.clone())
-                        .unwrap_or_else(default_metadata);
-                    (index, distance, metadata)
+                .filter_map(|(slot, distance)| {
+                    let record = self.records.get_by_slot(slot as u32)?;
+                    let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                    Some(SearchResult::new(record.id.clone(), distance, metadata))
                 })
                 .collect();
 
@@ -1926,12 +1961,10 @@ impl VectorStore {
         }
 
         // Fallback: brute-force search with filtering
-        let mut all_results: Vec<(usize, f32, JsonValue)> = self
+        let mut all_results: Vec<SearchResult> = self
             .records
             .iter_live()
             .filter_map(|(slot, record)| {
-                let index = slot as usize;
-
                 // Use bitmap if available, otherwise JSON
                 let passes_filter = if let Some(ref bitmap) = filter_bitmap {
                     bitmap.contains(slot)
@@ -1946,11 +1979,11 @@ impl VectorStore {
 
                 let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
                 let distance = l2_distance(&query.data, &record.vector);
-                Some((index, distance, metadata))
+                Some(SearchResult::new(record.id.clone(), distance, metadata))
             })
             .collect();
 
-        all_results.sort_by(|a, b| a.1.total_cmp(&b.1));
+        all_results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         all_results.truncate(k);
 
         Ok(all_results)
@@ -1964,7 +1997,7 @@ impl VectorStore {
         query: &Vector,
         k: usize,
         filter: Option<&MetadataFilter>,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         self.search_with_options_readonly(query, k, filter, None, None)
     }
 
@@ -1977,7 +2010,7 @@ impl VectorStore {
         k: usize,
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         self.search_with_options_readonly(query, k, filter, ef, None)
     }
 
@@ -1991,7 +2024,7 @@ impl VectorStore {
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
         max_distance: Option<f32>,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         self.search_with_options_readonly(query, k, filter, ef, max_distance)
     }
 
@@ -2002,7 +2035,7 @@ impl VectorStore {
         k: usize,
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         self.search_with_options_readonly(query, k, filter, ef, None)
     }
 
@@ -2014,23 +2047,17 @@ impl VectorStore {
         filter: Option<&MetadataFilter>,
         ef: Option<usize>,
         max_distance: Option<f32>,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         let mut results = if let Some(f) = filter {
             self.knn_search_with_filter_ef_readonly(query, k, f, ef)?
         } else {
             let results = self.knn_search_readonly(query, k, ef)?;
-            let filtered: Vec<(usize, f32, JsonValue)> = results
+            let filtered: Vec<SearchResult> = results
                 .into_iter()
-                .filter_map(|(index, distance)| {
-                    if !self.records.is_live(index as u32) {
-                        return None;
-                    }
-                    let metadata = self
-                        .records
-                        .get_by_slot(index as u32)
-                        .and_then(|r| r.metadata.clone())
-                        .unwrap_or_else(default_metadata);
-                    Some((index, distance, metadata))
+                .filter_map(|(slot, distance)| {
+                    let record = self.records.get_by_slot(slot as u32)?;
+                    let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                    Some(SearchResult::new(record.id.clone(), distance, metadata))
                 })
                 .collect();
 
@@ -2043,7 +2070,7 @@ impl VectorStore {
         };
 
         if let Some(max_dist) = max_distance {
-            results.retain(|(_, distance, _)| *distance <= max_dist);
+            results.retain(|r| r.distance <= max_dist);
         }
 
         Ok(results)
@@ -2059,20 +2086,14 @@ impl VectorStore {
         &self,
         query: &Vector,
         k: usize,
-    ) -> Result<Vec<(usize, f32, JsonValue)>> {
+    ) -> Result<Vec<SearchResult>> {
         let results = self.knn_search_brute_force(query, k)?;
         Ok(results
             .into_iter()
-            .filter_map(|(index, distance)| {
-                if !self.records.is_live(index as u32) {
-                    return None;
-                }
-                let metadata = self
-                    .records
-                    .get_by_slot(index as u32)
-                    .and_then(|r| r.metadata.clone())
-                    .unwrap_or_else(default_metadata);
-                Some((index, distance, metadata))
+            .filter_map(|(slot, distance)| {
+                let record = self.records.get_by_slot(slot as u32)?;
+                let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                Some(SearchResult::new(record.id.clone(), distance, metadata))
             })
             .collect())
     }
@@ -2101,7 +2122,7 @@ impl VectorStore {
         queries: &[Vector],
         k: usize,
         ef: Option<usize>,
-    ) -> Vec<Result<Vec<(usize, f32, JsonValue)>>> {
+    ) -> Vec<Result<Vec<SearchResult>>> {
         queries
             .par_iter()
             .map(|q| self.search_with_ef_readonly(q, k, None, ef))
@@ -2397,6 +2418,9 @@ impl VectorStore {
                 .map(postcard::to_allocvec)
                 .transpose()?;
 
+            // Serialize MetadataIndex for fast recovery
+            let metadata_index_bytes = self.metadata_index.to_bytes().ok();
+
             // Checkpoint from RecordStore data (not OmenFile's internal state)
             storage.checkpoint_from_snapshot(
                 &vectors,
@@ -2404,6 +2428,7 @@ impl VectorStore {
                 &deleted,
                 &metadata,
                 hnsw_bytes.as_deref(),
+                metadata_index_bytes.as_deref(),
             )?;
         }
 

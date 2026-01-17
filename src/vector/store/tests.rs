@@ -477,8 +477,8 @@ fn test_search_with_filter() {
 
     // Should only return Alice's documents (doc1 and doc3)
     assert_eq!(results.len(), 2);
-    for (_, _, metadata) in &results {
-        assert_eq!(metadata.get("author").unwrap(), "Alice");
+    for result in &results {
+        assert_eq!(result.metadata.get("author").unwrap(), "Alice");
     }
 }
 
