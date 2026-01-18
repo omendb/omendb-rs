@@ -14,6 +14,7 @@ mod prefetch;
 mod query_buffers;
 mod storage;
 mod types;
+mod unified_storage;
 
 // Public API exports
 pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
@@ -35,3 +36,6 @@ pub use error::{HNSWError, Result};
 
 // Re-export graph merging
 pub use merge::{GraphMerger, MergeConfig, MergeStats};
+
+// V1 architecture - unified node storage
+pub use unified_storage::UnifiedNodeStorage;
