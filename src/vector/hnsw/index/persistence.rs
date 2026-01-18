@@ -235,10 +235,7 @@ impl HNSWIndex {
         let vectors_len = u32::from_le_bytes(len_bytes) as usize;
         let mut vectors_bytes = vec![0u8; vectors_len];
         reader.read_exact(&mut vectors_bytes)?;
-        let mut vectors: VectorStorage = postcard::from_bytes(&vectors_bytes)?;
-
-        // Reconstruct internal state that isn't serialized (e.g., precomputed norms)
-        vectors.reconstruct_after_load();
+        let vectors: VectorStorage = postcard::from_bytes(&vectors_bytes)?;
 
         // Verify dimensions match
         if vectors.dimensions() != dimensions {

@@ -337,16 +337,6 @@ impl NeighborLists {
         self.neighbors[node_idx][level_idx].store(Arc::new(neighbors_list.into_boxed_slice()));
     }
 
-    /// Get total number of neighbor entries
-    #[must_use]
-    pub fn total_neighbors(&self) -> usize {
-        self.neighbors
-            .iter()
-            .flat_map(|node| node.iter())
-            .map(|level| level.load().len())
-            .sum()
-    }
-
     /// Get memory usage in bytes (approximate)
     #[must_use]
     pub fn memory_usage(&self) -> usize {
@@ -651,14 +641,6 @@ impl VectorStorage {
     #[must_use]
     pub fn is_sq8(&self) -> bool {
         matches!(self, Self::ScalarQuantized { .. })
-    }
-
-    /// Reconstruct internal state after deserialization
-    ///
-    /// Currently a no-op since SQ8 doesn't need reconstruction.
-    /// Kept for API compatibility.
-    pub fn reconstruct_after_load(&mut self) {
-        // SQ8 doesn't need reconstruction - params are fully serialized
     }
 
     /// Get number of vectors stored
@@ -1372,57 +1354,6 @@ impl VectorStorage {
     #[must_use]
     pub fn is_quantized_and_trained(&self) -> bool {
         matches!(self, Self::ScalarQuantized { trained: true, .. })
-    }
-
-    /// Get raw quantized code slice for a vector ID
-    ///
-    /// Returns None if not quantized, not trained, or ID out of bounds.
-    #[must_use]
-    pub fn get_quantized_code(&self, id: u32) -> Option<&[u8]> {
-        match self {
-            Self::ScalarQuantized {
-                quantized,
-                count,
-                dimensions,
-                trained: true,
-                ..
-            } => {
-                let idx = id as usize;
-                if idx >= *count {
-                    return None;
-                }
-                let start = idx * *dimensions;
-                let end = start + *dimensions;
-                Some(&quantized[start..end])
-            }
-            _ => None,
-        }
-    }
-
-    /// Get code size (dimensions) for quantized storage
-    #[must_use]
-    pub fn quantized_code_size(&self) -> Option<usize> {
-        match self {
-            Self::ScalarQuantized {
-                dimensions,
-                trained: true,
-                ..
-            } => Some(*dimensions),
-            _ => None,
-        }
-    }
-
-    /// Get entire quantized data slice
-    #[must_use]
-    pub fn quantized_data(&self) -> Option<&[u8]> {
-        match self {
-            Self::ScalarQuantized {
-                quantized,
-                trained: true,
-                ..
-            } => Some(quantized),
-            _ => None,
-        }
     }
 }
 
