@@ -384,6 +384,126 @@ impl UnifiedNodeStorage {
             StorageBacking::Mmap(mmap) => mmap.len(),
         }
     }
+
+    // =========================================================================
+    // Layout accessors (for persistence)
+    // =========================================================================
+
+    /// Offset to neighbors array in node layout
+    #[inline]
+    #[must_use]
+    pub fn neighbors_offset(&self) -> usize {
+        self.neighbors_offset
+    }
+
+    /// Offset to vector data in node layout
+    #[inline]
+    #[must_use]
+    pub fn vector_offset(&self) -> usize {
+        self.vector_offset
+    }
+
+    /// Offset to metadata in node layout
+    #[inline]
+    #[must_use]
+    pub fn metadata_offset(&self) -> usize {
+        self.metadata_offset
+    }
+
+    /// Get raw bytes of storage data (for persistence)
+    ///
+    /// Returns a slice of all node data (len * node_size bytes).
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        match &self.backing {
+            StorageBacking::Owned { data, .. } => {
+                if self.len == 0 {
+                    &[]
+                } else {
+                    unsafe { std::slice::from_raw_parts(data.as_ptr(), self.len * self.node_size) }
+                }
+            }
+            #[cfg(feature = "mmap")]
+            StorageBacking::Mmap(mmap) => &mmap[..self.len * self.node_size],
+        }
+    }
+
+    /// Construct storage from raw bytes (for loading)
+    ///
+    /// Takes ownership of the data vector.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_bytes(
+        data: Vec<u8>,
+        len: usize,
+        node_size: usize,
+        neighbors_offset: usize,
+        vector_offset: usize,
+        metadata_offset: usize,
+        dimensions: usize,
+        max_neighbors: usize,
+    ) -> Self {
+        use std::alloc::Layout;
+
+        let capacity = if node_size > 0 && !data.is_empty() {
+            data.len() / node_size
+        } else {
+            0
+        };
+
+        // Convert Vec<u8> to owned allocation
+        let backing = if data.is_empty() {
+            StorageBacking::default()
+        } else {
+            let layout = Layout::from_size_align(data.len(), CACHE_LINE).expect("Invalid layout");
+            // SAFETY: We're taking ownership of the data and converting to NonNull
+            let ptr = {
+                let boxed = data.into_boxed_slice();
+                let raw = Box::into_raw(boxed) as *mut u8;
+                NonNull::new(raw).expect("Box should not be null")
+            };
+            StorageBacking::Owned {
+                data: ptr,
+                layout,
+                capacity,
+            }
+        };
+
+        Self {
+            backing,
+            len,
+            node_size,
+            neighbors_offset,
+            vector_offset,
+            metadata_offset,
+            dimensions,
+            max_neighbors,
+        }
+    }
+
+    /// Construct storage from memory-mapped file (for mmap loading)
+    #[cfg(feature = "mmap")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_mmap(
+        mmap: memmap2::Mmap,
+        len: usize,
+        node_size: usize,
+        neighbors_offset: usize,
+        vector_offset: usize,
+        metadata_offset: usize,
+        dimensions: usize,
+        max_neighbors: usize,
+    ) -> Self {
+        Self {
+            backing: StorageBacking::Mmap(mmap),
+            len,
+            node_size,
+            neighbors_offset,
+            vector_offset,
+            metadata_offset,
+            dimensions,
+            max_neighbors,
+        }
+    }
 }
 
 impl Drop for UnifiedNodeStorage {

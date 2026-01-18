@@ -15,6 +15,7 @@ mod prefetch;
 mod query_buffers;
 mod segment;
 mod segment_manager;
+mod segment_persistence;
 mod storage;
 mod types;
 mod unified_storage;

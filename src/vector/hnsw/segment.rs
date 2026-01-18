@@ -194,6 +194,23 @@ pub struct FrozenSegment {
 }
 
 impl FrozenSegment {
+    /// Construct from individual parts (for loading from disk)
+    pub(crate) fn from_parts(
+        id: u64,
+        entry_point: Option<u32>,
+        params: HNSWParams,
+        distance_fn: DistanceFunction,
+        storage: UnifiedNodeStorage,
+    ) -> Self {
+        Self {
+            storage,
+            id,
+            entry_point,
+            params,
+            distance_fn,
+        }
+    }
+
     /// Create from mutable segment
     fn from_mutable(mutable: MutableSegment) -> Self {
         let dimensions = mutable.index.dimensions();
