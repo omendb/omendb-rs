@@ -465,9 +465,91 @@ def append_to_history(metadata: dict, results: list):
     print(f"History updated: {history_path} ({len(history)} entries)")
 
 
+def check_regressions(results: list) -> bool:
+    """Compare results to previous runs and warn about regressions.
+
+    Returns True if regressions detected.
+    """
+    history_path = Path(__file__).parent / "benchmarks" / "history.json"
+    if not history_path.exists():
+        return False
+
+    with open(history_path) as f:
+        history = json.load(f)
+
+    if len(history) < 2:
+        return False
+
+    # Get previous entry (before the one we just added)
+    prev = history[-2]
+
+    # Build lookup of previous results by config
+    prev_by_config = {}
+    for r in prev.get("results", []):
+        cfg = r.get("config", {})
+        key = (cfg.get("n_vectors"), cfg.get("dimensions"))
+        prev_by_config[key] = r
+
+    regressions = []
+    for r in results:
+        cfg = r.get("config", {})
+        key = (cfg.get("n_vectors"), cfg.get("dimensions"))
+
+        prev_r = prev_by_config.get(key)
+        if not prev_r:
+            continue
+
+        # Check recall regression (>5% drop is significant)
+        recall = r.get("recall", {})
+        prev_recall = prev_r.get("recall", {})
+        if recall and prev_recall:
+            cur = recall.get("recall_at_k", 0)
+            pre = prev_recall.get("recall_at_k", 0)
+            if pre > 0 and cur < pre * 0.95:
+                regressions.append(
+                    f"  Recall@10 regression at {key[0]:,}/{key[1]}D: {pre:.1%} → {cur:.1%} ({(cur - pre) / pre:+.1%})"
+                )
+
+        # Check search QPS regression (>20% drop is significant)
+        search = r.get("search", {})
+        prev_search = prev_r.get("search", {})
+        if search and prev_search:
+            cur_qps = search.get("qps", 0)
+            pre_qps = prev_search.get("qps", 0)
+            if pre_qps > 0 and cur_qps < pre_qps * 0.80:
+                regressions.append(
+                    f"  Search QPS regression at {key[0]:,}/{key[1]}D: {pre_qps:,.0f} → {cur_qps:,.0f} ({(cur_qps - pre_qps) / pre_qps:+.0%})"
+                )
+
+        # Check build throughput regression (>20% drop is significant)
+        build = r.get("build", {})
+        prev_build = prev_r.get("build", {})
+        if build and prev_build:
+            cur_vps = build.get("vec_per_s", 0)
+            pre_vps = prev_build.get("vec_per_s", 0)
+            if pre_vps > 0 and cur_vps < pre_vps * 0.80:
+                regressions.append(
+                    f"  Build regression at {key[0]:,}/{key[1]}D: {pre_vps:,.0f} → {cur_vps:,.0f} ({(cur_vps - pre_vps) / pre_vps:+.0%})"
+                )
+
+    if regressions:
+        print("\n" + "!" * 60)
+        print("WARNING: Performance regressions detected!")
+        print("!" * 60)
+        for r in regressions:
+            print(r)
+        print("!" * 60)
+        return True
+
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="OmenDB Performance Benchmark")
     parser.add_argument("--full", action="store_true", help="Run full benchmark suite")
+    parser.add_argument(
+        "--scale", action="store_true", help="Run scale tests (10K, 50K, 100K at 128D)"
+    )
     parser.add_argument("--hybrid", action="store_true", help="Run hybrid search benchmarks")
     parser.add_argument("--dimension", type=int, default=128, help="Vector dimension")
     parser.add_argument("--vectors", type=int, default=10000, help="Number of vectors")
@@ -496,6 +578,14 @@ def main():
         # Hybrid search benchmarks
         result = run_hybrid_benchmark(args.vectors, args.dimension)
         all_results.append(result)
+    elif args.scale:
+        # Scale tests at 128D (quick way to test large datasets)
+        print("\n" + "=" * 60)
+        print("Scale Test (128D)")
+        print("=" * 60)
+        for n in [10000, 50000, 100000]:
+            result = run_benchmark(n, 128)
+            all_results.append(result)
     elif args.full:
         # Multiple dimensions
         for dim in [128, 384, 768, 1536]:
@@ -533,6 +623,7 @@ def main():
     # Append to history unless disabled
     if not args.no_history:
         append_to_history(metadata, all_results)
+        check_regressions(all_results)
 
 
 if __name__ == "__main__":
