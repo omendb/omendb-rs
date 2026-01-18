@@ -13,6 +13,7 @@ mod merge;
 mod prefetch;
 mod query_buffers;
 mod segment;
+mod segment_manager;
 mod storage;
 mod types;
 mod unified_storage;
@@ -40,4 +41,5 @@ pub use merge::{GraphMerger, MergeConfig, MergeStats};
 
 // V1 architecture - unified node storage and segments
 pub use segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
+pub use segment_manager::{SegmentConfig, SegmentManager};
 pub use unified_storage::UnifiedNodeStorage;
