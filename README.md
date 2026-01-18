@@ -36,7 +36,7 @@ results = db.search([0.1] * 128, k=5, filter={"category": "science"})
 - **Persistent** - Data survives restarts automatically
 - **Filtered search** - Query by metadata with JSON-style filters
 - **Hybrid search** - Combine vector similarity with BM25 text search
-- **Quantization** - 4-8x smaller indexes with minimal recall loss
+- **Quantization** - 4x smaller indexes with minimal recall loss
 
 ## Platforms
 

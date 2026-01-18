@@ -7,7 +7,7 @@
 //! - Fast binary serialization (<1 second for 100K vectors)
 //! - Configurable parameters (M, `ef_construction`, `ef_search`)
 //! - Multiple distance functions (L2, cosine, dot product)
-//! - Optional binary quantization (32x memory reduction)
+//! - Optional SQ8 quantization (4x memory reduction)
 
 use super::hnsw::{DistanceFunction, HNSWIndex as CoreHNSW, HNSWParams as CoreParams};
 use anyhow::Result;
@@ -497,38 +497,6 @@ impl HNSWIndex {
             .map_err(|e| anyhow::anyhow!(e))?;
 
         // Convert to (id, distance) tuples
-        let neighbors: Vec<(usize, f32)> = results
-            .iter()
-            .map(|r| (r.id as usize, r.distance))
-            .collect();
-
-        Ok(neighbors)
-    }
-
-    /// Search using quantized (ADC) distances only - no exact distance calculation.
-    ///
-    /// Use when rescore=False for maximum speed (accepts quantization error).
-    /// Falls back to regular search if not in asymmetric mode.
-    #[inline]
-    pub(crate) fn search_asymmetric_ef(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef: usize,
-    ) -> Result<Vec<(usize, f32)>> {
-        if query.len() != self.dimensions {
-            anyhow::bail!(
-                "Query dimension mismatch: expected {}, got {}",
-                self.dimensions,
-                query.len()
-            );
-        }
-
-        let results = self
-            .index
-            .search(query, k, ef)
-            .map_err(|e| anyhow::anyhow!(e))?;
-
         let neighbors: Vec<(usize, f32)> = results
             .iter()
             .map(|r| (r.id as usize, r.distance))

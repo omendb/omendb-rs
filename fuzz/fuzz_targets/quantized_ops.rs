@@ -2,7 +2,7 @@
 
 //! Fuzz target for quantized VectorStore operations.
 //!
-//! This target specifically tests SQ8 and RaBitQ quantization modes,
+//! This target specifically tests SQ8 quantization mode,
 //! which had 10 bugs fixed in v0.0.12. High-risk area for regressions.
 
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
@@ -182,76 +182,6 @@ fn run_with_sq8(ops: Vec<QuantizedOp>) {
     }
 }
 
-fn run_with_rabitq(ops: Vec<QuantizedOp>) {
-    let temp_dir = match TempDir::new() {
-        Ok(dir) => dir,
-        Err(_) => return,
-    };
-
-    let mut store = match VectorStoreOptions::default()
-        .dimensions(DIMENSIONS)
-        .quantization_rabitq()
-        .open(temp_dir.path())
-    {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-
-    for op in ops {
-        match op {
-            QuantizedOp::Insert { id, mut vector } => {
-                sanitize_vector(&mut vector);
-                let v = Vector::new(vector);
-                let _ = store.set(id, v, json!({"test": true}));
-            }
-            QuantizedOp::Search { mut vector, k } => {
-                sanitize_vector(&mut vector);
-                let v = Vector::new(vector);
-                let _ = store.search(&v, k.min(100), None);
-            }
-            QuantizedOp::GetById { id } => {
-                let _ = store.get(&id);
-            }
-            QuantizedOp::Items => {
-                let items = store.items();
-                assert_eq!(items.len(), store.len());
-            }
-            QuantizedOp::Count => {
-                let _ = store.len();
-            }
-            QuantizedOp::Flush => {
-                let _ = store.flush();
-            }
-            QuantizedOp::InsertThenGetById { id, mut vector } => {
-                sanitize_vector(&mut vector);
-                let v = Vector::new(vector.clone());
-                if store.set(id.clone(), v, json!({})).is_ok() {
-                    let result = store.get(&id);
-                    assert!(
-                        result.is_some(),
-                        "get() returned None after successful insert for id: {}",
-                        id
-                    );
-                }
-            }
-            QuantizedOp::InsertThenSearch { id, mut vector, k } => {
-                sanitize_vector(&mut vector);
-                let v = Vector::new(vector.clone());
-                if store.set(id.clone(), v.clone(), json!({})).is_ok() {
-                    if let Ok(results) = store.search(&v, k.min(100), None) {
-                        if store.len() > 0 {
-                            assert!(
-                                !results.is_empty() || k == 0,
-                                "Search returned empty results on non-empty store"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 fuzz_target!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
@@ -264,9 +194,6 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    // Test with SQ8 quantization (most common, had bugs)
-    run_with_sq8(ops.clone());
-
-    // Test with RaBitQ quantization
-    run_with_rabitq(ops);
+    // Test with SQ8 quantization
+    run_with_sq8(ops);
 });

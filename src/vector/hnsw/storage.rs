@@ -1368,13 +1368,13 @@ impl VectorStorage {
         }
     }
 
-    /// Check if storage is SQ8 quantized and trained (ready for FastScan)
+    /// Check if storage is SQ8 quantized and trained
     #[must_use]
     pub fn is_quantized_and_trained(&self) -> bool {
         matches!(self, Self::ScalarQuantized { trained: true, .. })
     }
 
-    /// Get raw quantized code slice for a vector ID (for FastScan)
+    /// Get raw quantized code slice for a vector ID
     ///
     /// Returns None if not quantized, not trained, or ID out of bounds.
     #[must_use]
@@ -1412,7 +1412,7 @@ impl VectorStorage {
         }
     }
 
-    /// Get entire quantized data slice (for bulk FastScan building)
+    /// Get entire quantized data slice
     #[must_use]
     pub fn quantized_data(&self) -> Option<&[u8]> {
         match self {

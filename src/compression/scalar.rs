@@ -1,6 +1,6 @@
 //! Scalar Quantization (SQ8) for OmenDB
 //!
-//! Compresses f32 vectors to u8 (4x compression, ~97% recall, 2-3x faster than FP32).
+//! Compresses f32 vectors to u8 (4x compression, ~99% recall with rescore, 2-3x faster than FP32).
 //!
 //! # Algorithm
 //!
@@ -13,7 +13,7 @@
 //!
 //! - 4x compression (f32 → u8)
 //! - 2-3x faster than FP32 (integer SIMD)
-//! - ~97% recall (vs 99%+ for per-dimension quantization)
+//! - ~99% recall with rescore (raw ~97% without rescore)
 
 use serde::{Deserialize, Serialize};
 

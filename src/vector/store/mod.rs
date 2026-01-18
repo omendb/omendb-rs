@@ -1848,7 +1848,7 @@ impl VectorStore {
                 if self.rescore_enabled && can_rescore {
                     self.knn_search_with_rescore(query, k, ef)?
                 } else {
-                    index.search_asymmetric_ef(&query.data, k, ef)?
+                    index.search_ef(&query.data, k, ef)?
                 }
             } else {
                 index.search_ef(&query.data, k, ef)?
@@ -1878,7 +1878,7 @@ impl VectorStore {
             .ok_or_else(|| anyhow::anyhow!("HNSW index required for rescore"))?;
 
         let oversample_k = ((k as f32) * self.oversample_factor).ceil() as usize;
-        let candidates = index.search_asymmetric_ef(&query.data, oversample_k, ef)?;
+        let candidates = index.search_ef(&query.data, oversample_k, ef)?;
 
         if candidates.is_empty() {
             return Ok(Vec::new());
