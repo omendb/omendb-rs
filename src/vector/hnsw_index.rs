@@ -11,16 +11,14 @@
 
 use super::hnsw::{DistanceFunction, HNSWIndex as CoreHNSW, HNSWParams as CoreParams};
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Default `ef_search` value for deserialization
-fn default_ef_search() -> usize {
-    100
-}
-
 /// HNSW index for approximate nearest neighbor search
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// This struct does not implement Serialize/Deserialize because the core HNSW index
+/// (NodeStorage) uses raw pointers and can't be serialized with serde.
+/// Use save()/load() methods for persistence instead.
+#[derive(Debug)]
 pub struct HNSWIndex {
     /// Core HNSW implementation
     index: CoreHNSW,
@@ -32,7 +30,6 @@ pub struct HNSWIndex {
     dimensions: usize,
 
     /// Runtime search parameter (tunable, not persisted)
-    #[serde(skip, default = "default_ef_search")]
     ef_search: usize,
 
     /// Number of vectors inserted
@@ -642,7 +639,11 @@ impl HNSWIndex {
     /// Fast loading: <1 second for 100K vectors (vs minutes for rebuild)
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let index = CoreHNSW::load(path).map_err(|e| anyhow::anyhow!(e))?;
+        Ok(Self::from_core(index))
+    }
 
+    /// Create wrapper from core index (used by load and from_bytes)
+    fn from_core(index: CoreHNSW) -> Self {
         // Extract parameters from loaded index
         let dimensions = index.dimensions();
         let num_vectors = index.len();
@@ -650,7 +651,7 @@ impl HNSWIndex {
         let m = params.m;
         let ef_construction = params.ef_construction;
 
-        Ok(Self {
+        Self {
             index,
             max_elements: num_vectors.max(1_000_000),
             max_nb_connection: m,
@@ -658,7 +659,23 @@ impl HNSWIndex {
             ef_search: ef_construction, // Default ef_search to ef_construction
             dimensions,
             num_vectors,
-        })
+        }
+    }
+
+    /// Serialize index to bytes (for in-memory persistence)
+    ///
+    /// This is more efficient than save() for embedding in other data structures
+    /// like VectorStore checkpoints.
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        self.index.to_bytes().map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Deserialize index from bytes
+    ///
+    /// Counterpart to `to_bytes()`. Use for loading from embedded byte storage.
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        let index = CoreHNSW::from_bytes(data).map_err(|e| anyhow::anyhow!(e))?;
+        Ok(Self::from_core(index))
     }
 
     /// Get dimensions

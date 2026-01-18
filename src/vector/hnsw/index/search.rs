@@ -3,12 +3,11 @@
 //! Implements k-NN search, filtered search (ACORN-1), and layer-level search.
 
 use super::HNSWIndex;
-use crate::compression::scalar::QueryPrep;
-use crate::distance::norm_squared;
 use crate::vector::hnsw::error::{HNSWError, Result};
-use crate::vector::hnsw::types::{Candidate, Distance, DistanceFunction, SearchResult};
+use crate::vector::hnsw::node_storage::{NodeStorage, QueryPrep};
+use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
 use ordered_float::OrderedFloat;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, error, instrument};
 
 /// Context for distance computation during search
 ///
@@ -17,40 +16,24 @@ use tracing::{debug, error, instrument, warn};
 struct DistanceContext<'a> {
     query: &'a [f32],
     sq8_prep: Option<QueryPrep>,
-    query_norm: f32,
-    use_l2_decomposition: bool,
     force_full_precision: bool,
-    vectors: &'a crate::vector::hnsw::storage::VectorStorage,
+    storage: &'a NodeStorage,
 }
 
 impl<'a> DistanceContext<'a> {
     /// Create a new distance context for the current search
-    fn new<D: Distance>(
-        query: &'a [f32],
-        index: &'a HNSWIndex,
-        force_full_precision: bool,
-    ) -> Self {
-        let use_l2_decomposition =
-            index.supports_l2_decomposition() && D::as_enum() == DistanceFunction::L2;
-        let query_norm = if use_l2_decomposition {
-            norm_squared(query)
-        } else {
-            0.0
-        };
-
+    fn new(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
         let sq8_prep = if force_full_precision {
             None
         } else {
-            index.vectors.prepare_sq8_query(query)
+            index.storage.prepare_query(query)
         };
 
         Self {
             query,
             sq8_prep,
-            query_norm,
-            use_l2_decomposition,
             force_full_precision,
-            vectors: &index.vectors,
+            storage: &index.storage,
         }
     }
 
@@ -60,34 +43,23 @@ impl<'a> DistanceContext<'a> {
         // SQ8 fast path (skip if force_full_precision)
         if !self.force_full_precision {
             if let Some(ref prep) = self.sq8_prep {
-                if let Some(dist) = self.vectors.distance_sq8_with_prep(prep, node_id) {
+                if let Some(dist) = self.storage.distance_sq8(prep, node_id) {
                     return Ok(dist);
                 }
             }
         }
 
-        // L2 decomposition path
-        if self.use_l2_decomposition {
-            if let Some(dist) =
-                self.vectors
-                    .distance_l2_decomposed(self.query, self.query_norm, node_id)
-            {
-                return Ok(dist);
-            }
-        }
-
-        // Fallback
-        if self.force_full_precision {
+        // Full precision fallback
+        if self.storage.is_sq8() {
+            // Dequantize for SQ8 mode
             let vec = self
-                .vectors
+                .storage
                 .get_dequantized(node_id)
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
             Ok(D::distance(self.query, &vec))
         } else {
-            let vec = self
-                .vectors
-                .get(node_id)
-                .ok_or(HNSWError::VectorNotFound(node_id))?;
+            // Direct access for full precision
+            let vec = self.storage.vector(node_id);
             Ok(D::distance(self.query, vec))
         }
     }
@@ -105,7 +77,7 @@ impl<'a> DistanceContext<'a> {
     #[inline]
     fn compute_batch(&self, ids: &[u32], distances: &mut [f32]) -> usize {
         if let Some(ref prep) = self.sq8_prep {
-            self.vectors.distance_sq8_batch(prep, ids, distances)
+            self.storage.distance_sq8_batch(prep, ids, distances)
         } else {
             0
         }
@@ -133,9 +105,9 @@ trait NeighborCollector {
     );
 }
 
-/// Standard HNSW neighbor collector
+/// Standard HNSW neighbor collector using NodeStorage
 struct StandardCollector<'a> {
-    neighbors: &'a crate::vector::hnsw::graph_storage::GraphStorage,
+    storage: &'a NodeStorage,
 }
 
 impl NeighborCollector for StandardCollector<'_> {
@@ -148,14 +120,21 @@ impl NeighborCollector for StandardCollector<'_> {
         output: &mut Vec<u32>,
     ) {
         output.clear();
-        self.neighbors
-            .with_neighbors(node_id, level, |neighbor_list| {
-                for &id in neighbor_list {
-                    if !visited.contains(id) {
-                        output.push(id);
-                    }
+        if level == 0 {
+            // Level 0: colocated neighbors
+            for &id in self.storage.neighbors(node_id) {
+                if !visited.contains(id) {
+                    output.push(id);
                 }
-            });
+            }
+        } else {
+            // Upper levels: sparse storage
+            for id in self.storage.neighbors_at_level(node_id, level) {
+                if !visited.contains(id) {
+                    output.push(id);
+                }
+            }
+        }
     }
 
     #[inline(always)]
@@ -345,23 +324,21 @@ impl HNSWIndex {
                         }
                     }
                 } else {
-                    // Per-neighbor path (full precision, L2 decomposition, or single neighbor)
+                    // Per-neighbor path (full precision or single neighbor)
                     use crate::vector::hnsw::prefetch::PrefetchConfig;
                     const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
                     const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
 
                     if PREFETCH_ENABLED {
                         for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
-                            self.vectors.prefetch(id);
-                            self.neighbors.prefetch(id, level);
+                            self.storage.prefetch(id);
                         }
                     }
 
                     for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
                         if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < num_neighbors {
                             let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
-                            self.vectors.prefetch(prefetch_id);
-                            self.neighbors.prefetch(prefetch_id, level);
+                            self.storage.prefetch(prefetch_id);
                         }
 
                         // Guard against duplicates in neighbor list
@@ -456,7 +433,7 @@ impl HNSWIndex {
         }
 
         let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
-        let entry_level = self.nodes[entry_point as usize].level;
+        let entry_level = self.storage.level(entry_point);
 
         // Start from entry point, descend to layer 0
         let mut nearest = vec![entry_point];
@@ -476,7 +453,7 @@ impl HNSWIndex {
             let distance = self.distance_exact(query, id)?;
             // Return slot (original RecordStore index) not internal node id
             // After optimize(), id may differ from slot
-            let slot = self.nodes[id as usize].slot;
+            let slot = self.storage.slot(id);
             results.push(SearchResult::new(slot, distance));
         }
 
@@ -537,7 +514,7 @@ impl HNSWIndex {
 
         // Wrap filter to convert internal node ID to slot
         // After optimize(), id may differ from slot - filter expects slot
-        let slot_filter = |id: u32| filter_fn(self.nodes[id as usize].slot);
+        let slot_filter = |id: u32| filter_fn(self.storage.slot(id));
 
         // Estimate filter selectivity
         let selectivity = self.estimate_selectivity(&slot_filter);
@@ -586,7 +563,7 @@ impl HNSWIndex {
         debug!(selectivity, "Using ACORN-1 filtered search");
 
         let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
-        let entry_level = self.nodes[entry_point as usize].level;
+        let entry_level = self.storage.level(entry_point);
 
         // Start from entry point, descend to layer 0
         let mut nearest = vec![entry_point];
@@ -611,7 +588,7 @@ impl HNSWIndex {
         for &id in &candidates {
             let distance = self.distance_exact(query, id)?;
             // Return slot (original RecordStore index) not internal node id
-            let slot = self.nodes[id as usize].slot;
+            let slot = self.storage.slot(id);
             results.push(SearchResult::new(slot, distance));
         }
 
@@ -735,37 +712,30 @@ impl HNSWIndex {
         F: Fn(u32) -> bool,
     {
         output.clear();
-        self.neighbors
-            .with_neighbors(source_node, level, |neighbors_1hop| {
-                for &neighbor_id in neighbors_1hop {
-                    if visited.contains(neighbor_id) {
-                        continue;
-                    }
-                    if filter_fn(neighbor_id) {
-                        output.push(neighbor_id);
-                        if output.len() >= m {
-                            return;
-                        }
-                    } else {
-                        // 2-hop expansion for non-matching neighbors
-                        self.neighbors
-                            .with_neighbors(neighbor_id, level, |second_hop| {
-                                for &second_hop_id in second_hop {
-                                    if !visited.contains(second_hop_id) && filter_fn(second_hop_id)
-                                    {
-                                        output.push(second_hop_id);
-                                        if output.len() >= m {
-                                            return;
-                                        }
-                                    }
-                                }
-                            });
+        let neighbors_1hop = self.storage.neighbors_at_level(source_node, level);
+
+        for neighbor_id in neighbors_1hop {
+            if visited.contains(neighbor_id) {
+                continue;
+            }
+            if filter_fn(neighbor_id) {
+                output.push(neighbor_id);
+                if output.len() >= m {
+                    return;
+                }
+            } else {
+                // 2-hop expansion for non-matching neighbors
+                let second_hop = self.storage.neighbors_at_level(neighbor_id, level);
+                for second_hop_id in second_hop {
+                    if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
+                        output.push(second_hop_id);
                         if output.len() >= m {
                             return;
                         }
                     }
                 }
-            });
+            }
+        }
     }
 
     /// Monomorphized filtered search layer (static dispatch, no match in hot loop)
@@ -787,7 +757,7 @@ impl HNSWIndex {
     where
         F: Fn(u32) -> bool,
     {
-        let ctx = DistanceContext::new::<D>(query, self, false);
+        let ctx = DistanceContext::new(query, self, false);
         let collector = AcornCollector {
             index: self,
             filter_fn,
@@ -831,9 +801,9 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
     ) -> Result<Vec<u32>> {
-        let ctx = DistanceContext::new::<D>(query, self, false);
+        let ctx = DistanceContext::new(query, self, false);
         let collector = StandardCollector {
-            neighbors: &self.neighbors,
+            storage: &self.storage,
         };
 
         self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
@@ -851,9 +821,9 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<u32>> {
         dispatch_distance!(self.distance_fn, D => {
-            let ctx = DistanceContext::new::<D>(query, self, true);
+            let ctx = DistanceContext::new(query, self, true);
             let collector = StandardCollector {
-                neighbors: &self.neighbors,
+                storage: &self.storage,
             };
 
             self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)

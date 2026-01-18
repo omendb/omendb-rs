@@ -161,9 +161,9 @@ impl GraphMerger {
 
         for &small_id in &join_set {
             let vector = small
-                .get_vector(small_id)
+                .get_vector_dequantized(small_id)
                 .ok_or(HNSWError::VectorNotFound(small_id))?;
-            let large_id = large.insert(vector)?;
+            let large_id = large.insert(&vector)?;
             small_to_large.insert(small_id, large_id);
         }
         let join_set_insert_duration = join_insert_start.elapsed();
@@ -190,7 +190,7 @@ impl GraphMerger {
             }
 
             let vector = small
-                .get_vector(node_id)
+                .get_vector_dequantized(node_id)
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
 
             // Find neighbors of this node that are in the join set
@@ -203,11 +203,11 @@ impl GraphMerger {
 
             if entry_points.is_empty() {
                 // Fallback: no join set neighbors, use standard insert
-                large.insert(vector)?;
+                large.insert(&vector)?;
                 fallback_inserts += 1;
             } else {
                 // Fast path: use mapped join set neighbors as entry points in large graph
-                large.insert_with_hints(vector, &entry_points, fast_ef)?;
+                large.insert_with_hints(&vector, &entry_points, fast_ef)?;
                 fast_path_inserts += 1;
             }
         }
@@ -430,7 +430,7 @@ mod tests {
         let small = create_test_index(50, 8);
 
         // Remember a vector from small graph
-        let test_vector = small.get_vector(25).unwrap().to_vec();
+        let test_vector = small.get_vector_dequantized(25).unwrap();
 
         let merger = GraphMerger::new();
         merger.merge_graphs(&mut large, &small).unwrap();

@@ -508,7 +508,7 @@ impl VectorStore {
         let active_count = records.len() as usize;
 
         let hnsw_index = if let Some(hnsw_bytes) = snapshot.hnsw_bytes {
-            match postcard::from_bytes::<HNSWIndex>(&hnsw_bytes) {
+            match HNSWIndex::from_bytes(&hnsw_bytes) {
                 Ok(index) => {
                     // Compare with total slots, not just live count, since HNSW includes deleted
                     if index.len() != slot_count && slot_count > 0 {
@@ -2439,7 +2439,7 @@ impl VectorStore {
             let hnsw_bytes = self
                 .hnsw_index
                 .as_ref()
-                .map(postcard::to_allocvec)
+                .map(super::hnsw_index::HNSWIndex::to_bytes)
                 .transpose()?;
 
             // Serialize MetadataIndex for fast recovery

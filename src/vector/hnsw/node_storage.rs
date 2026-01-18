@@ -33,9 +33,13 @@
 // Allow pointer casts - we ensure alignment via layout design (all offsets are 4-byte aligned)
 #![allow(clippy::cast_ptr_alignment)]
 
-use crate::compression::scalar::{QueryPrep, ScalarParams};
+use crate::compression::scalar::ScalarParams;
 use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::fmt;
 use std::ptr::NonNull;
+
+// Re-export QueryPrep for use by callers
+pub use crate::compression::scalar::QueryPrep;
 
 /// Storage mode for vectors
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,6 +73,18 @@ impl Default for StorageBacking {
             data: NonNull::dangling(),
             layout: Layout::from_size_align(0, 1).unwrap(),
             capacity: 0,
+        }
+    }
+}
+
+impl fmt::Debug for StorageBacking {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StorageBacking::Owned { capacity, .. } => {
+                write!(f, "Owned {{ capacity: {capacity} }}")
+            }
+            #[cfg(feature = "mmap")]
+            StorageBacking::Mmap(mmap) => write!(f, "Mmap {{ len: {} }}", mmap.len()),
         }
     }
 }
@@ -121,6 +137,18 @@ pub struct NodeStorage {
     training_buffer: Vec<f32>,
     /// Whether SQ8 quantization has been trained
     sq8_trained: bool,
+}
+
+impl fmt::Debug for NodeStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeStorage")
+            .field("len", &self.len)
+            .field("dimensions", &self.dimensions)
+            .field("max_neighbors", &self.max_neighbors)
+            .field("mode", &self.mode)
+            .field("sq8_trained", &self.sq8_trained)
+            .finish_non_exhaustive()
+    }
 }
 
 impl NodeStorage {
@@ -425,17 +453,35 @@ impl NodeStorage {
         }
     }
 
-    /// Get dequantized vector (SQ8 mode only, allocates)
+    /// Get dequantized vector (handles both trained and untrained SQ8 mode)
     ///
-    /// Returns None if quantization is not yet trained.
+    /// In full precision mode, returns the vector directly.
+    /// In SQ8 mode before training, returns the vector from the training buffer.
+    /// In SQ8 mode after training, returns the dequantized vector.
     #[must_use]
     pub fn get_dequantized(&self, id: u32) -> Option<Vec<f32>> {
         if self.mode != StorageMode::SQ8 {
             return Some(self.vector(id).to_vec());
         }
-        let params = self.sq8_params.as_ref()?;
-        let quantized = self.quantized_vector(id);
-        Some(params.dequantize(quantized))
+
+        let id_usize = id as usize;
+
+        // If SQ8 trained, dequantize from storage
+        if self.sq8_trained {
+            let params = self.sq8_params.as_ref()?;
+            let quantized = self.quantized_vector(id);
+            return Some(params.dequantize(quantized));
+        }
+
+        // Not trained yet - get from training buffer
+        let dim = self.dimensions;
+        let start = id_usize * dim;
+        let end = start + dim;
+        if end <= self.training_buffer.len() {
+            Some(self.training_buffer[start..end].to_vec())
+        } else {
+            None
+        }
     }
 
     /// Get squared norm for a vector (used in L2 decomposition)
@@ -608,6 +654,27 @@ impl NodeStorage {
             + offset_term;
 
         Some(prep.norm_sq + vec_norm_sq - 2.0 * dot)
+    }
+
+    /// Batch compute SQ8 L2 distances
+    ///
+    /// Fills distances buffer with SQ8 distances for the given IDs.
+    /// Returns the number of distances computed (some IDs may be out of range).
+    #[inline]
+    pub fn distance_sq8_batch(
+        &self,
+        prep: &QueryPrep,
+        ids: &[u32],
+        distances: &mut [f32],
+    ) -> usize {
+        let mut count = 0;
+        for (&id, dist) in ids.iter().zip(distances.iter_mut()) {
+            if let Some(d) = self.distance_sq8(prep, id) {
+                *dist = d;
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Get neighbor count at level 0 (hot path, colocated storage)
@@ -999,6 +1066,372 @@ impl NodeStorage {
             sq8_sums: Vec::new(),
             training_buffer: Vec::new(),
             sq8_trained: false,
+        }
+    }
+
+    /// Serialize complete storage state to bytes
+    ///
+    /// Format:
+    /// - Header: len, node_size, offsets, dimensions, max_neighbors (7 * u64)
+    /// - Mode: u8 (0 = FullPrecision, 1 = SQ8)
+    /// - SQ8 trained: u8
+    /// - Raw node data: len * node_size bytes
+    /// - If SQ8: scale, offset (2 * f32), norms (len * f32), sq8_sums (len * i32)
+    /// - Upper neighbors count: u64
+    /// - For each node with upper neighbors: node_id (u32), num_levels (u8), then for each level: count (u16), neighbors ([u32])
+    pub fn serialize_full(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+
+        // Header
+        out.extend_from_slice(&(self.len as u64).to_le_bytes());
+        out.extend_from_slice(&(self.node_size as u64).to_le_bytes());
+        out.extend_from_slice(&(self.neighbors_offset as u64).to_le_bytes());
+        out.extend_from_slice(&(self.vector_offset as u64).to_le_bytes());
+        out.extend_from_slice(&(self.metadata_offset as u64).to_le_bytes());
+        out.extend_from_slice(&(self.dimensions as u64).to_le_bytes());
+        out.extend_from_slice(&(self.max_neighbors as u64).to_le_bytes());
+
+        // Mode and trained flag
+        let mode_byte: u8 = match self.mode {
+            StorageMode::FullPrecision => 0,
+            StorageMode::SQ8 => 1,
+        };
+        out.push(mode_byte);
+        out.push(u8::from(self.sq8_trained));
+
+        // Raw node data
+        let raw_data = self.as_bytes();
+        out.extend_from_slice(&(raw_data.len() as u64).to_le_bytes());
+        out.extend_from_slice(raw_data);
+
+        // SQ8 params if present
+        if let Some(ref params) = self.sq8_params {
+            out.push(1); // has params
+            out.extend_from_slice(&params.scale.to_le_bytes());
+            out.extend_from_slice(&params.offset.to_le_bytes());
+        } else {
+            out.push(0); // no params
+        }
+
+        // Norms (only if SQ8 trained)
+        out.extend_from_slice(&(self.norms.len() as u64).to_le_bytes());
+        for &norm in &self.norms {
+            out.extend_from_slice(&norm.to_le_bytes());
+        }
+
+        // SQ8 sums (only if SQ8 trained)
+        out.extend_from_slice(&(self.sq8_sums.len() as u64).to_le_bytes());
+        for &sum in &self.sq8_sums {
+            out.extend_from_slice(&sum.to_le_bytes());
+        }
+
+        // Upper neighbors
+        let upper_count = self.upper_neighbors.iter().filter(|n| n.is_some()).count();
+        out.extend_from_slice(&(upper_count as u64).to_le_bytes());
+
+        for (node_id, upper) in self.upper_neighbors.iter().enumerate() {
+            if let Some(ref levels) = upper {
+                out.extend_from_slice(&(node_id as u32).to_le_bytes());
+                out.push(levels.len() as u8); // num levels (excluding level 0)
+                for level_neighbors in &**levels {
+                    out.extend_from_slice(&(level_neighbors.len() as u16).to_le_bytes());
+                    for &neighbor in level_neighbors {
+                        out.extend_from_slice(&neighbor.to_le_bytes());
+                    }
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Deserialize complete storage state from bytes
+    ///
+    /// Returns the deserialized storage and the number of bytes consumed.
+    pub fn deserialize_full(data: &[u8]) -> Result<Self, String> {
+        if data.len() < 58 {
+            return Err("Data too short for header".to_string());
+        }
+
+        let mut pos = 0;
+
+        // Read header
+        let len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let node_size = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let neighbors_offset = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let vector_offset = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let metadata_offset = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let dimensions = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let max_neighbors = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+
+        // Mode and trained flag
+        let mode = match data[pos] {
+            0 => StorageMode::FullPrecision,
+            1 => StorageMode::SQ8,
+            _ => return Err("Invalid storage mode".to_string()),
+        };
+        pos += 1;
+        let sq8_trained = data[pos] != 0;
+        pos += 1;
+
+        // Raw node data
+        let raw_len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        if pos + raw_len > data.len() {
+            return Err("Data too short for raw nodes".to_string());
+        }
+        let raw_data = data[pos..pos + raw_len].to_vec();
+        pos += raw_len;
+
+        // SQ8 params
+        let has_params = data[pos] != 0;
+        pos += 1;
+        let sq8_params = if has_params {
+            let scale = f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            let offset = f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            Some(ScalarParams {
+                scale,
+                offset,
+                dimensions,
+            })
+        } else {
+            None
+        };
+
+        // Norms
+        let norms_len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let mut norms = Vec::with_capacity(norms_len);
+        for _ in 0..norms_len {
+            norms.push(f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()));
+            pos += 4;
+        }
+
+        // SQ8 sums
+        let sums_len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let mut sq8_sums = Vec::with_capacity(sums_len);
+        for _ in 0..sums_len {
+            sq8_sums.push(i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()));
+            pos += 4;
+        }
+
+        // Upper neighbors
+        let upper_count = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let mut upper_neighbors: Vec<Option<Box<[Vec<u32>]>>> = vec![None; len];
+
+        for _ in 0..upper_count {
+            let node_id = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+            pos += 4;
+            let num_levels = data[pos] as usize;
+            pos += 1;
+
+            let mut levels = Vec::with_capacity(num_levels);
+            for _ in 0..num_levels {
+                let count = u16::from_le_bytes(data[pos..pos + 2].try_into().unwrap()) as usize;
+                pos += 2;
+                let mut neighbors = Vec::with_capacity(count);
+                for _ in 0..count {
+                    neighbors.push(u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()));
+                    pos += 4;
+                }
+                levels.push(neighbors);
+            }
+            if node_id < upper_neighbors.len() {
+                upper_neighbors[node_id] = Some(levels.into_boxed_slice());
+            }
+        }
+
+        // Construct storage from raw bytes
+        let mut storage = Self::from_bytes(
+            raw_data,
+            len,
+            node_size,
+            neighbors_offset,
+            vector_offset,
+            metadata_offset,
+            dimensions,
+            max_neighbors,
+        );
+
+        // Restore SQ8 state
+        storage.mode = mode;
+        storage.sq8_params = sq8_params;
+        storage.norms = norms;
+        storage.sq8_sums = sq8_sums;
+        storage.sq8_trained = sq8_trained;
+        storage.upper_neighbors = upper_neighbors;
+
+        Ok(storage)
+    }
+
+    /// Reorder nodes using BFS traversal for cache-friendly layout
+    ///
+    /// Returns the old-to-new ID mapping.
+    pub fn reorder_bfs(&mut self, entry_point: u32, _max_level: u8) -> Vec<u32> {
+        use std::collections::{HashSet, VecDeque};
+
+        let n = self.len;
+        if n == 0 {
+            return Vec::new();
+        }
+
+        // BFS from entry point to determine optimal ordering
+        let mut visited = HashSet::new();
+        let mut bfs_order = Vec::with_capacity(n);
+        let mut queue = VecDeque::new();
+
+        // Start from entry point at highest level, then traverse down
+        queue.push_back(entry_point);
+        visited.insert(entry_point);
+
+        while let Some(node_id) = queue.pop_front() {
+            bfs_order.push(node_id);
+
+            // Visit neighbors at level 0 (most important for cache locality)
+            for &neighbor in self.neighbors(node_id) {
+                if visited.insert(neighbor) {
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        // Add any nodes not reachable from entry point
+        for node_id in 0..n as u32 {
+            if visited.insert(node_id) {
+                bfs_order.push(node_id);
+            }
+        }
+
+        // Create mapping: old_to_new[old_id] = new_id
+        let mut old_to_new = vec![0u32; n];
+        for (new_id, &old_id) in bfs_order.iter().enumerate() {
+            old_to_new[old_id as usize] = new_id as u32;
+        }
+
+        // Reorder the storage (creates new backing, copies data in BFS order)
+        self.apply_reorder(&bfs_order, &old_to_new);
+
+        old_to_new
+    }
+
+    /// Apply a reordering to the storage
+    fn apply_reorder(&mut self, bfs_order: &[u32], old_to_new: &[u32]) {
+        let n = self.len;
+        if n == 0 {
+            return;
+        }
+
+        // Allocate new storage
+        let new_size = n * self.node_size;
+        let layout = Layout::from_size_align(new_size, CACHE_LINE).expect("Invalid layout");
+        let new_ptr = unsafe { alloc_zeroed(layout) };
+        if new_ptr.is_null() {
+            return; // Allocation failed
+        }
+
+        // Copy nodes in BFS order
+        for (new_idx, &old_id) in bfs_order.iter().enumerate() {
+            let old_ptr = self.node_ptr(old_id);
+            let new_node_ptr = unsafe { new_ptr.add(new_idx * self.node_size) };
+
+            // Copy the node data
+            unsafe {
+                std::ptr::copy_nonoverlapping(old_ptr, new_node_ptr, self.node_size);
+            }
+
+            // Update neighbor IDs to use new indices
+            let count_ptr = new_node_ptr as *mut u16;
+            let count = unsafe { *count_ptr } as usize;
+            let neighbors_ptr = unsafe { new_node_ptr.add(self.neighbors_offset) as *mut u32 };
+
+            for i in 0..count.min(self.max_neighbors) {
+                let old_neighbor = unsafe { *neighbors_ptr.add(i) };
+                if (old_neighbor as usize) < old_to_new.len() {
+                    unsafe {
+                        *neighbors_ptr.add(i) = old_to_new[old_neighbor as usize];
+                    }
+                }
+            }
+        }
+
+        // Reorder norms and sq8_sums
+        if !self.norms.is_empty() {
+            let old_norms = std::mem::take(&mut self.norms);
+            self.norms = vec![0.0; n];
+            for (new_idx, &old_id) in bfs_order.iter().enumerate() {
+                if (old_id as usize) < old_norms.len() {
+                    self.norms[new_idx] = old_norms[old_id as usize];
+                }
+            }
+        }
+
+        if !self.sq8_sums.is_empty() {
+            let old_sums = std::mem::take(&mut self.sq8_sums);
+            self.sq8_sums = vec![0; n];
+            for (new_idx, &old_id) in bfs_order.iter().enumerate() {
+                if (old_id as usize) < old_sums.len() {
+                    self.sq8_sums[new_idx] = old_sums[old_id as usize];
+                }
+            }
+        }
+
+        // Reorder upper neighbors
+        if !self.upper_neighbors.is_empty() {
+            let old_upper = std::mem::take(&mut self.upper_neighbors);
+            self.upper_neighbors = vec![None; n];
+            for (new_idx, &old_id) in bfs_order.iter().enumerate() {
+                if let Some(ref levels) = old_upper.get(old_id as usize).and_then(|x| x.as_ref()) {
+                    // Remap neighbor IDs in upper levels
+                    let new_levels: Vec<Vec<u32>> = levels
+                        .iter()
+                        .map(|neighbors| {
+                            neighbors
+                                .iter()
+                                .filter_map(|&old_n| {
+                                    if (old_n as usize) < old_to_new.len() {
+                                        Some(old_to_new[old_n as usize])
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    self.upper_neighbors[new_idx] = Some(new_levels.into_boxed_slice());
+                }
+            }
+        }
+
+        // Swap in new backing
+        let old_backing = std::mem::replace(
+            &mut self.backing,
+            StorageBacking::Owned {
+                data: NonNull::new(new_ptr).expect("Allocation should not return null"),
+                layout,
+                capacity: n,
+            },
+        );
+
+        // Deallocate old backing
+        match old_backing {
+            StorageBacking::Owned {
+                data,
+                layout: old_layout,
+                ..
+            } => unsafe { dealloc(data.as_ptr(), old_layout) },
+            #[cfg(feature = "mmap")]
+            StorageBacking::Mmap(_) => {} // Mmap dropped automatically
         }
     }
 }

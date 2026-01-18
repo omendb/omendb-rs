@@ -292,8 +292,9 @@ fn test_hnsw_levels() {
     // Count how many nodes have their TOP level at each height
     // Note: All nodes exist at level 0, but node.level is their TOP level
     let mut top_level_counts = [0; 8];
-    for node in &index.nodes {
-        top_level_counts[node.level as usize] += 1;
+    for i in 0..100u32 {
+        let level = index.node_level(i).unwrap();
+        top_level_counts[level as usize] += 1;
     }
 
     // Most nodes should have top level = 0 (due to exponential decay)
@@ -323,8 +324,8 @@ fn test_neighbor_count_limits() {
     }
 
     // Check that no node has more than M*2 neighbors at level 0
-    for node in &index.nodes {
-        let neighbor_count = index.neighbors.get_neighbors(node.id, 0).len();
+    for node_id in 0..20u32 {
+        let neighbor_count = index.neighbor_count(node_id, 0);
         assert!(neighbor_count <= params.m * 2);
     }
 }
@@ -402,9 +403,17 @@ fn test_save_load_small() {
 
     // Verify vectors are preserved
     for i in 0..10 {
-        let orig = index.vectors.get(i).unwrap();
-        let load = loaded.vectors.get(i).unwrap();
-        assert_eq!(orig, load);
+        let orig = index.get_vector_dequantized(i).unwrap();
+        let load = loaded.get_vector_dequantized(i).unwrap();
+        // Compare within floating point tolerance
+        for (o, l) in orig.iter().zip(load.iter()) {
+            assert!(
+                (o - l).abs() < 1e-5,
+                "Vectors differ: {:?} vs {:?}",
+                orig,
+                load
+            );
+        }
     }
 
     // Verify search works on loaded index
@@ -1311,14 +1320,13 @@ fn test_sq8_distance_consistency() {
     }
 }
 
-/// Test that L2 decomposition and direct asymmetric L2 give same rankings
+/// Test that SQ8 distances are reasonably close to brute force f32 L2 distances
 #[test]
-fn test_sq8_distance_methods_match() {
-    use crate::distance::norm_squared;
+fn test_sq8_distance_accuracy() {
     use rand::prelude::*;
 
     let dim = 128;
-    let n_vectors = 300; // Enough to trigger quantization (>256)
+    let n_vectors = 300;
 
     let mut rng = StdRng::seed_from_u64(42);
 
@@ -1337,36 +1345,42 @@ fn test_sq8_distance_methods_match() {
 
     // Generate query
     let query: Vec<f32> = (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect();
-    let query_norm = norm_squared(&query);
 
-    // Compare L2 decomposition vs direct asymmetric L2 for all vectors
-    let mut max_abs_diff = 0.0f32;
-    let mut max_rel_diff = 0.0f32;
+    // Search and compare against brute force
+    let results = index.search(&query, 10, 100).unwrap();
 
-    for id in 0..n_vectors as u32 {
-        // Method 1: L2 decomposition (what current search uses)
-        let decomp_dist = index
-            .vectors
-            .distance_l2_decomposed(&query, query_norm, id)
-            .unwrap();
+    // Compute brute force distances
+    let mut bf_distances: Vec<(u32, f32)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let dist: f32 = query
+                .iter()
+                .zip(v.iter())
+                .map(|(a, b)| (a - b).powi(2))
+                .sum();
+            (i as u32, dist)
+        })
+        .collect();
+    bf_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        // Method 2: Direct asymmetric L2 (what old asymmetric path used)
-        let direct_dist = index.vectors.distance_asymmetric_l2(&query, id).unwrap();
+    // Check that SQ8 distances correlate well with brute force
+    // The top-10 from SQ8 should mostly overlap with brute force top-10
+    let bf_top10: std::collections::HashSet<u32> =
+        bf_distances.iter().take(10).map(|(id, _)| *id).collect();
+    let sq8_top10: std::collections::HashSet<u32> = results.iter().map(|r| r.id).collect();
 
-        let abs_diff = (decomp_dist - direct_dist).abs();
-        let rel_diff = abs_diff / direct_dist.max(1e-10);
+    let intersection = bf_top10.intersection(&sq8_top10).count();
+    let recall = intersection as f32 / 10.0;
 
-        max_abs_diff = max_abs_diff.max(abs_diff);
-        max_rel_diff = max_rel_diff.max(rel_diff);
-    }
+    println!("SQ8 vs brute force top-10 overlap: {}/{}", intersection, 10);
+    println!("Recall: {:.2}", recall);
 
-    println!("Max absolute difference: {max_abs_diff}");
-    println!("Max relative difference: {max_rel_diff}");
-
-    // The two methods should give nearly identical results
+    // SQ8 should achieve at least 80% overlap with brute force top-10
     assert!(
-        max_rel_diff < 1e-4,
-        "L2 decomposition differs from direct L2: max_rel_diff = {max_rel_diff}"
+        recall >= 0.80,
+        "SQ8 distance accuracy too low: {:.2} (expected >= 0.80)",
+        recall
     );
 }
 

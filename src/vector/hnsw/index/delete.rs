@@ -31,8 +31,7 @@ impl HNSWIndex {
     /// O(1) - only updates entry point if necessary
     #[instrument(skip(self), fields(node_id = node_id))]
     pub fn mark_deleted(&mut self, node_id: u32) -> Result<usize> {
-        let node_idx = node_id as usize;
-        if node_idx >= self.nodes.len() {
+        if (node_id as usize) >= self.storage.len() {
             debug!(node_id, "Node not found, skipping deletion");
             return Ok(0);
         }
@@ -56,8 +55,7 @@ impl HNSWIndex {
     /// O(M² · L) per deletion where M = max neighbors, L = max level
     #[instrument(skip(self), fields(node_id = node_id))]
     pub fn mark_deleted_with_repair(&mut self, node_id: u32) -> Result<usize> {
-        let node_idx = node_id as usize;
-        if node_idx >= self.nodes.len() {
+        if (node_id as usize) >= self.storage.len() {
             debug!(node_id, "Node not found, skipping deletion");
             return Ok(0);
         }
@@ -95,13 +93,13 @@ impl HNSWIndex {
         // If node A points to deleted node D, it is highly likely that D also points to A
         // unless pruning occurred. Even if we miss a few unidirectional edges, the
         // search logic handles deleted nodes gracefully, and graph connectivity remains high.
-        let deleted_neighbors = self.neighbors.get_neighbors(deleted_id, level);
+        let deleted_neighbors = self.storage.neighbors_at_level(deleted_id, level);
         let mut nodes_with_edge_to_deleted: Vec<u32> = Vec::new();
 
-        for &neighbor_id in &deleted_neighbors {
-            let n_neighbors = self.neighbors.get_neighbors(neighbor_id, level);
+        for neighbor_id in &deleted_neighbors {
+            let n_neighbors = self.storage.neighbors_at_level(*neighbor_id, level);
             if n_neighbors.contains(&deleted_id) {
-                nodes_with_edge_to_deleted.push(neighbor_id);
+                nodes_with_edge_to_deleted.push(*neighbor_id);
             }
         }
 
@@ -111,9 +109,9 @@ impl HNSWIndex {
         let m = self.params.m_for_level(level);
 
         // For each node that has an edge to the deleted node
-        for &node_id in &nodes_with_edge_to_deleted {
+        for node_id in &nodes_with_edge_to_deleted {
             // Get current neighbors of this node
-            let mut node_edges: Vec<u32> = self.neighbors.get_neighbors(node_id, level);
+            let mut node_edges: Vec<u32> = self.storage.neighbors_at_level(*node_id, level);
 
             // Remove edge to deleted node
             let original_len = node_edges.len();
@@ -128,12 +126,12 @@ impl HNSWIndex {
             let node_edge_set: HashSet<u32> = node_edges.iter().copied().collect();
             let candidates: Vec<u32> = deleted_neighbor_set
                 .iter()
-                .filter(|&&n| n != node_id && !node_edge_set.contains(&n))
+                .filter(|&&n| n != *node_id && !node_edge_set.contains(&n))
                 .copied()
                 .collect();
 
             // Find best replacement from candidates
-            if let Some(replacement) = self.find_best_replacement(node_id, &candidates)? {
+            if let Some(replacement) = self.find_best_replacement(*node_id, &candidates)? {
                 // Only add if we're under the neighbor limit
                 if node_edges.len() < m {
                     node_edges.push(replacement);
@@ -142,11 +140,13 @@ impl HNSWIndex {
             }
 
             // Update the neighbor list
-            self.neighbors.set_neighbors(node_id, level, node_edges);
+            self.storage
+                .set_neighbors_at_level(*node_id, level, node_edges);
         }
 
         // Clear the deleted node's neighbor lists at this level
-        self.neighbors.set_neighbors(deleted_id, level, Vec::new());
+        self.storage
+            .set_neighbors_at_level(deleted_id, level, Vec::new());
 
         Ok(repairs)
     }
@@ -160,7 +160,7 @@ impl HNSWIndex {
         }
 
         // Get source vector (handle both f32 and quantized storage)
-        let source_vec = match self.vectors.get_dequantized(source_id) {
+        let source_vec = match self.storage.get_dequantized(source_id) {
             Some(v) => v,
             None => return Ok(None),
         };
@@ -188,30 +188,32 @@ impl HNSWIndex {
         let mut best_connected: Option<(u32, u8)> = None;
         let mut best_fallback: Option<(u32, u8)> = None;
 
-        for (idx, node) in self.nodes.iter().enumerate() {
+        for idx in 0..self.storage.len() {
             let node_id = idx as u32;
             if node_id == deleted_id {
                 continue;
             }
 
+            let level = self.storage.level(node_id);
+
             // Track as fallback (any remaining node)
             match best_fallback {
-                None => best_fallback = Some((node_id, node.level)),
-                Some((_, best_level)) if node.level > best_level => {
-                    best_fallback = Some((node_id, node.level));
+                None => best_fallback = Some((node_id, level)),
+                Some((_, best_level)) if level > best_level => {
+                    best_fallback = Some((node_id, level));
                 }
                 _ => {}
             }
 
             // Check if this node has any neighbors (connected)
             let has_neighbors =
-                (0..=node.level).any(|lc| !self.neighbors.get_neighbors(node_id, lc).is_empty());
+                (0..=level).any(|lc| !self.storage.neighbors_at_level(node_id, lc).is_empty());
 
             if has_neighbors {
                 match best_connected {
-                    None => best_connected = Some((node_id, node.level)),
-                    Some((_, best_level)) if node.level > best_level => {
-                        best_connected = Some((node_id, node.level));
+                    None => best_connected = Some((node_id, level)),
+                    Some((_, best_level)) if level > best_level => {
+                        best_connected = Some((node_id, level));
                     }
                     _ => {}
                 }
@@ -254,8 +256,8 @@ impl HNSWIndex {
         let mut sorted_ids: Vec<u32> = node_ids.to_vec();
         sorted_ids.sort_unstable_by_key(|&id| {
             let idx = id as usize;
-            if idx < self.nodes.len() {
-                std::cmp::Reverse(self.nodes[idx].level)
+            if idx < self.storage.len() {
+                std::cmp::Reverse(self.storage.level(id))
             } else {
                 std::cmp::Reverse(0)
             }
@@ -278,13 +280,12 @@ impl HNSWIndex {
     /// Check if a node is effectively deleted (has no neighbors)
     #[must_use]
     pub fn is_orphaned(&self, node_id: u32) -> bool {
-        let node_idx = node_id as usize;
-        if node_idx >= self.nodes.len() {
+        if (node_id as usize) >= self.storage.len() {
             return true;
         }
 
-        let level = self.nodes[node_idx].level;
-        (0..=level).all(|lc| self.neighbors.get_neighbors(node_id, lc).is_empty())
+        let level = self.storage.level(node_id);
+        (0..=level).all(|lc| self.storage.neighbors_at_level(node_id, lc).is_empty())
     }
 
     /// Count orphaned nodes (nodes with no neighbors)
@@ -292,7 +293,7 @@ impl HNSWIndex {
     /// Useful for monitoring graph health after deletions.
     #[must_use]
     pub fn count_orphaned(&self) -> usize {
-        (0..self.nodes.len() as u32)
+        (0..self.storage.len() as u32)
             .filter(|&id| self.is_orphaned(id))
             .count()
     }
@@ -313,7 +314,7 @@ impl HNSWIndex {
 
         let entry_point = match self.entry_point {
             Some(ep) => ep,
-            None => return (0, self.nodes.len()),
+            None => return (0, self.storage.len()),
         };
 
         // BFS from entry point
@@ -324,11 +325,11 @@ impl HNSWIndex {
         queue.push_back(entry_point);
 
         while let Some(node_id) = queue.pop_front() {
-            let level = self.nodes[node_id as usize].level;
+            let level = self.storage.level(node_id);
 
             // Visit neighbors at all levels
             for lc in 0..=level {
-                for &neighbor_id in &self.neighbors.get_neighbors(node_id, lc) {
+                for neighbor_id in self.storage.neighbors_at_level(node_id, lc) {
                     if visited.insert(neighbor_id) {
                         if verbose {
                             println!("  BFS: node {node_id} level {lc} -> neighbor {neighbor_id}");
@@ -340,7 +341,7 @@ impl HNSWIndex {
         }
 
         let reachable = visited.len();
-        let orphans = self.nodes.len() - reachable;
+        let orphans = self.storage.len() - reachable;
 
         if verbose {
             println!("  BFS visited: {visited:?}");
@@ -517,7 +518,7 @@ mod small_graph_tests {
         // Print neighbors for each node BEFORE deletion
         println!("Graph structure:");
         for node_id in 0..5u32 {
-            let neighbors = index.neighbors.get_neighbors(node_id, 0);
+            let neighbors = index.get_neighbors_level0(node_id);
             println!("  Node {node_id} -> {neighbors:?}");
         }
 
@@ -535,7 +536,7 @@ mod small_graph_tests {
         // Graph structure should be UNCHANGED with lazy delete
         println!("Graph structure (should be unchanged):");
         for node_id in 0..5u32 {
-            let neighbors = index.neighbors.get_neighbors(node_id, 0);
+            let neighbors = index.get_neighbors_level0(node_id);
             println!("  Node {node_id} -> {neighbors:?}");
         }
 
