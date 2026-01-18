@@ -1600,6 +1600,44 @@ impl VectorDatabase {
         inner.store.flush().map_err(convert_error)
     }
 
+    /// Close the database and release file locks.
+    ///
+    /// Flushes pending changes to disk, then replaces the internal store
+    /// with an empty in-memory database to release file handles.
+    ///
+    /// After calling close(), the database is no longer usable.
+    /// Any subsequent operations will fail or return empty results.
+    ///
+    /// This is useful when you need to reopen the same database path
+    /// in the same process without relying on garbage collection.
+    ///
+    /// Note:
+    ///     For most use cases, prefer the context manager (`with` statement)
+    ///     which automatically flushes on exit:
+    ///
+    ///         with omendb.open("./db", dimensions=128) as db:
+    ///             db.set([...])
+    ///         # Flushed automatically
+    ///
+    /// Examples:
+    ///     >>> db = omendb.open("./mydb", dimensions=128)
+    ///     >>> db.set([{"id": "1", "vector": [0.1] * 128}])
+    ///     >>> db.close()  # Release file locks
+    ///     >>> # Can now reopen the same path
+    ///     >>> db = omendb.open("./mydb", dimensions=128)
+    fn close(&self) -> PyResult<()> {
+        let mut inner = self.inner.write();
+        // Flush first to ensure all data is persisted
+        inner.store.flush().map_err(convert_error)?;
+        // Replace with minimal in-memory store to release file lock
+        let dummy_store = VectorStoreOptions::default()
+            .dimensions(self.dimensions)
+            .build()
+            .map_err(convert_error)?;
+        inner.store = dummy_store;
+        Ok(())
+    }
+
     /// Compact the database by removing deleted records and reclaiming space.
     ///
     /// This operation removes tombstoned records, reassigns indices to be

@@ -85,6 +85,9 @@ db.search_text(query_text, k)           # Text-only BM25
 
 # Persistence
 db.flush()                              # Flush to disk
+db.close()                              # Close and release file locks
+db.compact()                            # Remove deleted records, reclaim space
+db.optimize()                           # Reorder graph for cache locality
 ```
 
 ## Distance Filtering
@@ -139,7 +142,6 @@ db = omendb.open(
 
 # Quantization options:
 # - True or "sq8": SQ8 ~4x smaller, ~99% recall (recommended)
-# - "rabitq": RaBitQ ~8x smaller, ~98% recall
 # - None/False: Full precision (default)
 
 # Distance metric options:
@@ -178,11 +180,10 @@ results = db.search_hybrid(query_vec, "query text", k=10, subscores=True)
 
 **Quantization** reduces memory with minimal recall loss:
 
-| Mode   | Compression | Use Case                       |
-| ------ | ----------- | ------------------------------ |
-| f32    | 1x          | Default, highest recall        |
-| sq8    | 4x          | Recommended for most users     |
-| rabitq | 8x          | Large datasets, cost-sensitive |
+| Mode | Compression | Use Case                   |
+| ---- | ----------- | -------------------------- |
+| f32  | 1x          | Default, highest recall    |
+| sq8  | 4x          | Recommended for most users |
 
 ```python
 db = omendb.open("./db", dimensions=768, quantization=True)  # Enable SQ8
