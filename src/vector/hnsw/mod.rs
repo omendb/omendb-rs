@@ -6,6 +6,7 @@
 // - SIMD-ready (AVX2/AVX512 distance calculations)
 // - SQ8 scalar quantization support (4x compression)
 
+mod batch_builder;
 mod error;
 mod graph_storage;
 mod index;
@@ -40,6 +41,7 @@ pub use error::{HNSWError, Result};
 pub use merge::{GraphMerger, MergeConfig, MergeStats};
 
 // V1 architecture - unified node storage and segments
+pub use batch_builder::{BatchBuilder, Cluster};
 pub use segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 pub use segment_manager::{SegmentConfig, SegmentManager};
 pub use unified_storage::UnifiedNodeStorage;
