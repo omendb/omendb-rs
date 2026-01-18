@@ -599,8 +599,17 @@ impl OmenFile {
 
         // Load metadata from manifest (bytes -> JsonValue)
         for (&idx, bytes) in &self.manifest.metadata {
-            if let Ok(json) = serde_json::from_slice(bytes) {
-                snapshot.metadata.insert(idx, json);
+            match serde_json::from_slice(bytes) {
+                Ok(json) => {
+                    snapshot.metadata.insert(idx, json);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Corrupt metadata for slot {} during manifest load: {}",
+                        idx,
+                        e
+                    );
+                }
             }
         }
 

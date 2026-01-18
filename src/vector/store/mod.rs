@@ -478,10 +478,20 @@ impl VectorStore {
                         }
 
                         // Parse metadata
-                        let metadata: Option<JsonValue> = insert_data
-                            .metadata
-                            .as_ref()
-                            .and_then(|bytes| serde_json::from_slice(bytes).ok());
+                        let metadata: Option<JsonValue> =
+                            insert_data.metadata.as_ref().and_then(|bytes| {
+                                match serde_json::from_slice(bytes) {
+                                    Ok(json) => Some(json),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Corrupt metadata for '{}' during WAL replay: {}",
+                                            insert_data.id,
+                                            e
+                                        );
+                                        None
+                                    }
+                                }
+                            });
 
                         // Upsert into RecordStore
                         records.upsert(insert_data.id, insert_data.vector, metadata)?;
