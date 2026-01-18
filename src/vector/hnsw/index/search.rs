@@ -409,7 +409,10 @@ impl HNSWIndex {
         let mut results = Vec::with_capacity(candidates.len());
         for &id in &candidates {
             let distance = self.distance_exact(query, id)?;
-            results.push(SearchResult::new(id, distance));
+            // Return slot (original RecordStore index) not internal node id
+            // After optimize(), id may differ from slot
+            let slot = self.nodes[id as usize].slot;
+            results.push(SearchResult::new(slot, distance));
         }
 
         // Sort by distance (closest first) - unstable is faster
@@ -482,8 +485,12 @@ impl HNSWIndex {
             return Ok(Vec::new());
         }
 
+        // Wrap filter to convert internal node ID to slot
+        // After optimize(), id may differ from slot - filter expects slot
+        let slot_filter = |id: u32| filter_fn(self.nodes[id as usize].slot);
+
         // Estimate filter selectivity
-        let selectivity = self.estimate_selectivity(&filter_fn);
+        let selectivity = self.estimate_selectivity(&slot_filter);
 
         // Adaptive threshold: bypass ACORN-1 if filter is too permissive
         // Or for small/medium graphs where brute force is fast enough
@@ -536,8 +543,14 @@ impl HNSWIndex {
 
         // Greedy search at each layer (find 1 nearest that matches filter)
         for level in (1..=entry_level).rev() {
-            nearest =
-                self.search_layer_with_filter(query, &nearest, 1, level, &filter_fn, selectivity)?;
+            nearest = self.search_layer_with_filter(
+                query,
+                &nearest,
+                1,
+                level,
+                &slot_filter,
+                selectivity,
+            )?;
             if nearest.is_empty() {
                 // No matching nodes found at this level, try standard search
                 debug!(level, "No matches at this level, falling back");
@@ -546,15 +559,23 @@ impl HNSWIndex {
         }
 
         // Beam search at layer 0 (find ef nearest that match filter)
-        let candidates =
-            self.search_layer_with_filter(query, &nearest, ef.max(k), 0, &filter_fn, selectivity)?;
+        let candidates = self.search_layer_with_filter(
+            query,
+            &nearest,
+            ef.max(k),
+            0,
+            &slot_filter,
+            selectivity,
+        )?;
 
         // Convert to SearchResult and return k nearest
         // Pre-allocate with exact capacity to avoid reallocations
         let mut results = Vec::with_capacity(candidates.len());
         for &id in &candidates {
             let distance = self.distance_exact(query, id)?;
-            results.push(SearchResult::new(id, distance));
+            // Return slot (original RecordStore index) not internal node id
+            let slot = self.nodes[id as usize].slot;
+            results.push(SearchResult::new(slot, distance));
         }
 
         results.sort_unstable_by_key(|r| OrderedFloat(r.distance));

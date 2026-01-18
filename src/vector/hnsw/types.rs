@@ -145,7 +145,15 @@ impl HNSWParams {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HNSWNode {
     /// Node ID (u32 = 4 bytes, supports 4 billion vectors)
+    ///
+    /// This is the internal HNSW node index, which may change after optimize().
     pub id: u32,
+
+    /// RecordStore slot index (u32 = 4 bytes)
+    ///
+    /// This is the original slot in RecordStore and never changes after insertion.
+    /// After optimize(), id may differ from slot but slot always maps to the correct record.
+    pub slot: u32,
 
     /// Current level (0 to `max_level`)
     pub level: u8,
@@ -159,9 +167,9 @@ pub struct HNSWNode {
     #[serde(skip, default = "default_reserved")]
     _reserved: [u8; 3],
 
-    /// Padding to complete 64-byte cache line (64 - 4 - 1 - 8 - 3 = 48)
+    /// Padding to complete 64-byte cache line (64 - 4 - 4 - 1 - 8 - 3 = 44)
     #[serde(skip, default = "default_padding")]
-    _padding: [u8; 48],
+    _padding: [u8; 44],
 }
 
 // Default functions for serde skipped fields
@@ -169,20 +177,24 @@ fn default_reserved() -> [u8; 3] {
     [0; 3]
 }
 
-fn default_padding() -> [u8; 48] {
-    [0; 48]
+fn default_padding() -> [u8; 44] {
+    [0; 44]
 }
 
 impl HNSWNode {
     /// Create a new node
+    ///
+    /// Initially, id == slot (both refer to the same RecordStore slot).
+    /// After optimize(), id may change but slot remains the original value.
     #[must_use]
     pub fn new(id: u32, level: u8) -> Self {
         Self {
             id,
+            slot: id, // Initially same as id
             level,
             neighbor_counts: [0; 8],
             _reserved: [0; 3],
-            _padding: [0; 48],
+            _padding: [0; 44],
         }
     }
 

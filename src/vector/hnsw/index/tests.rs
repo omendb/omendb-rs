@@ -1454,22 +1454,16 @@ fn test_optimize_maintains_recall() {
     let mut recall_after = 0.0;
     for (i, query) in queries.iter().enumerate() {
         let results = index.search(query, k, ef).unwrap();
-        // IMPORTANT: Result IDs are now in the NEW ID space after remapping
-        // Ground truth is still in OLD ID space, so we need to compare correctly
-        //
-        // After optimization:
-        // - index.search returns NEW IDs
-        // - ground_truth contains OLD IDs
-        // - mapping[old_id] = new_id, so we need to map ground truth to new space
-        let gt_new_ids: HashSet<u32> = ground_truth[i]
-            .iter()
-            .map(|&old_id| mapping[old_id as usize])
-            .collect();
+        // After optimization, search returns slot IDs (original RecordStore indices)
+        // which match ground_truth directly - no mapping needed
         let result_ids: HashSet<u32> = results.iter().map(|r| r.id).collect();
-        let intersection = result_ids.intersection(&gt_new_ids).count();
+        let intersection = result_ids.intersection(&ground_truth[i]).count();
         recall_after += intersection as f32 / k as f32;
     }
     recall_after /= n_queries as f32;
+
+    // Verify mapping is valid (sanity check)
+    assert_eq!(mapping.len(), n_vectors);
 
     println!("Recall after optimize: {:.4}", recall_after);
 
@@ -1553,15 +1547,15 @@ fn test_optimize_maintains_recall_sq8() {
     let mut recall_after = 0.0;
     for (i, query) in queries.iter().enumerate() {
         let results = index.search(query, k, ef).unwrap();
-        let gt_new_ids: HashSet<u32> = ground_truth[i]
-            .iter()
-            .map(|&old_id| mapping[old_id as usize])
-            .collect();
+        // After optimization, search returns slot IDs (original RecordStore indices)
         let result_ids: HashSet<u32> = results.iter().map(|r| r.id).collect();
-        let intersection = result_ids.intersection(&gt_new_ids).count();
+        let intersection = result_ids.intersection(&ground_truth[i]).count();
         recall_after += intersection as f32 / k as f32;
     }
     recall_after /= n_queries as f32;
+
+    // Verify mapping is valid
+    assert_eq!(mapping.len(), n_vectors);
 
     println!("SQ8 recall after optimize: {:.4}", recall_after);
 
