@@ -271,6 +271,12 @@ impl HNSWIndex {
         &self.params
     }
 
+    /// Get distance function
+    #[must_use]
+    pub fn distance_function(&self) -> DistanceFunction {
+        self.distance_fn
+    }
+
     /// Get neighbors at level 0 for a node
     ///
     /// Level 0 has the most connections (M*2) and is used for graph merging.

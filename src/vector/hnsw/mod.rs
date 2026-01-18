@@ -12,6 +12,7 @@ mod index;
 mod merge;
 mod prefetch;
 mod query_buffers;
+mod segment;
 mod storage;
 mod types;
 mod unified_storage;
@@ -37,5 +38,6 @@ pub use error::{HNSWError, Result};
 // Re-export graph merging
 pub use merge::{GraphMerger, MergeConfig, MergeStats};
 
-// V1 architecture - unified node storage
+// V1 architecture - unified node storage and segments
+pub use segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 pub use unified_storage::UnifiedNodeStorage;
