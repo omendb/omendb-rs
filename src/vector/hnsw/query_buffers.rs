@@ -126,6 +126,9 @@ pub struct QueryBuffers {
 
     /// Pre-allocated buffer for search results (avoids allocation in return path)
     pub results: Vec<Candidate>,
+
+    /// Pre-allocated buffer for batch distance computation (SQ8 mode)
+    pub batch_distances: Vec<f32>,
 }
 
 impl Default for QueryBuffers {
@@ -144,6 +147,7 @@ impl QueryBuffers {
             entry_points: Vec::new(),
             unvisited: Vec::new(),
             results: Vec::new(),
+            batch_distances: Vec::new(),
         }
     }
 
@@ -155,6 +159,7 @@ impl QueryBuffers {
         self.entry_points.clear();
         self.unvisited.clear();
         self.results.clear();
+        // batch_distances doesn't need clearing - overwritten each use
     }
 
     /// Pre-allocate buffers for expected capacity (standard Rust pattern)
@@ -167,6 +172,7 @@ impl QueryBuffers {
             entry_points: Vec::with_capacity(num_levels),
             unvisited: Vec::with_capacity(64), // Typical neighbor count
             results: Vec::with_capacity(ef),
+            batch_distances: Vec::with_capacity(64), // Typical neighbor count
         }
     }
 }

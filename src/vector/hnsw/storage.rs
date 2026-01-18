@@ -647,26 +647,64 @@ impl NeighborCodeStorage {
         self.neighbor_counts[idx]
     }
 
-    /// Build neighbor code storage from VectorStorage and NeighborLists
+    /// Build neighbor code storage from VectorStorage and NeighborStorage
     ///
     /// Extracts quantized codes for each vertex's neighbors and stores them
     /// in interleaved layout for FastScan.
     ///
     /// # Arguments
-    /// * `vectors` - Vector storage containing quantized codes
-    /// * `neighbors` - Neighbor lists for all vertices
+    /// * `vectors` - Vector storage containing quantized codes (must be SQ8 and trained)
+    /// * `neighbors` - Neighbor storage for all vertices
     /// * `level` - Which level to build codes for (typically 0 for most benefit)
     ///
     /// # Returns
-    /// New NeighborCodeStorage with interleaved codes for all vertices
-    ///
-    /// Currently returns None - FastScan integration pending.
+    /// New NeighborCodeStorage with interleaved codes for all vertices,
+    /// or None if vectors are not quantized/trained.
     pub fn build_from_storage(
-        _vectors: &VectorStorage,
-        _neighbors: &NeighborLists,
-        _level: u8,
+        vectors: &VectorStorage,
+        neighbors: &NeighborStorage,
+        level: u8,
     ) -> Option<Self> {
-        None
+        // Only works with trained quantized storage
+        let code_size = vectors.quantized_code_size()?;
+        let quantized_data = vectors.quantized_data()?;
+        let num_nodes = neighbors.num_nodes();
+
+        if num_nodes == 0 {
+            return Some(Self::new(code_size));
+        }
+
+        let block_size = code_size * FASTSCAN_BATCH_SIZE;
+        let mut storage = Self {
+            codes: vec![0u8; num_nodes * block_size],
+            offsets: (0..num_nodes).map(|i| i * block_size).collect(),
+            neighbor_counts: vec![0; num_nodes],
+            code_size,
+            block_size,
+        };
+
+        // Build interleaved codes for each vertex
+        for vertex_id in 0..num_nodes {
+            let neighbor_ids = neighbors.get_neighbors(vertex_id as u32, level);
+            let count = neighbor_ids.len().min(FASTSCAN_BATCH_SIZE);
+            storage.neighbor_counts[vertex_id] = count;
+
+            let block_start = storage.offsets[vertex_id];
+
+            // Interleave codes: for each sub-quantizer, store codes for all neighbors
+            for sq in 0..code_size {
+                for (n, &neighbor_id) in neighbor_ids.iter().take(FASTSCAN_BATCH_SIZE).enumerate() {
+                    let neighbor_idx = neighbor_id as usize;
+                    let code_start = neighbor_idx * code_size;
+                    if code_start + sq < quantized_data.len() {
+                        storage.codes[block_start + sq * FASTSCAN_BATCH_SIZE + n] =
+                            quantized_data[code_start + sq];
+                    }
+                }
+            }
+        }
+
+        Some(storage)
     }
 
     /// Update neighbor codes for a single vertex
@@ -1550,6 +1588,63 @@ impl VectorStorage {
                 *norms = new_norms;
                 *sums = new_sums;
             }
+        }
+    }
+
+    /// Check if storage is SQ8 quantized and trained (ready for FastScan)
+    #[must_use]
+    pub fn is_quantized_and_trained(&self) -> bool {
+        matches!(self, Self::ScalarQuantized { trained: true, .. })
+    }
+
+    /// Get raw quantized code slice for a vector ID (for FastScan)
+    ///
+    /// Returns None if not quantized, not trained, or ID out of bounds.
+    #[must_use]
+    pub fn get_quantized_code(&self, id: u32) -> Option<&[u8]> {
+        match self {
+            Self::ScalarQuantized {
+                quantized,
+                count,
+                dimensions,
+                trained: true,
+                ..
+            } => {
+                let idx = id as usize;
+                if idx >= *count {
+                    return None;
+                }
+                let start = idx * *dimensions;
+                let end = start + *dimensions;
+                Some(&quantized[start..end])
+            }
+            _ => None,
+        }
+    }
+
+    /// Get code size (dimensions) for quantized storage
+    #[must_use]
+    pub fn quantized_code_size(&self) -> Option<usize> {
+        match self {
+            Self::ScalarQuantized {
+                dimensions,
+                trained: true,
+                ..
+            } => Some(*dimensions),
+            _ => None,
+        }
+    }
+
+    /// Get entire quantized data slice (for bulk FastScan building)
+    #[must_use]
+    pub fn quantized_data(&self) -> Option<&[u8]> {
+        match self {
+            Self::ScalarQuantized {
+                quantized,
+                trained: true,
+                ..
+            } => Some(quantized),
+            _ => None,
         }
     }
 }

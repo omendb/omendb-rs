@@ -43,7 +43,7 @@ mod tests;
 
 use super::error::{HNSWError, Result};
 use super::graph_storage::GraphStorage;
-use super::storage::VectorStorage;
+use super::storage::{NeighborCodeStorage, VectorStorage};
 use super::types::{Distance, DistanceFunction, HNSWNode, HNSWParams};
 use serde::{Deserialize, Serialize};
 
@@ -113,6 +113,17 @@ pub struct HNSWIndex {
 
     /// Random number generator seed state
     pub(super) rng_state: u64,
+
+    /// FastScan neighbor codes (interleaved for SIMD batch distance)
+    ///
+    /// Built lazily after inserts, enables 5x faster distance computation.
+    /// None if not SQ8 quantized or not yet built.
+    #[serde(skip)]
+    pub(super) neighbor_codes: Option<NeighborCodeStorage>,
+
+    /// Whether neighbor_codes needs rebuilding (set on insert/delete)
+    #[serde(skip)]
+    pub(super) neighbor_codes_stale: bool,
 }
 
 impl HNSWIndex {
@@ -131,6 +142,8 @@ impl HNSWIndex {
             rng_state: params.seed,
             params,
             distance_fn,
+            neighbor_codes: None,
+            neighbor_codes_stale: true,
         }
     }
 

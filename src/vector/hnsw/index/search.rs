@@ -91,6 +91,25 @@ impl<'a> DistanceContext<'a> {
             Ok(D::distance(self.query, vec))
         }
     }
+
+    /// Check if batch distance computation is available (SQ8 mode)
+    #[inline(always)]
+    fn has_batch(&self) -> bool {
+        !self.force_full_precision && self.sq8_prep.is_some()
+    }
+
+    /// Batch compute distances to multiple nodes (SQ8 fast path)
+    ///
+    /// Returns the number of distances computed. Caller must provide output buffer
+    /// large enough to hold distances for all IDs.
+    #[inline]
+    fn compute_batch(&self, ids: &[u32], distances: &mut [f32]) -> usize {
+        if let Some(ref prep) = self.sq8_prep {
+            self.vectors.distance_sq8_batch(prep, ids, distances)
+        } else {
+            0
+        }
+    }
 }
 
 /// Trait for collecting neighbors during HNSW traversal
@@ -255,6 +274,7 @@ impl HNSWIndex {
             let working = &mut buffers.working;
             let unvisited = &mut buffers.unvisited;
             let results_buf = &mut buffers.results;
+            let batch_distances = &mut buffers.batch_distances;
 
             // Prepare entry points
             collector.prepare_entry_points(entry_points, level, visited, unvisited);
@@ -269,6 +289,9 @@ impl HNSWIndex {
                 return Ok(Vec::new());
             }
 
+            // Check if batch distance computation is available (SQ8 mode)
+            let use_batch = ctx.has_batch();
+
             // Greedy search
             while let Some(Reverse(current)) = candidates.pop() {
                 if let Some(&farthest) = working.peek() {
@@ -280,46 +303,88 @@ impl HNSWIndex {
                 // Collect neighbors using specialized collector
                 collector.collect(current.node_id, level, visited, unvisited);
 
-                // Platform-aware prefetching
-                use crate::vector::hnsw::prefetch::PrefetchConfig;
-                const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
-                const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
-
                 let neighbors_slice = unvisited.as_slice();
+                let num_neighbors = neighbors_slice.len();
 
-                if PREFETCH_ENABLED {
-                    for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
-                        self.vectors.prefetch(id);
-                        self.neighbors.prefetch(id, level);
-                    }
+                if num_neighbors == 0 {
+                    continue;
                 }
 
-                for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
-                    if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < neighbors_slice.len() {
-                        let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
-                        self.vectors.prefetch(prefetch_id);
-                        self.neighbors.prefetch(prefetch_id, level);
+                if use_batch && num_neighbors > 1 {
+                    // Batch path: compute all distances at once (SQ8 mode)
+                    // Ensure buffer is large enough
+                    if batch_distances.len() < num_neighbors {
+                        batch_distances.resize(num_neighbors, 0.0);
                     }
 
-                    if visited.contains(neighbor_id) {
-                        continue;
-                    }
-                    visited.insert(neighbor_id);
+                    let computed = ctx.compute_batch(neighbors_slice, batch_distances);
+                    debug_assert_eq!(computed, num_neighbors, "batch distance count mismatch");
 
-                    let dist = ctx.compute::<D>(neighbor_id)?;
-                    let neighbor = Candidate::new(neighbor_id, dist);
+                    // Process all computed distances, marking visited as we go
+                    for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
+                        // Guard against duplicates in neighbor list
+                        if visited.contains(neighbor_id) {
+                            continue;
+                        }
+                        visited.insert(neighbor_id);
 
-                    if let Some(&farthest) = working.peek() {
-                        if neighbor.distance < farthest.distance || working.len() < ef {
+                        let dist = batch_distances[i];
+                        let neighbor = Candidate::new(neighbor_id, dist);
+
+                        if let Some(&farthest) = working.peek() {
+                            if neighbor.distance < farthest.distance || working.len() < ef {
+                                candidates.push(Reverse(neighbor));
+                                working.push(neighbor);
+                                if working.len() > ef {
+                                    working.pop();
+                                }
+                            }
+                        } else {
                             candidates.push(Reverse(neighbor));
                             working.push(neighbor);
-                            if working.len() > ef {
-                                working.pop();
-                            }
                         }
-                    } else {
-                        candidates.push(Reverse(neighbor));
-                        working.push(neighbor);
+                    }
+                } else {
+                    // Per-neighbor path (full precision, L2 decomposition, or single neighbor)
+                    use crate::vector::hnsw::prefetch::PrefetchConfig;
+                    const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                    const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
+                    if PREFETCH_ENABLED {
+                        for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
+                            self.vectors.prefetch(id);
+                            self.neighbors.prefetch(id, level);
+                        }
+                    }
+
+                    for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
+                        if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < num_neighbors {
+                            let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
+                            self.vectors.prefetch(prefetch_id);
+                            self.neighbors.prefetch(prefetch_id, level);
+                        }
+
+                        // Guard against duplicates in neighbor list
+                        if visited.contains(neighbor_id) {
+                            continue;
+                        }
+                        visited.insert(neighbor_id);
+
+                        let dist = ctx.compute::<D>(neighbor_id)?;
+                        let neighbor = Candidate::new(neighbor_id, dist);
+
+                        if let Some(&farthest) = working.peek() {
+                            if neighbor.distance < farthest.distance || working.len() < ef {
+                                candidates.push(Reverse(neighbor));
+                                working.push(neighbor);
+                                if working.len() > ef {
+                                    working.pop();
+                                }
+                            }
+                        } else {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+                        }
                     }
                 }
             }
