@@ -86,9 +86,6 @@ impl HNSWIndex {
         self.insert_into_graph(node_id, vector, level)?;
         self.maybe_update_entry_point(node_id, level)?;
 
-        // Invalidate FastScan codes - they'll be rebuilt on next search
-        self.neighbor_codes_stale = true;
-
         debug!(
             node_id = node_id,
             level = level,
@@ -188,9 +185,6 @@ impl HNSWIndex {
         // Use hints as starting points for graph insertion
         self.insert_into_graph_with_hints(node_id, vector, level, &valid_hints, ef)?;
         self.maybe_update_entry_point(node_id, level)?;
-
-        // Invalidate FastScan codes
-        self.neighbor_codes_stale = true;
 
         Ok(node_id)
     }

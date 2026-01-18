@@ -495,21 +495,6 @@ impl HNSWIndex {
         Ok(results)
     }
 
-    /// Search using quantized distances (asymmetric mode).
-    ///
-    /// SQ8 uses distance_asymmetric_l2 via the regular search path.
-    /// This method is kept for API compatibility.
-    #[instrument(skip(self, query), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
-    pub fn search_asymmetric(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef: usize,
-    ) -> Result<Vec<SearchResult>> {
-        // All quantized modes work through distance_asymmetric_l2 in the regular search
-        self.search(query, k, ef)
-    }
-
     /// Search for k nearest neighbors with metadata filtering (ACORN-1)
     ///
     /// Implements ACORN-1 filtered search algorithm (arXiv:2403.04871).
@@ -608,14 +593,7 @@ impl HNSWIndex {
 
         // Greedy search at each layer (find 1 nearest that matches filter)
         for level in (1..=entry_level).rev() {
-            nearest = self.search_layer_with_filter(
-                query,
-                &nearest,
-                1,
-                level,
-                &slot_filter,
-                selectivity,
-            )?;
+            nearest = self.search_layer_with_filter(query, &nearest, 1, level, &slot_filter)?;
             if nearest.is_empty() {
                 // No matching nodes found at this level, try standard search
                 debug!(level, "No matches at this level, falling back");
@@ -624,14 +602,8 @@ impl HNSWIndex {
         }
 
         // Beam search at layer 0 (find ef nearest that match filter)
-        let candidates = self.search_layer_with_filter(
-            query,
-            &nearest,
-            ef.max(k),
-            0,
-            &slot_filter,
-            selectivity,
-        )?;
+        let candidates =
+            self.search_layer_with_filter(query, &nearest, ef.max(k), 0, &slot_filter)?;
 
         // Convert to SearchResult and return k nearest
         // Pre-allocate with exact capacity to avoid reallocations
@@ -721,7 +693,6 @@ impl HNSWIndex {
     /// - Uses `VisitedList` with O(1) clear (generation-based, like hnswlib)
     /// - Reuses pre-allocated unvisited buffer to avoid per-iteration allocation
     /// - Monomorphized distance dispatch (Dec 12, 2025)
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn search_layer_with_filter<F>(
         &self,
         query: &[f32],
@@ -729,7 +700,6 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
         filter_fn: &F,
-        selectivity: f32,
     ) -> Result<Vec<u32>>
     where
         F: Fn(u32) -> bool,
@@ -742,7 +712,6 @@ impl HNSWIndex {
                 ef,
                 level,
                 filter_fn,
-                selectivity,
             )
         })
     }
@@ -814,7 +783,6 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
         filter_fn: &F,
-        _selectivity: f32, // Kept for API compatibility, no longer used
     ) -> Result<Vec<u32>>
     where
         F: Fn(u32) -> bool,

@@ -161,20 +161,6 @@ impl QueryBuffers {
         self.results.clear();
         // batch_distances doesn't need clearing - overwritten each use
     }
-
-    /// Pre-allocate buffers for expected capacity (standard Rust pattern)
-    #[allow(dead_code)]
-    pub fn with_capacity(ef: usize, num_levels: usize) -> Self {
-        Self {
-            visited: VisitedList::new(),
-            candidates: BinaryHeap::with_capacity(ef),
-            working: BinaryHeap::with_capacity(ef),
-            entry_points: Vec::with_capacity(num_levels),
-            unvisited: Vec::with_capacity(64), // Typical neighbor count
-            results: Vec::with_capacity(ef),
-            batch_distances: Vec::with_capacity(64), // Typical neighbor count
-        }
-    }
 }
 
 thread_local! {

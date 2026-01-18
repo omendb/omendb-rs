@@ -90,15 +90,6 @@ impl HNSWParams {
         self
     }
 
-    /// Builder: set `ef_search` parameter (stored in construction for defaults)
-    /// Note: This is primarily used for passing the search ef to the index.
-    #[must_use]
-    pub fn with_ef_search(self, _ef: usize) -> Self {
-        // ef_search is not stored in HNSWParams, it's a runtime parameter
-        // This method exists for API consistency
-        self
-    }
-
     /// Validate parameters
     pub fn validate(&self) -> Result<(), String> {
         if self.m == 0 {

@@ -262,8 +262,6 @@ impl HNSWIndex {
             params,
             distance_fn,
             rng_state,
-            neighbor_codes: None,       // Rebuilt lazily on first search
-            neighbor_codes_stale: true, // Mark as stale to trigger rebuild
         };
 
         info!(

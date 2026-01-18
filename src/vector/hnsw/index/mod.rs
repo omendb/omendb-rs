@@ -43,8 +43,8 @@ mod tests;
 
 use super::error::{HNSWError, Result};
 use super::graph_storage::GraphStorage;
-use super::storage::{NeighborCodeStorage, VectorStorage};
-use super::types::{Distance, DistanceFunction, HNSWNode, HNSWParams};
+use super::storage::VectorStorage;
+use super::types::{DistanceFunction, HNSWNode, HNSWParams};
 use serde::{Deserialize, Serialize};
 
 /// Index statistics for monitoring and debugging
@@ -113,17 +113,6 @@ pub struct HNSWIndex {
 
     /// Random number generator seed state
     pub(super) rng_state: u64,
-
-    /// FastScan neighbor codes (interleaved for SIMD batch distance)
-    ///
-    /// Built lazily after inserts, enables 5x faster distance computation.
-    /// None if not SQ8 quantized or not yet built.
-    #[serde(skip)]
-    pub(super) neighbor_codes: Option<NeighborCodeStorage>,
-
-    /// Whether neighbor_codes needs rebuilding (set on insert/delete)
-    #[serde(skip)]
-    pub(super) neighbor_codes_stale: bool,
 }
 
 impl HNSWIndex {
@@ -142,8 +131,6 @@ impl HNSWIndex {
             rng_state: params.seed,
             params,
             distance_fn,
-            neighbor_codes: None,
-            neighbor_codes_stale: true,
         }
     }
 
@@ -352,22 +339,6 @@ impl HNSWIndex {
         // Fallback to full precision
         let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
         Ok(self.distance_fn.distance_for_comparison(query, vec))
-    }
-
-    /// Monomorphized distance computation (static dispatch, no match)
-    ///
-    /// Generic fallback path for storage types that don't have optimized distance.
-    /// Currently unused as SQ8 and FP32 have specialized fast paths.
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(super) fn distance_cmp_mono<D: Distance>(&self, query: &[f32], id: u32) -> Result<f32> {
-        // Try asymmetric distance first (for SQ8 storage)
-        if let Some(dist) = self.vectors.distance_asymmetric_l2(query, id) {
-            return Ok(dist);
-        }
-        // Fallback to full precision with static dispatch
-        let vec = self.vectors.get(id).ok_or(HNSWError::VectorNotFound(id))?;
-        Ok(D::distance(query, vec))
     }
 
     /// Actual distance (with sqrt for L2)

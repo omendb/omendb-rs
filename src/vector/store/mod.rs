@@ -188,10 +188,11 @@ fn initialize_quantized_hnsw(
     quant_mode: QuantizationMode,
     _training_vectors: &[Vec<f32>],
 ) -> Result<HNSWIndex> {
+    // Note: ef_search is a runtime parameter passed to search(), not stored in HNSWParams
+    let _ = hnsw_ef_search; // Silence unused warning - caller passes it to search() at runtime
     let hnsw_params = HNSWParams::default()
         .with_m(hnsw_m)
-        .with_ef_construction(hnsw_ef_construction)
-        .with_ef_search(hnsw_ef_search);
+        .with_ef_construction(hnsw_ef_construction);
 
     match quant_mode {
         QuantizationMode::SQ8 => {

@@ -526,7 +526,7 @@ impl HNSWIndex {
 
         let results = self
             .index
-            .search_asymmetric(query, k, ef)
+            .search(query, k, ef)
             .map_err(|e| anyhow::anyhow!(e))?;
 
         let neighbors: Vec<(usize, f32)> = results

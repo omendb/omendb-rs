@@ -215,56 +215,6 @@ impl HNSWIndex {
             "BFS graph reordering complete"
         );
 
-        // Invalidate FastScan codes - they need to be rebuilt with new ordering
-        self.neighbor_codes = None;
-        self.neighbor_codes_stale = true;
-
         Ok(old_to_new)
-    }
-
-    /// Build FastScan neighbor codes for SIMD batch distance computation
-    ///
-    /// Only works with SQ8 quantized and trained storage.
-    /// Returns true if codes were built, false if not applicable.
-    pub fn build_fastscan_codes(&mut self) -> bool {
-        use crate::vector::hnsw::storage::NeighborCodeStorage;
-
-        if !self.vectors.is_quantized_and_trained() {
-            return false;
-        }
-
-        if self.nodes.is_empty() {
-            return false;
-        }
-
-        // Build codes for level 0 (where most search work happens)
-        let codes =
-            NeighborCodeStorage::build_from_storage(&self.vectors, self.neighbors.inner(), 0);
-
-        if let Some(codes) = codes {
-            info!(
-                num_vertices = codes.len(),
-                memory_bytes = codes.memory_usage(),
-                "FastScan neighbor codes built"
-            );
-            self.neighbor_codes = Some(codes);
-            self.neighbor_codes_stale = false;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Ensure FastScan codes are built and up-to-date
-    ///
-    /// Call this before search to ensure codes are ready.
-    /// Returns true if codes are available for FastScan.
-    #[inline]
-    pub fn ensure_fastscan_codes(&mut self) -> bool {
-        if self.neighbor_codes_stale || self.neighbor_codes.is_none() {
-            self.build_fastscan_codes()
-        } else {
-            self.neighbor_codes.is_some()
-        }
     }
 }
