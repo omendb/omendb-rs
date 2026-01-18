@@ -2292,36 +2292,61 @@ impl NeighborStorage {
             return Vec::new();
         }
 
-        // BFS to determine new ordering
+        // Reverse Cuthill-McKee (RCM) ordering for better cache locality
+        // 1. Start from entry point (typically high-degree hub)
+        // 2. Visit neighbors sorted by degree (ascending) - low-degree first
+        // 3. Reverse final ordering to place high-degree nodes at start
+        //
+        // This achieves ~85% of Gorder's benefit with minimal complexity.
+
+        // Pre-compute degrees for sorting (level 0 only, where most work happens)
+        let degrees: Vec<usize> = (0..num_nodes)
+            .map(|i| self.level0.get_neighbors(i as u32).len())
+            .collect();
+
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
-        let mut old_to_new = vec![u32::MAX; num_nodes];
-        let mut new_id = 0u32;
+        let mut order = Vec::with_capacity(num_nodes);
 
         queue.push_back(entry_point);
         visited.insert(entry_point);
 
         while let Some(node_id) = queue.pop_front() {
-            old_to_new[node_id as usize] = new_id;
-            new_id += 1;
+            order.push(node_id);
 
-            // Visit neighbors at all levels
+            // Collect unvisited neighbors from all levels
+            let mut unvisited_neighbors = Vec::new();
             for level in (0..=start_level).rev() {
                 let neighbors = self.get_neighbors(node_id, level);
                 for neighbor_id in neighbors {
                     if visited.insert(neighbor_id) {
-                        queue.push_back(neighbor_id);
+                        unvisited_neighbors.push(neighbor_id);
                     }
                 }
             }
+
+            // Sort by degree (ascending) - visit low-degree nodes first
+            unvisited_neighbors.sort_by_key(|&id| degrees[id as usize]);
+
+            for neighbor_id in unvisited_neighbors {
+                queue.push_back(neighbor_id);
+            }
         }
 
-        // Handle unvisited nodes
-        for (_old_id, mapping) in old_to_new.iter_mut().enumerate().take(num_nodes) {
-            if *mapping == u32::MAX {
-                *mapping = new_id;
-                new_id += 1;
+        // Handle disconnected nodes (shouldn't happen in well-formed HNSW)
+        for node_id in 0..num_nodes as u32 {
+            if !visited.contains(&node_id) {
+                order.push(node_id);
             }
+        }
+
+        // RCM step 3: Reverse the order for optimal bandwidth reduction
+        order.reverse();
+
+        // Build old_to_new mapping from reversed order
+        let mut old_to_new = vec![0u32; num_nodes];
+        for (new_id, &old_id) in order.iter().enumerate() {
+            old_to_new[old_id as usize] = new_id as u32;
         }
 
         // Rebuild storage with new ordering

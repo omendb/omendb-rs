@@ -23,6 +23,8 @@ classifiers = [
     "Programming Language :: Rust",
 ]
 dependencies = [
+    "chromadb>=1.3.5",
+    "hnswlib>=0.8.0",
     "lancedb>=0.26.1",
     "numpy>=1.24.4",
     "qdrant-client>=1.16.1",
