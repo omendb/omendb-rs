@@ -83,7 +83,8 @@ quickcheck = "1.0"
 tempfile = "3.23"
 
 [features]
-default = []
+default = ["mmap"]
+mmap = []  # Enable mmap-backed NodeStorage for zero-copy segment loading
 profile_search = []
 
 [profile.release]

@@ -347,31 +347,29 @@ impl FrozenSegment {
             + params_len
             + STORAGE_HEADER_SIZE;
 
-        // Memory-map the data section
+        // Memory-map the data section (or use empty storage for zero-length)
         let data_size = len * node_size;
-        let mmap = if data_size > 0 {
-            unsafe {
+        let storage = if data_size > 0 {
+            let mmap = unsafe {
                 MmapOptions::new()
                     .offset(data_offset as u64)
                     .len(data_size)
                     .map(&file)?
-            }
+            };
+            NodeStorage::from_mmap(
+                mmap,
+                len,
+                node_size,
+                neighbors_offset,
+                vector_offset,
+                metadata_offset,
+                dimensions,
+                max_neighbors,
+            )
         } else {
-            // Empty mmap for zero-length segments
-            MmapOptions::new().len(0).map_anon()?
+            // Empty segment - use empty owned storage
+            NodeStorage::new(dimensions, max_neighbors, 8)
         };
-
-        // Create storage from mmap
-        let storage = NodeStorage::from_mmap(
-            mmap,
-            len,
-            node_size,
-            neighbors_offset,
-            vector_offset,
-            metadata_offset,
-            dimensions,
-            max_neighbors,
-        );
 
         let elapsed = start.elapsed();
         info!(
