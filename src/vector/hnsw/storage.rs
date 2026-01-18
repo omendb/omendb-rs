@@ -1173,6 +1173,72 @@ impl VectorStorage {
         }
     }
 
+    /// Batch compute SQ8 distances for multiple vectors
+    ///
+    /// More efficient than calling `distance_sq8_with_prep` in a loop:
+    /// - Common terms computed once
+    /// - Better cache utilization
+    /// - Better instruction-level parallelism
+    ///
+    /// Returns the number of distances computed (may be less than ids.len() if some IDs are invalid).
+    #[inline]
+    pub fn distance_sq8_batch(
+        &self,
+        prep: &QueryPrep,
+        ids: &[u32],
+        distances: &mut [f32],
+    ) -> usize {
+        if let Self::ScalarQuantized {
+            params,
+            quantized,
+            norms,
+            sums,
+            count,
+            dimensions,
+            trained,
+            ..
+        } = self
+        {
+            if !*trained {
+                return 0;
+            }
+
+            let dim = *dimensions;
+            let n = *count;
+            let mut computed = 0;
+
+            // Pre-compute common terms
+            let scale_sq = params.scale * params.scale;
+            let offset_term = params.offset * params.offset * dim as f32;
+            let query_norm = prep.norm_sq;
+
+            for (i, &id) in ids.iter().enumerate() {
+                let idx = id as usize;
+                if idx >= n {
+                    continue;
+                }
+
+                let start = idx * dim;
+                let vec_data = &quantized[start..start + dim];
+                let vec_sum = sums[idx];
+                let vec_norm_sq = norms[idx];
+
+                let int_dot = params.int_dot_product_pub(&prep.quantized, vec_data);
+
+                let dot = scale_sq * int_dot as f32
+                    + params.scale * params.offset * (prep.sum + vec_sum) as f32
+                    + offset_term;
+
+                distances[i] = query_norm + vec_norm_sq - 2.0 * dot;
+                computed += 1;
+            }
+
+            computed
+        } else {
+            0
+        }
+    }
+
     /// Get the pre-computed squared norm (||v||^2) for a vector
     ///
     /// Only available for FullPrecision storage. Used for L2 decomposition optimization.

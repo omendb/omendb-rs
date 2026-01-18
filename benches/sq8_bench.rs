@@ -189,6 +189,59 @@ fn bench_sq8_vs_fp32(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark batch vs individual SQ8 distance computation
+fn bench_sq8_batch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sq8_comparison/batch_vs_individual");
+    let dim = 768;
+
+    let vectors = generate_random_vectors(1000, dim);
+    let query = generate_random_vectors(1, dim).pop().unwrap();
+
+    // Setup SQ8
+    let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+    let params = ScalarParams::train(&refs).unwrap();
+    let quantized: Vec<_> = vectors.iter().map(|v| params.quantize(v)).collect();
+    let query_prep = params.prepare_query(&query);
+
+    // Test different batch sizes
+    for batch_size in [8, 16, 32, 64] {
+        let candidates = &quantized[..batch_size];
+
+        // Individual computation
+        group.bench_with_input(
+            BenchmarkId::new("individual", batch_size),
+            &batch_size,
+            |b, _| {
+                b.iter(|| {
+                    for q in candidates {
+                        black_box(params.distance_l2_squared(&query_prep, q));
+                    }
+                })
+            },
+        );
+
+        // Batch computation using tuples
+        let batch_data: Vec<(&[u8], i32, f32)> = candidates
+            .iter()
+            .map(|q| (q.data.as_slice(), q.sum, q.norm_sq))
+            .collect();
+        let mut distances = vec![0.0f32; batch_size];
+
+        group.bench_with_input(
+            BenchmarkId::new("batch", batch_size),
+            &batch_size,
+            |b, _| {
+                b.iter(|| {
+                    params.distance_l2_squared_batch(&query_prep, &batch_data, &mut distances);
+                    black_box(&distances);
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_fp32_l2,
@@ -196,6 +249,7 @@ criterion_group!(
     bench_sq8_int_simd,
     bench_sq8_query_prep,
     bench_sq8_quantize,
-    bench_sq8_vs_fp32
+    bench_sq8_vs_fp32,
+    bench_sq8_batch
 );
 criterion_main!(benches);

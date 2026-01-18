@@ -265,6 +265,50 @@ impl ScalarParams {
         query_prep.norm_sq + vec_norm_sq - 2.0 * dot
     }
 
+    /// Batch compute L2² distances for multiple vectors
+    ///
+    /// More efficient than calling `distance_l2_squared_raw` in a loop because:
+    /// - Query data stays in cache/registers across all computations
+    /// - Common terms (scale_sq, offset corrections) are computed once
+    /// - Better instruction-level parallelism
+    ///
+    /// # Arguments
+    /// * `query_prep` - Pre-prepared query (call `prepare_query` once)
+    /// * `vectors` - Slice of (vec_data, vec_sum, vec_norm_sq) tuples
+    /// * `distances` - Output buffer (must have len >= vectors.len())
+    #[inline]
+    pub fn distance_l2_squared_batch(
+        &self,
+        query_prep: &QueryPrep,
+        vectors: &[(&[u8], i32, f32)],
+        distances: &mut [f32],
+    ) {
+        debug_assert!(distances.len() >= vectors.len());
+
+        // Pre-compute common terms once
+        let scale_sq = self.scale * self.scale;
+        let offset_term = self.offset * self.offset * self.dimensions as f32;
+        let query_norm = query_prep.norm_sq;
+
+        for (i, (vec_data, vec_sum, vec_norm_sq)) in vectors.iter().enumerate() {
+            let int_dot = self.int_dot_product(&query_prep.quantized, vec_data);
+
+            let dot = scale_sq * int_dot as f32
+                + self.scale * self.offset * (query_prep.sum + vec_sum) as f32
+                + offset_term;
+
+            distances[i] = query_norm + vec_norm_sq - 2.0 * dot;
+        }
+    }
+
+    /// Integer dot product with SIMD acceleration (u8 × u8 → u32)
+    ///
+    /// Public wrapper for batch distance computation in VectorStorage.
+    #[inline(always)]
+    pub fn int_dot_product_pub(&self, query: &[u8], vec: &[u8]) -> u32 {
+        self.int_dot_product(query, vec)
+    }
+
     /// Integer dot product with SIMD acceleration (u8 × u8 → u32)
     #[inline(always)]
     fn int_dot_product(&self, query: &[u8], vec: &[u8]) -> u32 {

@@ -23,7 +23,9 @@ classifiers = [
     "Programming Language :: Rust",
 ]
 dependencies = [
+    "lancedb>=0.26.1",
     "numpy>=1.24.4",
+    "qdrant-client>=1.16.1",
 ]
 
 [project.optional-dependencies]
