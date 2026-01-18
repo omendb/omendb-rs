@@ -350,6 +350,16 @@ impl FrozenSegment {
         // Memory-map the data section (or use empty storage for zero-length)
         let data_size = len * node_size;
         let storage = if data_size > 0 {
+            // Validate file is large enough for declared data
+            let file_len = file.metadata()?.len();
+            let required_len = data_offset as u64 + data_size as u64;
+            if file_len < required_len {
+                return Err(HNSWError::Storage(format!(
+                    "File too small: {} bytes, need {} bytes (data_offset={}, data_size={})",
+                    file_len, required_len, data_offset, data_size
+                )));
+            }
+
             let mmap = unsafe {
                 MmapOptions::new()
                     .offset(data_offset as u64)

@@ -717,6 +717,8 @@ impl NodeStorage {
         if count == 0 {
             return &[];
         }
+        // Clamp to max_neighbors to prevent buffer overread on corrupt data
+        let count = count.min(self.max_neighbors);
         let ptr = self.node_ptr(id);
         unsafe {
             let neighbors_ptr = ptr.add(self.neighbors_offset) as *const u32;
@@ -1149,6 +1151,61 @@ impl NodeStorage {
     ///
     /// Returns the deserialized storage and the number of bytes consumed.
     pub fn deserialize_full(data: &[u8]) -> Result<Self, String> {
+        // Helper to read bytes safely
+        fn read_bytes<'a>(data: &'a [u8], pos: &mut usize, n: usize) -> Result<&'a [u8], String> {
+            if *pos + n > data.len() {
+                return Err(format!(
+                    "Data too short: need {} bytes at position {}, have {}",
+                    n,
+                    *pos,
+                    data.len()
+                ));
+            }
+            let result = &data[*pos..*pos + n];
+            *pos += n;
+            Ok(result)
+        }
+
+        fn read_u64(data: &[u8], pos: &mut usize) -> Result<u64, String> {
+            let bytes = read_bytes(data, pos, 8)?;
+            Ok(u64::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid u64")?,
+            ))
+        }
+
+        fn read_u32(data: &[u8], pos: &mut usize) -> Result<u32, String> {
+            let bytes = read_bytes(data, pos, 4)?;
+            Ok(u32::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid u32")?,
+            ))
+        }
+
+        fn read_u16(data: &[u8], pos: &mut usize) -> Result<u16, String> {
+            let bytes = read_bytes(data, pos, 2)?;
+            Ok(u16::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid u16")?,
+            ))
+        }
+
+        fn read_f32(data: &[u8], pos: &mut usize) -> Result<f32, String> {
+            let bytes = read_bytes(data, pos, 4)?;
+            Ok(f32::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid f32")?,
+            ))
+        }
+
+        fn read_i32(data: &[u8], pos: &mut usize) -> Result<i32, String> {
+            let bytes = read_bytes(data, pos, 4)?;
+            Ok(i32::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid i32")?,
+            ))
+        }
+
+        fn read_u8(data: &[u8], pos: &mut usize) -> Result<u8, String> {
+            let bytes = read_bytes(data, pos, 1)?;
+            Ok(bytes[0])
+        }
+
         if data.len() < 58 {
             return Err("Data too short for header".to_string());
         }
@@ -1156,48 +1213,32 @@ impl NodeStorage {
         let mut pos = 0;
 
         // Read header
-        let len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        let node_size = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        let neighbors_offset = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        let vector_offset = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        let metadata_offset = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        let dimensions = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        let max_neighbors = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
+        let len = read_u64(data, &mut pos)? as usize;
+        let node_size = read_u64(data, &mut pos)? as usize;
+        let neighbors_offset = read_u64(data, &mut pos)? as usize;
+        let vector_offset = read_u64(data, &mut pos)? as usize;
+        let metadata_offset = read_u64(data, &mut pos)? as usize;
+        let dimensions = read_u64(data, &mut pos)? as usize;
+        let max_neighbors = read_u64(data, &mut pos)? as usize;
 
         // Mode and trained flag
-        let mode = match data[pos] {
+        let mode_byte = read_u8(data, &mut pos)?;
+        let mode = match mode_byte {
             0 => StorageMode::FullPrecision,
             1 => StorageMode::SQ8,
-            _ => return Err("Invalid storage mode".to_string()),
+            _ => return Err(format!("Invalid storage mode: {}", mode_byte)),
         };
-        pos += 1;
-        let sq8_trained = data[pos] != 0;
-        pos += 1;
+        let sq8_trained = read_u8(data, &mut pos)? != 0;
 
         // Raw node data
-        let raw_len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        if pos + raw_len > data.len() {
-            return Err("Data too short for raw nodes".to_string());
-        }
-        let raw_data = data[pos..pos + raw_len].to_vec();
-        pos += raw_len;
+        let raw_len = read_u64(data, &mut pos)? as usize;
+        let raw_data = read_bytes(data, &mut pos, raw_len)?.to_vec();
 
         // SQ8 params
-        let has_params = data[pos] != 0;
-        pos += 1;
+        let has_params = read_u8(data, &mut pos)? != 0;
         let sq8_params = if has_params {
-            let scale = f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-            let offset = f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-            pos += 4;
+            let scale = read_f32(data, &mut pos)?;
+            let offset = read_f32(data, &mut pos)?;
             Some(ScalarParams {
                 scale,
                 offset,
@@ -1208,42 +1249,33 @@ impl NodeStorage {
         };
 
         // Norms
-        let norms_len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
+        let norms_len = read_u64(data, &mut pos)? as usize;
         let mut norms = Vec::with_capacity(norms_len);
         for _ in 0..norms_len {
-            norms.push(f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()));
-            pos += 4;
+            norms.push(read_f32(data, &mut pos)?);
         }
 
         // SQ8 sums
-        let sums_len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
+        let sums_len = read_u64(data, &mut pos)? as usize;
         let mut sq8_sums = Vec::with_capacity(sums_len);
         for _ in 0..sums_len {
-            sq8_sums.push(i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()));
-            pos += 4;
+            sq8_sums.push(read_i32(data, &mut pos)?);
         }
 
         // Upper neighbors
-        let upper_count = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
+        let upper_count = read_u64(data, &mut pos)? as usize;
         let mut upper_neighbors: Vec<Option<Box<[Vec<u32>]>>> = vec![None; len];
 
         for _ in 0..upper_count {
-            let node_id = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-            pos += 4;
-            let num_levels = data[pos] as usize;
-            pos += 1;
+            let node_id = read_u32(data, &mut pos)? as usize;
+            let num_levels = read_u8(data, &mut pos)? as usize;
 
             let mut levels = Vec::with_capacity(num_levels);
             for _ in 0..num_levels {
-                let count = u16::from_le_bytes(data[pos..pos + 2].try_into().unwrap()) as usize;
-                pos += 2;
+                let count = read_u16(data, &mut pos)? as usize;
                 let mut neighbors = Vec::with_capacity(count);
                 for _ in 0..count {
-                    neighbors.push(u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()));
-                    pos += 4;
+                    neighbors.push(read_u32(data, &mut pos)?);
                 }
                 levels.push(neighbors);
             }
@@ -1320,24 +1352,28 @@ impl NodeStorage {
         }
 
         // Reorder the storage (creates new backing, copies data in BFS order)
-        self.apply_reorder(&bfs_order, &old_to_new);
+        if let Err(e) = self.apply_reorder(&bfs_order, &old_to_new) {
+            tracing::error!("Failed to apply reorder: {}", e);
+            return old_to_new;
+        }
 
         old_to_new
     }
 
     /// Apply a reordering to the storage
-    fn apply_reorder(&mut self, bfs_order: &[u32], old_to_new: &[u32]) {
+    fn apply_reorder(&mut self, bfs_order: &[u32], old_to_new: &[u32]) -> Result<(), String> {
         let n = self.len;
         if n == 0 {
-            return;
+            return Ok(());
         }
 
         // Allocate new storage
         let new_size = n * self.node_size;
-        let layout = Layout::from_size_align(new_size, CACHE_LINE).expect("Invalid layout");
+        let layout = Layout::from_size_align(new_size, CACHE_LINE)
+            .map_err(|e| format!("Invalid layout for reorder: {}", e))?;
         let new_ptr = unsafe { alloc_zeroed(layout) };
         if new_ptr.is_null() {
-            return; // Allocation failed
+            return Err(format!("Allocation failed for reorder: {} bytes", new_size));
         }
 
         // Copy nodes in BFS order
@@ -1433,6 +1469,8 @@ impl NodeStorage {
             #[cfg(feature = "mmap")]
             StorageBacking::Mmap(_) => {} // Mmap dropped automatically
         }
+
+        Ok(())
     }
 }
 
