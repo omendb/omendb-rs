@@ -1369,3 +1369,207 @@ fn test_sq8_distance_methods_match() {
         "L2 decomposition differs from direct L2: max_rel_diff = {max_rel_diff}"
     );
 }
+
+/// Test that optimize_cache_locality maintains recall
+///
+/// This test validates the BFS graph reordering doesn't corrupt search results.
+/// Regression test for Phase 7.1 atomic slot storage integration.
+#[test]
+fn test_optimize_maintains_recall() {
+    use rand::prelude::*;
+    use std::collections::HashSet;
+
+    let dim = 128;
+    let n_vectors = 1000;
+    let n_queries = 50;
+    let k = 10;
+    let ef = 100;
+
+    // Fixed seed for reproducibility
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Generate vectors
+    let vectors: Vec<Vec<f32>> = (0..n_vectors)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    // Generate queries
+    let queries: Vec<Vec<f32>> = (0..n_queries)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    // Create index and insert vectors
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(dim, params, DistanceFunction::L2, false).unwrap();
+
+    for vec in &vectors {
+        index.insert(vec).unwrap();
+    }
+
+    // Compute ground truth using brute force
+    let ground_truth: Vec<HashSet<u32>> = queries
+        .iter()
+        .map(|query| {
+            let mut distances: Vec<(u32, f32)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let dist: f32 = query
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum();
+                    (i as u32, dist)
+                })
+                .collect();
+            distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            distances.iter().take(k).map(|(id, _)| *id).collect()
+        })
+        .collect();
+
+    // Measure recall before optimize
+    let mut recall_before = 0.0;
+    for (i, query) in queries.iter().enumerate() {
+        let results = index.search(query, k, ef).unwrap();
+        let result_ids: HashSet<u32> = results.iter().map(|r| r.id).collect();
+        let intersection = result_ids.intersection(&ground_truth[i]).count();
+        recall_before += intersection as f32 / k as f32;
+    }
+    recall_before /= n_queries as f32;
+
+    println!("Recall before optimize: {:.4}", recall_before);
+
+    // Verify we have reasonable recall to start with
+    assert!(
+        recall_before >= 0.85,
+        "Pre-optimize recall too low: {:.4} (expected >= 0.85)",
+        recall_before
+    );
+
+    // Optimize cache locality
+    let mapping = index.optimize_cache_locality().unwrap();
+    assert_eq!(mapping.len(), n_vectors);
+
+    // Measure recall after optimize
+    let mut recall_after = 0.0;
+    for (i, query) in queries.iter().enumerate() {
+        let results = index.search(query, k, ef).unwrap();
+        // IMPORTANT: Result IDs are now in the NEW ID space after remapping
+        // Ground truth is still in OLD ID space, so we need to compare correctly
+        //
+        // After optimization:
+        // - index.search returns NEW IDs
+        // - ground_truth contains OLD IDs
+        // - mapping[old_id] = new_id, so we need to map ground truth to new space
+        let gt_new_ids: HashSet<u32> = ground_truth[i]
+            .iter()
+            .map(|&old_id| mapping[old_id as usize])
+            .collect();
+        let result_ids: HashSet<u32> = results.iter().map(|r| r.id).collect();
+        let intersection = result_ids.intersection(&gt_new_ids).count();
+        recall_after += intersection as f32 / k as f32;
+    }
+    recall_after /= n_queries as f32;
+
+    println!("Recall after optimize: {:.4}", recall_after);
+
+    // Recall should be maintained (within 1% tolerance for HNSW variance)
+    assert!(
+        recall_after >= recall_before * 0.99,
+        "Recall dropped after optimize: {:.4} -> {:.4} (expected >= {:.4})",
+        recall_before,
+        recall_after,
+        recall_before * 0.99
+    );
+}
+
+/// Test that optimize works with SQ8 quantization
+#[test]
+fn test_optimize_maintains_recall_sq8() {
+    use rand::prelude::*;
+    use std::collections::HashSet;
+
+    let dim = 128;
+    let n_vectors = 500;
+    let n_queries = 30;
+    let k = 10;
+    let ef = 100;
+
+    let mut rng = StdRng::seed_from_u64(123);
+
+    let vectors: Vec<Vec<f32>> = (0..n_vectors)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    let queries: Vec<Vec<f32>> = (0..n_queries)
+        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .collect();
+
+    // Create SQ8 index
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+
+    for vec in &vectors {
+        index.insert(vec).unwrap();
+    }
+
+    // Compute ground truth
+    let ground_truth: Vec<HashSet<u32>> = queries
+        .iter()
+        .map(|query| {
+            let mut distances: Vec<(u32, f32)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let dist: f32 = query
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum();
+                    (i as u32, dist)
+                })
+                .collect();
+            distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            distances.iter().take(k).map(|(id, _)| *id).collect()
+        })
+        .collect();
+
+    // Measure recall before
+    let mut recall_before = 0.0;
+    for (i, query) in queries.iter().enumerate() {
+        let results = index.search(query, k, ef).unwrap();
+        let result_ids: HashSet<u32> = results.iter().map(|r| r.id).collect();
+        let intersection = result_ids.intersection(&ground_truth[i]).count();
+        recall_before += intersection as f32 / k as f32;
+    }
+    recall_before /= n_queries as f32;
+
+    println!("SQ8 recall before optimize: {:.4}", recall_before);
+
+    // Optimize
+    let mapping = index.optimize_cache_locality().unwrap();
+
+    // Measure recall after
+    let mut recall_after = 0.0;
+    for (i, query) in queries.iter().enumerate() {
+        let results = index.search(query, k, ef).unwrap();
+        let gt_new_ids: HashSet<u32> = ground_truth[i]
+            .iter()
+            .map(|&old_id| mapping[old_id as usize])
+            .collect();
+        let result_ids: HashSet<u32> = results.iter().map(|r| r.id).collect();
+        let intersection = result_ids.intersection(&gt_new_ids).count();
+        recall_after += intersection as f32 / k as f32;
+    }
+    recall_after /= n_queries as f32;
+
+    println!("SQ8 recall after optimize: {:.4}", recall_after);
+
+    // Allow slightly more tolerance for SQ8 due to quantization
+    assert!(
+        recall_after >= recall_before * 0.95,
+        "SQ8 recall dropped after optimize: {:.4} -> {:.4}",
+        recall_before,
+        recall_after
+    );
+}
