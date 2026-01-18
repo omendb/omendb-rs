@@ -599,4 +599,28 @@ impl HNSWIndex {
 
         Ok(result)
     }
+
+    /// Add a neighbor to a node if there's room (neighbor count < M*2)
+    ///
+    /// Used for adding boundary connections during cluster merging.
+    /// This is a unidirectional link - call twice for bidirectional.
+    ///
+    /// # Arguments
+    /// * `node_id` - Node to add neighbor to
+    /// * `neighbor_id` - Neighbor to add
+    ///
+    /// # Returns
+    /// Ok(()) on success, even if neighbor wasn't added (already at capacity)
+    pub fn add_neighbor_if_room(&mut self, node_id: u32, neighbor_id: u32) -> Result<()> {
+        let level = 0u8; // Only level 0 for boundary connections
+        let m_max = self.params.m_for_level(level);
+
+        let mut neighbors = self.neighbors.get_neighbors(node_id, level);
+        if neighbors.len() < m_max && !neighbors.contains(&neighbor_id) {
+            neighbors.push(neighbor_id);
+            self.neighbors.set_neighbors(node_id, level, neighbors);
+        }
+
+        Ok(())
+    }
 }
