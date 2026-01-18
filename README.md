@@ -201,6 +201,42 @@ db = omendb.open("./db", dimensions=768, quantization=True)  # Enable SQ8
 
 </details>
 
+### Tuning ef_search for High Dimensions
+
+The `ef_search` parameter controls the recall/speed tradeoff at query time. Higher values explore more candidates, improving recall but slowing search.
+
+**Rules of thumb:**
+
+- `ef_search` must be >= k (number of results requested)
+- For 128D embeddings: ef=100 usually achieves 90%+ recall
+- For 768D+ embeddings: increase to ef=200-400 for better recall
+- If recall drops at scale (50K+), increase both ef_search and ef_construction
+
+**Runtime tuning:**
+
+```python
+# Check current value
+print(db.get_ef_search())  # 100
+
+# Increase for better recall (slower)
+db.set_ef_search(200)
+
+# Decrease for speed (may reduce recall)
+db.set_ef_search(50)
+
+# Per-query override
+results = db.search(query, k=10, ef=300)
+```
+
+**Recommended settings by use case:**
+
+| Use Case            | ef_search | Expected Recall |
+| ------------------- | --------- | --------------- |
+| Fast search (128D)  | 64        | ~85%            |
+| Balanced (default)  | 100       | ~90%            |
+| High recall (768D+) | 200-300   | ~95%+           |
+| Maximum recall      | 500+      | ~98%+           |
+
 ## Examples
 
 See [`python/examples/`](python/examples/) for complete working examples:
