@@ -1,26 +1,51 @@
-//! Node storage - colocates vectors and neighbors for cache efficiency
+//! Unified node storage for HNSW - THE storage layer
 //!
-//! Node layout in memory (fixed size per index):
+//! Architecture:
+//! - Level 0: Colocated vectors + neighbors, cache-line aligned (hot path, 95% of operations)
+//! - Upper levels: Sparse storage, only allocated for nodes with level > 0 (cold path)
+//! - Supports both full precision (f32) and SQ8 quantization (u8)
+//!
+//! Level 0 node layout in memory (fixed size per index):
+//!
+//! Full precision:
 //! ```text
 //! [neighbor_count: u16][pad: u16][neighbors: [u32; M*2]][vector: [f32; D]][slot: u32][level: u8][padding]
 //! ```
+//! Total: 4 + 4*(M*2) + 4*D + 5 + padding bytes (rounded to cache line)
 //!
-//! Total size: 4 + 4*(M*2) + 4*D + 4 + 1 + padding bytes (rounded to cache line)
-//! Example (M=16, D=128): 4 + 128 + 512 + 4 + 1 + padding = 704 bytes/node (rounded to 704)
+//! SQ8 quantized:
+//! ```text
+//! [neighbor_count: u16][pad: u16][neighbors: [u32; M*2]][quantized: [u8; D]][slot: u32][level: u8][padding]
+//! ```
+//! Total: 4 + 4*(M*2) + D + 5 + padding bytes (4x smaller vectors)
+//! Plus separate norms and sums arrays for L2 decomposition.
 //!
 //! Benefits:
-//! - Single prefetch covers both neighbors and vector
+//! - Single prefetch covers both neighbors and vector (level 0)
 //! - Zero-copy neighbor access (no buffer copy)
 //! - Cache-line aligned node access
+//! - Sparse upper levels (memory efficient, only 5% of nodes)
 //! - 2-3x faster search at high dimensions (768D+)
+//! - SQ8: 4x memory reduction, 2-3x faster (integer SIMD)
 //!
 //! All fields after the count are 4-byte aligned, ensured by the 2-byte padding after count.
 
 // Allow pointer casts - we ensure alignment via layout design (all offsets are 4-byte aligned)
 #![allow(clippy::cast_ptr_alignment)]
 
+use crate::compression::scalar::{QueryPrep, ScalarParams};
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::ptr::NonNull;
+
+/// Storage mode for vectors
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StorageMode {
+    /// Full precision f32 vectors (D * 4 bytes per vector)
+    #[default]
+    FullPrecision,
+    /// SQ8 quantized vectors (D bytes per vector, 4x compression)
+    SQ8,
+}
 
 /// Cache-line alignment for optimal prefetch
 const CACHE_LINE: usize = 64;
@@ -53,8 +78,13 @@ impl Default for StorageBacking {
 /// This storage format places vectors and neighbors together in memory
 /// so that a single cache prefetch covers both. This significantly improves
 /// search performance by reducing cache misses during graph traversal.
+///
+/// Level 0 is stored colocated (hot path). Upper levels are stored sparsely
+/// (only ~5% of nodes have upper levels).
+///
+/// Supports both full precision (f32) and SQ8 quantized (u8) vectors.
 pub struct NodeStorage {
-    /// Storage backing (owned or mmap)
+    /// Level 0 storage backing (owned or mmap) - colocated vectors + neighbors
     backing: StorageBacking,
     /// Number of nodes in use
     len: usize,
@@ -70,24 +100,69 @@ pub struct NodeStorage {
     dimensions: usize,
     /// Max neighbors at level 0 (M * 2)
     max_neighbors: usize,
+    /// Max neighbors at upper levels (M)
+    max_neighbors_upper: usize,
+    /// Max level supported
+    max_level: usize,
+    /// Upper level neighbors: [node_id] -> [level-1] -> neighbors
+    /// Only populated for nodes with level > 0. Most entries are None.
+    upper_neighbors: Vec<Option<Box<[Vec<u32>]>>>,
+
+    // SQ8 quantization support
+    /// Storage mode (full precision or SQ8)
+    mode: StorageMode,
+    /// Scalar quantization parameters (only for SQ8 mode)
+    sq8_params: Option<ScalarParams>,
+    /// Squared norms for each vector (used in L2 decomposition)
+    norms: Vec<f32>,
+    /// Sum of quantized codes (only for SQ8 mode, used in L2 decomposition)
+    sq8_sums: Vec<i32>,
+    /// Training buffer for lazy SQ8 training (first 256 vectors)
+    training_buffer: Vec<f32>,
+    /// Whether SQ8 quantization has been trained
+    sq8_trained: bool,
 }
 
 impl NodeStorage {
-    /// Create new unified storage
+    /// Create new full precision storage
     ///
     /// # Arguments
     /// - `dimensions`: Vector dimensionality
-    /// - `m`: HNSW M parameter (level 0 gets M*2 neighbors)
-    /// - `_max_levels`: Max levels (reserved for future upper level storage)
+    /// - `m`: HNSW M parameter (level 0 gets M*2 neighbors, upper levels get M)
+    /// - `max_levels`: Maximum number of levels in the HNSW graph
     #[must_use]
-    pub fn new(dimensions: usize, m: usize, _max_levels: usize) -> Self {
-        let max_neighbors = m * 2;
+    pub fn new(dimensions: usize, m: usize, max_levels: usize) -> Self {
+        Self::with_mode(dimensions, m, max_levels, StorageMode::FullPrecision)
+    }
 
-        // Layout: [count:2][pad:2][neighbors:M*2*4][vector:D*4][slot:4][level:1]
-        // We add 2 bytes of padding after count to ensure neighbors are 4-byte aligned
+    /// Create new SQ8 quantized storage
+    ///
+    /// SQ8 provides:
+    /// - 4x memory reduction (u8 instead of f32)
+    /// - 2-3x faster search (integer SIMD)
+    /// - ~99% recall with L2 decomposition
+    ///
+    /// Quantization is trained lazily after 256 vectors are inserted.
+    #[must_use]
+    pub fn new_sq8(dimensions: usize, m: usize, max_levels: usize) -> Self {
+        Self::with_mode(dimensions, m, max_levels, StorageMode::SQ8)
+    }
+
+    /// Create storage with specified mode
+    #[must_use]
+    fn with_mode(dimensions: usize, m: usize, max_levels: usize, mode: StorageMode) -> Self {
+        let max_neighbors = m * 2; // Level 0 gets M*2
+        let max_neighbors_upper = m; // Upper levels get M
+
+        // Layout: [count:2][pad:2][neighbors:M*2*4][vector][slot:4][level:1]
+        // Vector size depends on mode: f32 (4 bytes) vs u8 (1 byte)
         let neighbors_offset = 4; // 2 (count) + 2 (padding) = 4
         let vector_offset = neighbors_offset + max_neighbors * 4;
-        let metadata_offset = vector_offset + dimensions * 4;
+        let vector_size = match mode {
+            StorageMode::FullPrecision => dimensions * 4, // f32
+            StorageMode::SQ8 => dimensions,               // u8
+        };
+        let metadata_offset = vector_offset + vector_size;
         let raw_size = metadata_offset + 4 + 1; // slot (4) + level (1)
 
         // Round up to cache line boundary for alignment
@@ -102,6 +177,15 @@ impl NodeStorage {
             metadata_offset,
             dimensions,
             max_neighbors,
+            max_neighbors_upper,
+            max_level: max_levels,
+            upper_neighbors: Vec::new(),
+            mode,
+            sq8_params: None,
+            norms: Vec::new(),
+            sq8_sums: Vec::new(),
+            training_buffer: Vec::new(),
+            sq8_trained: false,
         }
     }
 
@@ -119,11 +203,46 @@ impl NodeStorage {
         self.dimensions
     }
 
-    /// Max neighbors per node
+    /// Max neighbors per node at level 0
     #[inline]
     #[must_use]
     pub fn max_neighbors(&self) -> usize {
         self.max_neighbors
+    }
+
+    /// Max neighbors per node at upper levels
+    #[inline]
+    #[must_use]
+    pub fn max_neighbors_upper(&self) -> usize {
+        self.max_neighbors_upper
+    }
+
+    /// Maximum level supported
+    #[inline]
+    #[must_use]
+    pub fn max_level(&self) -> usize {
+        self.max_level
+    }
+
+    /// Storage mode (full precision or SQ8)
+    #[inline]
+    #[must_use]
+    pub fn mode(&self) -> StorageMode {
+        self.mode
+    }
+
+    /// Check if this storage uses SQ8 quantization
+    #[inline]
+    #[must_use]
+    pub fn is_sq8(&self) -> bool {
+        self.mode == StorageMode::SQ8
+    }
+
+    /// Check if SQ8 quantization is trained (only relevant for SQ8 mode)
+    #[inline]
+    #[must_use]
+    pub fn is_trained(&self) -> bool {
+        self.mode == StorageMode::FullPrecision || self.sq8_trained
     }
 
     /// Number of nodes
@@ -157,7 +276,42 @@ impl NodeStorage {
         }
         let node_id = self.len as u32;
         self.len += 1;
+        // Extend upper_neighbors vector (initially None)
+        self.upper_neighbors.push(None);
         node_id
+    }
+
+    /// Allocate upper level storage for a node
+    ///
+    /// Called when a node is assigned a level > 0. If the node already has
+    /// upper levels allocated but needs more, extends the storage.
+    pub fn allocate_upper_levels(&mut self, id: u32, level: u8) {
+        if level == 0 {
+            return;
+        }
+        let id = id as usize;
+        if id >= self.upper_neighbors.len() {
+            self.upper_neighbors.resize(id + 1, None);
+        }
+
+        let needed_levels = level as usize;
+
+        match &self.upper_neighbors[id] {
+            None => {
+                // Allocate empty Vec for each upper level (levels 1..=level)
+                let levels: Vec<Vec<u32>> = (0..needed_levels).map(|_| Vec::new()).collect();
+                self.upper_neighbors[id] = Some(levels.into_boxed_slice());
+            }
+            Some(existing) if existing.len() < needed_levels => {
+                // Extend existing allocation
+                let mut levels: Vec<Vec<u32>> = existing.to_vec();
+                levels.resize(needed_levels, Vec::new());
+                self.upper_neighbors[id] = Some(levels.into_boxed_slice());
+            }
+            Some(_) => {
+                // Already has enough levels
+            }
+        }
     }
 
     /// Grow capacity (double or initial 64)
@@ -239,10 +393,16 @@ impl NodeStorage {
         unsafe { data.as_ptr().add(id as usize * self.node_size) }
     }
 
-    /// Zero-copy access to vector
+    /// Zero-copy access to vector (full precision mode only)
+    ///
+    /// Panics in SQ8 mode - use `get_dequantized()` instead.
     #[inline]
     #[must_use]
     pub fn vector(&self, id: u32) -> &[f32] {
+        debug_assert!(
+            self.mode == StorageMode::FullPrecision,
+            "vector() not available in SQ8 mode, use get_dequantized()"
+        );
         let ptr = self.node_ptr(id);
         unsafe {
             let vec_ptr = ptr.add(self.vector_offset) as *const f32;
@@ -250,7 +410,42 @@ impl NodeStorage {
         }
     }
 
-    /// Set vector data
+    /// Zero-copy access to quantized vector (SQ8 mode only)
+    #[inline]
+    #[must_use]
+    pub fn quantized_vector(&self, id: u32) -> &[u8] {
+        debug_assert!(
+            self.mode == StorageMode::SQ8,
+            "quantized_vector() only available in SQ8 mode"
+        );
+        let ptr = self.node_ptr(id);
+        unsafe {
+            let vec_ptr = ptr.add(self.vector_offset);
+            std::slice::from_raw_parts(vec_ptr, self.dimensions)
+        }
+    }
+
+    /// Get dequantized vector (SQ8 mode only, allocates)
+    ///
+    /// Returns None if quantization is not yet trained.
+    #[must_use]
+    pub fn get_dequantized(&self, id: u32) -> Option<Vec<f32>> {
+        if self.mode != StorageMode::SQ8 {
+            return Some(self.vector(id).to_vec());
+        }
+        let params = self.sq8_params.as_ref()?;
+        let quantized = self.quantized_vector(id);
+        Some(params.dequantize(quantized))
+    }
+
+    /// Get squared norm for a vector (used in L2 decomposition)
+    #[inline]
+    #[must_use]
+    pub fn get_norm(&self, id: u32) -> Option<f32> {
+        self.norms.get(id as usize).copied()
+    }
+
+    /// Set vector data (handles both full precision and SQ8 modes)
     pub fn set_vector(&mut self, id: u32, vector: &[f32]) {
         debug_assert_eq!(
             vector.len(),
@@ -259,14 +454,163 @@ impl NodeStorage {
             vector.len(),
             self.dimensions
         );
-        let ptr = self.node_ptr_mut(id);
-        unsafe {
-            let vec_ptr = ptr.add(self.vector_offset) as *mut f32;
-            std::ptr::copy_nonoverlapping(vector.as_ptr(), vec_ptr, self.dimensions);
+
+        match self.mode {
+            StorageMode::FullPrecision => {
+                // Store vector directly and compute norm
+                let ptr = self.node_ptr_mut(id);
+                unsafe {
+                    let vec_ptr = ptr.add(self.vector_offset) as *mut f32;
+                    std::ptr::copy_nonoverlapping(vector.as_ptr(), vec_ptr, self.dimensions);
+                }
+                // Compute and store squared norm
+                let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
+                let id_usize = id as usize;
+                if id_usize >= self.norms.len() {
+                    self.norms.resize(id_usize + 1, 0.0);
+                }
+                self.norms[id_usize] = norm_sq;
+            }
+            StorageMode::SQ8 => {
+                self.set_vector_sq8(id, vector);
+            }
         }
     }
 
-    /// Get neighbor count
+    /// Set vector in SQ8 mode with lazy training
+    fn set_vector_sq8(&mut self, id: u32, vector: &[f32]) {
+        let id_usize = id as usize;
+
+        if self.sq8_trained {
+            // Already trained - quantize directly
+            let params = self.sq8_params.as_ref().expect("SQ8 params should exist");
+            let quant = params.quantize(vector);
+
+            // Store quantized vector
+            let ptr = self.node_ptr_mut(id);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::copy_nonoverlapping(quant.data.as_ptr(), vec_ptr, self.dimensions);
+            }
+
+            // Store norm and sum
+            if id_usize >= self.norms.len() {
+                self.norms.resize(id_usize + 1, 0.0);
+            }
+            if id_usize >= self.sq8_sums.len() {
+                self.sq8_sums.resize(id_usize + 1, 0);
+            }
+            self.norms[id_usize] = quant.norm_sq;
+            self.sq8_sums[id_usize] = quant.sum;
+        } else {
+            // Still in training phase - buffer the vector
+            self.training_buffer.extend_from_slice(vector);
+
+            // Store zeros in the colocated storage for now (will be filled after training)
+            let ptr = self.node_ptr_mut(id);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::write_bytes(vec_ptr, 0, self.dimensions);
+            }
+
+            // Check if we have enough vectors to train (256 threshold)
+            let num_vectors = self.training_buffer.len() / self.dimensions;
+            if num_vectors >= 256 {
+                self.train_quantization();
+            }
+        }
+    }
+
+    /// Train SQ8 quantization from buffered vectors
+    fn train_quantization(&mut self) {
+        let dim = self.dimensions;
+        let num_vectors = self.training_buffer.len() / dim;
+
+        // Build training sample (refs to slices)
+        let training_refs: Vec<&[f32]> = (0..num_vectors)
+            .map(|i| &self.training_buffer[i * dim..(i + 1) * dim])
+            .collect();
+
+        // Train quantization parameters
+        let params = ScalarParams::train(&training_refs).expect("Failed to train SQ8 params");
+        self.sq8_params = Some(params.clone());
+        self.sq8_trained = true;
+
+        // Quantize all buffered vectors and store them
+        self.norms.reserve(num_vectors);
+        self.sq8_sums.reserve(num_vectors);
+
+        for i in 0..num_vectors {
+            let vec_slice = &self.training_buffer[i * dim..(i + 1) * dim];
+            let quant = params.quantize(vec_slice);
+
+            // Store quantized vector in colocated storage
+            let ptr = self.node_ptr_mut(i as u32);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::copy_nonoverlapping(quant.data.as_ptr(), vec_ptr, dim);
+            }
+
+            // Store norm and sum
+            if i >= self.norms.len() {
+                self.norms.push(quant.norm_sq);
+            } else {
+                self.norms[i] = quant.norm_sq;
+            }
+            if i >= self.sq8_sums.len() {
+                self.sq8_sums.push(quant.sum);
+            } else {
+                self.sq8_sums[i] = quant.sum;
+            }
+        }
+
+        // Clear training buffer
+        self.training_buffer.clear();
+        self.training_buffer.shrink_to_fit();
+    }
+
+    /// Prepare query for SQ8 distance calculation
+    #[must_use]
+    pub fn prepare_query(&self, query: &[f32]) -> Option<QueryPrep> {
+        self.sq8_params
+            .as_ref()
+            .map(|params| params.prepare_query(query))
+    }
+
+    /// Compute SQ8 L2 distance (requires trained quantization)
+    ///
+    /// Uses integer SIMD for fast distance calculation.
+    #[inline]
+    #[must_use]
+    pub fn distance_sq8(&self, prep: &QueryPrep, id: u32) -> Option<f32> {
+        let params = self.sq8_params.as_ref()?;
+        if !self.sq8_trained {
+            return None;
+        }
+
+        let idx = id as usize;
+        if idx >= self.len {
+            return None;
+        }
+
+        let quantized = self.quantized_vector(id);
+        let vec_norm_sq = self.norms.get(idx)?;
+        let vec_sum = *self.sq8_sums.get(idx)?;
+
+        // L2 decomposition: ||a-b||^2 = ||a||^2 + ||b||^2 - 2<a,b>
+        let scale_sq = params.scale * params.scale;
+        let offset_term = params.offset * params.offset * self.dimensions as f32;
+
+        let int_dot = params.int_dot_product_pub(&prep.quantized, quantized);
+
+        let dot = scale_sq * int_dot as f32
+            + params.scale * params.offset * (prep.sum + vec_sum) as f32
+            + offset_term;
+
+        Some(prep.norm_sq + vec_norm_sq - 2.0 * dot)
+    }
+
+    /// Get neighbor count at level 0 (hot path, colocated storage)
     #[inline]
     #[must_use]
     pub fn neighbor_count(&self, id: u32) -> usize {
@@ -274,7 +618,31 @@ impl NodeStorage {
         unsafe { u16::from_le_bytes([*ptr, *ptr.add(1)]) as usize }
     }
 
-    /// Zero-copy access to neighbors
+    /// Get neighbor count at any level
+    #[inline]
+    #[must_use]
+    pub fn neighbor_count_at_level(&self, id: u32, level: u8) -> usize {
+        if level == 0 {
+            return self.neighbor_count(id);
+        }
+        let id = id as usize;
+        if id >= self.upper_neighbors.len() {
+            return 0;
+        }
+        match &self.upper_neighbors[id] {
+            Some(levels) => {
+                let level_idx = level as usize - 1;
+                if level_idx < levels.len() {
+                    levels[level_idx].len()
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        }
+    }
+
+    /// Zero-copy access to level 0 neighbors (hot path, colocated storage)
     #[inline]
     #[must_use]
     pub fn neighbors(&self, id: u32) -> &[u32] {
@@ -289,7 +657,34 @@ impl NodeStorage {
         }
     }
 
-    /// Set neighbors (overwrites all)
+    /// Get neighbors at any level
+    ///
+    /// Level 0 uses the colocated storage (zero-copy).
+    /// Upper levels use the sparse storage.
+    #[inline]
+    #[must_use]
+    pub fn neighbors_at_level(&self, id: u32, level: u8) -> Vec<u32> {
+        if level == 0 {
+            return self.neighbors(id).to_vec();
+        }
+        let id = id as usize;
+        if id >= self.upper_neighbors.len() {
+            return Vec::new();
+        }
+        match &self.upper_neighbors[id] {
+            Some(levels) => {
+                let level_idx = level as usize - 1;
+                if level_idx < levels.len() {
+                    levels[level_idx].clone()
+                } else {
+                    Vec::new()
+                }
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Set level 0 neighbors (overwrites all, colocated storage)
     pub fn set_neighbors(&mut self, id: u32, neighbors: &[u32]) {
         debug_assert!(
             neighbors.len() <= self.max_neighbors,
@@ -309,6 +704,67 @@ impl NodeStorage {
             if !neighbors.is_empty() {
                 let neighbors_ptr = ptr.add(self.neighbors_offset) as *mut u32;
                 std::ptr::copy_nonoverlapping(neighbors.as_ptr(), neighbors_ptr, neighbors.len());
+            }
+        }
+    }
+
+    /// Set neighbors at any level
+    ///
+    /// Level 0 uses colocated storage. Upper levels use sparse storage.
+    pub fn set_neighbors_at_level(&mut self, id: u32, level: u8, neighbors: Vec<u32>) {
+        if level == 0 {
+            self.set_neighbors(id, &neighbors);
+            return;
+        }
+
+        // Ensure upper levels are allocated
+        self.allocate_upper_levels(id, level);
+
+        let id = id as usize;
+        if let Some(levels) = &mut self.upper_neighbors[id] {
+            let level_idx = level as usize - 1;
+            if level_idx < levels.len() {
+                // Need to convert Box<[Vec<u32>]> to mutable
+                let mut levels_vec: Vec<Vec<u32>> = levels.to_vec();
+                levels_vec[level_idx] = neighbors;
+                self.upper_neighbors[id] = Some(levels_vec.into_boxed_slice());
+            }
+        }
+    }
+
+    /// Add a neighbor at a specific level (for incremental construction)
+    pub fn add_neighbor(&mut self, id: u32, level: u8, neighbor: u32) {
+        if level == 0 {
+            // Level 0: append to colocated storage
+            let count = self.neighbor_count(id);
+            if count >= self.max_neighbors {
+                return; // At capacity
+            }
+            let ptr = self.node_ptr_mut(id);
+            unsafe {
+                // Update count
+                let new_count = (count + 1) as u16;
+                let count_bytes = new_count.to_le_bytes();
+                *ptr = count_bytes[0];
+                *ptr.add(1) = count_bytes[1];
+
+                // Write new neighbor
+                let neighbors_ptr = ptr.add(self.neighbors_offset) as *mut u32;
+                *neighbors_ptr.add(count) = neighbor;
+            }
+        } else {
+            // Upper level: append to sparse storage
+            self.allocate_upper_levels(id, level);
+            let id = id as usize;
+            if let Some(levels) = &mut self.upper_neighbors[id] {
+                let level_idx = level as usize - 1;
+                if level_idx < levels.len() {
+                    let mut levels_vec: Vec<Vec<u32>> = levels.to_vec();
+                    if levels_vec[level_idx].len() < self.max_neighbors_upper {
+                        levels_vec[level_idx].push(neighbor);
+                    }
+                    self.upper_neighbors[id] = Some(levels_vec.into_boxed_slice());
+                }
             }
         }
     }
@@ -378,11 +834,29 @@ impl NodeStorage {
     /// Memory usage in bytes
     #[must_use]
     pub fn memory_usage(&self) -> usize {
-        match &self.backing {
+        let level0_usage = match &self.backing {
             StorageBacking::Owned { capacity, .. } => capacity * self.node_size,
             #[cfg(feature = "mmap")]
             StorageBacking::Mmap(mmap) => mmap.len(),
-        }
+        };
+
+        // Calculate upper level storage
+        let upper_usage: usize = self
+            .upper_neighbors
+            .iter()
+            .filter_map(|opt| opt.as_ref())
+            .map(|levels| {
+                levels.iter().map(|v| v.len() * 4).sum::<usize>()
+                    + levels.len() * std::mem::size_of::<Vec<u32>>()
+            })
+            .sum();
+
+        // SQ8 auxiliary storage
+        let sq8_usage = self.norms.len() * 4  // f32 norms
+            + self.sq8_sums.len() * 4  // i32 sums
+            + self.training_buffer.len() * 4; // f32 training buffer
+
+        level0_usage + upper_usage + sq8_usage
     }
 
     // =========================================================================
@@ -468,6 +942,9 @@ impl NodeStorage {
             }
         };
 
+        // M = max_neighbors / 2 (level 0 has M*2)
+        let max_neighbors_upper = max_neighbors / 2;
+
         Self {
             backing,
             len,
@@ -477,6 +954,15 @@ impl NodeStorage {
             metadata_offset,
             dimensions,
             max_neighbors,
+            max_neighbors_upper,
+            max_level: 8, // Default max level
+            upper_neighbors: vec![None; len],
+            mode: StorageMode::FullPrecision, // Default to full precision for loaded data
+            sq8_params: None,
+            norms: Vec::new(),
+            sq8_sums: Vec::new(),
+            training_buffer: Vec::new(),
+            sq8_trained: false,
         }
     }
 
@@ -493,6 +979,8 @@ impl NodeStorage {
         dimensions: usize,
         max_neighbors: usize,
     ) -> Self {
+        let max_neighbors_upper = max_neighbors / 2;
+
         Self {
             backing: StorageBacking::Mmap(mmap),
             len,
@@ -502,6 +990,15 @@ impl NodeStorage {
             metadata_offset,
             dimensions,
             max_neighbors,
+            max_neighbors_upper,
+            max_level: 8,
+            upper_neighbors: vec![None; len],
+            mode: StorageMode::FullPrecision,
+            sq8_params: None,
+            norms: Vec::new(),
+            sq8_sums: Vec::new(),
+            training_buffer: Vec::new(),
+            sq8_trained: false,
         }
     }
 }
@@ -665,5 +1162,283 @@ mod tests {
 
         assert_eq!(storage.len(), 100);
         assert!(storage.capacity() >= 100);
+    }
+
+    #[test]
+    fn test_upper_level_allocation() {
+        let mut storage = NodeStorage::new(4, 16, 8); // M=16, max_level=8
+        let id = storage.allocate_node();
+
+        // No upper levels initially
+        assert_eq!(storage.neighbor_count_at_level(id, 1), 0);
+        assert_eq!(storage.neighbor_count_at_level(id, 2), 0);
+
+        // Allocate levels 1-3
+        storage.allocate_upper_levels(id, 3);
+
+        // Still empty but allocated
+        assert_eq!(storage.neighbor_count_at_level(id, 1), 0);
+        assert_eq!(storage.neighbor_count_at_level(id, 2), 0);
+        assert_eq!(storage.neighbor_count_at_level(id, 3), 0);
+    }
+
+    #[test]
+    fn test_upper_level_neighbors() {
+        let mut storage = NodeStorage::new(4, 16, 8);
+        let id = storage.allocate_node();
+        storage.allocate_node(); // node 1
+        storage.allocate_node(); // node 2
+
+        // Set level 0 neighbors (uses colocated storage)
+        storage.set_neighbors_at_level(id, 0, vec![1, 2]);
+        assert_eq!(storage.neighbors_at_level(id, 0), vec![1, 2]);
+        assert_eq!(storage.neighbors(id), &[1, 2]); // Same data
+
+        // Set upper level neighbors
+        storage.set_neighbors_at_level(id, 1, vec![1]);
+        storage.set_neighbors_at_level(id, 2, vec![2]);
+
+        assert_eq!(storage.neighbors_at_level(id, 1), vec![1]);
+        assert_eq!(storage.neighbors_at_level(id, 2), vec![2]);
+
+        // Level 0 unchanged
+        assert_eq!(storage.neighbors_at_level(id, 0), vec![1, 2]);
+    }
+
+    #[test]
+    fn test_add_neighbor() {
+        let mut storage = NodeStorage::new(4, 4, 8); // M=4 -> level0 max=8, upper max=4
+        let id = storage.allocate_node();
+        for _ in 0..10 {
+            storage.allocate_node();
+        }
+
+        // Add level 0 neighbors one by one
+        storage.add_neighbor(id, 0, 1);
+        storage.add_neighbor(id, 0, 2);
+        assert_eq!(storage.neighbors(id), &[1, 2]);
+
+        // Add upper level neighbors
+        storage.allocate_upper_levels(id, 2);
+        storage.add_neighbor(id, 1, 3);
+        storage.add_neighbor(id, 1, 4);
+        storage.add_neighbor(id, 2, 5);
+
+        assert_eq!(storage.neighbors_at_level(id, 1), vec![3, 4]);
+        assert_eq!(storage.neighbors_at_level(id, 2), vec![5]);
+
+        // Level 0 unchanged
+        assert_eq!(storage.neighbors(id), &[1, 2]);
+    }
+
+    #[test]
+    fn test_upper_level_memory_usage() {
+        let mut storage = NodeStorage::new(4, 16, 8);
+
+        // Allocate 100 nodes, only 10% have upper levels (realistic HNSW)
+        for i in 0..100u32 {
+            storage.allocate_node();
+            if i % 10 == 0 {
+                // ~10% have upper levels
+                storage.allocate_upper_levels(i, 2);
+                storage.set_neighbors_at_level(i, 1, vec![0, 1, 2]);
+            }
+        }
+
+        let mem = storage.memory_usage();
+        assert!(mem > 0);
+        // Upper level storage is sparse, should be much smaller than level 0
+    }
+
+    #[test]
+    fn test_max_neighbors_enforcement() {
+        let mut storage = NodeStorage::new(4, 2, 8); // M=2 -> level0 max=4, upper max=2
+        let id = storage.allocate_node();
+        for _ in 0..10 {
+            storage.allocate_node();
+        }
+
+        // Fill level 0 to capacity (M*2 = 4)
+        for i in 1..=4 {
+            storage.add_neighbor(id, 0, i);
+        }
+        assert_eq!(storage.neighbor_count(id), 4);
+
+        // Try to add more - should be ignored (at capacity)
+        storage.add_neighbor(id, 0, 5);
+        assert_eq!(storage.neighbor_count(id), 4);
+        assert!(!storage.neighbors(id).contains(&5));
+
+        // Upper level has max M=2
+        storage.allocate_upper_levels(id, 1);
+        storage.add_neighbor(id, 1, 1);
+        storage.add_neighbor(id, 1, 2);
+        assert_eq!(storage.neighbor_count_at_level(id, 1), 2);
+
+        // Try to exceed - should be ignored
+        storage.add_neighbor(id, 1, 3);
+        assert_eq!(storage.neighbor_count_at_level(id, 1), 2);
+    }
+
+    // =========================================================================
+    // SQ8 Quantization Tests
+    // =========================================================================
+
+    #[test]
+    fn test_sq8_node_layout_size() {
+        // SQ8 uses u8 per dimension instead of f32 (4x smaller)
+        // M=16, D=128:
+        // Full precision: 4 + 128 + 512 + 5 = 649 -> 704 (cache aligned)
+        // SQ8: 4 + 128 + 128 + 5 = 265 -> 320 (cache aligned)
+        let fp_storage = NodeStorage::new(128, 16, 8);
+        let sq8_storage = NodeStorage::new_sq8(128, 16, 8);
+
+        assert_eq!(fp_storage.node_size(), 704);
+        assert_eq!(sq8_storage.node_size(), 320);
+        assert!(sq8_storage.node_size() < fp_storage.node_size());
+
+        // Verify mode
+        assert_eq!(fp_storage.mode(), StorageMode::FullPrecision);
+        assert_eq!(sq8_storage.mode(), StorageMode::SQ8);
+    }
+
+    #[test]
+    fn test_sq8_lazy_training() {
+        let mut storage = NodeStorage::new_sq8(4, 2, 8);
+        assert!(!storage.is_trained());
+
+        // Insert 255 vectors (not enough to train)
+        for i in 0..255 {
+            storage.allocate_node();
+            let vector: Vec<f32> = (0..4).map(|j| (i * 4 + j) as f32).collect();
+            storage.set_vector(i as u32, &vector);
+        }
+        assert!(!storage.is_trained());
+
+        // Insert 256th vector - should trigger training
+        storage.allocate_node();
+        let vector: Vec<f32> = (0..4).map(|j| (255 * 4 + j) as f32).collect();
+        storage.set_vector(255, &vector);
+        assert!(storage.is_trained());
+
+        // New vectors should be quantized directly
+        storage.allocate_node();
+        let vector: Vec<f32> = (0..4).map(|j| (256 * 4 + j) as f32).collect();
+        storage.set_vector(256, &vector);
+        assert_eq!(storage.len(), 257);
+    }
+
+    #[test]
+    fn test_sq8_dequantization() {
+        let mut storage = NodeStorage::new_sq8(4, 2, 8);
+
+        // Insert enough vectors to trigger training
+        for i in 0..256 {
+            storage.allocate_node();
+            let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32 / 255.0).collect();
+            storage.set_vector(i as u32, &vector);
+        }
+        assert!(storage.is_trained());
+
+        // Dequantized should be approximately equal to original
+        let original: Vec<f32> = (0..4).map(|j| (100 + j) as f32 / 255.0).collect();
+        let dequantized = storage.get_dequantized(100).unwrap();
+
+        // Check approximate equality (quantization introduces small errors)
+        for (o, d) in original.iter().zip(dequantized.iter()) {
+            assert!((o - d).abs() < 0.02, "Dequantization error too large");
+        }
+    }
+
+    #[test]
+    fn test_sq8_distance_calculation() {
+        let mut storage = NodeStorage::new_sq8(128, 2, 8);
+
+        // Insert vectors with known values (realistic high-dimensional data)
+        for i in 0..256 {
+            storage.allocate_node();
+            // Random-ish distribution with meaningful variance
+            let vector: Vec<f32> = (0..128)
+                .map(|j| ((i * 128 + j) % 255) as f32 / 255.0)
+                .collect();
+            storage.set_vector(i as u32, &vector);
+        }
+        assert!(storage.is_trained());
+
+        // Query vector (middle of range)
+        let query: Vec<f32> = (0..128).map(|j| (j % 255) as f32 / 255.0).collect();
+        let prep = storage.prepare_query(&query).expect("Should have params");
+
+        // Calculate distance to vectors
+        for id in [0, 50, 100, 150, 200, 250] {
+            let dist = storage.distance_sq8(&prep, id);
+            assert!(
+                dist.is_some(),
+                "Distance should be computable for vector {id}"
+            );
+            // Allow small negative values due to floating point precision
+            let dist_val = dist.unwrap();
+            assert!(
+                dist_val >= -0.01,
+                "Distance {} for vector {} is too negative",
+                dist_val,
+                id
+            );
+        }
+
+        // Distance to self should be near zero
+        storage.allocate_node();
+        storage.set_vector(256, &query);
+        let self_dist = storage.distance_sq8(&prep, 256).unwrap();
+        assert!(
+            self_dist.abs() < 0.1,
+            "Self-distance should be near zero, got {}",
+            self_dist
+        );
+    }
+
+    #[test]
+    fn test_sq8_norms_stored() {
+        let mut storage = NodeStorage::new_sq8(4, 2, 8);
+
+        // Insert enough vectors to trigger training
+        for i in 0..256 {
+            storage.allocate_node();
+            let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32).collect();
+            storage.set_vector(i as u32, &vector);
+        }
+
+        // After training, norms should be stored
+        for i in 0..256 {
+            let norm = storage.get_norm(i as u32);
+            assert!(norm.is_some(), "Norm should be stored for vector {i}");
+            assert!(norm.unwrap() >= 0.0, "Norm should be non-negative");
+        }
+    }
+
+    #[test]
+    fn test_full_precision_norms_stored() {
+        let mut storage = NodeStorage::new(4, 2, 8);
+
+        // Insert some vectors
+        for i in 0..10 {
+            storage.allocate_node();
+            let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32).collect();
+            storage.set_vector(i as u32, &vector);
+        }
+
+        // Norms should be stored for full precision too
+        for i in 0..10 {
+            let norm = storage.get_norm(i as u32);
+            assert!(norm.is_some(), "Norm should be stored for vector {i}");
+
+            // Verify norm is correct: sum of squares
+            let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32).collect();
+            let expected_norm: f32 = vector.iter().map(|x| x * x).sum();
+            assert!(
+                (norm.unwrap() - expected_norm).abs() < 0.01,
+                "Norm should equal sum of squares"
+            );
+        }
     }
 }
