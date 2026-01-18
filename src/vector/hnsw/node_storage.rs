@@ -1,4 +1,4 @@
-//! Unified node storage - colocates vectors and neighbors for cache efficiency
+//! Node storage - colocates vectors and neighbors for cache efficiency
 //!
 //! Node layout in memory (fixed size per index):
 //! ```text
@@ -53,7 +53,7 @@ impl Default for StorageBacking {
 /// This storage format places vectors and neighbors together in memory
 /// so that a single cache prefetch covers both. This significantly improves
 /// search performance by reducing cache misses during graph traversal.
-pub struct UnifiedNodeStorage {
+pub struct NodeStorage {
     /// Storage backing (owned or mmap)
     backing: StorageBacking,
     /// Number of nodes in use
@@ -72,7 +72,7 @@ pub struct UnifiedNodeStorage {
     max_neighbors: usize,
 }
 
-impl UnifiedNodeStorage {
+impl NodeStorage {
     /// Create new unified storage
     ///
     /// # Arguments
@@ -506,7 +506,7 @@ impl UnifiedNodeStorage {
     }
 }
 
-impl Drop for UnifiedNodeStorage {
+impl Drop for NodeStorage {
     fn drop(&mut self) {
         match &self.backing {
             StorageBacking::Owned {
@@ -530,8 +530,8 @@ impl Drop for UnifiedNodeStorage {
 
 // SAFETY: The raw pointer is only accessed through &self or &mut self,
 // ensuring exclusive access for mutations.
-unsafe impl Send for UnifiedNodeStorage {}
-unsafe impl Sync for UnifiedNodeStorage {}
+unsafe impl Send for NodeStorage {}
+unsafe impl Sync for NodeStorage {}
 
 #[cfg(test)]
 mod tests {
@@ -542,19 +542,19 @@ mod tests {
         // M=16, D=128:
         // count(2) + neighbors(16*2*4=128) + vector(128*4=512) + slot(4) + level(1) = 647
         // Rounded to cache line (64): 704
-        let storage = UnifiedNodeStorage::new(128, 16, 8);
+        let storage = NodeStorage::new(128, 16, 8);
         assert_eq!(storage.node_size(), 704);
 
         // M=32, D=768:
         // count(2) + neighbors(32*2*4=256) + vector(768*4=3072) + slot(4) + level(1) = 3335
         // Rounded to cache line (64): 3392
-        let storage = UnifiedNodeStorage::new(768, 32, 8);
+        let storage = NodeStorage::new(768, 32, 8);
         assert_eq!(storage.node_size(), 3392);
     }
 
     #[test]
     fn test_store_and_retrieve_vector() {
-        let mut storage = UnifiedNodeStorage::new(4, 2, 8);
+        let mut storage = NodeStorage::new(4, 2, 8);
         let vector = vec![1.0f32, 2.0, 3.0, 4.0];
         storage.allocate_node();
         storage.set_vector(0, &vector);
@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_store_and_retrieve_neighbors() {
-        let mut storage = UnifiedNodeStorage::new(4, 2, 8);
+        let mut storage = NodeStorage::new(4, 2, 8);
         storage.allocate_node();
         storage.allocate_node();
         storage.allocate_node();
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_metadata_slot_mapping() {
-        let mut storage = UnifiedNodeStorage::new(4, 2, 8);
+        let mut storage = NodeStorage::new(4, 2, 8);
         storage.allocate_node();
         storage.set_slot(0, 42);
         assert_eq!(storage.slot(0), 42);
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_metadata_level() {
-        let mut storage = UnifiedNodeStorage::new(4, 2, 8);
+        let mut storage = NodeStorage::new(4, 2, 8);
         storage.allocate_node();
         storage.set_level(0, 5);
         assert_eq!(storage.level(0), 5);
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_prefetch_does_not_crash() {
-        let mut storage = UnifiedNodeStorage::new(128, 16, 8);
+        let mut storage = NodeStorage::new(128, 16, 8);
         for _ in 0..10 {
             storage.allocate_node();
         }
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn test_multiple_nodes() {
-        let mut storage = UnifiedNodeStorage::new(4, 2, 8);
+        let mut storage = NodeStorage::new(4, 2, 8);
 
         // Allocate and populate 100 nodes
         for i in 0..100 {
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_memory_usage() {
-        let mut storage = UnifiedNodeStorage::new(4, 2, 8);
+        let mut storage = NodeStorage::new(4, 2, 8);
         assert_eq!(storage.memory_usage(), 0);
 
         storage.allocate_node();
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_grow_capacity() {
-        let mut storage = UnifiedNodeStorage::new(4, 2, 8);
+        let mut storage = NodeStorage::new(4, 2, 8);
 
         // Allocate more than initial capacity
         for i in 0..100 {

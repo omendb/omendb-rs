@@ -22,9 +22,9 @@
 //! The data section starts at a known offset for mmap support.
 
 use crate::vector::hnsw::error::{HNSWError, Result};
+use crate::vector::hnsw::node_storage::NodeStorage;
 use crate::vector::hnsw::segment::FrozenSegment;
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
-use crate::vector::hnsw::unified_storage::UnifiedNodeStorage;
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
@@ -219,7 +219,7 @@ impl FrozenSegment {
         }
 
         // Reconstruct storage
-        let storage = UnifiedNodeStorage::from_bytes(
+        let storage = NodeStorage::from_bytes(
             data,
             len,
             node_size,
@@ -362,7 +362,7 @@ impl FrozenSegment {
         };
 
         // Create storage from mmap
-        let storage = UnifiedNodeStorage::from_mmap(
+        let storage = NodeStorage::from_mmap(
             mmap,
             len,
             node_size,

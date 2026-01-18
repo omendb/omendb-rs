@@ -11,6 +11,7 @@ mod error;
 mod graph_storage;
 mod index;
 mod merge;
+mod node_storage;
 mod prefetch;
 mod query_buffers;
 mod segment;
@@ -18,7 +19,6 @@ mod segment_manager;
 mod segment_persistence;
 mod storage;
 mod types;
-mod unified_storage;
 
 // Public API exports
 pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
@@ -43,6 +43,6 @@ pub use merge::{GraphMerger, MergeConfig, MergeStats};
 
 // V1 architecture - unified node storage and segments
 pub use batch_builder::{BatchBuilder, Cluster};
+pub use node_storage::NodeStorage;
 pub use segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 pub use segment_manager::{SegmentConfig, SegmentManager};
-pub use unified_storage::UnifiedNodeStorage;

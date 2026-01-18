@@ -11,8 +11,8 @@
 //! - Incremental persistence (only save new segments)
 
 use crate::vector::hnsw::index::HNSWIndex;
+use crate::vector::hnsw::node_storage::NodeStorage;
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
-use crate::vector::hnsw::unified_storage::UnifiedNodeStorage;
 
 use ordered_float::OrderedFloat;
 use std::cmp::Reverse;
@@ -182,7 +182,7 @@ impl MutableSegment {
 /// Cannot be modified after creation.
 pub struct FrozenSegment {
     /// Unified storage (colocated vectors + neighbors)
-    storage: UnifiedNodeStorage,
+    storage: NodeStorage,
     /// Segment ID
     id: u64,
     /// Entry point for search
@@ -200,7 +200,7 @@ impl FrozenSegment {
         entry_point: Option<u32>,
         params: HNSWParams,
         distance_fn: DistanceFunction,
-        storage: UnifiedNodeStorage,
+        storage: NodeStorage,
     ) -> Self {
         Self {
             storage,
@@ -219,7 +219,7 @@ impl FrozenSegment {
         let m = params.m;
 
         // Create unified storage
-        let mut storage = UnifiedNodeStorage::new(dimensions, m, params.max_level as usize);
+        let mut storage = NodeStorage::new(dimensions, m, params.max_level as usize);
 
         // Copy all nodes from mutable to frozen
         for id in 0..mutable.index.len() as u32 {
@@ -406,7 +406,7 @@ impl FrozenSegment {
     }
 
     /// Access underlying storage (for advanced operations)
-    pub fn storage(&self) -> &UnifiedNodeStorage {
+    pub fn storage(&self) -> &NodeStorage {
         &self.storage
     }
 }
