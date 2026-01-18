@@ -381,4 +381,4 @@ const merged = db.mergeFrom(otherDb);
 
 ## License
 
-Apache-2.0
+[Elastic License 2.0](../LICENSE)

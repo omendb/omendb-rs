@@ -1,10 +1,11 @@
 # Changelog
 
-## v0.0.22 (Unreleased)
+## v0.0.23 (Unreleased)
 
 ### BREAKING CHANGES
 
 **Persistence format upgraded to v2 (postcard)**
+
 - Existing `.omen` files from v0.0.21 or earlier will fail to load
 - Error: `"Unsupported version: 1 (expected 2)"`
 - **Migration**: Re-create databases by reinserting vectors

@@ -793,7 +793,7 @@ impl OmenFile {
         self.wal.sync()?;
 
         // Re-establish mmap
-        let file = self.file.as_ref().unwrap();
+        let file = self.file.as_ref().expect("OmenFile must have backing file");
         self.mmap = Some(unsafe { MmapMut::map_mut(file)? });
 
         // Update header count
