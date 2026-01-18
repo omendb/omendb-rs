@@ -1,8 +1,8 @@
-//! Benchmark SQ8 and RaBitQ scaling with vector count.
+//! Benchmark SQ8 scaling with vector count.
 //!
 //! Run with: cargo run --release --example bench_sq8_scaling
 
-use omendb::vector::{QuantizationMode, RaBitQParams, Vector, VectorStoreOptions};
+use omendb::vector::{QuantizationMode, Vector, VectorStoreOptions};
 use rand::Rng;
 use std::time::Instant;
 
@@ -79,36 +79,6 @@ fn main() {
         }
         let us = start.elapsed().as_micros() as f64 / n_queries as f64;
         println!("SQ8:     {:.0} us", us);
-    }
-
-    // RaBitQ
-    {
-        let mut store = VectorStoreOptions::default()
-            .dimensions(dim)
-            .quantization(QuantizationMode::RaBitQ(RaBitQParams::default()))
-            .rescore(true)
-            .build()
-            .unwrap();
-        for (i, v) in vectors.iter().enumerate() {
-            store
-                .set(
-                    format!("v{}", i),
-                    Vector::new(v.clone()),
-                    serde_json::json!({}),
-                )
-                .unwrap();
-        }
-        store.ensure_index_ready().unwrap();
-
-        for q in queries.iter().take(50) {
-            let _ = store.knn_search_ef(&Vector::new(q.clone()), k, ef);
-        }
-        let start = Instant::now();
-        for q in &queries {
-            let _ = store.knn_search_ef(&Vector::new(q.clone()), k, ef);
-        }
-        let us = start.elapsed().as_micros() as f64 / n_queries as f64;
-        println!("RaBitQ:  {:.0} us", us);
     }
 
     println!("\n=== Scaling test ===");

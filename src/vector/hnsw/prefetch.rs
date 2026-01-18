@@ -37,12 +37,4 @@ impl PrefetchConfig {
     pub const fn stride() -> usize {
         4
     }
-
-    /// Cache line size in bytes (for alignment)
-    #[inline(always)]
-    #[must_use]
-    #[allow(dead_code)]
-    pub const fn cache_line_size() -> usize {
-        64
-    }
 }

@@ -404,14 +404,14 @@ impl OmenFile {
 
     /// Store quantization mode
     ///
-    /// Mode values: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+    /// Mode values: 0=none, 1=sq8
     pub fn put_quantization_mode(&mut self, mode: u64) -> Result<()> {
         self.put_config("quantization", mode)
     }
 
     /// Get quantization mode
     ///
-    /// Returns: 0=none, 1=sq8, 2=rabitq-4, 3=rabitq-2, 4=rabitq-8
+    /// Returns: 0=none, 1=sq8
     pub fn get_quantization_mode(&self) -> Result<Option<u64>> {
         self.get_config("quantization")
     }

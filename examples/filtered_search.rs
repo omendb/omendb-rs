@@ -50,7 +50,7 @@ fn main() -> anyhow::Result<()> {
     let results = store.knn_search_with_filter(&query, 10, &filter)?;
     println!(
         "year >= 2020: {:?}",
-        results.iter().map(|(i, _, _)| *i).collect::<Vec<_>>()
+        results.iter().map(|r| &r.id).collect::<Vec<_>>()
     );
 
     // Filter: venue in ["VLDB", "SIGMOD"]
@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
     let results = store.knn_search_with_filter(&query, 10, &filter)?;
     println!(
         "venue in [VLDB, SIGMOD]: {:?}",
-        results.iter().map(|(i, _, _)| *i).collect::<Vec<_>>()
+        results.iter().map(|r| &r.id).collect::<Vec<_>>()
     );
 
     // Filter: citations > 500
@@ -66,7 +66,7 @@ fn main() -> anyhow::Result<()> {
     let results = store.knn_search_with_filter(&query, 10, &filter)?;
     println!(
         "citations > 500: {:?}",
-        results.iter().map(|(i, _, _)| *i).collect::<Vec<_>>()
+        results.iter().map(|r| &r.id).collect::<Vec<_>>()
     );
 
     // Combined: year >= 2018 AND citations > 100
@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
     let results = store.knn_search_with_filter(&query, 10, &filter)?;
     println!(
         "year >= 2018 AND citations > 100: {:?}",
-        results.iter().map(|(i, _, _)| *i).collect::<Vec<_>>()
+        results.iter().map(|r| &r.id).collect::<Vec<_>>()
     );
 
     Ok(())
