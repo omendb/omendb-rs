@@ -16,14 +16,21 @@ use super::HNSWIndex;
 use crate::vector::hnsw::atomic_bitvec::AtomicBitVec;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::NodeStorage;
+use crate::vector::hnsw::query_buffers::VisitedList;
 use crate::vector::hnsw::types::{Candidate, DistanceFunction, HNSWParams};
 use ordered_float::OrderedFloat;
 use parking_lot::Mutex;
 use rayon::prelude::*;
-use std::cell::UnsafeCell;
+use std::cell::{RefCell, UnsafeCell};
 use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use tracing::{debug, info};
+
+thread_local! {
+    /// Thread-local visited list for parallel construction
+    /// Avoids HashSet allocation per search, uses O(1) clear via generation counter
+    static PARALLEL_VISITED: RefCell<VisitedList> = RefCell::new(VisitedList::new());
+}
 
 /// Parallel HNSW builder
 ///
@@ -295,6 +302,7 @@ impl ParallelBuilder {
     ///
     /// Uses lock-free distance computation (vectors are cached).
     /// Only neighbor list reads require synchronization.
+    /// Uses thread-local VisitedList for O(1) clear between searches.
     fn search_layer(
         &self,
         query: &[f32],
@@ -304,77 +312,82 @@ impl ParallelBuilder {
         use_ready_filter: bool,
     ) -> Vec<u32> {
         use std::cmp::Reverse;
-        use std::collections::HashSet;
 
-        let mut visited = HashSet::new();
-        let mut candidates: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
-        let mut working: BinaryHeap<Candidate> = BinaryHeap::new();
+        PARALLEL_VISITED.with(|visited_cell| {
+            let mut visited = visited_cell.borrow_mut();
+            visited.clear(); // O(1) via generation counter
 
-        // Initialize with entry points
-        for &ep in entry_points {
-            if use_ready_filter && !self.ready_bitmap.is_ready(ep as usize) {
-                continue;
-            }
-            if !visited.insert(ep) {
-                continue;
-            }
+            let mut candidates: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+            let mut working: BinaryHeap<Candidate> = BinaryHeap::new();
 
-            let dist = self.distance_cmp(query, ep);
-            let candidate = Candidate::new(ep, dist);
-            candidates.push(Reverse(candidate));
-            working.push(candidate);
-        }
-
-        if candidates.is_empty() {
-            return Vec::new();
-        }
-
-        // Greedy search
-        while let Some(Reverse(current)) = candidates.pop() {
-            if let Some(&farthest) = working.peek() {
-                if current.distance > farthest.distance {
-                    break;
-                }
-            }
-
-            // Get neighbors (requires lock)
-            let neighbors = {
-                let _lock = self.node_locks[current.node_id as usize].lock();
-                // SAFETY: Protected by per-node lock
-                unsafe { self.storage() }.neighbors_at_level(current.node_id, level)
-            };
-
-            for neighbor_id in neighbors {
-                if !visited.insert(neighbor_id) {
+            // Initialize with entry points
+            for &ep in entry_points {
+                if use_ready_filter && !self.ready_bitmap.is_ready(ep as usize) {
                     continue;
                 }
-
-                if use_ready_filter && !self.ready_bitmap.is_ready(neighbor_id as usize) {
+                if visited.contains(ep) {
                     continue;
                 }
+                visited.insert(ep);
 
-                let dist = self.distance_cmp(query, neighbor_id);
-                let neighbor = Candidate::new(neighbor_id, dist);
+                let dist = self.distance_cmp(query, ep);
+                let candidate = Candidate::new(ep, dist);
+                candidates.push(Reverse(candidate));
+                working.push(candidate);
+            }
 
+            if candidates.is_empty() {
+                return Vec::new();
+            }
+
+            // Greedy search
+            while let Some(Reverse(current)) = candidates.pop() {
                 if let Some(&farthest) = working.peek() {
-                    if neighbor.distance < farthest.distance || working.len() < ef {
+                    if current.distance > farthest.distance {
+                        break;
+                    }
+                }
+
+                // Get neighbors (requires lock)
+                let neighbors = {
+                    let _lock = self.node_locks[current.node_id as usize].lock();
+                    // SAFETY: Protected by per-node lock
+                    unsafe { self.storage() }.neighbors_at_level(current.node_id, level)
+                };
+
+                for neighbor_id in neighbors {
+                    if visited.contains(neighbor_id) {
+                        continue;
+                    }
+                    visited.insert(neighbor_id);
+
+                    if use_ready_filter && !self.ready_bitmap.is_ready(neighbor_id as usize) {
+                        continue;
+                    }
+
+                    let dist = self.distance_cmp(query, neighbor_id);
+                    let neighbor = Candidate::new(neighbor_id, dist);
+
+                    if let Some(&farthest) = working.peek() {
+                        if neighbor.distance < farthest.distance || working.len() < ef {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+                            if working.len() > ef {
+                                working.pop();
+                            }
+                        }
+                    } else {
                         candidates.push(Reverse(neighbor));
                         working.push(neighbor);
-                        if working.len() > ef {
-                            working.pop();
-                        }
                     }
-                } else {
-                    candidates.push(Reverse(neighbor));
-                    working.push(neighbor);
                 }
             }
-        }
 
-        // Return sorted by distance
-        let mut results: Vec<_> = working.into_vec();
-        results.sort_unstable_by_key(|c| c.distance);
-        results.into_iter().map(|c| c.node_id).collect()
+            // Return sorted by distance
+            let mut results: Vec<_> = working.into_vec();
+            results.sort_unstable_by_key(|c| c.distance);
+            results.into_iter().map(|c| c.node_id).collect()
+        })
     }
 
     /// Connect node to neighbors with fine-grained locking
