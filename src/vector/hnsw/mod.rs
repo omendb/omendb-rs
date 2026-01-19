@@ -5,7 +5,9 @@
 // - Memory-efficient (flattened index with u32 node IDs)
 // - SIMD-ready (AVX2/AVX512 distance calculations)
 // - SQ8 scalar quantization support (4x compression)
+// - Parallel construction with fine-grained locking
 
+mod atomic_bitvec;
 mod batch_builder;
 mod error;
 mod graph_storage;
@@ -33,7 +35,7 @@ pub use storage::{NeighborLists, VectorStorage};
 
 pub use graph_storage::GraphStorage;
 
-pub use index::{HNSWIndex, IndexStats};
+pub use index::{HNSWIndex, IndexStats, ParallelBuilder};
 
 // Re-export error types
 pub use error::{HNSWError, Result};

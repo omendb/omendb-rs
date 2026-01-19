@@ -35,12 +35,16 @@ macro_rules! dispatch_distance {
 
 mod delete;
 mod insert;
+mod parallel;
 mod persistence;
 mod search;
 mod stats;
 
 #[cfg(test)]
 mod tests;
+
+// Re-export parallel builder
+pub use parallel::ParallelBuilder;
 
 use super::error::{HNSWError, Result};
 use super::node_storage::NodeStorage;

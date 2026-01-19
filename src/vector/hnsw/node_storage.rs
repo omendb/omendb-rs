@@ -838,6 +838,45 @@ impl NodeStorage {
         }
     }
 
+    /// Check if a neighbor exists at a specific level
+    ///
+    /// Used during parallel construction to avoid duplicate links.
+    #[inline]
+    #[must_use]
+    pub fn contains_neighbor(&self, id: u32, level: u8, neighbor: u32) -> bool {
+        if level == 0 {
+            self.neighbors(id).contains(&neighbor)
+        } else {
+            self.neighbors_at_level(id, level).contains(&neighbor)
+        }
+    }
+
+    /// Try to add a neighbor at a specific level, returns true if added
+    ///
+    /// Returns false if:
+    /// - The neighbor already exists (duplicate)
+    /// - The neighbor list is at capacity
+    ///
+    /// Used during parallel construction for atomic-style neighbor updates.
+    pub fn try_add_neighbor(&mut self, id: u32, level: u8, neighbor: u32) -> bool {
+        if self.contains_neighbor(id, level, neighbor) {
+            return false; // Already exists
+        }
+
+        let max = if level == 0 {
+            self.max_neighbors
+        } else {
+            self.max_neighbors_upper
+        };
+
+        if self.neighbor_count_at_level(id, level) >= max {
+            return false; // At capacity
+        }
+
+        self.add_neighbor(id, level, neighbor);
+        true
+    }
+
     /// Get slot ID (original RecordStore slot)
     #[inline]
     #[must_use]
@@ -1226,7 +1265,7 @@ impl NodeStorage {
         let mode = match mode_byte {
             0 => StorageMode::FullPrecision,
             1 => StorageMode::SQ8,
-            _ => return Err(format!("Invalid storage mode: {}", mode_byte)),
+            _ => return Err(format!("Invalid storage mode: {mode_byte}")),
         };
         let sq8_trained = read_u8(data, &mut pos)? != 0;
 
@@ -1370,10 +1409,10 @@ impl NodeStorage {
         // Allocate new storage
         let new_size = n * self.node_size;
         let layout = Layout::from_size_align(new_size, CACHE_LINE)
-            .map_err(|e| format!("Invalid layout for reorder: {}", e))?;
+            .map_err(|e| format!("Invalid layout for reorder: {e}"))?;
         let new_ptr = unsafe { alloc_zeroed(layout) };
         if new_ptr.is_null() {
-            return Err(format!("Allocation failed for reorder: {} bytes", new_size));
+            return Err(format!("Allocation failed for reorder: {new_size} bytes"));
         }
 
         // Copy nodes in BFS order

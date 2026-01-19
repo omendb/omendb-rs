@@ -355,8 +355,7 @@ impl FrozenSegment {
             let required_len = data_offset as u64 + data_size as u64;
             if file_len < required_len {
                 return Err(HNSWError::Storage(format!(
-                    "File too small: {} bytes, need {} bytes (data_offset={}, data_size={})",
-                    file_len, required_len, data_offset, data_size
+                    "File too small: {file_len} bytes, need {required_len} bytes (data_offset={data_offset}, data_size={data_size})"
                 )));
             }
 
