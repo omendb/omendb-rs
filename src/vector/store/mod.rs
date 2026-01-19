@@ -952,7 +952,14 @@ impl VectorStore {
         if let Some(ref mut index) = self.hnsw_index {
             if let Some(old) = old_slot {
                 // Mark old HNSW node as deleted (same slot that RecordStore marked deleted)
-                let _ = index.mark_deleted(old);
+                if let Err(e) = index.mark_deleted(old) {
+                    tracing::warn!(
+                        id = %id,
+                        slot = old,
+                        error = ?e,
+                        "Failed to mark old node as deleted in HNSW during update"
+                    );
+                }
             }
             // Insert new vector - gets new node ID that matches new RecordStore slot
             index.insert(&vector.data)?;
@@ -1006,7 +1013,13 @@ impl VectorStore {
 
             // Update HNSW (mark old deleted, insert new)
             if let Some(ref mut index) = self.hnsw_index {
-                let _ = index.mark_deleted(old_slot);
+                if let Err(e) = index.mark_deleted(old_slot) {
+                    tracing::warn!(
+                        slot = old_slot,
+                        error = ?e,
+                        "Failed to mark old node as deleted in HNSW during batch update"
+                    );
+                }
                 index.insert(&vector.data)?;
             }
 

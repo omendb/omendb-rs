@@ -124,7 +124,8 @@ pub struct NodeStorage {
     /// Upper level neighbors: node_id -> [level-1] -> neighbors
     /// Only populated for nodes with level > 0 (~5% of nodes).
     /// Using HashMap instead of Vec<Option<...>> saves ~7MB at 1M vectors.
-    upper_neighbors: FxHashMap<u32, Box<[Vec<u32>]>>,
+    /// Using Vec<Vec<u32>> instead of Box<[Vec<u32>]> allows in-place mutation.
+    upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>>,
 
     // SQ8 quantization support
     /// Storage mode (full precision or SQ8)
@@ -321,20 +322,17 @@ impl NodeStorage {
 
         let needed_levels = level as usize;
 
-        match self.upper_neighbors.get(&id) {
-            None => {
+        match self.upper_neighbors.entry(id) {
+            std::collections::hash_map::Entry::Vacant(e) => {
                 // Allocate empty Vec for each upper level (levels 1..=level)
                 let levels: Vec<Vec<u32>> = (0..needed_levels).map(|_| Vec::new()).collect();
-                self.upper_neighbors.insert(id, levels.into_boxed_slice());
+                e.insert(levels);
             }
-            Some(existing) if existing.len() < needed_levels => {
-                // Extend existing allocation
-                let mut levels: Vec<Vec<u32>> = existing.to_vec();
-                levels.resize(needed_levels, Vec::new());
-                self.upper_neighbors.insert(id, levels.into_boxed_slice());
-            }
-            Some(_) => {
-                // Already has enough levels
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if e.get().len() < needed_levels {
+                    // Extend existing allocation in place
+                    e.get_mut().resize(needed_levels, Vec::new());
+                }
             }
         }
     }
@@ -576,7 +574,7 @@ impl NodeStorage {
 
         // Train quantization parameters
         let params = ScalarParams::train(&training_refs).expect("Failed to train SQ8 params");
-        self.sq8_params = Some(params.clone());
+        self.sq8_params = Some(params);
         self.sq8_trained = true;
 
         // Quantize all buffered vectors and store them
@@ -778,14 +776,10 @@ impl NodeStorage {
         // Ensure upper levels are allocated
         self.allocate_upper_levels(id, level);
 
-        if let Some(levels) = self.upper_neighbors.get(&id) {
+        if let Some(levels) = self.upper_neighbors.get_mut(&id) {
             let level_idx = level as usize - 1;
             if level_idx < levels.len() {
-                // Need to convert Box<[Vec<u32>]> to mutable
-                let mut levels_vec: Vec<Vec<u32>> = levels.to_vec();
-                levels_vec[level_idx] = neighbors;
-                self.upper_neighbors
-                    .insert(id, levels_vec.into_boxed_slice());
+                levels[level_idx] = neighbors;
             }
         }
     }
@@ -813,15 +807,10 @@ impl NodeStorage {
         } else {
             // Upper level: append to sparse storage
             self.allocate_upper_levels(id, level);
-            if let Some(levels) = self.upper_neighbors.get(&id) {
+            if let Some(levels) = self.upper_neighbors.get_mut(&id) {
                 let level_idx = level as usize - 1;
-                if level_idx < levels.len() {
-                    let mut levels_vec: Vec<Vec<u32>> = levels.to_vec();
-                    if levels_vec[level_idx].len() < self.max_neighbors_upper {
-                        levels_vec[level_idx].push(neighbor);
-                    }
-                    self.upper_neighbors
-                        .insert(id, levels_vec.into_boxed_slice());
+                if level_idx < levels.len() && levels[level_idx].len() < self.max_neighbors_upper {
+                    levels[level_idx].push(neighbor);
                 }
             }
         }
@@ -941,7 +930,7 @@ impl NodeStorage {
         let upper_usage: usize = self
             .upper_neighbors
             .values()
-            .map(|levels: &Box<[Vec<u32>]>| {
+            .map(|levels: &Vec<Vec<u32>>| {
                 levels.iter().map(|v| v.len() * 4).sum::<usize>()
                     + levels.len() * std::mem::size_of::<Vec<u32>>()
             })
@@ -1167,7 +1156,7 @@ impl NodeStorage {
         for (&node_id, levels) in &self.upper_neighbors {
             out.extend_from_slice(&node_id.to_le_bytes());
             out.push(levels.len() as u8); // num levels (excluding level 0)
-            for level_neighbors in &**levels {
+            for level_neighbors in levels {
                 out.extend_from_slice(&(level_neighbors.len() as u16).to_le_bytes());
                 for &neighbor in level_neighbors {
                     out.extend_from_slice(&neighbor.to_le_bytes());
@@ -1295,7 +1284,7 @@ impl NodeStorage {
 
         // Upper neighbors (HashMap - only nodes with upper levels)
         let upper_count = read_u64(data, &mut pos)? as usize;
-        let mut upper_neighbors: FxHashMap<u32, Box<[Vec<u32>]>> =
+        let mut upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>> =
             FxHashMap::with_capacity_and_hasher(upper_count, Default::default());
 
         for _ in 0..upper_count {
@@ -1311,7 +1300,7 @@ impl NodeStorage {
                 }
                 levels.push(neighbors);
             }
-            upper_neighbors.insert(node_id, levels.into_boxed_slice());
+            upper_neighbors.insert(node_id, levels);
         }
 
         // Construct storage from raw bytes
@@ -1473,8 +1462,7 @@ impl NodeStorage {
                                 .collect()
                         })
                         .collect();
-                    self.upper_neighbors
-                        .insert(new_idx as u32, new_levels.into_boxed_slice());
+                    self.upper_neighbors.insert(new_idx as u32, new_levels);
                 }
             }
         }

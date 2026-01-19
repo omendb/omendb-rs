@@ -25,7 +25,7 @@ use std::arch::x86_64::*;
 ///
 /// Uses a single scale/offset for all dimensions, enabling integer SIMD
 /// for 2-3x speedup over FP32.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ScalarParams {
     /// Global scale factor: (max - min) / 255
     pub scale: f32,

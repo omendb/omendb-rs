@@ -373,14 +373,9 @@ impl HNSWIndex {
         vectors: Vec<Vec<f32>>,
     ) -> Result<Self> {
         let num_vectors = vectors.len();
-        let index = CoreHNSW::build_parallel(
-            dimensions,
-            params.clone(),
-            distance_fn,
-            use_quantization,
-            vectors,
-        )
-        .map_err(|e| anyhow::anyhow!(e))?;
+        let index =
+            CoreHNSW::build_parallel(dimensions, params, distance_fn, use_quantization, vectors)
+                .map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(Self {
             index,

@@ -66,8 +66,15 @@ impl AtomicBitVec {
     /// Set a bit (mark node as ready)
     ///
     /// Thread-safe: uses atomic OR operation.
+    /// Debug builds assert on out-of-bounds; release builds silently no-op.
     #[inline]
     pub fn set(&self, idx: usize) {
+        debug_assert!(
+            idx < self.capacity,
+            "AtomicBitVec::set out of bounds: idx={}, capacity={}",
+            idx,
+            self.capacity
+        );
         if idx >= self.capacity {
             return;
         }
@@ -80,9 +87,16 @@ impl AtomicBitVec {
     /// Check if a bit is set (node is ready)
     ///
     /// Thread-safe: uses atomic load.
+    /// Debug builds assert on out-of-bounds; release builds return false.
     #[inline]
     #[must_use]
     pub fn is_ready(&self, idx: usize) -> bool {
+        debug_assert!(
+            idx < self.capacity,
+            "AtomicBitVec::is_ready out of bounds: idx={}, capacity={}",
+            idx,
+            self.capacity
+        );
         if idx >= self.capacity {
             return false;
         }
@@ -192,7 +206,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(debug_assertions))]
     fn test_out_of_bounds() {
+        // This test only runs in release mode since debug builds assert on OOB
         let bv = AtomicBitVec::new(64);
 
         // Out of bounds set should be no-op
