@@ -247,6 +247,11 @@ impl MutableSegment {
         &self.index
     }
 
+    /// Mutable access to underlying index (for merging)
+    pub fn index_mut(&mut self) -> &mut HNSWIndex {
+        &mut self.index
+    }
+
     /// Freeze into read-optimized segment
     ///
     /// This consumes the mutable segment and creates a frozen segment

@@ -47,4 +47,4 @@ pub use merge::{GraphMerger, MergeConfig, MergeStats};
 pub use batch_builder::{BatchBuilder, Cluster};
 pub use node_storage::NodeStorage;
 pub use segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
-pub use segment_manager::{SegmentConfig, SegmentManager};
+pub use segment_manager::{MergePolicy, SegmentConfig, SegmentManager};
