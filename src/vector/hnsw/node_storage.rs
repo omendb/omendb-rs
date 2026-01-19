@@ -1285,7 +1285,7 @@ impl NodeStorage {
         // Upper neighbors (HashMap - only nodes with upper levels)
         let upper_count = read_u64(data, &mut pos)? as usize;
         let mut upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>> =
-            FxHashMap::with_capacity_and_hasher(upper_count, Default::default());
+            FxHashMap::with_capacity_and_hasher(upper_count, rustc_hash::FxBuildHasher);
 
         for _ in 0..upper_count {
             let node_id = read_u32(data, &mut pos)?;

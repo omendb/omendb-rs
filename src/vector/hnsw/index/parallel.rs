@@ -118,7 +118,7 @@ impl ParallelBuilder {
         // Validate all vectors for dimensions and NaN/Inf
         // SAFETY: No concurrent access yet - we're still in single-threaded setup
         let dimensions = unsafe { self.storage() }.dimensions();
-        for vec in vectors.iter() {
+        for vec in &vectors {
             if vec.len() != dimensions {
                 return Err(HNSWError::DimensionMismatch {
                     expected: dimensions,
