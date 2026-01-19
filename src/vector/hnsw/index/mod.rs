@@ -465,17 +465,22 @@ impl HNSWIndex {
                     }
                 }
             }
+            // SQ8 fallback: dequantize both (slow but necessary)
+            let vec_a = self
+                .storage
+                .get_dequantized(id_a)
+                .ok_or(HNSWError::VectorNotFound(id_a))?;
+            let vec_b = self
+                .storage
+                .get_dequantized(id_b)
+                .ok_or(HNSWError::VectorNotFound(id_b))?;
+            Ok(self.distance_fn.distance_for_comparison(&vec_a, &vec_b))
+        } else {
+            // Full precision: use zero-copy references (no allocation)
+            let vec_a = self.storage.vector(id_a);
+            let vec_b = self.storage.vector(id_b);
+            Ok(self.distance_fn.distance_for_comparison(vec_a, vec_b))
         }
-        // Fallback to full precision (or dequantized for SQ8)
-        let vec_a = self
-            .storage
-            .get_dequantized(id_a)
-            .ok_or(HNSWError::VectorNotFound(id_a))?;
-        let vec_b = self
-            .storage
-            .get_dequantized(id_b)
-            .ok_or(HNSWError::VectorNotFound(id_b))?;
-        Ok(self.distance_fn.distance_for_comparison(&vec_a, &vec_b))
     }
 
     /// Distance from query to node for ordering comparisons
