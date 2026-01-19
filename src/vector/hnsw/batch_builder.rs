@@ -100,8 +100,8 @@ fn kmeans_plus_plus_init(vectors: &[Vec<f32>], k: usize) -> Vec<Vec<f32>> {
         let mut best_min_dist = 0.0f32;
 
         for (i, v) in vectors.iter().enumerate() {
-            // Skip if already a centroid
-            if centroids.iter().any(|c| l2_distance_squared(v, c) < 1e-10) {
+            // Skip if already a centroid (use larger epsilon for SQ8 quantization tolerance)
+            if centroids.iter().any(|c| l2_distance_squared(v, c) < 0.01) {
                 continue;
             }
 
@@ -352,7 +352,8 @@ impl BatchBuilder {
 
                 // Find this vector's ID in the merged index
                 // (we need to search since IDs may have been remapped during merge)
-                if let Some(self_result) = results.iter().find(|r| r.distance < 1e-10) {
+                // Use larger epsilon for SQ8 quantization tolerance
+                if let Some(self_result) = results.iter().find(|r| r.distance < 0.01) {
                     let node_id = self_result.id;
 
                     // Get current neighbors

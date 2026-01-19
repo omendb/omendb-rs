@@ -12,11 +12,19 @@
 
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::node_storage::NodeStorage;
+use crate::vector::hnsw::query_buffers::VisitedList;
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
 
 use ordered_float::OrderedFloat;
+use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+
+thread_local! {
+    /// Thread-local visited list for FrozenSegment search
+    /// Avoids Vec<bool> allocation per search, uses O(1) clear via generation counter
+    static FROZEN_VISITED: RefCell<VisitedList> = RefCell::new(VisitedList::new());
+}
 
 /// Search result from a segment
 #[derive(Debug, Clone)]
@@ -297,6 +305,7 @@ impl FrozenSegment {
     /// Search for k nearest neighbors using unified storage
     ///
     /// This uses the colocated layout for cache-efficient search.
+    /// Uses thread-local VisitedList for O(1) clear between searches.
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Vec<SegmentSearchResult> {
         let Some(entry_point) = self.entry_point else {
             return Vec::new();
@@ -306,78 +315,80 @@ impl FrozenSegment {
             return Vec::new();
         }
 
-        // Visited tracking
-        let mut visited = vec![false; self.storage.len()];
+        FROZEN_VISITED.with(|visited_cell| {
+            let mut visited = visited_cell.borrow_mut();
+            visited.clear(); // O(1) via generation counter
 
-        // Min-heap for candidates (closest first)
-        let mut candidates: BinaryHeap<Reverse<(OrderedFloat<f32>, u32)>> = BinaryHeap::new();
+            // Min-heap for candidates (closest first)
+            let mut candidates: BinaryHeap<Reverse<(OrderedFloat<f32>, u32)>> = BinaryHeap::new();
 
-        // Max-heap for results (furthest first, for trimming)
-        let mut results: BinaryHeap<(OrderedFloat<f32>, u32)> = BinaryHeap::new();
+            // Max-heap for results (furthest first, for trimming)
+            let mut results: BinaryHeap<(OrderedFloat<f32>, u32)> = BinaryHeap::new();
 
-        // Start from entry point
-        let ep_dist = self.compute_distance(query, self.storage.vector(entry_point));
-        visited[entry_point as usize] = true;
-        candidates.push(Reverse((OrderedFloat(ep_dist), entry_point)));
-        results.push((OrderedFloat(ep_dist), entry_point));
+            // Start from entry point
+            let ep_dist = self.compute_distance(query, self.storage.vector(entry_point));
+            visited.insert(entry_point);
+            candidates.push(Reverse((OrderedFloat(ep_dist), entry_point)));
+            results.push((OrderedFloat(ep_dist), entry_point));
 
-        // Greedy search on level 0
-        while let Some(Reverse((OrderedFloat(c_dist), c_id))) = candidates.pop() {
-            // Early termination: if current candidate is worse than worst result
-            if results.len() >= ef {
-                if let Some(&(OrderedFloat(worst_dist), _)) = results.peek() {
-                    if c_dist > worst_dist {
-                        break;
+            // Greedy search on level 0
+            while let Some(Reverse((OrderedFloat(c_dist), c_id))) = candidates.pop() {
+                // Early termination: if current candidate is worse than worst result
+                if results.len() >= ef {
+                    if let Some(&(OrderedFloat(worst_dist), _)) = results.peek() {
+                        if c_dist > worst_dist {
+                            break;
+                        }
+                    }
+                }
+
+                // Get neighbors and prefetch
+                let neighbors = self.storage.neighbors(c_id);
+
+                // Prefetch first few neighbors
+                for &neighbor in neighbors.iter().take(4) {
+                    self.storage.prefetch(neighbor);
+                }
+
+                // Explore neighbors
+                for &neighbor in neighbors {
+                    if visited.contains(neighbor) {
+                        continue;
+                    }
+                    visited.insert(neighbor);
+
+                    let n_dist = self.compute_distance(query, self.storage.vector(neighbor));
+
+                    // Only add if better than worst result (or results not full)
+                    let dominated = results.len() >= ef && {
+                        let &(OrderedFloat(worst), _) = results.peek().unwrap();
+                        n_dist > worst
+                    };
+
+                    if !dominated {
+                        candidates.push(Reverse((OrderedFloat(n_dist), neighbor)));
+                        results.push((OrderedFloat(n_dist), neighbor));
+
+                        // Trim results if over ef
+                        while results.len() > ef {
+                            results.pop();
+                        }
                     }
                 }
             }
 
-            // Get neighbors and prefetch
-            let neighbors = self.storage.neighbors(c_id);
+            // Convert to output format, sorted by distance
+            let mut output: Vec<_> = results
+                .into_iter()
+                .map(|(OrderedFloat(dist), id)| {
+                    SegmentSearchResult::new(id, dist, self.storage.slot(id))
+                })
+                .collect();
 
-            // Prefetch first few neighbors
-            for &neighbor in neighbors.iter().take(4) {
-                self.storage.prefetch(neighbor);
-            }
-
-            // Explore neighbors
-            for &neighbor in neighbors {
-                if visited[neighbor as usize] {
-                    continue;
-                }
-                visited[neighbor as usize] = true;
-
-                let n_dist = self.compute_distance(query, self.storage.vector(neighbor));
-
-                // Only add if better than worst result (or results not full)
-                let dominated = results.len() >= ef && {
-                    let &(OrderedFloat(worst), _) = results.peek().unwrap();
-                    n_dist > worst
-                };
-
-                if !dominated {
-                    candidates.push(Reverse((OrderedFloat(n_dist), neighbor)));
-                    results.push((OrderedFloat(n_dist), neighbor));
-
-                    // Trim results if over ef
-                    while results.len() > ef {
-                        results.pop();
-                    }
-                }
-            }
-        }
-
-        // Convert to output format, sorted by distance
-        let mut output: Vec<_> = results
-            .into_iter()
-            .map(|(OrderedFloat(dist), id)| {
-                SegmentSearchResult::new(id, dist, self.storage.slot(id))
-            })
-            .collect();
-
-        output.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-        output.truncate(k);
-        output
+            output.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            output.truncate(k);
+            output
+        })
     }
 
     /// Compute distance between query and candidate vector

@@ -456,48 +456,18 @@ impl HNSWIndex {
             }
         }
 
-        // Phase 3: Prune over-connected nodes to restore search performance
-        let prune_start = std::time::Instant::now();
-        let mut pruned_count = 0u32;
+        // Note: Post-insert pruning pass removed - inline pruning during reverse link
+        // addition (lines 412-424) already ensures neighbors never exceed M.
+        // This eliminates redundant O(n) pass over all nodes.
 
-        // Prune all nodes in the graph
-        let max_node_id = self.storage.len() as u32;
-        for node_id in 0..max_node_id {
-            let level = self.storage.level(node_id);
-            for lc in 0..=level {
-                let m = self.params.m_for_level(lc);
-                let neighbors = self.storage.neighbors_at_level(node_id, lc);
-
-                if neighbors.len() > m {
-                    let vector = match self.storage.get_dequantized(node_id) {
-                        Some(v) => v,
-                        None => continue,
-                    };
-
-                    let pruned = match self
-                        .select_neighbors_heuristic(node_id, &neighbors, m, lc, &vector)
-                    {
-                        Ok(p) => p,
-                        Err(_) => continue,
-                    };
-
-                    self.storage.set_neighbors_at_level(node_id, lc, pruned);
-                    pruned_count += 1;
-                }
-            }
-        }
-
-        let prune_time = prune_start.elapsed().as_secs_f64();
         let total_time = graph_start.elapsed().as_secs_f64();
         let final_rate = batch_size as f64 / total_time;
 
         info!(
             inserted = node_ids.len(),
-            pruned = pruned_count,
-            prune_secs = prune_time,
             duration_secs = total_time,
             rate_vec_per_sec = final_rate as u64,
-            "Parallel batch insertion complete"
+            "Batch insertion complete"
         );
 
         Ok(node_ids)
