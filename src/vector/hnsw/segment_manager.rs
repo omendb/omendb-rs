@@ -8,6 +8,7 @@
 //! mutable segment is created. Searches query all segments in parallel.
 
 use crate::vector::hnsw::error::Result;
+use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
 use std::sync::Arc;
@@ -105,6 +106,65 @@ impl SegmentManager {
         })
     }
 
+    /// Create segment manager from an existing HNSWIndex with slot mapping
+    ///
+    /// Used for integrating parallel-built indexes into segment system.
+    pub fn from_index(config: SegmentConfig, index: HNSWIndex, slots: &[u32]) -> Self {
+        Self {
+            config,
+            mutable: MutableSegment::from_index(index, slots),
+            frozen: Vec::new(),
+            next_segment_id: 0,
+        }
+    }
+
+    /// Create segment manager from parallel-built vectors
+    ///
+    /// Uses HNSWIndex::build_parallel for fast initial construction.
+    /// Slots are sequential starting from 0.
+    pub fn build_parallel(config: SegmentConfig, vectors: Vec<Vec<f32>>) -> Result<Self> {
+        let index = HNSWIndex::build_parallel(
+            config.dimensions,
+            config.params,
+            config.distance_fn,
+            config.use_quantization,
+            vectors,
+        )?;
+        let mutable = MutableSegment::from_index_sequential(index);
+
+        Ok(Self {
+            config,
+            mutable,
+            frozen: Vec::new(),
+            next_segment_id: 0,
+        })
+    }
+
+    /// Create segment manager from parallel-built vectors with explicit slots
+    ///
+    /// Uses HNSWIndex::build_parallel for fast initial construction.
+    pub fn build_parallel_with_slots(
+        config: SegmentConfig,
+        vectors: Vec<Vec<f32>>,
+        slots: &[u32],
+    ) -> Result<Self> {
+        let index = HNSWIndex::build_parallel(
+            config.dimensions,
+            config.params,
+            config.distance_fn,
+            config.use_quantization,
+            vectors,
+        )?;
+        let mutable = MutableSegment::from_index(index, slots);
+
+        Ok(Self {
+            config,
+            mutable,
+            frozen: Vec::new(),
+            next_segment_id: 0,
+        })
+    }
+
     /// Get configuration
     pub fn config(&self) -> &SegmentConfig {
         &self.config
@@ -130,7 +190,21 @@ impl SegmentManager {
         self.len() == 0
     }
 
-    /// Insert a vector
+    /// Insert a vector with a specific slot
+    ///
+    /// Inserts into the mutable segment. If the segment reaches capacity,
+    /// it's automatically frozen and a new mutable segment is created.
+    /// The slot is the global RecordStore slot that will be returned in search results.
+    pub fn insert_with_slot(&mut self, vector: &[f32], slot: u32) -> Result<u32> {
+        // Freeze mutable if at capacity
+        if self.mutable.is_full() {
+            self.freeze_mutable()?;
+        }
+
+        self.mutable.insert_with_slot(vector, slot)
+    }
+
+    /// Insert a vector (slot == local_id for backward compatibility)
     ///
     /// Inserts into the mutable segment. If the segment reaches capacity,
     /// it's automatically frozen and a new mutable segment is created.
@@ -217,6 +291,29 @@ impl SegmentManager {
     /// Get access to mutable segment
     pub fn mutable_segment(&self) -> &MutableSegment {
         &self.mutable
+    }
+
+    /// Get mutable access to mutable segment
+    pub fn mutable_segment_mut(&mut self) -> &mut MutableSegment {
+        &mut self.mutable
+    }
+
+    /// Get dimensions
+    #[inline]
+    pub fn dimensions(&self) -> usize {
+        self.config.dimensions
+    }
+
+    /// Get HNSW params
+    #[inline]
+    pub fn params(&self) -> &HNSWParams {
+        &self.config.params
+    }
+
+    /// Check if using quantization (asymmetric search)
+    #[inline]
+    pub fn is_quantized(&self) -> bool {
+        self.config.use_quantization
     }
 }
 

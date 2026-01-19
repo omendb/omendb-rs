@@ -20,7 +20,7 @@ pub use thread_safe::ThreadSafeVectorStore;
 
 // SearchResult is defined in this module and re-exported from lib.rs
 
-use super::hnsw::{DistanceFunction, HNSWParams};
+use super::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
 use super::QuantizationMode;
@@ -181,6 +181,7 @@ fn rebuild_hnsw_with_slots(
 }
 
 /// Initialize HNSW index from quantization mode.
+#[allow(dead_code)]
 fn initialize_quantized_hnsw(
     dimensions: usize,
     hnsw_m: usize,
@@ -204,6 +205,7 @@ fn initialize_quantized_hnsw(
 }
 
 /// Initialize standard (non-quantized) HNSW index.
+#[allow(dead_code)]
 fn initialize_standard_hnsw(
     dimensions: usize,
     hnsw_m: usize,
@@ -256,7 +258,11 @@ pub struct VectorStore {
     /// Single source of truth for records (vectors, IDs, deleted, metadata)
     records: RecordStore,
 
-    /// HNSW index for approximate nearest neighbor search
+    /// Segment manager for HNSW index (mutable + frozen segments)
+    pub segments: Option<SegmentManager>,
+
+    /// Direct HNSW index access (for backward compatibility during transition)
+    /// TODO: Remove once segment integration is complete
     pub hnsw_index: Option<HNSWIndex>,
 
     /// Whether to rescore candidates with original vectors (default: true when quantization enabled)
@@ -302,6 +308,7 @@ impl VectorStore {
     pub fn new(dimensions: usize) -> Self {
         Self {
             records: RecordStore::new(dimensions as u32),
+            segments: None,
             hnsw_index: None,
             rescore_enabled: false,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
@@ -330,6 +337,7 @@ impl VectorStore {
     pub fn new_with_quantization(dimensions: usize, mode: QuantizationMode) -> Self {
         Self {
             records: RecordStore::new(dimensions as u32),
+            segments: None,
             hnsw_index: None,
             rescore_enabled: true,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
@@ -365,6 +373,7 @@ impl VectorStore {
 
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
+            segments: None,
             hnsw_index,
             rescore_enabled: false,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
@@ -620,6 +629,7 @@ impl VectorStore {
 
         Ok(Self {
             records,
+            segments: None,
             hnsw_index,
             rescore_enabled,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
@@ -738,6 +748,7 @@ impl VectorStore {
 
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
+            segments: None,
             hnsw_index,
             rescore_enabled,
             oversample_factor,
@@ -804,6 +815,7 @@ impl VectorStore {
 
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
+            segments: None,
             hnsw_index,
             rescore_enabled,
             oversample_factor,
@@ -840,6 +852,7 @@ impl VectorStore {
     }
 
     /// Create initial HNSW index, handling pending quantization.
+    #[allow(dead_code)]
     fn create_initial_hnsw(
         &mut self,
         dimensions: usize,
@@ -849,6 +862,7 @@ impl VectorStore {
     }
 
     /// Create initial HNSW index with custom capacity.
+    #[allow(dead_code)]
     fn create_initial_hnsw_with_capacity(
         &mut self,
         dimensions: usize,
@@ -924,12 +938,25 @@ impl VectorStore {
     /// - Data is recoverable after normal shutdown
     /// - Data may be lost on crash/power failure between set() and next flush/batch
     pub fn set(&mut self, id: String, vector: Vector, metadata: JsonValue) -> Result<usize> {
-        // Initialize HNSW if needed
-        if self.hnsw_index.is_none() {
+        // Initialize segments if needed
+        if self.segments.is_none() && self.hnsw_index.is_none() {
             let dimensions = self.resolve_dimensions(vector.dim())?;
-            self.hnsw_index =
-                Some(self.create_initial_hnsw(dimensions, std::slice::from_ref(&vector.data))?);
             self.records.set_dimensions(dimensions as u32);
+
+            // Create segment manager with initial config
+            let config = SegmentConfig::new(dimensions)
+                .with_params(HNSWParams {
+                    m: self.hnsw_m,
+                    ef_construction: self.hnsw_ef_construction,
+                    ..Default::default()
+                })
+                .with_distance(self.distance_metric.into())
+                .with_quantization(self.pending_quantization.is_some());
+
+            self.segments = Some(
+                SegmentManager::new(config)
+                    .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?,
+            );
         } else if vector.dim() != self.dimensions() {
             anyhow::bail!(
                 "Vector dimension mismatch: store expects {}, got {}",
@@ -938,7 +965,7 @@ impl VectorStore {
             );
         }
 
-        // Check if this is an update (need old slot for HNSW mark_deleted)
+        // Check if this is an update
         let old_slot = self.records.get_slot(&id);
 
         // Upsert into RecordStore - creates new slot (both for insert and update)
@@ -948,10 +975,15 @@ impl VectorStore {
             .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?
             as usize;
 
-        // Update HNSW index
-        if let Some(ref mut index) = self.hnsw_index {
+        // Insert into segments (preferred) or hnsw_index (legacy)
+        if let Some(ref mut segments) = self.segments {
+            // Note: mark_deleted not needed - RecordStore filtering handles deleted nodes
+            segments
+                .insert_with_slot(&vector.data, slot as u32)
+                .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+        } else if let Some(ref mut index) = self.hnsw_index {
+            // Legacy path: direct hnsw_index
             if let Some(old) = old_slot {
-                // Mark old HNSW node as deleted (same slot that RecordStore marked deleted)
                 if let Err(e) = index.mark_deleted(old) {
                     tracing::warn!(
                         id = %id,
@@ -961,13 +993,11 @@ impl VectorStore {
                     );
                 }
             }
-            // Insert new vector - gets new node ID that matches new RecordStore slot
             index.insert(&vector.data)?;
         }
 
         // Update metadata index
         if let Some(old) = old_slot {
-            // Remove old slot's index entries
             self.metadata_index.remove(old);
         }
         self.metadata_index.index_json(slot as u32, &metadata);
@@ -984,7 +1014,7 @@ impl VectorStore {
     /// Batch set vectors (insert or update multiple vectors at once)
     ///
     /// This is the recommended method for bulk operations.
-    /// Uses batch HNSW insertion for better performance than individual sets.
+    /// Uses parallel HNSW construction for new indexes.
     pub fn set_batch(&mut self, batch: Vec<(String, Vector, JsonValue)>) -> Result<Vec<usize>> {
         if batch.is_empty() {
             return Ok(Vec::new());
@@ -1004,15 +1034,19 @@ impl VectorStore {
 
         let mut result_indices = Vec::with_capacity(updates.len() + inserts.len());
 
-        // Process updates individually (they need mark_deleted + insert)
+        // Process updates individually
         for (old_slot, id, vector, metadata) in updates {
             // Update RecordStore - creates new slot, marks old as deleted
             let new_slot =
                 self.records
                     .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
 
-            // Update HNSW (mark old deleted, insert new)
-            if let Some(ref mut index) = self.hnsw_index {
+            // Insert into segments (preferred) or hnsw_index (legacy)
+            if let Some(ref mut segments) = self.segments {
+                segments
+                    .insert_with_slot(&vector.data, new_slot)
+                    .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+            } else if let Some(ref mut index) = self.hnsw_index {
                 if let Err(e) = index.mark_deleted(old_slot) {
                     tracing::warn!(
                         slot = old_slot,
@@ -1041,29 +1075,40 @@ impl VectorStore {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
-            // Initialize HNSW if needed - use parallel build for new index
-            let is_new_index = self.hnsw_index.is_none();
+            // Check if this is a new index (no existing segments or hnsw_index)
+            let is_new_index = self.segments.is_none() && self.hnsw_index.is_none();
+
             if is_new_index {
                 let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
-                let use_quantization = self.pending_quantization.is_some();
+                self.records.set_dimensions(dimensions as u32);
 
-                // Build params from store config
-                let params = HNSWParams {
-                    m: self.hnsw_m,
-                    ef_construction: self.hnsw_ef_construction,
-                    ..Default::default()
-                };
+                // Insert into RecordStore first to get slots
+                let mut slots = Vec::with_capacity(inserts.len());
+                for (id, vector, metadata) in &inserts {
+                    let slot = self.records.upsert(
+                        id.clone(),
+                        vector.data.clone(),
+                        Some(metadata.clone()),
+                    )?;
+                    slots.push(slot);
+                    self.metadata_index.index_json(slot, metadata);
+                }
 
-                // Use parallel build for new index (much faster than sequential)
-                let distance_fn: DistanceFunction = self.distance_metric.into();
-                let mut index = HNSWIndex::build_parallel(
-                    dimensions,
-                    params,
-                    distance_fn,
-                    use_quantization,
-                    vectors_data.clone(),
-                )?;
-                index.set_ef_search(self.hnsw_ef_search);
+                // Build segment config
+                let config = SegmentConfig::new(dimensions)
+                    .with_params(HNSWParams {
+                        m: self.hnsw_m,
+                        ef_construction: self.hnsw_ef_construction,
+                        ..Default::default()
+                    })
+                    .with_distance(self.distance_metric.into())
+                    .with_quantization(self.pending_quantization.is_some());
+
+                // Use parallel build with slot mapping
+                self.segments = Some(
+                    SegmentManager::build_parallel_with_slots(config, vectors_data.clone(), &slots)
+                        .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?,
+                );
 
                 // Handle quantization mode persistence
                 if let Some(quant_mode) = self.pending_quantization.take() {
@@ -1072,49 +1117,60 @@ impl VectorStore {
                     }
                 }
 
-                self.hnsw_index = Some(index);
-                self.records.set_dimensions(dimensions as u32);
-            }
-
-            // Validate dimensions
-            let expected_dims = self.dimensions();
-            for (i, (_, vector, _)) in inserts.iter().enumerate() {
-                if vector.dim() != expected_dims {
-                    anyhow::bail!(
-                        "Vector {} dimension mismatch: expected {}, got {}",
-                        i,
-                        expected_dims,
-                        vector.dim()
-                    );
+                // WAL for crash durability
+                if let Some(ref mut storage) = self.storage {
+                    for (id, vector, metadata) in &inserts {
+                        let metadata_bytes = serde_json::to_vec(metadata)?;
+                        storage.wal_append_insert(id, &vector.data, Some(&metadata_bytes))?;
+                    }
                 }
-            }
 
-            // Batch insert into existing HNSW (skip if we just built with parallel)
-            if !is_new_index {
-                if let Some(ref mut index) = self.hnsw_index {
-                    index.batch_insert(&vectors_data)?;
+                result_indices.extend(slots.iter().map(|&s| s as usize));
+            } else {
+                // Existing index - validate dimensions and insert one by one
+                let expected_dims = self.dimensions();
+                for (i, (_, vector, _)) in inserts.iter().enumerate() {
+                    if vector.dim() != expected_dims {
+                        anyhow::bail!(
+                            "Vector {} dimension mismatch: expected {}, got {}",
+                            i,
+                            expected_dims,
+                            vector.dim()
+                        );
+                    }
                 }
-            }
 
-            // Insert into RecordStore, update metadata index, and collect slots
-            let mut slots = Vec::with_capacity(inserts.len());
-            for (id, vector, metadata) in &inserts {
-                let slot =
-                    self.records
-                        .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
-                slots.push(slot);
-                self.metadata_index.index_json(slot, metadata);
-            }
-
-            // WAL for crash durability
-            if let Some(ref mut storage) = self.storage {
+                // Insert into RecordStore and index
+                let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in &inserts {
-                    let metadata_bytes = serde_json::to_vec(metadata)?;
-                    storage.wal_append_insert(id, &vector.data, Some(&metadata_bytes))?;
-                }
-            }
+                    let slot = self.records.upsert(
+                        id.clone(),
+                        vector.data.clone(),
+                        Some(metadata.clone()),
+                    )?;
+                    slots.push(slot);
+                    self.metadata_index.index_json(slot, metadata);
 
-            result_indices.extend(slots.iter().map(|&s| s as usize));
+                    // Insert into segments or hnsw_index
+                    if let Some(ref mut segments) = self.segments {
+                        segments
+                            .insert_with_slot(&vector.data, slot)
+                            .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+                    } else if let Some(ref mut index) = self.hnsw_index {
+                        index.insert(&vector.data)?;
+                    }
+                }
+
+                // WAL for crash durability
+                if let Some(ref mut storage) = self.storage {
+                    for (id, vector, metadata) in &inserts {
+                        let metadata_bytes = serde_json::to_vec(metadata)?;
+                        storage.wal_append_insert(id, &vector.data, Some(&metadata_bytes))?;
+                    }
+                }
+
+                result_indices.extend(slots.iter().map(|&s| s as usize));
+            }
         }
 
         // Sync WAL once at end of batch for durability
@@ -1702,34 +1758,23 @@ impl VectorStore {
     /// NOTE: This method generates synthetic IDs for the vectors.
     /// For explicit IDs, use `set_batch` instead.
     pub fn batch_insert(&mut self, vectors: Vec<Vector>) -> Result<Vec<usize>> {
-        const CHUNK_SIZE: usize = 10_000;
-
         if vectors.is_empty() {
             return Ok(Vec::new());
         }
 
+        let dimensions = self.dimensions();
         for (i, vector) in vectors.iter().enumerate() {
-            if vector.dim() != self.dimensions() {
+            if vector.dim() != dimensions {
                 anyhow::bail!(
                     "Vector {} dimension mismatch: expected {}, got {}",
                     i,
-                    self.dimensions(),
+                    dimensions,
                     vector.dim()
                 );
             }
         }
 
-        if self.hnsw_index.is_none() {
-            let training: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
-            let capacity = vectors.len().max(1_000_000);
-            self.hnsw_index = Some(self.create_initial_hnsw_with_capacity(
-                self.dimensions(),
-                &training,
-                capacity,
-            )?);
-        }
-
-        // Insert into RecordStore with generated IDs, then into HNSW
+        // Insert into RecordStore with generated IDs
         let mut all_slots = Vec::with_capacity(vectors.len());
         let base_slot = self.records.slot_count();
 
@@ -1739,12 +1784,35 @@ impl VectorStore {
             all_slots.push(slot as usize);
         }
 
-        // Insert into HNSW in chunks
-        for chunk in vectors.chunks(CHUNK_SIZE) {
-            let vector_data: Vec<Vec<f32>> = chunk.iter().map(|v| v.data.clone()).collect();
-            if let Some(ref mut index) = self.hnsw_index {
-                index.batch_insert(&vector_data)?;
+        // Build or extend segments
+        let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
+        let slots: Vec<u32> = all_slots.iter().map(|&s| s as u32).collect();
+
+        if self.segments.is_none() && self.hnsw_index.is_none() {
+            // Build new segment with parallel construction
+            let config = SegmentConfig::new(dimensions)
+                .with_params(HNSWParams {
+                    m: self.hnsw_m,
+                    ef_construction: self.hnsw_ef_construction,
+                    ..Default::default()
+                })
+                .with_distance(self.distance_metric.into())
+                .with_quantization(self.pending_quantization.is_some());
+
+            self.segments = Some(
+                SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
+                    .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?,
+            );
+        } else if let Some(ref mut segments) = self.segments {
+            // Insert into existing segments
+            for (vector, &slot) in vector_data.iter().zip(slots.iter()) {
+                segments
+                    .insert_with_slot(vector, slot)
+                    .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
             }
+        } else if let Some(ref mut index) = self.hnsw_index {
+            // Legacy path: insert into hnsw_index
+            index.batch_insert(&vector_data)?;
         }
 
         Ok(all_slots)
@@ -1756,21 +1824,33 @@ impl VectorStore {
             return Ok(());
         }
 
-        let capacity = (self.records.len() as usize).max(1_000_000);
-        let mut index = HNSWIndex::new_with_params(
-            capacity,
-            self.dimensions(),
-            self.hnsw_m,
-            self.hnsw_ef_construction,
-            self.hnsw_ef_search,
-            self.distance_metric.into(),
-        )?;
-
-        for (_, record) in self.records.iter_live() {
-            index.insert(&record.vector)?;
+        // Collect live vectors and their slots
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(self.records.len() as usize);
+        let mut slots: Vec<u32> = Vec::with_capacity(self.records.len() as usize);
+        for (slot, record) in self.records.iter_live() {
+            vectors.push(record.vector.clone());
+            slots.push(slot);
         }
 
-        self.hnsw_index = Some(index);
+        // Build segment config
+        let config = SegmentConfig::new(self.dimensions())
+            .with_params(HNSWParams {
+                m: self.hnsw_m,
+                ef_construction: self.hnsw_ef_construction,
+                ..Default::default()
+            })
+            .with_distance(self.distance_metric.into())
+            .with_quantization(self.pending_quantization.is_some());
+
+        // Rebuild with parallel construction
+        self.segments = Some(
+            SegmentManager::build_parallel_with_slots(config, vectors, &slots)
+                .map_err(|e| anyhow::anyhow!("Segment rebuild failed: {e}"))?,
+        );
+
+        // Clear legacy hnsw_index
+        self.hnsw_index = None;
+
         Ok(())
     }
 
@@ -1829,7 +1909,7 @@ impl VectorStore {
     #[inline]
     #[must_use]
     pub fn needs_index_rebuild(&self) -> bool {
-        self.hnsw_index.is_none() && self.records.len() > 100
+        self.segments.is_none() && self.hnsw_index.is_none() && self.records.len() > 100
     }
 
     /// Ensure HNSW index is ready for search
@@ -1889,13 +1969,34 @@ impl VectorStore {
             );
         }
 
-        let has_data =
-            !self.records.is_empty() || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
+        let has_data = !self.records.is_empty()
+            || self.segments.as_ref().is_some_and(|s| !s.is_empty())
+            || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
 
         if !has_data {
             return Ok(Vec::new());
         }
 
+        // Use segments if available (preferred path)
+        if let Some(ref segments) = self.segments {
+            let segment_results = segments
+                .search(&query.data, k, ef)
+                .map_err(|e| anyhow::anyhow!("Segment search failed: {e}"))?;
+
+            // Convert SegmentSearchResult to (slot, distance)
+            let results: Vec<(usize, f32)> = segment_results
+                .into_iter()
+                .map(|r| (r.slot as usize, r.distance))
+                .collect();
+
+            // Fall back to brute force if segments return nothing but we have data
+            if results.is_empty() && self.has_live_vectors() {
+                return self.knn_search_brute_force(query, k);
+            }
+            return Ok(results);
+        }
+
+        // Legacy path: use hnsw_index directly
         if let Some(ref index) = self.hnsw_index {
             let results = if index.is_asymmetric() {
                 // Rescore if we have storage (fetch from disk) OR records in RAM
@@ -1910,7 +2011,6 @@ impl VectorStore {
             };
 
             // Fall back to brute force if HNSW returns nothing but we have data
-            // This can happen after heavy deletions leave the graph disconnected
             if results.is_empty() && self.has_live_vectors() {
                 return self.knn_search_brute_force(query, k);
             }

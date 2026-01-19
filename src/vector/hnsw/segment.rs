@@ -55,6 +55,8 @@ pub struct MutableSegment {
     id: u64,
     /// Max capacity before freeze
     capacity: usize,
+    /// Global slots for each local node ID (local_id → RecordStore slot)
+    slots: Vec<u32>,
 }
 
 impl MutableSegment {
@@ -68,6 +70,7 @@ impl MutableSegment {
             index: HNSWIndex::new(dimensions, params, distance_fn, false)?,
             id: 0,
             capacity: 100_000, // Default capacity
+            slots: Vec::new(),
         })
     }
 
@@ -82,6 +85,7 @@ impl MutableSegment {
             index: HNSWIndex::new(dimensions, params, distance_fn, false)?,
             id: 0,
             capacity,
+            slots: Vec::with_capacity(capacity),
         })
     }
 
@@ -95,7 +99,38 @@ impl MutableSegment {
             index: HNSWIndex::new(dimensions, params, distance_fn, true)?,
             id: 0,
             capacity: 100_000,
+            slots: Vec::new(),
         })
+    }
+
+    /// Create from an existing HNSWIndex with slot mapping
+    ///
+    /// Used for integrating parallel-built indexes into segment system.
+    /// The slots slice must have one entry per vector in the index.
+    pub fn from_index(index: HNSWIndex, slots: &[u32]) -> Self {
+        debug_assert_eq!(
+            index.len(),
+            slots.len(),
+            "Slot count must match vector count"
+        );
+        Self {
+            id: 0,
+            capacity: index.len().max(100_000),
+            slots: slots.to_vec(),
+            index,
+        }
+    }
+
+    /// Create from an existing HNSWIndex using sequential slots starting at 0
+    pub fn from_index_sequential(index: HNSWIndex) -> Self {
+        let len = index.len();
+        let slots: Vec<u32> = (0..len as u32).collect();
+        Self {
+            id: 0,
+            capacity: len.max(100_000),
+            slots,
+            index,
+        }
     }
 
     /// Get segment ID
@@ -145,9 +180,30 @@ impl MutableSegment {
         self.index.distance_function()
     }
 
-    /// Insert vector, returns internal ID
+    /// Insert vector with global slot, returns internal ID
+    ///
+    /// The slot is the global RecordStore slot that will be returned in search results.
+    pub fn insert_with_slot(
+        &mut self,
+        vector: &[f32],
+        slot: u32,
+    ) -> crate::vector::hnsw::error::Result<u32> {
+        let local_id = self.index.insert(vector)?;
+        debug_assert_eq!(
+            local_id as usize,
+            self.slots.len(),
+            "Slot tracking out of sync: local_id={}, slots.len()={}",
+            local_id,
+            self.slots.len()
+        );
+        self.slots.push(slot);
+        Ok(local_id)
+    }
+
+    /// Insert vector, returns internal ID (slot == local_id for backward compatibility)
     pub fn insert(&mut self, vector: &[f32]) -> crate::vector::hnsw::error::Result<u32> {
-        self.index.insert(vector)
+        let slot = self.slots.len() as u32;
+        self.insert_with_slot(vector, slot)
     }
 
     /// Search for k nearest neighbors
@@ -160,8 +216,24 @@ impl MutableSegment {
         let results = self.index.search(query, k, ef)?;
         Ok(results
             .into_iter()
-            .map(|r| SegmentSearchResult::new(r.id, r.distance, r.id)) // In mutable, id == slot
+            .map(|r| {
+                // Map local_id to global slot
+                let slot = self.slots.get(r.id as usize).copied().unwrap_or(r.id);
+                SegmentSearchResult::new(r.id, r.distance, slot)
+            })
             .collect())
+    }
+
+    /// Get global slot for a local node ID
+    #[inline]
+    pub fn get_slot(&self, local_id: u32) -> Option<u32> {
+        self.slots.get(local_id as usize).copied()
+    }
+
+    /// Access slots for freeze operation
+    #[allow(dead_code)]
+    pub(crate) fn slots(&self) -> &[u32] {
+        &self.slots
     }
 
     /// Get entry point
@@ -254,7 +326,9 @@ impl FrozenSegment {
                     }
                 }
             }
-            storage.set_slot(id, id); // In mutable segment, slot == id
+            // Use slot from mutable segment's slot tracking
+            let slot = mutable.get_slot(id).unwrap_or(id);
+            storage.set_slot(id, slot);
         }
 
         Self {

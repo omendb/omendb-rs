@@ -96,18 +96,19 @@ fn test_rebuild_index() {
         store.insert(random_vector(128, i)).unwrap();
     }
 
-    // Verify HNSW index exists
-    assert!(store.hnsw_index.is_some());
+    // Verify index exists (segments or hnsw_index)
+    assert!(store.segments.is_some() || store.hnsw_index.is_some());
 
     // Clear the index
+    store.segments = None;
     store.hnsw_index = None;
-    assert!(store.hnsw_index.is_none());
+    assert!(store.segments.is_none() && store.hnsw_index.is_none());
 
     // Rebuild index
     store.rebuild_index().unwrap();
 
     // Verify index is rebuilt
-    assert!(store.hnsw_index.is_some());
+    assert!(store.segments.is_some());
 
     // Verify search works
     let query = random_vector(128, 50);
@@ -210,12 +211,9 @@ fn test_quantization_insert() {
         store.insert(random_vector(128, i)).unwrap();
     }
 
-    // Verify vectors stored and HNSW uses asymmetric mode
+    // Verify vectors stored and quantization is enabled
     assert_eq!(store.len(), 50);
-    assert!(store
-        .hnsw_index
-        .as_ref()
-        .is_some_and(super::super::hnsw_index::HNSWIndex::is_asymmetric));
+    assert!(store.segments.as_ref().is_some_and(|s| s.is_quantized()));
 }
 
 #[test]
@@ -254,13 +252,10 @@ fn test_quantization_batch_insert() {
     let vectors: Vec<Vector> = (0..100).map(|i| random_vector(128, i)).collect();
     let ids = store.batch_insert(vectors).unwrap();
 
-    // Verify all vectors were created and HNSW is asymmetric
+    // Verify all vectors were created and quantization is enabled
     assert_eq!(ids.len(), 100);
     assert_eq!(store.len(), 100);
-    assert!(store
-        .hnsw_index
-        .as_ref()
-        .is_some_and(super::super::hnsw_index::HNSWIndex::is_asymmetric));
+    assert!(store.segments.as_ref().is_some_and(|s| s.is_quantized()));
 }
 
 #[test]
