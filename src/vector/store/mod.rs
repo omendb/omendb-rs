@@ -61,6 +61,8 @@ fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> usize 
 }
 
 #[cfg(test)]
+mod stress_tests;
+#[cfg(test)]
 mod tests;
 
 /// Compute optimal oversample factor based on quantization mode.

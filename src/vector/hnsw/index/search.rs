@@ -412,7 +412,8 @@ impl HNSWIndex {
             return Err(HNSWError::InvalidVector);
         }
 
-        if self.is_empty() {
+        // Check both empty storage AND no entry point (all nodes deleted)
+        if self.is_empty() || self.entry_point.is_none() {
             debug!("Search on empty index, returning empty results");
             return Ok(SearchValidation::Empty);
         }
