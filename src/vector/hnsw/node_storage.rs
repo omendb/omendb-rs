@@ -1032,17 +1032,24 @@ impl NodeStorage {
             0
         };
 
-        // Convert Vec<u8> to owned allocation
+        // Convert Vec<u8> to owned allocation with proper alignment
         let backing = if data.is_empty() {
             StorageBacking::default()
         } else {
+            // Allocate with CACHE_LINE alignment for optimal performance
             let layout = Layout::from_size_align(data.len(), CACHE_LINE).expect("Invalid layout");
-            // SAFETY: We're taking ownership of the data and converting to NonNull
-            let ptr = {
-                let boxed = data.into_boxed_slice();
-                let raw = Box::into_raw(boxed) as *mut u8;
-                NonNull::new(raw).expect("Box should not be null")
+            // SAFETY: We allocate with proper alignment and copy data
+            let ptr = unsafe {
+                use std::alloc::alloc;
+                let raw = alloc(layout);
+                if raw.is_null() {
+                    std::alloc::handle_alloc_error(layout);
+                }
+                // Copy data to properly aligned allocation
+                std::ptr::copy_nonoverlapping(data.as_ptr(), raw, data.len());
+                NonNull::new(raw).expect("Allocation should not return null")
             };
+            // data is dropped here, freeing the original unaligned allocation
             StorageBacking::Owned {
                 data: ptr,
                 layout,

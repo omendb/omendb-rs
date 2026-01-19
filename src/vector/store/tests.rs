@@ -670,7 +670,7 @@ fn test_persistent_search() {
 
     // Reopen and search
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
 
         assert_eq!(store.len(), 100);
 
@@ -1513,7 +1513,6 @@ mod proptest_tests {
                 store.flush().unwrap();
 
                 // Verify count before close
-                let expected_count = (num_vectors / 3) * 3; // Account for integer division
                 prop_assert!(store.len() > 0, "Store should not be empty");
             }
 

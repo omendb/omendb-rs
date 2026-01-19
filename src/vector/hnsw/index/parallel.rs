@@ -115,10 +115,10 @@ impl ParallelBuilder {
         info!(batch_size, "Starting parallel HNSW construction");
         let start = std::time::Instant::now();
 
-        // Validate dimensions
+        // Validate all vectors for dimensions and NaN/Inf
         // SAFETY: No concurrent access yet - we're still in single-threaded setup
         let dimensions = unsafe { self.storage() }.dimensions();
-        for (i, vec) in vectors.iter().enumerate() {
+        for vec in vectors.iter() {
             if vec.len() != dimensions {
                 return Err(HNSWError::DimensionMismatch {
                     expected: dimensions,
@@ -128,11 +128,8 @@ impl ParallelBuilder {
             if vec.iter().any(|x| !x.is_finite()) {
                 return Err(HNSWError::InvalidVector);
             }
-            // Quick validation only - full validation is expensive
-            if i >= 100 {
-                break;
-            }
         }
+        debug!(batch_size, dimensions, "Validated all vectors");
 
         // Phase 1: Allocate all nodes, assign levels, store vectors
         self.allocate_all_nodes(&vectors);

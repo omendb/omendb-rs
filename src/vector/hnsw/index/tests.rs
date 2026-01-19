@@ -967,7 +967,7 @@ fn profile_persistence_comprehensive() {
     // === TEST 3: Cold Start (reopen from disk) ===
     println!("\n=== 3. Cold Start (reload from disk) ===");
     let start = Instant::now();
-    let mut reloaded_store = VectorStore::open(&path).unwrap();
+    let reloaded_store = VectorStore::open(&path).unwrap();
     let reload_time = start.elapsed();
     println!("Reload {} vectors: {:?}", reloaded_store.len(), reload_time);
 

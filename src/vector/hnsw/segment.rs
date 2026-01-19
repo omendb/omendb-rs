@@ -234,9 +234,17 @@ impl FrozenSegment {
             let neighbors = mutable.index.get_neighbors_level0(id);
             storage.set_neighbors(id, &neighbors);
 
-            // Copy metadata
+            // Copy metadata and upper level neighbors
             if let Some(level) = mutable.index.node_level(id) {
                 storage.set_level(id, level);
+
+                // Copy upper level neighbors (levels 1+) for HNSW hierarchy
+                for l in 1..=level {
+                    let upper_neighbors = mutable.index.get_neighbors(id, l);
+                    if !upper_neighbors.is_empty() {
+                        storage.set_neighbors_at_level(id, l, upper_neighbors);
+                    }
+                }
             }
             storage.set_slot(id, id); // In mutable segment, slot == id
         }
