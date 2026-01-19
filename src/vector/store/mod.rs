@@ -20,7 +20,7 @@ pub use thread_safe::ThreadSafeVectorStore;
 
 // SearchResult is defined in this module and re-exported from lib.rs
 
-use super::hnsw::HNSWParams;
+use super::hnsw::{DistanceFunction, HNSWParams};
 use super::hnsw_index::HNSWIndex;
 use super::types::Vector;
 use super::QuantizationMode;
@@ -1026,10 +1026,38 @@ impl VectorStore {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
-            // Initialize HNSW if needed
-            if self.hnsw_index.is_none() {
+            // Initialize HNSW if needed - use parallel build for new index
+            let is_new_index = self.hnsw_index.is_none();
+            if is_new_index {
                 let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
-                self.hnsw_index = Some(self.create_initial_hnsw(dimensions, &vectors_data)?);
+                let use_quantization = self.pending_quantization.is_some();
+
+                // Build params from store config
+                let params = HNSWParams {
+                    m: self.hnsw_m,
+                    ef_construction: self.hnsw_ef_construction,
+                    ..Default::default()
+                };
+
+                // Use parallel build for new index (much faster than sequential)
+                let distance_fn: DistanceFunction = self.distance_metric.into();
+                let mut index = HNSWIndex::build_parallel(
+                    dimensions,
+                    params,
+                    distance_fn,
+                    use_quantization,
+                    vectors_data.clone(),
+                )?;
+                index.set_ef_search(self.hnsw_ef_search);
+
+                // Handle quantization mode persistence
+                if let Some(quant_mode) = self.pending_quantization.take() {
+                    if let Some(ref mut storage) = self.storage {
+                        storage.put_quantization_mode(quantization_mode_to_id(&quant_mode))?;
+                    }
+                }
+
+                self.hnsw_index = Some(index);
                 self.records.set_dimensions(dimensions as u32);
             }
 
@@ -1046,9 +1074,11 @@ impl VectorStore {
                 }
             }
 
-            // Batch insert into HNSW
-            if let Some(ref mut index) = self.hnsw_index {
-                index.batch_insert(&vectors_data)?;
+            // Batch insert into existing HNSW (skip if we just built with parallel)
+            if !is_new_index {
+                if let Some(ref mut index) = self.hnsw_index {
+                    index.batch_insert(&vectors_data)?;
+                }
             }
 
             // Insert into RecordStore, update metadata index, and collect slots

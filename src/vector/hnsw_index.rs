@@ -351,6 +351,48 @@ impl HNSWIndex {
         })
     }
 
+    /// Build HNSW index with parallel construction (faster for bulk inserts)
+    ///
+    /// Uses lock-based parallel insertion for much faster build times compared
+    /// to sequential insertion. Recommended for initial bulk loading.
+    ///
+    /// # Arguments
+    /// * `dimensions` - Vector dimensionality
+    /// * `params` - HNSW parameters (m, ef_construction)
+    /// * `distance_fn` - Distance function
+    /// * `use_quantization` - Whether to use SQ8 quantization
+    /// * `vectors` - All vectors to insert
+    ///
+    /// # Returns
+    /// New HNSWIndex with all vectors inserted
+    pub fn build_parallel(
+        dimensions: usize,
+        params: CoreParams,
+        distance_fn: DistanceFunction,
+        use_quantization: bool,
+        vectors: Vec<Vec<f32>>,
+    ) -> Result<Self> {
+        let num_vectors = vectors.len();
+        let index = CoreHNSW::build_parallel(
+            dimensions,
+            params.clone(),
+            distance_fn,
+            use_quantization,
+            vectors,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(Self {
+            index,
+            max_elements: num_vectors.max(1_000_000),
+            max_nb_connection: params.m,
+            ef_construction: params.ef_construction,
+            ef_search: params.ef_construction,
+            dimensions,
+            num_vectors,
+        })
+    }
+
     /// Check if this index uses asymmetric search (`SQ8`)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
