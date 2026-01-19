@@ -328,17 +328,20 @@ impl SegmentManager {
         self.mutable.insert_with_slot(vector, slot)
     }
 
-    /// Insert a vector (slot == local_id for backward compatibility)
+    /// Insert a vector (slot == global vector count for consistency)
     ///
     /// Inserts into the mutable segment. If the segment reaches capacity,
     /// it's automatically frozen and a new mutable segment is created.
+    /// The slot is assigned as the total vector count (global ID).
     pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
         // Freeze mutable if at capacity
         if self.mutable.is_full() {
             self.freeze_mutable()?;
         }
 
-        self.mutable.insert(vector)
+        // Use global vector count as slot to maintain unique IDs across segments
+        let slot = self.len() as u32;
+        self.mutable.insert_with_slot(vector, slot)
     }
 
     /// Freeze current mutable segment
@@ -363,14 +366,15 @@ impl SegmentManager {
         };
 
         // Swap in new mutable, freeze old one
-        let old_mutable = std::mem::replace(&mut self.mutable, new_mutable);
+        let mut old_mutable = std::mem::replace(&mut self.mutable, new_mutable);
 
         if !old_mutable.is_empty() {
+            // Assign unique segment ID before freezing
+            old_mutable.set_id(self.next_segment_id);
+            self.next_segment_id += 1;
             let frozen = old_mutable.freeze();
             self.frozen.push(Arc::new(frozen));
         }
-
-        self.next_segment_id += 1;
 
         // Check merge policy and merge if needed
         if self.should_merge() {
@@ -627,6 +631,187 @@ impl SegmentManager {
         } else {
             Ok(None)
         }
+    }
+
+    // ============================================================================
+    // Persistence
+    // ============================================================================
+
+    /// Save segment manager to a directory
+    ///
+    /// Flushes the mutable segment to frozen, then saves:
+    /// - `manifest.json` - config, segment IDs, merge policy
+    /// - `segment_{id}.bin` - one file per frozen segment
+    ///
+    /// The directory is created if it doesn't exist.
+    pub fn save<P: AsRef<std::path::Path>>(&mut self, dir: P) -> Result<()> {
+        use std::fs;
+        use std::io::Write;
+
+        let dir = dir.as_ref();
+        info!(path = %dir.display(), "Saving segment manager");
+
+        // Create directory if needed
+        fs::create_dir_all(dir).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!(
+                "Failed to create directory: {e}"
+            ))
+        })?;
+
+        // Flush mutable to frozen for consistent snapshot
+        self.flush()?;
+
+        // Collect segment info for manifest
+        let segment_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
+
+        // Build manifest
+        let manifest = serde_json::json!({
+            "version": 1,
+            "dimensions": self.config.dimensions,
+            "params": {
+                "m": self.config.params.m,
+                "ef_construction": self.config.params.ef_construction,
+                "max_level": self.config.params.max_level,
+            },
+            "distance_fn": format!("{:?}", self.config.distance_fn),
+            "segment_capacity": self.config.segment_capacity,
+            "use_quantization": self.config.use_quantization,
+            "next_segment_id": self.next_segment_id,
+            "segment_ids": segment_ids,
+            "merge_policy": {
+                "enabled": self.merge_policy.enabled,
+                "min_segments": self.merge_policy.min_segments,
+                "max_segments": self.merge_policy.max_segments,
+                "min_vectors": self.merge_policy.min_vectors,
+                "size_ratio_threshold": self.merge_policy.size_ratio_threshold,
+            },
+        });
+
+        // Write manifest
+        let manifest_path = dir.join("manifest.json");
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!(
+                "Failed to serialize manifest: {e}"
+            ))
+        })?;
+        let mut file = std::fs::File::create(&manifest_path).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!(
+                "Failed to create manifest file: {e}"
+            ))
+        })?;
+        file.write_all(&manifest_bytes)?;
+
+        // Save each frozen segment
+        for segment in &self.frozen {
+            let segment_path = dir.join(format!("segment_{}.bin", segment.id()));
+            segment.save(&segment_path)?;
+            debug!(segment_id = segment.id(), path = %segment_path.display(), "Saved segment");
+        }
+
+        info!(
+            segments = self.frozen.len(),
+            total_vectors = self.len(),
+            "Segment manager saved"
+        );
+        Ok(())
+    }
+
+    /// Load segment manager from a directory
+    ///
+    /// Loads the manifest and all segment files, recreating the manager state.
+    pub fn load<P: AsRef<std::path::Path>>(dir: P) -> Result<Self> {
+        use crate::vector::hnsw::segment::FrozenSegment;
+        use std::fs;
+
+        let dir = dir.as_ref();
+        info!(path = %dir.display(), "Loading segment manager");
+
+        // Read manifest
+        let manifest_path = dir.join("manifest.json");
+        let manifest_bytes = fs::read(&manifest_path).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!("Failed to read manifest: {e}"))
+        })?;
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!("Failed to parse manifest: {e}"))
+        })?;
+
+        // Parse config
+        let dimensions = manifest["dimensions"].as_u64().unwrap_or(128) as usize;
+        let params = HNSWParams {
+            m: manifest["params"]["m"].as_u64().unwrap_or(16) as usize,
+            ef_construction: manifest["params"]["ef_construction"]
+                .as_u64()
+                .unwrap_or(100) as usize,
+            max_level: manifest["params"]["max_level"].as_u64().unwrap_or(8) as u8,
+            ..Default::default()
+        };
+        let distance_fn = match manifest["distance_fn"].as_str().unwrap_or("L2") {
+            "Cosine" => DistanceFunction::Cosine,
+            "NegativeDotProduct" => DistanceFunction::NegativeDotProduct,
+            _ => DistanceFunction::L2,
+        };
+        let segment_capacity = manifest["segment_capacity"].as_u64().unwrap_or(100_000) as usize;
+        let use_quantization = manifest["use_quantization"].as_bool().unwrap_or(false);
+
+        let config = SegmentConfig {
+            dimensions,
+            params,
+            distance_fn,
+            segment_capacity,
+            use_quantization,
+        };
+
+        // Parse merge policy
+        let merge_policy = if let Some(mp) = manifest.get("merge_policy") {
+            MergePolicy {
+                enabled: mp["enabled"].as_bool().unwrap_or(true),
+                min_segments: mp["min_segments"].as_u64().unwrap_or(2) as usize,
+                max_segments: mp["max_segments"].as_u64().unwrap_or(8) as usize,
+                min_vectors: mp["min_vectors"].as_u64().unwrap_or(1000) as usize,
+                size_ratio_threshold: mp["size_ratio_threshold"].as_f64().unwrap_or(4.0) as f32,
+                ..Default::default()
+            }
+        } else {
+            MergePolicy::default()
+        };
+
+        let next_segment_id = manifest["next_segment_id"].as_u64().unwrap_or(0);
+
+        // Load segment files
+        let segment_ids: Vec<u64> = manifest["segment_ids"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .unwrap_or_default();
+
+        let mut frozen = Vec::with_capacity(segment_ids.len());
+        for seg_id in segment_ids {
+            let segment_path = dir.join(format!("segment_{}.bin", seg_id));
+            let segment = FrozenSegment::load(&segment_path)?;
+            frozen.push(Arc::new(segment));
+            debug!(segment_id = seg_id, "Loaded segment");
+        }
+
+        // Create empty mutable segment
+        let mutable = if use_quantization {
+            MutableSegment::new_quantized(dimensions, params, distance_fn)?
+        } else {
+            MutableSegment::with_capacity(dimensions, params, distance_fn, segment_capacity)?
+        };
+
+        let total_vectors: usize = frozen.iter().map(|s| s.len()).sum();
+        info!(
+            segments = frozen.len(),
+            total_vectors, "Segment manager loaded"
+        );
+
+        Ok(Self {
+            config,
+            mutable,
+            frozen,
+            next_segment_id,
+            merge_policy,
+            last_merge_stats: None,
+        })
     }
 
     /// Merge specific frozen segments by index
@@ -926,7 +1111,7 @@ mod tests {
 
         // Search before merge
         let query = [7.0, 0.0, 0.0, 0.0];
-        let results_before = manager.search(&query, 5, 50).unwrap();
+        let _results_before = manager.search(&query, 5, 50).unwrap();
 
         // Merge
         manager.merge_all_frozen().unwrap();
@@ -1013,5 +1198,136 @@ mod tests {
         // Now have 2 frozen segments: 10 and 3 vectors
         // Ratio is 10/3 = 3.33 > 2.0
         assert!(manager.should_merge(), "Size ratio should trigger merge");
+    }
+
+    // ============== Persistence Tests ==============
+
+    #[test]
+    fn test_save_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config().with_capacity(5);
+        let policy = MergePolicy::disabled();
+        let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
+
+        // Insert vectors
+        for i in 0..12 {
+            let vector = vec![i as f32, 0.0, 0.0, 0.0];
+            manager.insert(&vector).unwrap();
+        }
+
+        // Should have 2 frozen + some in mutable
+        assert_eq!(manager.frozen_count(), 2);
+        let total_before = manager.len();
+
+        // Save
+        manager.save(dir.path()).unwrap();
+
+        // Load
+        let loaded = SegmentManager::load(dir.path()).unwrap();
+
+        // Verify
+        assert_eq!(loaded.len(), total_before);
+        assert_eq!(loaded.dimensions(), 4);
+        assert_eq!(loaded.params().m, 8);
+
+        // Search should work
+        let results = loaded.search(&[5.0, 0.0, 0.0, 0.0], 3, 50).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].slot, 5); // Should find exact match (slot is the original ID)
+    }
+
+    #[test]
+    fn test_save_load_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config();
+        let mut manager = SegmentManager::new(config).unwrap();
+
+        // Save empty manager
+        manager.save(dir.path()).unwrap();
+
+        // Load
+        let loaded = SegmentManager::load(dir.path()).unwrap();
+        assert_eq!(loaded.len(), 0);
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn test_save_load_preserves_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SegmentConfig::new(128)
+            .with_params(HNSWParams {
+                m: 32,
+                ef_construction: 200,
+                max_level: 10,
+                ..Default::default()
+            })
+            .with_distance(DistanceFunction::Cosine)
+            .with_capacity(50_000);
+
+        let policy = MergePolicy {
+            min_segments: 3,
+            max_segments: 10,
+            min_vectors: 500,
+            size_ratio_threshold: 5.0,
+            enabled: true,
+            ..Default::default()
+        };
+
+        let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
+
+        // Insert some vectors
+        for i in 0..100 {
+            let vector: Vec<f32> = (0..128).map(|j| (i * 128 + j) as f32 / 1000.0).collect();
+            manager.insert(&vector).unwrap();
+        }
+
+        // Save and load
+        manager.save(dir.path()).unwrap();
+        let loaded = SegmentManager::load(dir.path()).unwrap();
+
+        // Verify config preserved
+        assert_eq!(loaded.dimensions(), 128);
+        assert_eq!(loaded.params().m, 32);
+        assert_eq!(loaded.params().ef_construction, 200);
+        assert_eq!(loaded.config().segment_capacity, 50_000);
+
+        // Verify merge policy preserved
+        assert_eq!(loaded.merge_policy().min_segments, 3);
+        assert_eq!(loaded.merge_policy().max_segments, 10);
+        assert!(loaded.merge_policy().enabled);
+    }
+
+    #[test]
+    fn test_save_load_search_consistency() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config().with_capacity(10);
+        let policy = MergePolicy::disabled();
+        let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
+
+        // Insert vectors
+        for i in 0..25 {
+            let vector = vec![i as f32, 0.0, 0.0, 0.0];
+            manager.insert(&vector).unwrap();
+        }
+
+        // Search before save
+        let query = [12.0, 0.0, 0.0, 0.0];
+        let results_before = manager.search(&query, 5, 50).unwrap();
+
+        // Save
+        manager.save(dir.path()).unwrap();
+
+        // Load
+        let loaded = SegmentManager::load(dir.path()).unwrap();
+
+        // Search after load
+        let results_after = loaded.search(&query, 5, 50).unwrap();
+
+        // Results should match (same IDs, similar distances)
+        assert_eq!(results_before.len(), results_after.len());
+        for (before, after) in results_before.iter().zip(results_after.iter()) {
+            assert_eq!(before.id, after.id);
+            assert!((before.distance - after.distance).abs() < 0.001);
+        }
     }
 }
