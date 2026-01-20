@@ -272,6 +272,7 @@ jobs:
 
       - name: Check PyPI publish
         id: pypi-skip
+        shell: bash
         run: |
           if [ "${{ needs.verify.outputs.pypi_published }}" = "true" ]; then
             echo "skip=true" >> $GITHUB_OUTPUT
@@ -432,6 +433,7 @@ jobs:
 
       - name: Check npm publish
         id: npm-skip
+        shell: bash
         run: |
           if [ "${{ needs.verify.outputs.npm_published }}" = "true" ]; then
             echo "skip=true" >> $GITHUB_OUTPUT
