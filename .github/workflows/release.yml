@@ -448,11 +448,13 @@ jobs:
         verify,
         validate,
         test-python,
+        test-node,
         examples,
         build-python-linux,
         build-python-macos,
         build-python-windows,
         build-python-sdist,
+        build-node,
       ]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
@@ -474,7 +476,19 @@ jobs:
           args: --non-interactive --skip-existing dist/*
 
   publish-npm:
-    needs: [verify, validate, test-python, test-node, examples, build-node]
+    needs:
+      [
+        verify,
+        validate,
+        test-python,
+        test-node,
+        examples,
+        build-python-linux,
+        build-python-macos,
+        build-python-windows,
+        build-python-sdist,
+        build-node,
+      ]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
