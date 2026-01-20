@@ -15,7 +15,7 @@
 
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::index::HNSWIndex;
-use crate::vector::hnsw::merge::{GraphMerger, MergeConfig, MergeStats};
+use crate::vector::hnsw::merge::{MergeConfig, MergeStats};
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
 use std::sync::Arc;
@@ -517,20 +517,79 @@ impl SegmentManager {
         false
     }
 
-    /// Merge all frozen segments into a single new frozen segment
-    ///
-    /// Uses IGTM (Iterative Greedy Tree Merging) algorithm for 1.3-1.7x
-    /// speedup over naive insertion. The result is a single frozen segment
-    /// replacing all previous frozen segments.
-    ///
-    /// Returns merge statistics if any segments were merged.
-    pub fn merge_all_frozen(&mut self) -> Result<Option<MergeStats>> {
-        if self.frozen.is_empty() {
-            return Ok(None);
+    // ============================================================================
+    // Merge Helpers
+    // ============================================================================
+
+    /// Collect all (vector, slot) pairs from frozen segments
+    fn collect_vectors_and_slots(segments: &[Arc<FrozenSegment>]) -> Vec<(Vec<f32>, u32)> {
+        let total_len: usize = segments.iter().map(|s| s.len()).sum();
+        let mut all_vectors = Vec::with_capacity(total_len);
+
+        for frozen_arc in segments {
+            let frozen = frozen_arc.as_ref();
+            if frozen.is_empty() {
+                continue;
+            }
+
+            let storage = frozen.storage();
+            for id in 0..frozen.len() as u32 {
+                let vector = storage.vector(id).to_vec();
+                let slot = storage.slot(id);
+                all_vectors.push((vector, slot));
+            }
         }
 
-        if self.frozen.len() == 1 {
-            // Nothing to merge
+        all_vectors
+    }
+
+    /// Insert vectors into index, tracking slots. Returns (slots, duration) on success.
+    fn insert_vectors_with_slots(
+        index: &mut HNSWIndex,
+        vectors: &[(Vec<f32>, u32)],
+    ) -> Result<(Vec<u32>, std::time::Duration)> {
+        let mut collected_slots = Vec::with_capacity(vectors.len());
+        let insert_start = std::time::Instant::now();
+
+        for (vector, slot) in vectors {
+            index.insert(vector)?;
+            collected_slots.push(*slot);
+        }
+
+        Ok((collected_slots, insert_start.elapsed()))
+    }
+
+    /// Create a frozen segment from merged index with slots
+    fn create_merged_segment(&mut self, index: HNSWIndex, slots: &[u32]) -> Arc<FrozenSegment> {
+        let mut mutable = MutableSegment::from_index(index, slots);
+        mutable.set_id(self.next_segment_id);
+        self.next_segment_id += 1;
+        Arc::new(mutable.freeze())
+    }
+
+    /// Build MergeStats from merge operation
+    fn build_merge_stats(
+        vectors_merged: usize,
+        insert_duration: std::time::Duration,
+    ) -> MergeStats {
+        MergeStats {
+            vectors_merged,
+            join_set_size: 0,
+            join_set_duration: std::time::Duration::ZERO,
+            join_set_insert_duration: insert_duration,
+            remaining_insert_duration: std::time::Duration::ZERO,
+            total_duration: insert_duration,
+            fast_path_inserts: vectors_merged,
+            fallback_inserts: 0,
+        }
+    }
+
+    /// Merge all frozen segments into a single new frozen segment
+    ///
+    /// The result is a single frozen segment replacing all previous frozen segments.
+    /// Returns merge statistics if any segments were merged.
+    pub fn merge_all_frozen(&mut self) -> Result<Option<MergeStats>> {
+        if self.frozen.len() < 2 {
             return Ok(None);
         }
 
@@ -540,10 +599,16 @@ impl SegmentManager {
             "Starting segment merge"
         );
 
-        let merger = GraphMerger::with_config(self.merge_policy.merge_config.clone());
-        let mut total_stats: Option<MergeStats> = None;
+        // Take ownership of segments (will restore on failure)
+        let segments_to_merge = std::mem::take(&mut self.frozen);
 
-        // Build merged index from all frozen segments
+        // Collect vectors and slots from all segments
+        let all_vectors = Self::collect_vectors_and_slots(&segments_to_merge);
+        if all_vectors.is_empty() {
+            return Ok(None);
+        }
+
+        // Build merged index
         let mut merged_index = HNSWIndex::new(
             self.config.dimensions,
             self.config.params,
@@ -551,72 +616,38 @@ impl SegmentManager {
             self.config.use_quantization,
         )?;
 
-        // Process each frozen segment
-        for frozen_arc in std::mem::take(&mut self.frozen) {
-            let frozen = frozen_arc.as_ref();
-            if frozen.is_empty() {
-                continue;
-            }
-
-            // Create temporary HNSWIndex from frozen segment data
-            let mut temp_index = HNSWIndex::new(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                self.config.use_quantization,
-            )?;
-
-            // Insert all vectors from frozen segment into temp index
-            let storage = frozen.storage();
-            for id in 0..frozen.len() as u32 {
-                let vector = storage.vector(id);
-                temp_index.insert(vector)?;
-            }
-
-            // Merge temp_index into merged_index
-            let stats = merger.merge_graphs(&mut merged_index, &temp_index)?;
-
-            debug!(
-                vectors_merged = stats.vectors_merged,
-                join_set_size = stats.join_set_size,
-                duration_ms = stats.total_duration.as_millis(),
-                "Merged frozen segment"
-            );
-
-            // Accumulate stats
-            total_stats = Some(match total_stats {
-                None => stats,
-                Some(mut prev) => {
-                    prev.vectors_merged += stats.vectors_merged;
-                    prev.join_set_size += stats.join_set_size;
-                    prev.total_duration += stats.total_duration;
-                    prev.fast_path_inserts += stats.fast_path_inserts;
-                    prev.fallback_inserts += stats.fallback_inserts;
-                    prev
+        // Insert all vectors with slot tracking
+        let (collected_slots, insert_duration) =
+            match Self::insert_vectors_with_slots(&mut merged_index, &all_vectors) {
+                Ok(result) => result,
+                Err(e) => {
+                    self.frozen = segments_to_merge;
+                    return Err(e);
                 }
-            });
-        }
+            };
 
-        // Create new frozen segment from merged index
+        let vectors_merged = all_vectors.len();
+        debug!(
+            vectors_merged,
+            duration_ms = insert_duration.as_millis(),
+            "Merged frozen segments"
+        );
+
+        // Create merged segment and stats
         if !merged_index.is_empty() {
-            let mut mutable_temp = MutableSegment::from_index_sequential(merged_index);
-            mutable_temp.set_id(self.next_segment_id);
-            self.next_segment_id += 1;
-
-            let frozen = mutable_temp.freeze();
-            self.frozen.push(Arc::new(frozen));
+            let frozen = self.create_merged_segment(merged_index, &collected_slots);
+            self.frozen.push(frozen);
         }
 
-        if let Some(ref stats) = total_stats {
-            info!(
-                total_vectors = stats.vectors_merged,
-                total_duration_ms = stats.total_duration.as_millis(),
-                "Segment merge complete"
-            );
-        }
+        let stats = Self::build_merge_stats(vectors_merged, insert_duration);
+        info!(
+            total_vectors = stats.vectors_merged,
+            total_duration_ms = stats.total_duration.as_millis(),
+            "Segment merge complete"
+        );
 
-        self.last_merge_stats = total_stats.clone();
-        Ok(total_stats)
+        self.last_merge_stats = Some(stats.clone());
+        Ok(Some(stats))
     }
 
     /// Check and merge if policy conditions are met
@@ -636,6 +667,74 @@ impl SegmentManager {
     // ============================================================================
     // Persistence
     // ============================================================================
+
+    /// Build manifest JSON for saving
+    fn build_manifest(&self, segment_ids: &[u64]) -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "dimensions": self.config.dimensions,
+            "params": {
+                "m": self.config.params.m,
+                "ef_construction": self.config.params.ef_construction,
+                "max_level": self.config.params.max_level,
+            },
+            "distance_fn": format!("{:?}", self.config.distance_fn),
+            "segment_capacity": self.config.segment_capacity,
+            "use_quantization": self.config.use_quantization,
+            "next_segment_id": self.next_segment_id,
+            "segment_ids": segment_ids,
+            "merge_policy": {
+                "enabled": self.merge_policy.enabled,
+                "min_segments": self.merge_policy.min_segments,
+                "max_segments": self.merge_policy.max_segments,
+                "min_vectors": self.merge_policy.min_vectors,
+                "size_ratio_threshold": self.merge_policy.size_ratio_threshold,
+            },
+        })
+    }
+
+    /// Parse config from manifest JSON
+    fn parse_config(manifest: &serde_json::Value) -> SegmentConfig {
+        let dimensions = manifest["dimensions"].as_u64().unwrap_or(128) as usize;
+        let params = HNSWParams {
+            m: manifest["params"]["m"].as_u64().unwrap_or(16) as usize,
+            ef_construction: manifest["params"]["ef_construction"]
+                .as_u64()
+                .unwrap_or(100) as usize,
+            max_level: manifest["params"]["max_level"].as_u64().unwrap_or(8) as u8,
+            ..Default::default()
+        };
+        let distance_fn = match manifest["distance_fn"].as_str().unwrap_or("L2") {
+            "Cosine" => DistanceFunction::Cosine,
+            "NegativeDotProduct" => DistanceFunction::NegativeDotProduct,
+            _ => DistanceFunction::L2,
+        };
+        let segment_capacity = manifest["segment_capacity"].as_u64().unwrap_or(100_000) as usize;
+        let use_quantization = manifest["use_quantization"].as_bool().unwrap_or(false);
+
+        SegmentConfig {
+            dimensions,
+            params,
+            distance_fn,
+            segment_capacity,
+            use_quantization,
+        }
+    }
+
+    /// Parse merge policy from manifest JSON
+    fn parse_merge_policy(manifest: &serde_json::Value) -> MergePolicy {
+        manifest
+            .get("merge_policy")
+            .map(|mp| MergePolicy {
+                enabled: mp["enabled"].as_bool().unwrap_or(true),
+                min_segments: mp["min_segments"].as_u64().unwrap_or(2) as usize,
+                max_segments: mp["max_segments"].as_u64().unwrap_or(8) as usize,
+                min_vectors: mp["min_vectors"].as_u64().unwrap_or(1000) as usize,
+                size_ratio_threshold: mp["size_ratio_threshold"].as_f64().unwrap_or(4.0) as f32,
+                ..Default::default()
+            })
+            .unwrap_or_default()
+    }
 
     /// Save segment manager to a directory
     ///
@@ -661,31 +760,9 @@ impl SegmentManager {
         // Flush mutable to frozen for consistent snapshot
         self.flush()?;
 
-        // Collect segment info for manifest
-        let segment_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
-
         // Build manifest
-        let manifest = serde_json::json!({
-            "version": 1,
-            "dimensions": self.config.dimensions,
-            "params": {
-                "m": self.config.params.m,
-                "ef_construction": self.config.params.ef_construction,
-                "max_level": self.config.params.max_level,
-            },
-            "distance_fn": format!("{:?}", self.config.distance_fn),
-            "segment_capacity": self.config.segment_capacity,
-            "use_quantization": self.config.use_quantization,
-            "next_segment_id": self.next_segment_id,
-            "segment_ids": segment_ids,
-            "merge_policy": {
-                "enabled": self.merge_policy.enabled,
-                "min_segments": self.merge_policy.min_segments,
-                "max_segments": self.merge_policy.max_segments,
-                "min_vectors": self.merge_policy.min_vectors,
-                "size_ratio_threshold": self.merge_policy.size_ratio_threshold,
-            },
-        });
+        let segment_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
+        let manifest = self.build_manifest(&segment_ids);
 
         // Write manifest
         let manifest_path = dir.join("manifest.json");
@@ -700,6 +777,7 @@ impl SegmentManager {
             ))
         })?;
         file.write_all(&manifest_bytes)?;
+        file.sync_all()?; // Ensure manifest is durably written before segments
 
         // Save each frozen segment
         for segment in &self.frozen {
@@ -735,46 +813,9 @@ impl SegmentManager {
             crate::vector::hnsw::error::HNSWError::Storage(format!("Failed to parse manifest: {e}"))
         })?;
 
-        // Parse config
-        let dimensions = manifest["dimensions"].as_u64().unwrap_or(128) as usize;
-        let params = HNSWParams {
-            m: manifest["params"]["m"].as_u64().unwrap_or(16) as usize,
-            ef_construction: manifest["params"]["ef_construction"]
-                .as_u64()
-                .unwrap_or(100) as usize,
-            max_level: manifest["params"]["max_level"].as_u64().unwrap_or(8) as u8,
-            ..Default::default()
-        };
-        let distance_fn = match manifest["distance_fn"].as_str().unwrap_or("L2") {
-            "Cosine" => DistanceFunction::Cosine,
-            "NegativeDotProduct" => DistanceFunction::NegativeDotProduct,
-            _ => DistanceFunction::L2,
-        };
-        let segment_capacity = manifest["segment_capacity"].as_u64().unwrap_or(100_000) as usize;
-        let use_quantization = manifest["use_quantization"].as_bool().unwrap_or(false);
-
-        let config = SegmentConfig {
-            dimensions,
-            params,
-            distance_fn,
-            segment_capacity,
-            use_quantization,
-        };
-
-        // Parse merge policy
-        let merge_policy = if let Some(mp) = manifest.get("merge_policy") {
-            MergePolicy {
-                enabled: mp["enabled"].as_bool().unwrap_or(true),
-                min_segments: mp["min_segments"].as_u64().unwrap_or(2) as usize,
-                max_segments: mp["max_segments"].as_u64().unwrap_or(8) as usize,
-                min_vectors: mp["min_vectors"].as_u64().unwrap_or(1000) as usize,
-                size_ratio_threshold: mp["size_ratio_threshold"].as_f64().unwrap_or(4.0) as f32,
-                ..Default::default()
-            }
-        } else {
-            MergePolicy::default()
-        };
-
+        // Parse config and merge policy from manifest
+        let config = Self::parse_config(&manifest);
+        let merge_policy = Self::parse_merge_policy(&manifest);
         let next_segment_id = manifest["next_segment_id"].as_u64().unwrap_or(0);
 
         // Load segment files
@@ -792,10 +833,15 @@ impl SegmentManager {
         }
 
         // Create empty mutable segment
-        let mutable = if use_quantization {
-            MutableSegment::new_quantized(dimensions, params, distance_fn)?
+        let mutable = if config.use_quantization {
+            MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
         } else {
-            MutableSegment::with_capacity(dimensions, params, distance_fn, segment_capacity)?
+            MutableSegment::with_capacity(
+                config.dimensions,
+                config.params,
+                config.distance_fn,
+                config.segment_capacity,
+            )?
         };
 
         let total_vectors: usize = frozen.iter().map(|s| s.len()).sum();
@@ -820,13 +866,22 @@ impl SegmentManager {
     /// removing the originals. Useful for targeted merging.
     ///
     /// # Arguments
-    /// * `indices` - Indices of frozen segments to merge (must be sorted ascending)
+    /// * `indices` - Indices of frozen segments to merge (must be sorted ascending, unique)
     pub fn merge_segments(&mut self, indices: &[usize]) -> Result<Option<MergeStats>> {
         if indices.is_empty() || indices.len() == 1 {
             return Ok(None);
         }
 
-        // Validate indices
+        // Validate indices are sorted ascending and unique
+        for i in 1..indices.len() {
+            if indices[i] <= indices[i - 1] {
+                return Err(crate::vector::hnsw::error::HNSWError::internal(
+                    "Segment indices must be sorted ascending with no duplicates".to_string(),
+                ));
+            }
+        }
+
+        // Validate indices in range
         for &idx in indices {
             if idx >= self.frozen.len() {
                 return Err(crate::vector::hnsw::error::HNSWError::internal(format!(
@@ -844,8 +899,13 @@ impl SegmentManager {
         }
         segments_to_merge.reverse();
 
+        // Collect vectors and slots from selected segments
+        let all_vectors = Self::collect_vectors_and_slots(&segments_to_merge);
+        if all_vectors.is_empty() {
+            return Ok(None);
+        }
+
         // Build merged index
-        let merger = GraphMerger::with_config(self.merge_policy.merge_config.clone());
         let mut merged_index = HNSWIndex::new(
             self.config.dimensions,
             self.config.params,
@@ -853,51 +913,29 @@ impl SegmentManager {
             self.config.use_quantization,
         )?;
 
-        let mut total_stats: Option<MergeStats> = None;
-
-        for frozen_arc in segments_to_merge {
-            let frozen = frozen_arc.as_ref();
-            if frozen.is_empty() {
-                continue;
-            }
-
-            // Create temp index from frozen
-            let mut temp_index = HNSWIndex::new(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                self.config.use_quantization,
-            )?;
-
-            let storage = frozen.storage();
-            for id in 0..frozen.len() as u32 {
-                temp_index.insert(storage.vector(id))?;
-            }
-
-            let stats = merger.merge_graphs(&mut merged_index, &temp_index)?;
-
-            total_stats = Some(match total_stats {
-                None => stats,
-                Some(mut prev) => {
-                    prev.vectors_merged += stats.vectors_merged;
-                    prev.total_duration += stats.total_duration;
-                    prev
+        // Insert all vectors with slot tracking
+        let (collected_slots, insert_duration) =
+            match Self::insert_vectors_with_slots(&mut merged_index, &all_vectors) {
+                Ok(result) => result,
+                Err(e) => {
+                    // Restore segments on failure (best-effort)
+                    for (i, seg) in segments_to_merge.into_iter().enumerate() {
+                        let insert_idx = indices[i].min(self.frozen.len());
+                        self.frozen.insert(insert_idx, seg);
+                    }
+                    return Err(e);
                 }
-            });
-        }
+            };
 
-        // Create new frozen segment from merged index
+        // Create merged segment and stats
         if !merged_index.is_empty() {
-            let mut mutable = MutableSegment::from_index_sequential(merged_index);
-            mutable.set_id(self.next_segment_id);
-            self.next_segment_id += 1;
-
-            let frozen = mutable.freeze();
-            self.frozen.push(Arc::new(frozen));
+            let frozen = self.create_merged_segment(merged_index, &collected_slots);
+            self.frozen.push(frozen);
         }
 
-        self.last_merge_stats = total_stats.clone();
-        Ok(total_stats)
+        let stats = Self::build_merge_stats(all_vectors.len(), insert_duration);
+        self.last_merge_stats = Some(stats.clone());
+        Ok(Some(stats))
     }
 }
 
@@ -1151,6 +1189,73 @@ mod tests {
             2,
             "Should have 2 frozen after partial merge"
         );
+    }
+
+    #[test]
+    fn test_merge_preserves_custom_slots() {
+        // Test that merge preserves original slot mappings (critical for VectorStore integration)
+        let config = test_config().with_capacity(5);
+        let policy = MergePolicy::disabled();
+        let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
+
+        // Insert with non-sequential custom slots (simulating VectorStore behavior)
+        // Slots: 100, 200, 300, 400, 500 (segment 1)
+        // Slots: 600, 700, 800, 900, 1000 (segment 2)
+        for i in 0..10 {
+            let vector = vec![i as f32, 0.0, 0.0, 0.0];
+            let slot = ((i + 1) * 100) as u32;
+            manager.insert_with_slot(&vector, slot).unwrap();
+        }
+
+        // Flush to ensure mutable becomes frozen
+        manager.flush().unwrap();
+
+        // Should have 2 frozen segments (5 each)
+        assert_eq!(manager.frozen_count(), 2, "Should have 2 frozen segments");
+
+        // Search before merge - find vector closest to [5, 0, 0, 0]
+        let query = [5.0, 0.0, 0.0, 0.0];
+        let results_before = manager.search(&query, 1, 50).unwrap();
+        assert_eq!(results_before.len(), 1);
+        let slot_before = results_before[0].slot;
+        assert_eq!(
+            slot_before, 600,
+            "Should find slot 600 (vector [5, 0, 0, 0])"
+        );
+
+        // Merge all frozen segments
+        let stats = manager.merge_all_frozen().unwrap();
+        assert!(stats.is_some(), "Should return merge stats");
+
+        // Should have 1 frozen segment after merge
+        assert_eq!(
+            manager.frozen_count(),
+            1,
+            "Should have 1 frozen after merge"
+        );
+
+        // Search after merge - should find same slot
+        let results_after = manager.search(&query, 1, 50).unwrap();
+        assert_eq!(results_after.len(), 1);
+        let slot_after = results_after[0].slot;
+        assert_eq!(
+            slot_after, slot_before,
+            "Slot should be preserved after merge: expected {}, got {}",
+            slot_before, slot_after
+        );
+
+        // Verify all slots are preserved by searching for each vector
+        for i in 0..10 {
+            let q = [i as f32, 0.0, 0.0, 0.0];
+            let r = manager.search(&q, 1, 50).unwrap();
+            assert_eq!(r.len(), 1);
+            let expected_slot = ((i + 1) * 100) as u32;
+            assert_eq!(
+                r[0].slot, expected_slot,
+                "Vector {} should have slot {}, got {}",
+                i, expected_slot, r[0].slot
+            );
+        }
     }
 
     #[test]

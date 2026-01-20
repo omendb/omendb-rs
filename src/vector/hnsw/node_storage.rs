@@ -990,6 +990,9 @@ impl NodeStorage {
     /// Construct storage from raw bytes (for loading)
     ///
     /// Takes ownership of the data vector.
+    ///
+    /// # Panics
+    /// Panics if parameters are inconsistent with data size.
     #[allow(clippy::too_many_arguments)]
     pub fn from_bytes(
         data: Vec<u8>,
@@ -1002,6 +1005,28 @@ impl NodeStorage {
         max_neighbors: usize,
     ) -> Self {
         use std::alloc::Layout;
+
+        // Validate parameters to prevent memory safety issues
+        let expected_size = len.checked_mul(node_size);
+        assert!(
+            expected_size.is_some() && expected_size.unwrap() <= data.len(),
+            "Invalid segment: len={} * node_size={} exceeds data.len()={}",
+            len,
+            node_size,
+            data.len()
+        );
+        assert!(
+            node_size == 0 || neighbors_offset < node_size,
+            "Invalid segment: neighbors_offset {} >= node_size {}",
+            neighbors_offset,
+            node_size
+        );
+        assert!(
+            node_size == 0 || vector_offset < node_size,
+            "Invalid segment: vector_offset {} >= node_size {}",
+            vector_offset,
+            node_size
+        );
 
         let capacity = if node_size > 0 && !data.is_empty() {
             data.len() / node_size

@@ -211,8 +211,13 @@ impl FrozenSegment {
         let max_neighbors =
             u32::from_le_bytes([header[24], header[25], header[26], header[27]]) as usize;
 
-        // Read storage data
-        let data_size = len * node_size;
+        // Read storage data (with overflow check)
+        let data_size = len.checked_mul(node_size).ok_or_else(|| {
+            HNSWError::Storage(format!(
+                "Segment data size overflow: len={} * node_size={}",
+                len, node_size
+            ))
+        })?;
         let mut data = vec![0u8; data_size];
         if data_size > 0 {
             reader.read_exact(&mut data)?;
