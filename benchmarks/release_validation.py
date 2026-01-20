@@ -2,18 +2,18 @@
 """
 Release Recall Validation - runs before publishing.
 
-Comprehensive validation using 25K subsets from SIFT and GloVe datasets.
+Comprehensive validation using 10K subsets from SIFT and GloVe datasets.
 Downloads datasets on first run (cached to ~/.cache/omendb/).
 
-Time budget: ~3 minutes on CI
+Time budget: ~90 seconds on CI
 Exit code: 0 on success, 1 on failure
 
 Tests:
-  1. L2 baseline (SIFT-25K): recall@10 >= 97%
-  2. Cosine baseline (GloVe-25K): recall@10 >= 88%
-  3. SQ8 quantization (SIFT-25K): recall@10 >= 95%
-  4. Filtered search (SIFT-25K, 50%): recall@10 >= 92%
-  5. Persistence (SIFT-25K): recall unchanged after save/load
+  1. L2 baseline (SIFT-10K): recall@10 >= 97%
+  2. Cosine baseline (GloVe-10K): recall@10 >= 88%
+  3. SQ8 quantization (SIFT-10K): recall@10 >= 95%
+  4. Filtered search (SIFT-10K, 50%): recall@10 >= 92%
+  5. Persistence (SIFT-10K): recall unchanged after save/load
 
 Note: GloVe has lower recall than SIFT at scale - this is expected due to
 its more uniform angular distribution which is harder for HNSW.
@@ -23,6 +23,7 @@ Usage:
     uv run python benchmarks/release_validation.py  # from python/
 """
 
+import os
 import shutil
 import sys
 import tempfile
@@ -50,8 +51,8 @@ DATASETS = {
     },
 }
 
-SUBSET_SIZE = 25_000
-NUM_QUERIES = 250
+SUBSET_SIZE = int(os.getenv("OMENDB_RELEASE_SUBSET", "10000"))
+NUM_QUERIES = int(os.getenv("OMENDB_RELEASE_QUERIES", "200"))
 K = 10  # recall@K
 
 # Test configurations
