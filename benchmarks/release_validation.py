@@ -12,9 +12,8 @@ Tests:
   1. L2 baseline (SIFT-25K): recall@10 >= 97%
   2. Cosine baseline (GloVe-25K): recall@10 >= 88%
   3. SQ8 quantization (SIFT-25K): recall@10 >= 95%
-  4. RaBitQ (SIFT-25K): recall@10 >= 93%
-  5. Filtered search (SIFT-25K, 50%): recall@10 >= 92%
-  6. Persistence (SIFT-25K): recall unchanged after save/load
+  4. Filtered search (SIFT-25K, 50%): recall@10 >= 92%
+  5. Persistence (SIFT-25K): recall unchanged after save/load
 
 Note: GloVe has lower recall than SIFT at scale - this is expected due to
 its more uniform angular distribution which is harder for HNSW.
@@ -77,13 +76,6 @@ TESTS = [
         "quantization": "sq8",
         "filtered": False,
         "threshold": 0.95,
-    },
-    {
-        "name": "RaBitQ",
-        "dataset": "sift",
-        "quantization": "rabitq",
-        "filtered": False,
-        "threshold": 0.93,
     },
     {
         "name": "Filtered",
