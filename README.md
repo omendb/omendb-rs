@@ -239,12 +239,13 @@ results = db.search(query, k=10, ef=300)
 
 ## Examples
 
-See [`python/examples/`](python/examples/) for complete working examples:
+See complete working examples:
 
-- `quickstart.py` - Minimal working example
-- `basic.py` - CRUD operations and persistence
-- `filters.py` - All filter operators
-- `rag.py` - RAG workflow with mock embeddings
+- [`python/examples/quickstart.py`](python/examples/quickstart.py) - Minimal Python example
+- [`python/examples/basic.py`](python/examples/basic.py) - CRUD operations and persistence
+- [`python/examples/filters.py`](python/examples/filters.py) - All filter operators
+- [`python/examples/rag.py`](python/examples/rag.py) - RAG workflow with mock embeddings
+- [`node/examples/quickstart.js`](node/examples/quickstart.js) - Minimal Node.js example
 
 ## Integrations
 

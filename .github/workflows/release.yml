@@ -216,6 +216,31 @@ jobs:
         working-directory: node
         run: npm test
 
+  examples:
+    needs: [verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run examples
+        run: ./scripts/verify-examples.sh
+
   # ============================================================================
   # STAGE 2: Build all artifacts (parallel, starts immediately after verify)
   # ============================================================================
@@ -363,6 +388,7 @@ jobs:
         validate,
         test-python,
         test-node,
+        examples,
         build-python-linux,
         build-python-macos,
         build-python-windows,
@@ -424,6 +450,7 @@ jobs:
         verify,
         validate,
         test-python,
+        examples,
         build-python-linux,
         build-python-macos,
         build-python-windows,
@@ -450,7 +477,7 @@ jobs:
           args: --non-interactive --skip-existing dist/*
 
   publish-npm:
-    needs: [verify, validate, test-node, build-node]
+    needs: [verify, validate, test-node, examples, build-node]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
