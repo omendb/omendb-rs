@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      pypi_published: ${{ steps.published.outputs.pypi_published }}
+      npm_published: ${{ steps.published.outputs.npm_published }}
     steps:
       - uses: actions/checkout@v4
 
@@ -85,23 +87,38 @@ jobs:
           echo "All 8 version locations match: $VERSION"
 
       - name: Check already published
+        id: published
         run: |
           VERSION=${{ steps.version.outputs.version }}
 
           PYPI_V=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.info.version' || echo "0.0.0")
           CRATES_V=$(curl -sf https://crates.io/api/v1/crates/omendb | jq -r '.versions[0].num' || echo "0.0.0")
+          NPM_V=$(curl -sf https://registry.npmjs.org/@omendb/omendb | jq -r '.["dist-tags"].latest' || echo "0.0.0")
 
           echo "Published versions:"
           echo "  PyPI:      $PYPI_V"
           echo "  crates.io: $CRATES_V"
+          echo "  npm:       $NPM_V"
           echo ""
 
+          PYPI_PUBLISHED=false
           if [ "$VERSION" = "$PYPI_V" ]; then
             echo "WARNING: Version $VERSION already published to PyPI"
+            PYPI_PUBLISHED=true
           fi
+
           if [ "$VERSION" = "$CRATES_V" ]; then
             echo "WARNING: Version $VERSION already published to crates.io"
           fi
+
+          NPM_PUBLISHED=false
+          if [ "$VERSION" = "$NPM_V" ]; then
+            echo "WARNING: Version $VERSION already published to npm"
+            NPM_PUBLISHED=true
+          fi
+
+          echo "pypi_published=$PYPI_PUBLISHED" >> $GITHUB_OUTPUT
+          echo "npm_published=$NPM_PUBLISHED" >> $GITHUB_OUTPUT
 
           echo "Proceeding with release"
 
@@ -252,16 +269,30 @@ jobs:
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check PyPI publish
+        id: pypi-skip
+        run: |
+          if [ "${{ needs.verify.outputs.pypi_published }}" = "true" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "PyPI already has version; skipping wheel build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.pypi-skip.outputs.skip != 'true'
         with:
           python-version: 3.x
       - name: Build wheels
+        if: steps.pypi-skip.outputs.skip != 'true'
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter -m python/Cargo.toml
           manylinux: auto
       - uses: actions/upload-artifact@v4
+        if: steps.pypi-skip.outputs.skip != 'true'
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
@@ -279,15 +310,29 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check PyPI publish
+        id: pypi-skip
+        run: |
+          if [ "${{ needs.verify.outputs.pypi_published }}" = "true" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "PyPI already has version; skipping wheel build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.pypi-skip.outputs.skip != 'true'
         with:
           python-version: 3.x
       - name: Build wheels
+        if: steps.pypi-skip.outputs.skip != 'true'
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter -m python/Cargo.toml
       - uses: actions/upload-artifact@v4
+        if: steps.pypi-skip.outputs.skip != 'true'
         with:
           name: wheels-macos-${{ matrix.target }}
           path: dist
@@ -297,14 +342,28 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check PyPI publish
+        id: pypi-skip
+        run: |
+          if [ "${{ needs.verify.outputs.pypi_published }}" = "true" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "PyPI already has version; skipping wheel build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.pypi-skip.outputs.skip != 'true'
         with:
           python-version: 3.x
       - name: Build wheels (experimental)
+        if: steps.pypi-skip.outputs.skip != 'true'
         uses: PyO3/maturin-action@v1
         with:
           args: --release --out dist --find-interpreter -m python/Cargo.toml
       - uses: actions/upload-artifact@v4
+        if: steps.pypi-skip.outputs.skip != 'true'
         with:
           name: wheels-windows-x64
           path: dist
@@ -314,12 +373,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check PyPI publish
+        id: pypi-skip
+        run: |
+          if [ "${{ needs.verify.outputs.pypi_published }}" = "true" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "PyPI already has version; skipping sdist build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build sdist
+        if: steps.pypi-skip.outputs.skip != 'true'
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist -m python/Cargo.toml
       - uses: actions/upload-artifact@v4
+        if: steps.pypi-skip.outputs.skip != 'true'
         with:
           name: wheels-sdist
           path: dist
@@ -357,19 +429,35 @@ jobs:
             build: npm run build -- --target x86_64-pc-windows-msvc --platform
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check npm publish
+        id: npm-skip
+        run: |
+          if [ "${{ needs.verify.outputs.npm_published }}" = "true" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "npm already has version; skipping node build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.npm-skip.outputs.skip != 'true'
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@master
+        if: steps.npm-skip.outputs.skip != 'true'
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - run: npm install
+        if: steps.npm-skip.outputs.skip != 'true'
         working-directory: node
       - run: ${{ matrix.build }}
+        if: steps.npm-skip.outputs.skip != 'true'
         shell: bash
         working-directory: node
       - uses: actions/upload-artifact@v4
+        if: steps.npm-skip.outputs.skip != 'true'
         with:
           name: node-${{ matrix.target }}
           path: node/*.node
@@ -481,7 +569,7 @@ jobs:
         build-python-sdist,
         build-node,
       ]
-    if: ${{ !inputs.dry-run }}
+    if: ${{ !inputs.dry-run && needs.verify.outputs.pypi_published != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -527,7 +615,7 @@ jobs:
         build-python-sdist,
         build-node,
       ]
-    if: ${{ !inputs.dry-run }}
+    if: ${{ !inputs.dry-run && needs.verify.outputs.npm_published != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -612,7 +700,12 @@ jobs:
   tag-release:
     needs:
       [verify, publish-crates, publish-crates-ffi, publish-pypi, publish-npm]
-    if: ${{ !inputs.dry-run }}
+    if: >
+      ${{ !inputs.dry-run &&
+          needs.publish-crates.result == 'success' &&
+          needs.publish-crates-ffi.result == 'success' &&
+          (needs.publish-pypi.result == 'success' || needs.publish-pypi.result == 'skipped') &&
+          (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
