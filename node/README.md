@@ -375,9 +375,9 @@ const merged = db.mergeFrom(otherDb);
 
 | Metric     | Value     |
 | ---------- | --------- |
-| Search QPS | 12,000+   |
-| Build      | 15K vec/s |
-| Recall@10  | 100%      |
+| Search QPS | 11,542    |
+| Build      | 30,826 vec/s |
+| Recall@10  | 89.7%     |
 
 ## License
 

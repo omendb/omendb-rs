@@ -157,6 +157,66 @@ jobs:
         timeout-minutes: 10
 
   # ============================================================================
+  # STAGE 1.75: Language test suites
+  # ============================================================================
+
+  test-python:
+    needs: [verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync
+
+      - name: Build
+        working-directory: python
+        run: uv run maturin develop --release
+
+      - name: Test
+        working-directory: python
+        run: uv run pytest tests/ -x
+
+  test-node:
+    needs: [verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Install dependencies
+        working-directory: node
+        run: npm install
+
+      - name: Build
+        working-directory: node
+        run: npm run build
+
+      - name: Test
+        working-directory: node
+        run: npm test
+
+  # ============================================================================
   # STAGE 2: Build all artifacts (parallel, starts immediately after verify)
   # ============================================================================
 
@@ -301,6 +361,8 @@ jobs:
       [
         verify,
         validate,
+        test-python,
+        test-node,
         build-python-linux,
         build-python-macos,
         build-python-windows,
@@ -361,6 +423,7 @@ jobs:
       [
         verify,
         validate,
+        test-python,
         build-python-linux,
         build-python-macos,
         build-python-windows,
@@ -387,7 +450,7 @@ jobs:
           args: --non-interactive --skip-existing dist/*
 
   publish-npm:
-    needs: [verify, validate, build-node]
+    needs: [verify, validate, test-node, build-node]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:

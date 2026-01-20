@@ -167,9 +167,9 @@ results = db.search_hybrid(query_vec, "query text", k=10, subscores=True)
 
 | Dimension | Single QPS | Batch QPS | Speedup |
 | --------- | ---------- | --------- | ------- |
-| 128D      | 12,000+    | 87,000+   | 7.2x    |
-| 768D      | 3,800+     | 20,500+   | 5.4x    |
-| 1536D     | 1,600+     | 6,200+    | 3.8x    |
+| 128D      | 11,542     | 82,015    | 7.1x    |
+| 768D      | 3,531      | 26,254    | 7.4x    |
+| 1536D     | 1,825      | 7,579     | 4.2x    |
 
 **SIFT-1M** (1M vectors, 128D, m=16, ef=100, k=10):
 
