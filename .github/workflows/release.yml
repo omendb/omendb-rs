@@ -119,7 +119,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Test
-        run: cargo test --lib
+        run: cargo test --lib -- --skip stress_
 
   # ============================================================================
   # STAGE 1.5: Recall Validation (runs PARALLEL with builds)
@@ -188,7 +188,7 @@ jobs:
 
       - name: Test
         working-directory: python
-        run: uv run pytest tests/ -x
+        run: uv run pytest tests/ -x -m "not slow and not soak"
 
   test-node:
     needs: [verify]

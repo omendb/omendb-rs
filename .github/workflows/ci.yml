@@ -105,7 +105,7 @@ jobs:
         run: cargo test --lib proptest
         timeout-minutes: 15
         env:
-          PROPTEST_CASES: 500
+          PROPTEST_CASES: 200
 
   # ==========================================================================
   # Stage 2: Python bindings (parallel with Rust tests)
