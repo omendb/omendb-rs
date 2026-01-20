@@ -521,7 +521,20 @@ jobs:
             echo "tag=" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check npm version
+        id: npm-skip
+        run: |
+          VERSION=${{ needs.verify.outputs.version }}
+          PUBLISHED=$(npm view @omendb/omendb version || echo "")
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Version $VERSION already published to npm; skipping npm publish."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Publish platform packages
+        if: steps.npm-skip.outputs.skip != 'true'
         run: |
           for dir in npm/*/; do
             echo "Publishing $dir"
@@ -530,10 +543,12 @@ jobs:
         working-directory: node
 
       - name: Publish @omendb/omendb
+        if: steps.npm-skip.outputs.skip != 'true'
         run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
         working-directory: node
 
       - name: Publish omendb wrapper
+        if: steps.npm-skip.outputs.skip != 'true'
         run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
         working-directory: node/wrapper
 
