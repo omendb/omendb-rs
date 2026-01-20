@@ -163,7 +163,7 @@ results = db.search_hybrid(query_vec, "query text", k=10, subscores=True)
 
 ## Performance
 
-**10K vectors, Apple M3 Max** (m=16, ef=100, k=10):
+**10K vectors, Apple M3 Max** (m=16, ef=100, k=10). Measured 2026-01-20:
 
 | Dimension | Single QPS | Batch QPS | Speedup |
 | --------- | ---------- | --------- | ------- |

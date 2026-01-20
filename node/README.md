@@ -371,7 +371,7 @@ const merged = db.mergeFrom(otherDb);
 
 ## Performance
 
-**10K vectors, 128D, M=16, ef=100:**
+**10K vectors, 128D, M=16, ef=100. Measured 2026-01-20 (Apple M3 Max):**
 
 | Metric     | Value     |
 | ---------- | --------- |
