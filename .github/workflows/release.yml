@@ -516,16 +516,18 @@ jobs:
         if: steps.crates-skip.outputs.skip != 'true'
         run: |
           set +e
-          cargo publish -p omendb --token ${{ steps.crates-io-auth.outputs.token }}
+          output=$(cargo publish -p omendb --token ${{ steps.crates-io-auth.outputs.token }} 2>&1)
           status=$?
           if [ "$status" -eq 0 ]; then
+            echo "$output"
             exit 0
           fi
-          VERSION=${{ needs.verify.outputs.version }}
-          if curl -sf "https://crates.io/api/v1/crates/omendb/$VERSION" > /dev/null 2>&1; then
-            echo "omendb $VERSION already exists on crates.io; treating as success."
+          if printf '%s' "$output" | grep -q "already exists on crates.io index"; then
+            echo "$output"
+            echo "omendb ${{ needs.verify.outputs.version }} already exists on crates.io; treating as success."
             exit 0
           fi
+          echo "$output"
           exit $status
 
   publish-crates-ffi:
@@ -573,16 +575,18 @@ jobs:
         working-directory: omendb-ffi
         run: |
           set +e
-          cargo publish --token ${{ steps.crates-io-auth.outputs.token }}
+          output=$(cargo publish --token ${{ steps.crates-io-auth.outputs.token }} 2>&1)
           status=$?
           if [ "$status" -eq 0 ]; then
+            echo "$output"
             exit 0
           fi
-          VERSION=${{ needs.verify.outputs.version }}
-          if curl -sf "https://crates.io/api/v1/crates/omendb-ffi/$VERSION" > /dev/null 2>&1; then
-            echo "omendb-ffi $VERSION already exists on crates.io; treating as success."
+          if printf '%s' "$output" | grep -q "already exists on crates.io index"; then
+            echo "$output"
+            echo "omendb-ffi ${{ needs.verify.outputs.version }} already exists on crates.io; treating as success."
             exit 0
           fi
+          echo "$output"
           exit $status
 
   publish-pypi:
