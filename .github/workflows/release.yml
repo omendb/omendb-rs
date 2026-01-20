@@ -474,7 +474,7 @@ jobs:
           args: --non-interactive --skip-existing dist/*
 
   publish-npm:
-    needs: [verify, validate, test-node, examples, build-node]
+    needs: [verify, validate, test-python, test-node, examples, build-node]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
