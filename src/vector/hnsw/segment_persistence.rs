@@ -214,8 +214,7 @@ impl FrozenSegment {
         // Read storage data (with overflow check)
         let data_size = len.checked_mul(node_size).ok_or_else(|| {
             HNSWError::Storage(format!(
-                "Segment data size overflow: len={} * node_size={}",
-                len, node_size
+                "Segment data size overflow: len={len} * node_size={node_size}"
             ))
         })?;
         let mut data = vec![0u8; data_size];

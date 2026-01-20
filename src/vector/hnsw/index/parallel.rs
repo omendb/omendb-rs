@@ -36,10 +36,6 @@ struct BuildBuffers {
     working: BinaryHeap<Candidate>,
     /// Results with distances
     results_with_dist: Vec<(u32, f32)>,
-    /// Selected neighbors
-    neighbors: Vec<u32>,
-    /// Remaining candidates in heuristic
-    remaining: Vec<u32>,
 }
 
 impl BuildBuffers {
@@ -49,18 +45,7 @@ impl BuildBuffers {
             candidates: BinaryHeap::new(),
             working: BinaryHeap::new(),
             results_with_dist: Vec::new(),
-            neighbors: Vec::new(),
-            remaining: Vec::new(),
         }
-    }
-
-    fn clear(&mut self) {
-        self.visited.clear();
-        self.candidates.clear();
-        self.working.clear();
-        self.results_with_dist.clear();
-        self.neighbors.clear();
-        self.remaining.clear();
     }
 }
 

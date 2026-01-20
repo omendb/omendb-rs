@@ -1017,15 +1017,11 @@ impl NodeStorage {
         );
         assert!(
             node_size == 0 || neighbors_offset < node_size,
-            "Invalid segment: neighbors_offset {} >= node_size {}",
-            neighbors_offset,
-            node_size
+            "Invalid segment: neighbors_offset {neighbors_offset} >= node_size {node_size}",
         );
         assert!(
             node_size == 0 || vector_offset < node_size,
-            "Invalid segment: vector_offset {} >= node_size {}",
-            vector_offset,
-            node_size
+            "Invalid segment: vector_offset {vector_offset} >= node_size {node_size}",
         );
 
         let capacity = if node_size > 0 && !data.is_empty() {

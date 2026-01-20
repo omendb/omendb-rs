@@ -477,8 +477,8 @@ impl SegmentManager {
     /// Returns true if:
     /// - Policy is enabled AND
     /// - (frozen segments >= max_segments OR
-    ///    (frozen segments >= min_segments AND
-    ///     (total frozen vectors >= min_vectors OR size ratio exceeded)))
+    ///   (frozen segments >= min_segments AND
+    ///   (total frozen vectors >= min_vectors OR size ratio exceeded)))
     pub fn should_merge(&self) -> bool {
         if !self.merge_policy.enabled {
             return false;
@@ -821,12 +821,12 @@ impl SegmentManager {
         // Load segment files
         let segment_ids: Vec<u64> = manifest["segment_ids"]
             .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .map(|arr| arr.iter().filter_map(serde_json::Value::as_u64).collect())
             .unwrap_or_default();
 
         let mut frozen = Vec::with_capacity(segment_ids.len());
         for seg_id in segment_ids {
-            let segment_path = dir.join(format!("segment_{}.bin", seg_id));
+            let segment_path = dir.join(format!("segment_{seg_id}.bin"));
             let segment = FrozenSegment::load(&segment_path)?;
             frozen.push(Arc::new(segment));
             debug!(segment_id = seg_id, "Loaded segment");
