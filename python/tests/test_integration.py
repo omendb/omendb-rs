@@ -265,12 +265,12 @@ class TestPerformance:
             avg_threshold = 6.0 if os.getenv("CI") else 5.0
             p99_threshold = 12.0 if os.getenv("CI") else 10.0
 
-            assert (
-                avg_latency < avg_threshold
-            ), f"Average latency {avg_latency:.2f}ms > {avg_threshold:.1f}ms"
-            assert (
-                p99_latency < p99_threshold
-            ), f"P99 latency {p99_latency:.2f}ms > {p99_threshold:.1f}ms"
+            assert avg_latency < avg_threshold, (
+                f"Average latency {avg_latency:.2f}ms > {avg_threshold:.1f}ms"
+            )
+            assert p99_latency < p99_threshold, (
+                f"P99 latency {p99_latency:.2f}ms > {p99_threshold:.1f}ms"
+            )
 
     @pytest.mark.slow
     def test_search_batch_performance(self):
