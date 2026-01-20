@@ -8,7 +8,7 @@ dynamic = ["version"]
 readme = "README.md"
 description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
 authors = [{ name = "OmenDB Team" }]
-license = { text = "Elastic-2.0" }
+license = { text = "PolyForm-Shield-1.0.0" }
 requires-python = ">=3.9"
 classifiers = [
     "Development Status :: 3 - Alpha",
