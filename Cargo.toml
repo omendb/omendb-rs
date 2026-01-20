@@ -11,7 +11,6 @@ authors = ["OmenDB Team"]
 description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
 repository = "https://github.com/omendb/omendb"
 license-file = "LICENSE"
-license = "LicenseRef-PolyForm-Shield-1.0.0"
 keywords = ["vector-database", "embedded", "ai", "hnsw", "acorn"]
 categories = ["database", "embedded"]
 readme = "README.md"

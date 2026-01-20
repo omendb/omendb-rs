@@ -381,4 +381,4 @@ const merged = db.mergeFrom(otherDb);
 
 ## License
 
-[PolyForm Shield 1.0.0](../LICENSE)
+[Elastic License 2.0](../LICENSE)

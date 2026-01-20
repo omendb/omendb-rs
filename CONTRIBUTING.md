@@ -59,4 +59,4 @@ Open an issue with:
 
 ## License
 
-OmenDB is licensed under [PolyForm Shield 1.0.0](LICENSE). By contributing, you agree that your contributions will be licensed under the project's CLA terms.
+OmenDB is licensed under [Elastic License 2.0](LICENSE). By contributing, you agree that your contributions will be licensed under the project's CLA terms.

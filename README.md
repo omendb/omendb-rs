@@ -1,7 +1,7 @@
 # OmenDB
 
 [![PyPI](https://img.shields.io/pypi/v/omendb)](https://pypi.org/project/omendb/)
-[![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-blue.svg)](https://github.com/omendb/omendb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-Elastic_2.0-blue.svg)](https://github.com/omendb/omendb/blob/main/LICENSE)
 
 Embedded vector database for Python and Node.js. No server, no setup, just install.
 
@@ -287,4 +287,4 @@ response = index.as_query_engine().query("What is OmenDB?")
 
 ## License
 
-[PolyForm Shield 1.0.0](LICENSE) - See LICENSE for terms.
+[Elastic License 2.0](LICENSE) - Free to use, modify, and embed. The only restriction: you can't offer OmenDB as a managed service to third parties.
