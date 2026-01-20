@@ -567,12 +567,30 @@ jobs:
         working-directory: node/wrapper
 
   # ============================================================================
-  # STAGE 4: Create git tag and GitHub release
+  # ============================================================================
+  # STAGE 4: Tag and release
   # ============================================================================
 
-  create-release:
+  tag-release:
     needs:
       [verify, publish-crates, publish-crates-ffi, publish-pypi, publish-npm]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create git tag
+        run: |
+          VERSION="v${{ needs.verify.outputs.version }}"
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists"
+            exit 0
+          fi
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "$VERSION"
+
+  create-release:
+    needs: [verify, tag-release]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     steps:
@@ -584,7 +602,4 @@ jobs:
         run: |
           VERSION="v${{ needs.verify.outputs.version }}"
           echo "Creating release $VERSION"
-          gh release create "$VERSION" \
-            --title "$VERSION" \
-            --generate-notes \
-            --latest
+          gh release create "$VERSION"             --title "$VERSION"             --generate-notes             --latest
