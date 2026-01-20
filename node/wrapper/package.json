@@ -18,7 +18,7 @@
     "machine-learning"
   ],
   "author": "Nick Jaru",
-  "license": "AGPL-3.0",
+  "license": "SEE LICENSE IN LICENSE",
   "engines": {
     "node": ">= 18"
   },
