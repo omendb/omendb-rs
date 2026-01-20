@@ -28,4 +28,4 @@ for r in results:
 
 # Output:
 # doc1: First doc (distance: 0.0000)
-# doc3: Third doc (distance: 0.0320)
+# doc3: Third doc (distance: 0.5657)
