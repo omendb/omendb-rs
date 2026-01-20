@@ -515,8 +515,10 @@ jobs:
       - name: Publish omendb to crates.io
         if: steps.crates-skip.outputs.skip != 'true'
         run: |
-          set -e
-          if cargo publish -p omendb --token ${{ steps.crates-io-auth.outputs.token }}; then
+          set +e
+          cargo publish -p omendb --token ${{ steps.crates-io-auth.outputs.token }}
+          status=$?
+          if [ "$status" -eq 0 ]; then
             exit 0
           fi
           VERSION=${{ needs.verify.outputs.version }}
@@ -524,7 +526,7 @@ jobs:
             echo "omendb $VERSION already exists on crates.io; treating as success."
             exit 0
           fi
-          exit 1
+          exit $status
 
   publish-crates-ffi:
     needs: [verify, publish-crates]
@@ -570,8 +572,10 @@ jobs:
         if: steps.ffi-skip.outputs.skip != 'true'
         working-directory: omendb-ffi
         run: |
-          set -e
-          if cargo publish --token ${{ steps.crates-io-auth.outputs.token }}; then
+          set +e
+          cargo publish --token ${{ steps.crates-io-auth.outputs.token }}
+          status=$?
+          if [ "$status" -eq 0 ]; then
             exit 0
           fi
           VERSION=${{ needs.verify.outputs.version }}
@@ -579,7 +583,7 @@ jobs:
             echo "omendb-ffi $VERSION already exists on crates.io; treating as success."
             exit 0
           fi
-          exit 1
+          exit $status
 
   publish-pypi:
     needs:
