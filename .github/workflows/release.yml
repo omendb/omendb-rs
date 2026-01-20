@@ -432,23 +432,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - name: Wait for crates.io index
-        run: |
-          VERSION=${{ needs.verify.outputs.version }}
-          echo "Waiting for omendb $VERSION to appear in crates.io index..."
-          for i in {1..30}; do
-            if curl -sf "https://crates.io/api/v1/crates/omendb/$VERSION" > /dev/null 2>&1; then
-              echo "omendb $VERSION found in index"
-              exit 0
-            fi
-            echo "Attempt $i/30 - waiting 10s..."
-            sleep 10
-          done
-          echo "Timeout waiting for crates.io index"
-          exit 1
-      - name: Get crates.io token via OIDC
-        uses: rust-lang/crates-io-auth-action@v1
-        id: crates-io-auth
       - name: Check omendb-ffi version
         id: ffi-skip
         run: |
@@ -460,7 +443,25 @@ jobs:
           else
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
-
+      - name: Wait for crates.io index
+        if: steps.ffi-skip.outputs.skip != 'true'
+        run: |
+          VERSION=${{ needs.verify.outputs.version }}
+          echo "Waiting for omendb $VERSION to appear in crates.io index..."
+          for i in {1..60}; do
+            if curl -sf "https://crates.io/api/v1/crates/omendb/$VERSION" > /dev/null 2>&1; then
+              echo "omendb $VERSION found in index"
+              exit 0
+            fi
+            echo "Attempt $i/60 - waiting 10s..."
+            sleep 10
+          done
+          echo "Timeout waiting for crates.io index"
+          exit 1
+      - name: Get crates.io token via OIDC
+        if: steps.ffi-skip.outputs.skip != 'true'
+        uses: rust-lang/crates-io-auth-action@v1
+        id: crates-io-auth
       - name: Publish omendb-ffi to crates.io
         if: steps.ffi-skip.outputs.skip != 'true'
         working-directory: omendb-ffi
