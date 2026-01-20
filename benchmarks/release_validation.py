@@ -2,8 +2,8 @@
 """
 Release Recall Validation - runs before publishing.
 
-Comprehensive validation using 10K subsets from SIFT and GloVe datasets.
-Downloads datasets on first run (cached to ~/.cache/omendb/).
+Validation using 10K SIFT/GloVe subsets in benchmarks/data with precomputed
+ground truth to keep CI fast and deterministic.
 
 Time budget: ~90 seconds on CI
 Exit code: 0 on success, 1 on failure
@@ -24,34 +24,28 @@ Usage:
 """
 
 import os
-import shutil
 import sys
 import tempfile
 import time
-import urllib.request
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 import omendb
 
-CACHE_DIR = Path.home() / ".cache" / "omendb"
+DATA_DIR = Path(__file__).parent / "data"
 
 DATASETS = {
     "sift": {
-        "url": "http://ann-benchmarks.com/sift-128-euclidean.hdf5",
-        "file": "sift-128-euclidean.hdf5",
+        "file": "sift-10k.npz",
         "metric": "l2",
     },
     "glove": {
-        "url": "http://ann-benchmarks.com/glove-100-angular.hdf5",
-        "file": "glove-100-angular.hdf5",
+        "file": "glove-10k.npz",
         "metric": "cosine",
     },
 }
 
-SUBSET_SIZE = int(os.getenv("OMENDB_RELEASE_SUBSET", "10000"))
 NUM_QUERIES = int(os.getenv("OMENDB_RELEASE_QUERIES", "200"))
 K = 10  # recall@K
 
@@ -88,90 +82,21 @@ TESTS = [
 ]
 
 
-def download_dataset(name: str) -> Path:
-    """Download dataset if not already cached."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    config = DATASETS[name]
-    path = CACHE_DIR / config["file"]
-
-    if path.exists():
-        print(f"  Using cached: {path}")
-        return path
-
-    url = config["url"]
-    print(f"  Downloading {name} from {url}...")
-    urllib.request.urlretrieve(url, path)
-    print(f"  Saved to {path}")
-    return path
-
-
-def compute_ground_truth_l2(
-    vectors: np.ndarray, queries: np.ndarray, k: int
-) -> np.ndarray:
-    """Compute brute-force L2 KNN ground truth using argpartition (O(n) vs O(n log n))."""
-    gt = np.zeros((len(queries), k), dtype=np.int32)
-    for i, q in enumerate(queries):
-        distances = np.sum((vectors - q) ** 2, axis=1)  # Squared L2, skip sqrt
-        # argpartition is O(n), finds k smallest without full sort
-        top_k_unsorted = np.argpartition(distances, k)[:k]
-        # Sort only the k candidates
-        gt[i] = top_k_unsorted[np.argsort(distances[top_k_unsorted])]
-    return gt
-
-
-def compute_ground_truth_cosine(
-    vectors: np.ndarray, queries: np.ndarray, k: int
-) -> np.ndarray:
-    """Compute brute-force cosine KNN ground truth using argpartition (O(n) vs O(n log n))."""
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1, norms)
-    vectors_norm = vectors / norms
-
-    gt = np.zeros((len(queries), k), dtype=np.int32)
-    for i, q in enumerate(queries):
-        q_norm = q / np.linalg.norm(q) if np.linalg.norm(q) > 0 else q
-        similarities = vectors_norm @ q_norm
-        # argpartition on negated similarities for top-k largest
-        top_k_unsorted = np.argpartition(-similarities, k)[:k]
-        gt[i] = top_k_unsorted[np.argsort(-similarities[top_k_unsorted])]
-    return gt
-
-
 def load_subset(name: str) -> dict:
-    """Load and prepare dataset subset with ground truth."""
-    path = download_dataset(name)
+    """Load dataset subset with precomputed ground truth."""
     config = DATASETS[name]
+    path = DATA_DIR / config["file"]
+    if not path.exists():
+        print(f"ERROR: Dataset not found: {path}")
+        print("Run benchmarks/create_subsets.py to generate the data files.")
+        sys.exit(1)
 
-    with h5py.File(path, "r") as f:
-        train = np.array(f["train"])
-        test = np.array(f["test"])
-
-    # Take subset
-    vectors = train[:SUBSET_SIZE].astype(np.float32)
-    queries = test[:NUM_QUERIES].astype(np.float32)
-
-    print(f"  Computing ground truth for {len(vectors):,} vectors...")
-
-    # Compute ground truth
-    if config["metric"] == "l2":
-        ground_truth = compute_ground_truth_l2(vectors, queries, K)
-    else:
-        ground_truth = compute_ground_truth_cosine(vectors, queries, K)
-
-    # Synthetic metadata for filtered search
-    metadata = (np.arange(len(vectors)) % 10).astype(np.int32)
-
-    # Filtered ground truth
-    mask = metadata < 5
-    filtered_indices = np.where(mask)[0]
-    filtered_vectors = vectors[mask]
-
-    if config["metric"] == "l2":
-        filtered_gt_local = compute_ground_truth_l2(filtered_vectors, queries, K)
-    else:
-        filtered_gt_local = compute_ground_truth_cosine(filtered_vectors, queries, K)
-
-    filtered_ground_truth = filtered_indices[filtered_gt_local]
+    data = np.load(path)
+    vectors = data["vectors"].astype(np.float32)
+    queries = data["queries"][:NUM_QUERIES].astype(np.float32)
+    ground_truth = data["ground_truth"][:NUM_QUERIES]
+    metadata = data["metadata"]
+    filtered_ground_truth = data["filtered_ground_truth"][:NUM_QUERIES]
 
     return {
         "vectors": vectors,
@@ -293,9 +218,8 @@ def run_persistence_test(datasets: dict) -> tuple[bool, float, float]:
         qps = len(queries) / elapsed
         mean_recall = np.mean(recalls)
 
-        # Clean up
         del db
-        shutil.rmtree(db_path, ignore_errors=True)
+        del db_path
 
     passed = mean_recall >= threshold
     return passed, mean_recall, qps
@@ -393,9 +317,8 @@ def main():
     if all_passed:
         print("All tests PASSED")
         return 0
-    else:
-        print("Some tests FAILED")
-        return 1
+    print("Some tests FAILED")
+    return 1
 
 
 if __name__ == "__main__":
