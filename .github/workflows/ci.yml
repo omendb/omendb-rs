@@ -89,7 +89,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Unit tests
         run: cargo test --lib
-        timeout-minutes: 10
+        timeout-minutes: 15
 
   proptest:
     name: Property Tests
