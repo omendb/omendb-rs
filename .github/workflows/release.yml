@@ -84,7 +84,7 @@ jobs:
           echo ""
           echo "All 8 version locations match: $VERSION"
 
-      - name: Check not already published
+      - name: Check already published
         run: |
           VERSION=${{ steps.version.outputs.version }}
 
@@ -97,15 +97,13 @@ jobs:
           echo ""
 
           if [ "$VERSION" = "$PYPI_V" ]; then
-            echo "ERROR: Version $VERSION already published to PyPI"
-            exit 1
+            echo "WARNING: Version $VERSION already published to PyPI"
           fi
           if [ "$VERSION" = "$CRATES_V" ]; then
-            echo "ERROR: Version $VERSION already published to crates.io"
-            exit 1
+            echo "WARNING: Version $VERSION already published to crates.io"
           fi
 
-          echo "Version $VERSION is new - proceeding with release"
+          echo "Proceeding with release"
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -407,7 +405,20 @@ jobs:
       - name: Get crates.io token via OIDC
         uses: rust-lang/crates-io-auth-action@v1
         id: crates-io-auth
+      - name: Check crates.io version
+        id: crates-skip
+        run: |
+          VERSION=${{ needs.verify.outputs.version }}
+          PUBLISHED=$(curl -sf https://crates.io/api/v1/crates/omendb | jq -r '.versions[0].num' || echo "")
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Version $VERSION already published to crates.io; skipping crates publish."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Publish omendb to crates.io
+        if: steps.crates-skip.outputs.skip != 'true'
         run: cargo publish -p omendb --token ${{ steps.crates-io-auth.outputs.token }}
 
   publish-crates-ffi:
@@ -438,7 +449,20 @@ jobs:
       - name: Get crates.io token via OIDC
         uses: rust-lang/crates-io-auth-action@v1
         id: crates-io-auth
+      - name: Check omendb-ffi version
+        id: ffi-skip
+        run: |
+          VERSION=${{ needs.verify.outputs.version }}
+          PUBLISHED=$(curl -sf https://crates.io/api/v1/crates/omendb-ffi | jq -r '.versions[0].num' || echo "")
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Version $VERSION already published to crates.io (omendb-ffi); skipping publish."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Publish omendb-ffi to crates.io
+        if: steps.ffi-skip.outputs.skip != 'true'
         working-directory: omendb-ffi
         run: cargo publish --token ${{ steps.crates-io-auth.outputs.token }}
 
@@ -469,7 +493,20 @@ jobs:
           merge-multiple: true
       - name: List wheels
         run: ls -la dist/
+      - name: Check PyPI version
+        id: pypi-skip
+        run: |
+          VERSION=${{ needs.verify.outputs.version }}
+          PUBLISHED=$(curl -sf https://pypi.org/pypi/omendb/json | jq -r '.info.version' || echo "")
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Version $VERSION already published to PyPI; skipping publish."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Publish to PyPI
+        if: steps.pypi-skip.outputs.skip != 'true'
         uses: PyO3/maturin-action@v1
         with:
           command: upload
