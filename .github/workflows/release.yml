@@ -341,6 +341,9 @@ jobs:
   build-python-windows:
     needs: [verify]
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -400,6 +403,9 @@ jobs:
   build-node:
     needs: [verify]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: true
       matrix:
