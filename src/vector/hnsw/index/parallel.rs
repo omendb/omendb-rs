@@ -26,10 +26,48 @@ use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use tracing::{debug, info};
 
+/// Reusable buffers for parallel build operations
+struct BuildBuffers {
+    /// Visited nodes during search
+    visited: VisitedList,
+    /// Candidate queue (min-heap)
+    candidates: BinaryHeap<std::cmp::Reverse<Candidate>>,
+    /// Working set (max-heap)
+    working: BinaryHeap<Candidate>,
+    /// Results with distances
+    results_with_dist: Vec<(u32, f32)>,
+    /// Selected neighbors
+    neighbors: Vec<u32>,
+    /// Remaining candidates in heuristic
+    remaining: Vec<u32>,
+}
+
+impl BuildBuffers {
+    fn new() -> Self {
+        Self {
+            visited: VisitedList::new(),
+            candidates: BinaryHeap::new(),
+            working: BinaryHeap::new(),
+            results_with_dist: Vec::new(),
+            neighbors: Vec::new(),
+            remaining: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.visited.clear();
+        self.candidates.clear();
+        self.working.clear();
+        self.results_with_dist.clear();
+        self.neighbors.clear();
+        self.remaining.clear();
+    }
+}
+
 thread_local! {
-    /// Thread-local visited list for parallel construction
-    /// Avoids HashSet allocation per search, uses O(1) clear via generation counter
-    static PARALLEL_VISITED: RefCell<VisitedList> = RefCell::new(VisitedList::new());
+    /// Thread-local build buffers for parallel construction
+    /// Avoids allocations per insert, uses O(1) clear via generation counter
+    static BUILD_BUFFERS: RefCell<BuildBuffers> = RefCell::new(BuildBuffers::new());
 }
 
 /// Parallel HNSW builder
@@ -269,14 +307,15 @@ impl ParallelBuilder {
         // Search for nearest neighbors
         let mut nearest = vec![entry_point];
 
-        // Descend from top level to target level
+        // Descend from top level to target level (just need IDs here)
         for lc in ((level + 1)..=entry_level).rev() {
             nearest = self.search_layer(vector, &nearest, 1, lc, use_ready_filter);
         }
 
         // Insert at each level from target down to 0
         for lc in (0..=level).rev() {
-            let candidates = self.search_layer(
+            // Use distance-aware search to avoid recomputing in heuristic
+            let candidates_with_distances = self.search_layer_with_distances(
                 vector,
                 &nearest,
                 self.params.ef_construction,
@@ -285,61 +324,69 @@ impl ParallelBuilder {
             );
 
             let m = self.params.m_for_level(lc);
-            let neighbors = self.select_neighbors_heuristic(&candidates, m, vector);
+            // Use pre-computed distances
+            let neighbors =
+                self.select_neighbors_heuristic_with_distances(&candidates_with_distances, m);
 
             self.connect_with_locks(node_id, &neighbors, lc);
 
-            nearest = candidates;
+            // Extract IDs for next level
+            nearest = candidates_with_distances
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
         }
 
         Ok(())
     }
 
-    /// Search layer with optional ready filter
+    /// Search layer with optional ready filter, returning (node_id, distance) pairs
     ///
     /// Uses lock-free distance computation (vectors are cached).
     /// Only neighbor list reads require synchronization.
-    /// Uses thread-local VisitedList for O(1) clear between searches.
-    fn search_layer(
+    /// Uses thread-local buffers to avoid per-search allocations.
+    /// Returns distances to avoid recomputation in select_neighbors_heuristic.
+    fn search_layer_with_distances(
         &self,
         query: &[f32],
         entry_points: &[u32],
         ef: usize,
         level: u8,
         use_ready_filter: bool,
-    ) -> Vec<u32> {
+    ) -> Vec<(u32, f32)> {
         use std::cmp::Reverse;
 
-        PARALLEL_VISITED.with(|visited_cell| {
-            let mut visited = visited_cell.borrow_mut();
-            visited.clear(); // O(1) via generation counter
-
-            let mut candidates: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
-            let mut working: BinaryHeap<Candidate> = BinaryHeap::new();
+        BUILD_BUFFERS.with(|buffers_cell| {
+            let mut buffers = buffers_cell.borrow_mut();
+            // Clear but keep capacity
+            buffers.visited.clear();
+            buffers.candidates.clear();
+            buffers.working.clear();
+            buffers.results_with_dist.clear();
 
             // Initialize with entry points
             for &ep in entry_points {
                 if use_ready_filter && !self.ready_bitmap.is_ready(ep as usize) {
                     continue;
                 }
-                if visited.contains(ep) {
+                if buffers.visited.contains(ep) {
                     continue;
                 }
-                visited.insert(ep);
+                buffers.visited.insert(ep);
 
                 let dist = self.distance_cmp(query, ep);
                 let candidate = Candidate::new(ep, dist);
-                candidates.push(Reverse(candidate));
-                working.push(candidate);
+                buffers.candidates.push(Reverse(candidate));
+                buffers.working.push(candidate);
             }
 
-            if candidates.is_empty() {
+            if buffers.candidates.is_empty() {
                 return Vec::new();
             }
 
             // Greedy search
-            while let Some(Reverse(current)) = candidates.pop() {
-                if let Some(&farthest) = working.peek() {
+            while let Some(Reverse(current)) = buffers.candidates.pop() {
+                if let Some(&farthest) = buffers.working.peek() {
                     if current.distance > farthest.distance {
                         break;
                     }
@@ -353,10 +400,10 @@ impl ParallelBuilder {
                 };
 
                 for neighbor_id in neighbors {
-                    if visited.contains(neighbor_id) {
+                    if buffers.visited.contains(neighbor_id) {
                         continue;
                     }
-                    visited.insert(neighbor_id);
+                    buffers.visited.insert(neighbor_id);
 
                     if use_ready_filter && !self.ready_bitmap.is_ready(neighbor_id as usize) {
                         continue;
@@ -365,26 +412,52 @@ impl ParallelBuilder {
                     let dist = self.distance_cmp(query, neighbor_id);
                     let neighbor = Candidate::new(neighbor_id, dist);
 
-                    if let Some(&farthest) = working.peek() {
-                        if neighbor.distance < farthest.distance || working.len() < ef {
-                            candidates.push(Reverse(neighbor));
-                            working.push(neighbor);
-                            if working.len() > ef {
-                                working.pop();
+                    if let Some(&farthest) = buffers.working.peek() {
+                        if neighbor.distance < farthest.distance || buffers.working.len() < ef {
+                            buffers.candidates.push(Reverse(neighbor));
+                            buffers.working.push(neighbor);
+                            if buffers.working.len() > ef {
+                                buffers.working.pop();
                             }
                         }
                     } else {
-                        candidates.push(Reverse(neighbor));
-                        working.push(neighbor);
+                        buffers.candidates.push(Reverse(neighbor));
+                        buffers.working.push(neighbor);
                     }
                 }
             }
 
-            // Return sorted by distance
-            let mut results: Vec<_> = working.into_vec();
-            results.sort_unstable_by_key(|c| c.distance);
-            results.into_iter().map(|c| c.node_id).collect()
+            // Collect results sorted by distance
+            let working_len = buffers.working.len();
+            buffers.results_with_dist.clear();
+            buffers.results_with_dist.reserve(working_len);
+            while let Some(c) = buffers.working.pop() {
+                buffers
+                    .results_with_dist
+                    .push((c.node_id, c.distance.into_inner()));
+            }
+            buffers
+                .results_with_dist
+                .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+            // Return a clone (buffer stays for next use)
+            buffers.results_with_dist.clone()
         })
+    }
+
+    /// Search layer returning only node IDs (for upper level traversal)
+    fn search_layer(
+        &self,
+        query: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+        use_ready_filter: bool,
+    ) -> Vec<u32> {
+        self.search_layer_with_distances(query, entry_points, ef, level, use_ready_filter)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
     }
 
     /// Connect node to neighbors with fine-grained locking
@@ -436,7 +509,62 @@ impl ParallelBuilder {
         }
     }
 
-    /// Select neighbors using diversity heuristic
+    /// Select neighbors using diversity heuristic (with pre-computed distances)
+    ///
+    /// Accepts candidates with distances already computed from search phase
+    /// to avoid recomputing them.
+    fn select_neighbors_heuristic_with_distances(
+        &self,
+        candidates_with_distances: &[(u32, f32)],
+        m: usize,
+    ) -> Vec<u32> {
+        if candidates_with_distances.len() <= m {
+            return candidates_with_distances
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
+        }
+
+        // Already sorted by distance from search_layer_with_distances
+        let mut result = Vec::with_capacity(m);
+        let mut remaining = Vec::new();
+
+        for &(candidate_id, candidate_dist) in candidates_with_distances {
+            if result.len() >= m {
+                remaining.push(candidate_id);
+                continue;
+            }
+
+            let mut good = true;
+            for &result_id in &result {
+                let dist_to_result = self.distance_between_cmp(candidate_id, result_id);
+                if dist_to_result < candidate_dist {
+                    good = false;
+                    break;
+                }
+            }
+
+            if good {
+                result.push(candidate_id);
+            } else {
+                remaining.push(candidate_id);
+            }
+        }
+
+        // Fill remaining slots
+        for id in remaining {
+            if result.len() >= m {
+                break;
+            }
+            result.push(id);
+        }
+
+        result
+    }
+
+    /// Select neighbors using diversity heuristic (computes distances)
+    ///
+    /// Used for pruning reverse links where we don't have pre-computed distances.
     fn select_neighbors_heuristic(
         &self,
         candidates: &[u32],
@@ -454,40 +582,8 @@ impl ParallelBuilder {
             .collect();
         sorted.sort_unstable_by_key(|c| OrderedFloat(c.1));
 
-        let mut result = Vec::with_capacity(m);
-        let mut remaining = Vec::new();
-
-        for (candidate_id, candidate_dist) in &sorted {
-            if result.len() >= m {
-                remaining.push(*candidate_id);
-                continue;
-            }
-
-            let mut good = true;
-            for &result_id in &result {
-                let dist_to_result = self.distance_between_cmp(*candidate_id, result_id);
-                if dist_to_result < *candidate_dist {
-                    good = false;
-                    break;
-                }
-            }
-
-            if good {
-                result.push(*candidate_id);
-            } else {
-                remaining.push(*candidate_id);
-            }
-        }
-
-        // Fill remaining slots
-        for id in remaining {
-            if result.len() >= m {
-                break;
-            }
-            result.push(id);
-        }
-
-        result
+        // Delegate to the distance-aware version
+        self.select_neighbors_heuristic_with_distances(&sorted, m)
     }
 
     /// Update entry point if new node has higher level

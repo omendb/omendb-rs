@@ -830,4 +830,163 @@ impl HNSWIndex {
             self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
         })
     }
+
+    /// Search layer returning (node_id, distance) pairs
+    ///
+    /// Used during graph construction to avoid recomputing distances in select_neighbors_heuristic.
+    /// Returns candidates sorted by distance (closest first).
+    pub(super) fn search_layer_with_distances(
+        &self,
+        query: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+    ) -> Result<Vec<(u32, f32)>> {
+        dispatch_distance!(self.distance_fn, D => {
+            let ctx = DistanceContext::new(query, self, true);
+            let collector = StandardCollector {
+                storage: &self.storage,
+            };
+
+            self.search_layer_internal_with_distances::<D, _>(entry_points, &ctx, &collector, ef, level)
+        })
+    }
+
+    /// Internal search returning (node_id, distance) pairs instead of just IDs
+    #[inline(always)]
+    fn search_layer_internal_with_distances<D, C>(
+        &self,
+        entry_points: &[u32],
+        ctx: &DistanceContext,
+        collector: &C,
+        ef: usize,
+        level: u8,
+    ) -> Result<Vec<(u32, f32)>>
+    where
+        D: Distance,
+        C: NeighborCollector,
+    {
+        use super::super::query_buffers;
+        use std::cmp::Reverse;
+
+        query_buffers::with_buffers(|buffers| {
+            let visited = &mut buffers.visited;
+            let candidates = &mut buffers.candidates;
+            let working = &mut buffers.working;
+            let unvisited = &mut buffers.unvisited;
+            let results_buf = &mut buffers.results;
+            let batch_distances = &mut buffers.batch_distances;
+
+            // Prepare entry points
+            collector.prepare_entry_points(entry_points, level, visited, unvisited);
+            for &ep in unvisited.iter() {
+                let dist = ctx.compute::<D>(ep)?;
+                let candidate = Candidate::new(ep, dist);
+                candidates.push(Reverse(candidate));
+                working.push(candidate);
+            }
+
+            if candidates.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let use_batch = ctx.has_batch();
+
+            // Greedy search (same as search_layer_internal)
+            while let Some(Reverse(current)) = candidates.pop() {
+                if let Some(&farthest) = working.peek() {
+                    if current.distance > farthest.distance {
+                        break;
+                    }
+                }
+
+                collector.collect(current.node_id, level, visited, unvisited);
+                let neighbors_slice = unvisited.as_slice();
+                let num_neighbors = neighbors_slice.len();
+
+                if num_neighbors == 0 {
+                    continue;
+                }
+
+                if use_batch && num_neighbors > 1 {
+                    if batch_distances.len() < num_neighbors {
+                        batch_distances.resize(num_neighbors, 0.0);
+                    }
+
+                    let computed = ctx.compute_batch(neighbors_slice, batch_distances);
+                    debug_assert_eq!(computed, num_neighbors, "batch distance count mismatch");
+
+                    for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
+                        if visited.contains(neighbor_id) {
+                            continue;
+                        }
+                        visited.insert(neighbor_id);
+
+                        let dist = batch_distances[i];
+                        let neighbor = Candidate::new(neighbor_id, dist);
+
+                        if let Some(&farthest) = working.peek() {
+                            if neighbor.distance < farthest.distance || working.len() < ef {
+                                candidates.push(Reverse(neighbor));
+                                working.push(neighbor);
+                                if working.len() > ef {
+                                    working.pop();
+                                }
+                            }
+                        } else {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+                        }
+                    }
+                } else {
+                    use crate::vector::hnsw::prefetch::PrefetchConfig;
+                    const PREFETCH_ENABLED: bool = PrefetchConfig::enabled();
+                    const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
+
+                    if PREFETCH_ENABLED {
+                        for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
+                            self.storage.prefetch(id);
+                        }
+                    }
+
+                    for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
+                        if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < num_neighbors {
+                            let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
+                            self.storage.prefetch(prefetch_id);
+                        }
+
+                        if visited.contains(neighbor_id) {
+                            continue;
+                        }
+                        visited.insert(neighbor_id);
+
+                        let dist = ctx.compute::<D>(neighbor_id)?;
+                        let neighbor = Candidate::new(neighbor_id, dist);
+
+                        if let Some(&farthest) = working.peek() {
+                            if neighbor.distance < farthest.distance || working.len() < ef {
+                                candidates.push(Reverse(neighbor));
+                                working.push(neighbor);
+                                if working.len() > ef {
+                                    working.pop();
+                                }
+                            }
+                        } else {
+                            candidates.push(Reverse(neighbor));
+                            working.push(neighbor);
+                        }
+                    }
+                }
+            }
+
+            // Return (node_id, distance) pairs sorted by distance
+            results_buf.extend(working.drain());
+            results_buf.sort_unstable_by_key(|c| c.distance);
+            let output: Vec<(u32, f32)> = results_buf
+                .iter()
+                .map(|c| (c.node_id, c.distance.into_inner()))
+                .collect();
+            Ok(output)
+        })
+    }
 }

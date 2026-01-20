@@ -216,17 +216,22 @@ impl HNSWIndex {
         // Use full precision distances during graph construction for better quality
         for lc in (0..=level).rev() {
             // Find ef nearest neighbors at this level using reduced ef
-            let candidates = self.search_layer_full_precision(vector, &nearest, ef, lc)?;
+            // Use distance-aware search to avoid recomputing in heuristic
+            let candidates_with_distances =
+                self.search_layer_with_distances(vector, &nearest, ef, lc)?;
 
-            // Select M best neighbors using heuristic
+            // Select M best neighbors using heuristic (distances already computed)
             let m = self.params.m_for_level(lc);
-
-            let neighbors = self.select_neighbors_heuristic(node_id, &candidates, m, lc, vector)?;
+            let neighbors =
+                self.select_neighbors_heuristic_with_distances(&candidates_with_distances, m)?;
 
             self.reconcile_node_neighbors(node_id, &neighbors, lc)?;
 
             // Update nearest for next level
-            nearest = candidates;
+            nearest = candidates_with_distances
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
         }
 
         Ok(())
@@ -387,17 +392,18 @@ impl HNSWIndex {
             // Insert at levels 0..=level
             for lc in (0..=*level).rev() {
                 // Find ef_construction nearest neighbors at this level
-                let candidates = self.search_layer_full_precision(
+                // Use distance-aware search to avoid recomputing in heuristic
+                let candidates_with_distances = self.search_layer_with_distances(
                     &vector,
                     &nearest,
                     self.params.ef_construction,
                     lc,
                 )?;
 
-                // Select M best neighbors using heuristic
+                // Select M best neighbors using heuristic (distances already computed)
                 let m = self.params.m_for_level(lc);
                 let neighbors =
-                    self.select_neighbors_heuristic(*node_id, &candidates, m, lc, &vector)?;
+                    self.select_neighbors_heuristic_with_distances(&candidates_with_distances, m)?;
 
                 // Set neighbors for this node
                 self.storage
@@ -408,7 +414,7 @@ impl HNSWIndex {
                     let mut neighbor_neighbors = self.storage.neighbors_at_level(neighbor_id, lc);
                     if !neighbor_neighbors.contains(node_id) {
                         neighbor_neighbors.push(*node_id);
-                        // Prune if over capacity
+                        // Prune if over capacity (must recompute distances for pruning)
                         if neighbor_neighbors.len() > m {
                             if let Some(neighbor_vec) = self.storage.get_dequantized(neighbor_id) {
                                 if let Ok(pruned) = self.select_neighbors_heuristic(
@@ -428,7 +434,10 @@ impl HNSWIndex {
                 }
 
                 // Update nearest for next level
-                nearest = candidates;
+                nearest = candidates_with_distances
+                    .iter()
+                    .map(|(id, _)| *id)
+                    .collect();
             }
 
             // Progress tracking
@@ -493,25 +502,34 @@ impl HNSWIndex {
         }
 
         // Insert at levels 0..=level (iterate from top to bottom)
+        // Track candidates with distances to pass to next level
+        let mut nearest_with_distances: Vec<(u32, f32)> = Vec::new();
         for lc in (0..=level).rev() {
             // Find ef_construction nearest neighbors at this level
-            let candidates = self.search_layer_full_precision(
+            // Use distance-aware search to avoid recomputing in heuristic
+            let candidates_with_distances = self.search_layer_with_distances(
                 vector,
                 &nearest,
                 self.params.ef_construction,
                 lc,
             )?;
 
-            // Select M best neighbors using heuristic
+            // Select M best neighbors using heuristic (distances already computed)
             let m = self.params.m_for_level(lc);
-
-            let neighbors = self.select_neighbors_heuristic(node_id, &candidates, m, lc, vector)?;
+            let neighbors =
+                self.select_neighbors_heuristic_with_distances(&candidates_with_distances, m)?;
 
             self.reconcile_node_neighbors(node_id, &neighbors, lc)?;
 
-            // Update nearest for next level
-            nearest = candidates;
+            // Update nearest for next level (just node IDs for entry points)
+            nearest = candidates_with_distances
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
+            nearest_with_distances = candidates_with_distances;
         }
+        // Silence unused variable warning - nearest_with_distances used in loop
+        let _ = nearest_with_distances;
 
         Ok(())
     }
@@ -519,6 +537,64 @@ impl HNSWIndex {
     /// Select neighbors using heuristic (diverse neighbors, better recall)
     ///
     /// Algorithm from Malkov 2018, Section 4
+    ///
+    /// This version accepts (node_id, distance) pairs to avoid recomputing distances
+    /// that were already calculated during the search phase.
+    pub(super) fn select_neighbors_heuristic_with_distances(
+        &self,
+        candidates_with_distances: &[(u32, f32)],
+        m: usize,
+    ) -> Result<Vec<u32>> {
+        if candidates_with_distances.len() <= m {
+            return Ok(candidates_with_distances
+                .iter()
+                .map(|(id, _)| *id)
+                .collect());
+        }
+
+        // Already sorted by distance from search_layer_with_distances
+        let mut result = Vec::with_capacity(m);
+        let mut remaining = Vec::new();
+
+        // Heuristic: Select diverse neighbors
+        for &(candidate_id, candidate_dist) in candidates_with_distances {
+            if result.len() >= m {
+                remaining.push(candidate_id);
+                continue;
+            }
+
+            // Check if candidate is closer to query than to existing neighbors
+            let mut good = true;
+            for &result_id in &result {
+                let dist_to_result = self.distance_between_cmp(candidate_id, result_id)?;
+                if dist_to_result < candidate_dist {
+                    good = false;
+                    break;
+                }
+            }
+
+            if good {
+                result.push(candidate_id);
+            } else {
+                remaining.push(candidate_id);
+            }
+        }
+
+        // Fill remaining slots with closest candidates if needed
+        for candidate_id in remaining {
+            if result.len() >= m {
+                break;
+            }
+            result.push(candidate_id);
+        }
+
+        Ok(result)
+    }
+
+    /// Select neighbors using heuristic (legacy version that computes distances)
+    ///
+    /// Used by reconcile_node_neighbors for pruning reverse links where we
+    /// don't have pre-computed distances.
     pub(super) fn select_neighbors_heuristic(
         &self,
         _node_id: u32,
@@ -540,42 +616,8 @@ impl HNSWIndex {
             .collect::<Result<Vec<_>>>()?;
         sorted_candidates.sort_unstable_by_key(|c| OrderedFloat(c.1));
 
-        let mut result = Vec::with_capacity(m);
-        let mut remaining = Vec::new();
-
-        // Heuristic: Select diverse neighbors
-        for (candidate_id, candidate_dist) in &sorted_candidates {
-            if result.len() >= m {
-                remaining.push(*candidate_id);
-                continue;
-            }
-
-            // Check if candidate is closer to query than to existing neighbors
-            let mut good = true;
-            for &result_id in &result {
-                let dist_to_result = self.distance_between_cmp(*candidate_id, result_id)?;
-                if dist_to_result < *candidate_dist {
-                    good = false;
-                    break;
-                }
-            }
-
-            if good {
-                result.push(*candidate_id);
-            } else {
-                remaining.push(*candidate_id);
-            }
-        }
-
-        // Fill remaining slots with closest candidates if needed
-        for candidate_id in remaining {
-            if result.len() >= m {
-                break;
-            }
-            result.push(candidate_id);
-        }
-
-        Ok(result)
+        // Delegate to the distance-aware version
+        self.select_neighbors_heuristic_with_distances(&sorted_candidates, m)
     }
 
     /// Add a neighbor to a node if there's room (neighbor count < M*2)
