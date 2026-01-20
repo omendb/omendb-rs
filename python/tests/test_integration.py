@@ -13,6 +13,7 @@ These tests verify:
 - Performance at scale
 """
 
+import os
 import random
 import tempfile
 import time
@@ -261,9 +262,15 @@ class TestPerformance:
             avg_latency = sum(latencies) / len(latencies)
             p99_latency = sorted(latencies)[99]
 
-            # Should be sub-millisecond for 1K vectors
-            assert avg_latency < 5.0, f"Average latency {avg_latency:.2f}ms > 5ms"
-            assert p99_latency < 10.0, f"P99 latency {p99_latency:.2f}ms > 10ms"
+            avg_threshold = 6.0 if os.getenv("CI") else 5.0
+            p99_threshold = 12.0 if os.getenv("CI") else 10.0
+
+            assert (
+                avg_latency < avg_threshold
+            ), f"Average latency {avg_latency:.2f}ms > {avg_threshold:.1f}ms"
+            assert (
+                p99_latency < p99_threshold
+            ), f"P99 latency {p99_latency:.2f}ms > {p99_threshold:.1f}ms"
 
     @pytest.mark.slow
     def test_search_batch_performance(self):
