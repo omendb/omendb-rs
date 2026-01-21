@@ -33,7 +33,6 @@
 //! ```
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::Path;
@@ -60,28 +59,6 @@ fn clear_last_error() {
 pub struct OmenDB {
     store: VectorStore,
     dimensions: usize,
-    /// Cache: internal index -> string ID (rebuilt when needed)
-    index_to_id: HashMap<usize, String>,
-}
-
-impl OmenDB {
-    /// Rebuild the index->ID cache from the store's id_to_index map
-    fn rebuild_cache(&mut self) {
-        self.index_to_id = self
-            .store
-            .id_to_index
-            .iter()
-            .map(|(id, &idx)| (idx, id.clone()))
-            .collect();
-    }
-
-    /// Get string ID for an internal index
-    fn get_id(&self, idx: usize) -> String {
-        self.index_to_id
-            .get(&idx)
-            .cloned()
-            .unwrap_or_else(|| idx.to_string())
-    }
 }
 
 /// Open a database at the given path
@@ -168,16 +145,9 @@ pub unsafe extern "C" fn omendb_open(
 
     match result {
         Ok(store) => {
-            // Build initial index->ID cache
-            let index_to_id: HashMap<usize, String> = store
-                .id_to_index
-                .iter()
-                .map(|(id, &idx)| (idx, id.clone()))
-                .collect();
             Box::into_raw(Box::new(OmenDB {
                 store,
                 dimensions,
-                index_to_id,
             }))
         }
         Err(e) => {
@@ -264,16 +234,12 @@ pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) 
 
         let vector = Vector::new(vector_data);
         if let Err(e) = db.store.set(id, vector, metadata) {
-            // Rebuild cache even on partial failure to stay in sync
-            db.rebuild_cache();
             set_last_error(format!("Set failed after {count} items: {e}"));
             return -1;
         }
         count += 1;
     }
 
-    // Rebuild cache after insertions
-    db.rebuild_cache();
     count
 }
 
@@ -401,7 +367,6 @@ pub unsafe extern "C" fn omendb_delete(db: *mut OmenDB, ids_json: *const c_char)
 
     match db.store.delete_batch(&ids) {
         Ok(count) => {
-            db.rebuild_cache();
             i64::try_from(count).unwrap_or(i64::MAX)
         }
         Err(e) => {
@@ -499,11 +464,11 @@ pub unsafe extern "C" fn omendb_search(
     // Convert results to JSON, mapping internal indices to string IDs
     let json_results: Vec<JsonValue> = results
         .into_iter()
-        .map(|(idx, distance, metadata)| {
+        .map(|result| {
             json!({
-                "id": db.get_id(idx),
-                "distance": distance,
-                "metadata": metadata
+                "id": result.id,
+                "distance": result.distance,
+                "metadata": result.metadata
             })
         })
         .collect();
@@ -729,16 +694,12 @@ pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *cons
 
         let vector = Vector::new(vector_data);
         if let Err(e) = db.store.set_with_text(id, vector, text, metadata) {
-            // Rebuild cache even on partial failure to stay in sync
-            db.rebuild_cache();
             set_last_error(format!("Set with text failed after {count} items: {e}"));
             return -1;
         }
         count += 1;
     }
 
-    // Rebuild cache after insertions
-    db.rebuild_cache();
     count
 }
 
