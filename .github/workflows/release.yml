@@ -556,20 +556,19 @@ jobs:
       - name: Verify omendb published
         run: |
           VERSION=${{ needs.verify.outputs.version }}
-          code=""
-          for i in 1 2 3; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "https://crates.io/api/v1/crates/omendb/$VERSION" || true)
-            if [ "$code" = "200" ]; then
-              exit 0
-            fi
-            if [ "$code" = "404" ]; then
-              echo "ERROR: omendb $VERSION is not on crates.io; publish omendb first." >&2
-              exit 1
-            fi
-            echo "Attempt $i: crates.io returned ${code:-000}; retrying..."
-            sleep $((i * 2))
-          done
-          echo "WARNING: unable to verify omendb $VERSION on crates.io (last status ${code:-000}); continuing."
+          code=$(curl -sS -o /dev/null -w "%{http_code}" \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 5 --max-time 20 \
+            "https://crates.io/api/v1/crates/omendb/$VERSION" || true)
+          if [ "$code" = "200" ]; then
+            exit 0
+          fi
+          if [ "$code" = "404" ]; then
+            echo "ERROR: omendb $VERSION is not on crates.io; publish omendb first." >&2
+            exit 1
+          fi
+          echo "ERROR: unable to verify omendb $VERSION on crates.io (status ${code:-000})." >&2
+          exit 1
       - name: Check omendb-ffi version
         id: ffi-skip
         run: |
