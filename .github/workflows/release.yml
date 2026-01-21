@@ -505,7 +505,10 @@ jobs:
         id: crates-skip
         run: |
           VERSION=${{ needs.verify.outputs.version }}
-          if curl -sf "https://crates.io/api/v1/crates/omendb/$VERSION" > /dev/null 2>&1; then
+          code=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "User-Agent: omendb-release" \
+            "https://crates.io/api/v1/crates/omendb/$VERSION" || true)
+          if [ "$code" = "200" ]; then
             echo "skip=true" >> $GITHUB_OUTPUT
             echo "Version $VERSION already published to crates.io; skipping crates publish."
           else
@@ -556,24 +559,32 @@ jobs:
       - name: Verify omendb published
         run: |
           VERSION=${{ needs.verify.outputs.version }}
-          code=$(curl -sS -o /dev/null -w "%{http_code}" \
-            --retry 5 --retry-all-errors --retry-delay 2 \
-            --connect-timeout 5 --max-time 20 \
-            "https://crates.io/api/v1/crates/omendb/$VERSION" || true)
-          if [ "$code" = "200" ]; then
-            exit 0
-          fi
-          if [ "$code" = "404" ]; then
-            echo "ERROR: omendb $VERSION is not on crates.io; publish omendb first." >&2
-            exit 1
-          fi
+          code=""
+          for i in 1 2 3; do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -H "User-Agent: omendb-release" \
+              --connect-timeout 5 --max-time 20 \
+              "https://crates.io/api/v1/crates/omendb/$VERSION" || true)
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            if [ "$code" = "404" ]; then
+              echo "ERROR: omendb $VERSION is not on crates.io; publish omendb first." >&2
+              exit 1
+            fi
+            echo "Attempt $i: crates.io returned ${code:-000}; retrying..."
+            sleep $((i * 2))
+          done
           echo "ERROR: unable to verify omendb $VERSION on crates.io (status ${code:-000})." >&2
           exit 1
       - name: Check omendb-ffi version
         id: ffi-skip
         run: |
           VERSION=${{ needs.verify.outputs.version }}
-          if curl -sf "https://crates.io/api/v1/crates/omendb-ffi/$VERSION" > /dev/null 2>&1; then
+          code=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "User-Agent: omendb-release" \
+            "https://crates.io/api/v1/crates/omendb-ffi/$VERSION" || true)
+          if [ "$code" = "200" ]; then
             echo "skip=true" >> $GITHUB_OUTPUT
             echo "Version $VERSION already published to crates.io (omendb-ffi); skipping publish."
           else
