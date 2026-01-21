@@ -493,6 +493,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+    outputs:
+      published: ${{ steps.publish-status.outputs.published }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -513,6 +515,7 @@ jobs:
           fi
 
       - name: Publish omendb to crates.io
+        id: publish-crates-step
         if: steps.crates-skip.outputs.skip != 'true'
         run: |
           set +e
@@ -529,6 +532,18 @@ jobs:
           fi
           echo "$output"
           exit $status
+
+      - name: Publish status
+        id: publish-status
+        if: always()
+        run: |
+          if [ "${{ steps.crates-skip.outputs.skip }}" = "true" ]; then
+            echo "published=false" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.publish-crates-step.outcome }}" = "success" ]; then
+            echo "published=true" >> $GITHUB_OUTPUT
+          else
+            echo "published=false" >> $GITHUB_OUTPUT
+          fi
 
   publish-crates-ffi:
     needs: [verify, publish-crates]
@@ -552,7 +567,7 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
       - name: Wait for crates.io index
-        if: steps.ffi-skip.outputs.skip != 'true'
+        if: steps.ffi-skip.outputs.skip != 'true' && needs.publish-crates.outputs.published == 'true'
         run: |
           VERSION=${{ needs.verify.outputs.version }}
           echo "Waiting for omendb $VERSION to appear in crates.io index..."
