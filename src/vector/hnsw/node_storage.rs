@@ -740,6 +740,30 @@ impl NodeStorage {
         }
     }
 
+    /// Get neighbors at any level as Cow (zero-copy for level 0)
+    ///
+    /// Use this in performance-critical paths to avoid allocation.
+    #[inline]
+    #[must_use]
+    pub fn neighbors_at_level_cow(&self, id: u32, level: u8) -> std::borrow::Cow<'_, [u32]> {
+        use std::borrow::Cow;
+        if level == 0 {
+            Cow::Borrowed(self.neighbors(id))
+        } else {
+            match self.upper_neighbors.get(&id) {
+                Some(levels) => {
+                    let level_idx = level as usize - 1;
+                    if level_idx < levels.len() {
+                        Cow::Owned(levels[level_idx].clone())
+                    } else {
+                        Cow::Owned(Vec::new())
+                    }
+                }
+                None => Cow::Owned(Vec::new()),
+            }
+        }
+    }
+
     /// Set level 0 neighbors (overwrites all, colocated storage)
     pub fn set_neighbors(&mut self, id: u32, neighbors: &[u32]) {
         debug_assert!(
