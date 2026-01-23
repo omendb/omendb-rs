@@ -377,14 +377,30 @@ impl ParallelBuilder {
                     }
                 }
 
-                // Get neighbors (requires lock)
-                let neighbors = {
+                // Get neighbors into stack buffer (no heap allocation)
+                // LOCK-FREE for level 0 (95%+ of accesses):
+                // - Data is in contiguous memory, already allocated
+                // - Count is written atomically (u16)
+                // - Reading stale data is fine - HNSW is approximate
+                // Upper levels still use locks (HashMap not thread-safe, but rare)
+                let mut neighbor_buf = [0u32; 64]; // Max M*2 = 32, so 64 is safe
+                let neighbor_count = if level == 0 {
+                    // SAFETY: Level 0 storage is contiguous, count is atomic u16,
+                    // and we're only reading - no lock needed (hnswlib pattern)
+                    let neighbors = unsafe { self.storage() }.neighbors(current.node_id);
+                    let n = neighbors.len().min(64);
+                    neighbor_buf[..n].copy_from_slice(&neighbors[..n]);
+                    n
+                } else {
                     let _lock = self.node_locks[current.node_id as usize].lock();
-                    // SAFETY: Protected by per-node lock
-                    unsafe { self.storage() }.neighbors_at_level(current.node_id, level)
+                    let neighbors =
+                        unsafe { self.storage() }.neighbors_at_level(current.node_id, level);
+                    let n = neighbors.len().min(64);
+                    neighbor_buf[..n].copy_from_slice(&neighbors[..n]);
+                    n
                 };
 
-                for neighbor_id in neighbors {
+                for &neighbor_id in &neighbor_buf[..neighbor_count] {
                     if buffers.visited.contains(neighbor_id) {
                         continue;
                     }
@@ -456,23 +472,12 @@ impl ParallelBuilder {
             unsafe { self.storage() }.set_neighbors_at_level(node_id, level, neighbors.to_vec());
         }
 
-        // Add reverse links (neighbors -> node) with proper pruning
+        // Add reverse links (neighbors -> node)
+        // Optimized: only lock the neighbor node (not both nodes - forward links already set)
         for &neighbor_id in neighbors {
-            // Lock ordering: lower ID first
-            let (first_id, second_id) = if node_id < neighbor_id {
-                (node_id, neighbor_id)
-            } else {
-                (neighbor_id, node_id)
-            };
+            let _lock = self.node_locks[neighbor_id as usize].lock();
 
-            let _lock1 = self.node_locks[first_id as usize].lock();
-            let _lock2 = if first_id == second_id {
-                None
-            } else {
-                Some(self.node_locks[second_id as usize].lock())
-            };
-
-            // SAFETY: Protected by per-node locks (both nodes locked in order)
+            // SAFETY: Protected by per-node lock
             let storage = unsafe { self.storage() };
 
             // Check if already connected
