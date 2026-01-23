@@ -1555,6 +1555,33 @@ impl Level0Storage {
         Some(self.write_locks[idx].lock())
     }
 
+    /// Check if neighbor exists (lock-free)
+    #[inline]
+    pub fn contains(&self, node_id: u32, neighbor: u32) -> bool {
+        let idx = node_id as usize;
+        if idx >= self.counts.len() {
+            return false;
+        }
+        let base = idx * self.max_m0;
+        let count = self.counts[idx].load(Ordering::Acquire) as usize;
+        for i in 0..count.min(self.max_m0) {
+            if self.data[base + i].load(Ordering::Relaxed) == neighbor {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get neighbor count (lock-free)
+    #[inline]
+    pub fn count(&self, node_id: u32) -> usize {
+        let idx = node_id as usize;
+        if idx >= self.counts.len() {
+            return 0;
+        }
+        self.counts[idx].load(Ordering::Acquire) as usize
+    }
+
     pub fn num_nodes(&self) -> usize {
         self.counts.len()
     }
@@ -1783,6 +1810,23 @@ impl UpperLevelStorage {
             .map_or(0, |links| links.max_level)
     }
 
+    /// Get neighbor count at level (lock-free)
+    #[inline]
+    pub fn count(&self, node_id: u32, level: u8) -> usize {
+        debug_assert!(level >= 1);
+        let idx = node_id as usize;
+        if idx >= self.nodes.len() {
+            return 0;
+        }
+        match &self.nodes[idx] {
+            Some(links) if level <= links.max_level => {
+                let level_idx = (level - 1) as usize;
+                links.counts[level_idx].load(Ordering::Acquire) as usize
+            }
+            _ => 0,
+        }
+    }
+
     pub fn memory_usage(&self) -> usize {
         let mut total = self.nodes.len() * std::mem::size_of::<Option<UpperNodeLinks>>();
         total += self.locks.len() * std::mem::size_of::<Mutex<()>>();
@@ -1953,6 +1997,27 @@ impl NeighborStorage {
     #[must_use]
     pub fn max_levels(&self) -> usize {
         self.max_levels
+    }
+
+    /// Check if neighbor exists at level (lock-free)
+    #[inline]
+    pub fn contains_neighbor(&self, node_id: u32, level: u8, neighbor: u32) -> bool {
+        if level == 0 {
+            self.level0.contains(node_id, neighbor)
+        } else {
+            self.upper
+                .with_neighbors(node_id, level, |n| n.contains(&neighbor))
+        }
+    }
+
+    /// Get neighbor count at level (lock-free)
+    #[inline]
+    pub fn neighbor_count(&self, node_id: u32, level: u8) -> usize {
+        if level == 0 {
+            self.level0.count(node_id)
+        } else {
+            self.upper.count(node_id, level)
+        }
     }
 
     /// Get number of nodes
