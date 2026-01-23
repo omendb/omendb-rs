@@ -38,13 +38,15 @@ mod insert;
 mod parallel;
 mod persistence;
 mod search;
+mod sequential;
 mod stats;
 
 #[cfg(test)]
 mod tests;
 
-// Re-export parallel builder
+// Re-export builders
 pub use parallel::ParallelBuilder;
+pub use sequential::SequentialBuilder;
 
 use super::error::{HNSWError, Result};
 use super::node_storage::NodeStorage;
