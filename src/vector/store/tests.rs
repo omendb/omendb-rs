@@ -2308,3 +2308,333 @@ mod muvera_tests {
         }
     }
 }
+
+// ============================================================================
+// Unified API tests
+// ============================================================================
+
+mod unified_api_tests {
+    use super::*;
+
+    fn random_vec(dim: usize, seed: usize) -> Vec<f32> {
+        (0..dim).map(|i| ((seed + i) as f32) * 0.1).collect()
+    }
+
+    fn random_tokens(num_tokens: usize, dim: usize, seed: usize) -> Vec<Vec<f32>> {
+        (0..num_tokens)
+            .map(|i| {
+                (0..dim)
+                    .map(|j| ((seed + i * dim + j) as f32 * 0.01) - 0.5)
+                    .collect()
+            })
+            .collect()
+    }
+
+    // === Regular store tests ===
+
+    #[test]
+    fn test_store_single_vector() {
+        let mut store = VectorStore::new(4);
+
+        store
+            .store(
+                "doc1",
+                vec![1.0, 2.0, 3.0, 4.0],
+                serde_json::json!({"title": "test"}),
+            )
+            .unwrap();
+
+        assert_eq!(store.len(), 1);
+        assert!(store.contains("doc1"));
+    }
+
+    #[test]
+    fn test_store_single_vector_slice() {
+        let mut store = VectorStore::new(4);
+        let vec = [1.0, 2.0, 3.0, 4.0];
+
+        store
+            .store("doc1", vec.as_slice(), serde_json::json!({}))
+            .unwrap();
+
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_store_multi_in_regular_store_fails() {
+        let mut store = VectorStore::new(4);
+        let tokens = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+
+        let result = store.store("doc1", tokens, serde_json::json!({}));
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot store token embeddings in regular store"));
+    }
+
+    #[test]
+    fn test_query_single_vector() {
+        let mut store = VectorStore::new(4);
+        store
+            .store("doc1", vec![1.0, 0.0, 0.0, 0.0], serde_json::json!({}))
+            .unwrap();
+        store
+            .store("doc2", vec![0.0, 1.0, 0.0, 0.0], serde_json::json!({}))
+            .unwrap();
+
+        let results = store.query(&vec![1.0, 0.1, 0.0, 0.0], 2).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "doc1"); // Closer to query
+    }
+
+    #[test]
+    fn test_query_multi_in_regular_store_fails() {
+        let mut store = VectorStore::new(4);
+        store
+            .store("doc1", vec![1.0, 0.0, 0.0, 0.0], serde_json::json!({}))
+            .unwrap();
+
+        let query = vec![vec![1.0, 0.0, 0.0, 0.0]];
+        let result = store.query(&query, 1);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot query regular store with token embeddings"));
+    }
+
+    #[test]
+    fn test_get_vector() {
+        let mut store = VectorStore::new(4);
+        store
+            .store(
+                "doc1",
+                vec![1.0, 2.0, 3.0, 4.0],
+                serde_json::json!({"key": "value"}),
+            )
+            .unwrap();
+
+        let (vec, meta) = store.get_vector("doc1").unwrap();
+
+        assert_eq!(vec, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(meta["key"], "value");
+    }
+
+    #[test]
+    fn test_get_data_single() {
+        let mut store = VectorStore::new(4);
+        store
+            .store("doc1", vec![1.0, 2.0, 3.0, 4.0], serde_json::json!({}))
+            .unwrap();
+
+        let (data, _) = store.get_data("doc1").unwrap();
+
+        assert!(data.is_single());
+        assert_eq!(data.as_single().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_store_batch_single() {
+        let mut store = VectorStore::new(4);
+
+        store
+            .store_batch(vec![
+                ("doc1", vec![1.0, 2.0, 3.0, 4.0], serde_json::json!({})),
+                ("doc2", vec![5.0, 6.0, 7.0, 8.0], serde_json::json!({})),
+            ])
+            .unwrap();
+
+        assert_eq!(store.len(), 2);
+        assert!(store.contains("doc1"));
+        assert!(store.contains("doc2"));
+    }
+
+    // === Multi-vector store tests ===
+
+    #[test]
+    fn test_store_multi_vector() {
+        let mut store = VectorStore::multi_vector(4);
+        let tokens = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+
+        store
+            .store("doc1", tokens, serde_json::json!({"title": "test"}))
+            .unwrap();
+
+        assert_eq!(store.len(), 1);
+        assert!(store.contains("doc1"));
+    }
+
+    #[test]
+    fn test_store_single_in_multi_store_fails() {
+        let mut store = VectorStore::multi_vector(4);
+
+        let result = store.store("doc1", vec![1.0, 2.0, 3.0, 4.0], serde_json::json!({}));
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot store single vector in multi-vector store"));
+    }
+
+    #[test]
+    fn test_query_multi_vector() {
+        let mut store = VectorStore::multi_vector(4);
+
+        // Insert documents
+        let doc1_tokens = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+        let doc2_tokens = vec![vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
+
+        store
+            .store("doc1", doc1_tokens, serde_json::json!({}))
+            .unwrap();
+        store
+            .store("doc2", doc2_tokens, serde_json::json!({}))
+            .unwrap();
+
+        // Query
+        let query = vec![vec![1.0, 0.0, 0.0, 0.0]];
+        let results = store.query(&query, 2).unwrap();
+
+        assert_eq!(results.len(), 2);
+        // doc1 should be closer because query token matches one of its tokens
+        assert_eq!(results[0].id, "doc1");
+    }
+
+    #[test]
+    fn test_query_single_in_multi_store_fails() {
+        let mut store = VectorStore::multi_vector(4);
+        store
+            .store(
+                "doc1",
+                vec![vec![1.0, 0.0, 0.0, 0.0]],
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        let result = store.query(&vec![1.0, 0.0, 0.0, 0.0], 1);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot query multi-vector store with single vector"));
+    }
+
+    #[test]
+    fn test_get_tokens() {
+        let mut store = VectorStore::multi_vector(4);
+        let tokens = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+
+        store
+            .store("doc1", tokens.clone(), serde_json::json!({"key": "value"}))
+            .unwrap();
+
+        let (retrieved, meta) = store.get_tokens("doc1").unwrap();
+
+        assert_eq!(retrieved, tokens);
+        assert_eq!(meta["key"], "value");
+    }
+
+    #[test]
+    fn test_get_data_multi() {
+        let mut store = VectorStore::multi_vector(4);
+        let tokens = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+
+        store
+            .store("doc1", tokens.clone(), serde_json::json!({}))
+            .unwrap();
+
+        let (data, _) = store.get_data("doc1").unwrap();
+
+        assert!(data.is_multi());
+        assert_eq!(data.as_multi().unwrap(), &tokens);
+    }
+
+    #[test]
+    fn test_get_vector_on_multi_store_returns_none() {
+        let mut store = VectorStore::multi_vector(4);
+        store
+            .store(
+                "doc1",
+                vec![vec![1.0, 2.0, 3.0, 4.0]],
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        assert!(store.get_vector("doc1").is_none());
+    }
+
+    #[test]
+    fn test_get_tokens_on_regular_store_returns_none() {
+        let mut store = VectorStore::new(4);
+        store
+            .store("doc1", vec![1.0, 2.0, 3.0, 4.0], serde_json::json!({}))
+            .unwrap();
+
+        assert!(store.get_tokens("doc1").is_none());
+    }
+
+    #[test]
+    fn test_store_batch_multi() {
+        let mut store = VectorStore::multi_vector(4);
+
+        store
+            .store_batch(vec![
+                (
+                    "doc1",
+                    vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]],
+                    serde_json::json!({}),
+                ),
+                (
+                    "doc2",
+                    vec![vec![9.0, 10.0, 11.0, 12.0]],
+                    serde_json::json!({}),
+                ),
+            ])
+            .unwrap();
+
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_query_with_options_no_rerank() {
+        let mut store = VectorStore::multi_vector(4);
+
+        let doc1_tokens = vec![vec![1.0, 0.0, 0.0, 0.0]];
+        let doc2_tokens = vec![vec![0.0, 1.0, 0.0, 0.0]];
+
+        store
+            .store("doc1", doc1_tokens, serde_json::json!({}))
+            .unwrap();
+        store
+            .store("doc2", doc2_tokens, serde_json::json!({}))
+            .unwrap();
+
+        let query = vec![vec![1.0, 0.0, 0.0, 0.0]];
+        let options = SearchOptions::default().no_rerank();
+        let results = store.query_with_options(&query, 2, &options).unwrap();
+
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_query_with_options_custom_rerank() {
+        let mut store = VectorStore::multi_vector(4);
+
+        let doc1_tokens = vec![vec![1.0, 0.0, 0.0, 0.0]];
+        store
+            .store("doc1", doc1_tokens, serde_json::json!({}))
+            .unwrap();
+
+        let query = vec![vec![1.0, 0.0, 0.0, 0.0]];
+        let options = SearchOptions::default().rerank(Rerank::Factor(10));
+        let results = store.query_with_options(&query, 1, &options).unwrap();
+
+        assert_eq!(results.len(), 1);
+    }
+}

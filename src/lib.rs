@@ -104,8 +104,11 @@ pub use compression::{QueryPrep, ScalarParams};
 pub use distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
 pub use types::{CompactionStats, DistanceMetric, OmenDBError, Result, VectorID};
 pub use vector::{
-    muvera::MultiVectorConfig, MetadataFilter, SearchResult, ThreadSafeVectorStore, Vector,
-    VectorStore, VectorStoreOptions,
+    muvera::MultiVectorConfig,
+    store::{
+        BatchItem, QueryInput, Rerank, SearchOptions, VectorData, VectorInput, VectorStoreOptions,
+    },
+    MetadataFilter, SearchResult, ThreadSafeVectorStore, Vector, VectorStore,
 };
 
 // Re-export storage types

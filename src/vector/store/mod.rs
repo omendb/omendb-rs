@@ -8,12 +8,14 @@
 //! Optional tantivy-based full-text search for hybrid (vector + BM25) retrieval.
 
 mod filter;
+mod input;
 mod options;
 mod record_store;
 mod thread_safe;
 
 pub use crate::omen::Metric;
 pub use filter::MetadataFilter;
+pub use input::{BatchItem, QueryData, QueryInput, Rerank, SearchOptions, VectorData, VectorInput};
 pub use options::VectorStoreOptions;
 pub use record_store::{Record, RecordStore};
 pub use thread_safe::ThreadSafeVectorStore;
@@ -418,16 +420,6 @@ impl VectorStore {
             multivec_storage: Some(MultiVecStorage::new(token_dim)),
             max_tokens: DEFAULT_MAX_TOKENS,
         }
-    }
-
-    /// Backwards-compatible alias for `multi_vector_with`.
-    #[deprecated(
-        since = "0.0.25",
-        note = "Use `multi_vector` or `multi_vector_with` instead"
-    )]
-    #[must_use]
-    pub fn new_muvera(token_dim: usize, config: MuveraConfig) -> Self {
-        Self::multi_vector_with(token_dim, config)
     }
 
     // Compatibility accessors for fields moved to RecordStore
@@ -2760,13 +2752,6 @@ impl VectorStore {
         self.muvera_encoder.is_some()
     }
 
-    /// Backwards-compatible alias.
-    #[deprecated(since = "0.0.25", note = "Use `is_multi_vector` instead")]
-    #[must_use]
-    pub fn is_muvera(&self) -> bool {
-        self.is_multi_vector()
-    }
-
     /// Get the token dimension (for multi-vector stores).
     #[must_use]
     pub fn token_dimension(&self) -> Option<usize> {
@@ -2777,13 +2762,6 @@ impl VectorStore {
     #[must_use]
     pub fn encoded_dimension(&self) -> Option<usize> {
         self.muvera_encoder.as_ref().map(|e| e.fde_dimension())
-    }
-
-    /// Backwards-compatible alias.
-    #[deprecated(since = "0.0.25", note = "Use `encoded_dimension` instead")]
-    #[must_use]
-    pub fn fde_dimension(&self) -> Option<usize> {
-        self.encoded_dimension()
     }
 
     /// Insert a document with token embeddings.
@@ -2862,12 +2840,6 @@ impl VectorStore {
         // Use the standard set() method to store the FDE
         self.set(id.to_string(), Vector::new(fde), metadata)?;
         Ok(())
-    }
-
-    /// Backwards-compatible alias for `set_multi`.
-    #[deprecated(since = "0.0.25", note = "Use `set_multi` instead")]
-    pub fn set_multivec(&mut self, id: &str, tokens: &[&[f32]], metadata: JsonValue) -> Result<()> {
-        self.set_multi(id, tokens, metadata)
     }
 
     /// Batch insert documents with token embeddings.
@@ -2951,15 +2923,6 @@ impl VectorStore {
         self.set_batch(fde_batch)?;
 
         Ok(())
-    }
-
-    /// Backwards-compatible alias for `set_multi_batch`.
-    #[deprecated(since = "0.0.25", note = "Use `set_multi_batch` instead")]
-    pub fn set_multivec_batch(
-        &mut self,
-        batch: Vec<(&str, Vec<Vec<f32>>, JsonValue)>,
-    ) -> Result<()> {
-        self.set_multi_batch(batch)
     }
 
     /// Search for similar documents using query tokens.
@@ -3048,15 +3011,6 @@ impl VectorStore {
             .collect();
 
         Ok(search_results)
-    }
-
-    /// Backwards-compatible alias for `search_multi_approx`.
-    #[deprecated(
-        since = "0.0.25",
-        note = "Use `search_multi` (with reranking) or `search_multi_approx` (fast)"
-    )]
-    pub fn search_multivec(&self, query_tokens: &[&[f32]], k: usize) -> Result<Vec<SearchResult>> {
-        self.search_multi_approx(query_tokens, k)
     }
 
     /// Search with custom rerank factor.
@@ -3166,17 +3120,378 @@ impl VectorStore {
         Ok(results)
     }
 
-    /// Backwards-compatible alias for `search_multi_rerank`.
-    #[deprecated(
-        since = "0.0.25",
-        note = "Use `search_multi` or `search_multi_rerank` instead"
-    )]
-    pub fn search_multivec_rerank(
+    // ============================================================================
+    // Unified API (trait-based dispatch)
+    // ============================================================================
+
+    /// Store vector or token embeddings.
+    ///
+    /// This unified method works for both regular and multi-vector stores:
+    /// - Regular stores: pass `&[f32]` or `Vec<f32>`
+    /// - Multi-vector stores: pass `&[&[f32]]` or `Vec<Vec<f32>>`
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use omendb::VectorStore;
+    /// use serde_json::json;
+    ///
+    /// // Regular store
+    /// let mut store = VectorStore::new(3);
+    /// store.store("doc1", vec![1.0, 2.0, 3.0], json!({})).unwrap();
+    ///
+    /// // Multi-vector store
+    /// let mut store = VectorStore::multi_vector(3);
+    /// let tokens = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+    /// store.store("doc1", tokens, json!({})).unwrap();
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Data type doesn't match store type (single vs multi)
+    /// - Dimension mismatch
+    /// - Token count exceeds limit (multi-vector only)
+    pub fn store<V: VectorInput>(&mut self, id: &str, data: V, metadata: JsonValue) -> Result<()> {
+        let data = data.into_vector_data();
+
+        match (&self.muvera_encoder, data) {
+            // Regular store, single vector
+            (None, VectorData::Single(vec)) => {
+                self.set(id.to_string(), Vector::new(vec), metadata)?;
+                Ok(())
+            }
+            // Multi-vector store, multi-vector data
+            (Some(_), VectorData::Multi(tokens)) => {
+                let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+                self.store_multi_internal(&token_refs, id, metadata)
+            }
+            // Error: wrong type for store
+            (None, VectorData::Multi(_)) => {
+                anyhow::bail!(
+                    "Cannot store token embeddings in regular store. \
+                    Pass single vector (&[f32] or Vec<f32>), or create multi-vector store with VectorStore::multi_vector()"
+                );
+            }
+            (Some(_), VectorData::Single(_)) => {
+                anyhow::bail!(
+                    "Cannot store single vector in multi-vector store. \
+                    Pass token embeddings (&[&[f32]] or Vec<Vec<f32>>)"
+                );
+            }
+        }
+    }
+
+    /// Internal helper for store() with multi-vector tokens.
+    fn store_multi_internal(
+        &mut self,
+        tokens: &[&[f32]],
+        id: &str,
+        metadata: JsonValue,
+    ) -> Result<()> {
+        // Validate MUVERA is enabled
+        let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Store not configured for multi-vector. Use VectorStore::multi_vector()"
+            )
+        })?;
+
+        // Validate tokens
+        if tokens.is_empty() {
+            anyhow::bail!("Cannot store empty token set");
+        }
+
+        if tokens.len() > self.max_tokens {
+            anyhow::bail!(
+                "Token count {} exceeds maximum {} (configure with max_tokens)",
+                tokens.len(),
+                self.max_tokens
+            );
+        }
+
+        let token_dim = encoder.token_dimension();
+        for (i, token) in tokens.iter().enumerate() {
+            if token.len() != token_dim {
+                anyhow::bail!(
+                    "Token {} has dimension {} but expected {}",
+                    i,
+                    token.len(),
+                    token_dim
+                );
+            }
+        }
+
+        // Encode tokens to FDE (document mode = AVERAGE)
+        let fde = encoder.encode_document(tokens);
+
+        // Store original tokens for reranking
+        let multivec_storage = self
+            .multivec_storage
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
+        let _token_slot = multivec_storage.add(tokens);
+
+        // Use the standard set() method to store the FDE
+        self.set(id.to_string(), Vector::new(fde), metadata)?;
+        Ok(())
+    }
+
+    /// Search for similar vectors/documents.
+    ///
+    /// This unified method works for both regular and multi-vector stores:
+    /// - Regular stores: pass `&[f32]` or `Vec<f32>`
+    /// - Multi-vector stores: pass `&[&[f32]]` or `Vec<Vec<f32>>`
+    ///
+    /// For multi-vector stores, reranking is enabled by default for quality.
+    /// Use `query_with_options` with `Rerank::Off` for fast approximate search.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use omendb::VectorStore;
+    ///
+    /// // Regular store
+    /// let store = VectorStore::new(3);
+    /// let results = store.query(&vec![1.0, 2.0, 3.0], 10).unwrap();
+    ///
+    /// // Multi-vector store
+    /// let store = VectorStore::multi_vector(3);
+    /// let query_tokens = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+    /// let results = store.query(&query_tokens, 10).unwrap();
+    /// ```
+    pub fn query<Q: QueryInput>(&self, query: &Q, k: usize) -> Result<Vec<SearchResult>> {
+        self.query_with_options(query, k, &SearchOptions::default())
+    }
+
+    /// Search with options.
+    ///
+    /// Provides control over ef, filter, max_distance, and reranking.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use omendb::{VectorStore, SearchOptions, Rerank};
+    ///
+    /// let store = VectorStore::multi_vector(128);
+    /// let query = vec![vec![0.1; 128]; 5];
+    ///
+    /// // Fast approximate search (no reranking)
+    /// let results = store.query_with_options(&query, 10, &SearchOptions::default().no_rerank()).unwrap();
+    ///
+    /// // With custom rerank factor
+    /// let results = store.query_with_options(&query, 10, &SearchOptions::default().rerank(Rerank::Factor(8))).unwrap();
+    /// ```
+    pub fn query_with_options<Q: QueryInput>(
+        &self,
+        query: &Q,
+        k: usize,
+        options: &SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        let query_data = query.to_query_data();
+
+        match (&self.muvera_encoder, &query_data) {
+            // Regular store, single vector query
+            (None, QueryData::Single(vec)) => self.search_single_internal(vec, k, options),
+            // Multi-vector store, multi-vector query
+            (Some(_), QueryData::Multi(tokens)) => self.search_multi_internal(tokens, k, options),
+            // Error: wrong query type for store
+            (None, QueryData::Multi(_)) => {
+                anyhow::bail!(
+                    "Cannot query regular store with token embeddings. \
+                    Pass single vector (&[f32] or Vec<f32>)"
+                );
+            }
+            (Some(_), QueryData::Single(_)) => {
+                anyhow::bail!(
+                    "Cannot query multi-vector store with single vector. \
+                    Pass token embeddings (&[&[f32]] or Vec<Vec<f32>>)"
+                );
+            }
+        }
+    }
+
+    /// Internal: search with single vector.
+    fn search_single_internal(
+        &self,
+        query: &[f32],
+        k: usize,
+        options: &SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        let query_vec = Vector::new(query.to_vec());
+        self.search_with_options_readonly(
+            &query_vec,
+            k,
+            options.filter.as_ref(),
+            options.ef,
+            options.max_distance,
+        )
+    }
+
+    /// Internal: search with multi-vector tokens.
+    fn search_multi_internal(
         &self,
         query_tokens: &[&[f32]],
         k: usize,
-        rerank_factor: Option<usize>,
+        options: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
-        self.search_multi_rerank(query_tokens, k, rerank_factor.unwrap_or(4))
+        match options.rerank {
+            Rerank::Off => self.search_multi_approx(query_tokens, k),
+            Rerank::On => self.search_multi_rerank(query_tokens, k, 4),
+            Rerank::Factor(f) => self.search_multi_rerank(query_tokens, k, f),
+        }
+    }
+
+    /// Get stored data by ID.
+    ///
+    /// Returns `VectorData::Single` for regular stores, `VectorData::Multi` for multi-vector stores.
+    pub fn get_data(&self, id: &str) -> Option<(VectorData, JsonValue)> {
+        if self.is_multi_vector() {
+            self.get_tokens_internal(id)
+                .map(|(tokens, meta)| (VectorData::Multi(tokens), meta))
+        } else {
+            self.get_vector_internal(id)
+                .map(|(vec, meta)| (VectorData::Single(vec), meta))
+        }
+    }
+
+    /// Get as single vector (convenience for regular stores).
+    ///
+    /// Returns `None` if ID not found or store is multi-vector.
+    pub fn get_vector(&self, id: &str) -> Option<(Vec<f32>, JsonValue)> {
+        if self.is_multi_vector() {
+            None
+        } else {
+            self.get_vector_internal(id)
+        }
+    }
+
+    /// Get as token embeddings (convenience for multi-vector stores).
+    ///
+    /// Returns `None` if ID not found or store is regular.
+    pub fn get_tokens(&self, id: &str) -> Option<(Vec<Vec<f32>>, JsonValue)> {
+        if self.is_multi_vector() {
+            self.get_tokens_internal(id)
+        } else {
+            None
+        }
+    }
+
+    /// Internal: get single vector.
+    fn get_vector_internal(&self, id: &str) -> Option<(Vec<f32>, JsonValue)> {
+        let record = self.records.get(id)?;
+        let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+        Some((record.vector.clone(), metadata))
+    }
+
+    /// Internal: get multi-vector tokens.
+    fn get_tokens_internal(&self, id: &str) -> Option<(Vec<Vec<f32>>, JsonValue)> {
+        let slot = self.records.get_slot(id)?;
+        let multivec_storage = self.multivec_storage.as_ref()?;
+        let token_refs = multivec_storage.get_tokens(slot as u32)?;
+        let tokens: Vec<Vec<f32>> = token_refs.iter().map(|t| t.to_vec()).collect();
+        let metadata = self
+            .records
+            .get(id)?
+            .metadata
+            .clone()
+            .unwrap_or_else(default_metadata);
+        Some((tokens, metadata))
+    }
+
+    /// Batch store vectors or token embeddings.
+    ///
+    /// More efficient than calling `store()` in a loop.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use omendb::VectorStore;
+    /// use serde_json::json;
+    ///
+    /// let mut store = VectorStore::new(3);
+    /// store.store_batch(vec![
+    ///     ("doc1", vec![1.0, 2.0, 3.0], json!({})),
+    ///     ("doc2", vec![4.0, 5.0, 6.0], json!({})),
+    /// ]).unwrap();
+    /// ```
+    pub fn store_batch<I, B>(&mut self, batch: I) -> Result<()>
+    where
+        I: IntoIterator<Item = B>,
+        B: BatchItem,
+    {
+        let items: Vec<_> = batch.into_iter().map(BatchItem::into_parts).collect();
+
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        // Check first item to determine type
+        let is_multi = items.first().map_or(false, |(_, data, _)| data.is_multi());
+
+        // Validate all items are same type
+        for (i, (_, data, _)) in items.iter().enumerate() {
+            if data.is_multi() != is_multi {
+                anyhow::bail!(
+                    "Batch item {} has different type than item 0. \
+                    All items must be same type (all single vectors or all token embeddings)",
+                    i
+                );
+            }
+        }
+
+        if is_multi {
+            if self.muvera_encoder.is_none() {
+                anyhow::bail!(
+                    "Cannot store token embeddings in regular store. \
+                    Create multi-vector store with VectorStore::multi_vector()"
+                );
+            }
+            self.store_multi_batch_internal(items)
+        } else {
+            if self.muvera_encoder.is_some() {
+                anyhow::bail!(
+                    "Cannot store single vectors in multi-vector store. \
+                    Pass token embeddings"
+                );
+            }
+            self.store_single_batch_internal(items)
+        }
+    }
+
+    /// Internal: batch set single vectors.
+    fn store_single_batch_internal(
+        &mut self,
+        items: Vec<(String, VectorData, JsonValue)>,
+    ) -> Result<()> {
+        let batch: Vec<(String, Vector, JsonValue)> = items
+            .into_iter()
+            .map(|(id, data, meta)| {
+                let VectorData::Single(vec) = data else {
+                    unreachable!()
+                };
+                (id, Vector::new(vec), meta)
+            })
+            .collect();
+
+        self.set_batch(batch)?;
+        Ok(())
+    }
+
+    /// Internal: batch set multi-vectors.
+    fn store_multi_batch_internal(
+        &mut self,
+        items: Vec<(String, VectorData, JsonValue)>,
+    ) -> Result<()> {
+        let batch: Vec<(&str, Vec<Vec<f32>>, JsonValue)> = items
+            .iter()
+            .map(|(id, data, meta)| {
+                let VectorData::Multi(tokens) = data else {
+                    unreachable!()
+                };
+                (id.as_str(), tokens.clone(), meta.clone())
+            })
+            .collect();
+
+        self.set_multi_batch(batch)
     }
 }
