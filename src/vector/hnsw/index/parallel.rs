@@ -441,20 +441,25 @@ impl ParallelBuilder {
                 continue;
             }
 
-            // Get current neighbors and add new one
-            let mut neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, level);
-            neighbor_neighbors.push(node_id);
-
-            // Prune if over capacity
-            if neighbor_neighbors.len() > m {
+            // Try O(1) atomic append - avoids Vec allocation in common case
+            if self.neighbors.add_neighbor(neighbor_id, level, node_id) {
+                // Successfully added. Check if pruning needed (rare).
+                if self.neighbors.neighbor_count(neighbor_id, level) > m {
+                    // Only allocate when pruning is actually needed
+                    let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, level);
+                    let neighbor_vec = &self.vectors[neighbor_id as usize];
+                    let pruned =
+                        self.select_neighbors_heuristic(&neighbor_neighbors, m, neighbor_vec);
+                    self.neighbors.set_neighbors(neighbor_id, level, pruned);
+                }
+            } else {
+                // Capacity full - need to prune (very rare during normal construction)
+                let mut neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, level);
+                neighbor_neighbors.push(node_id);
                 let neighbor_vec = &self.vectors[neighbor_id as usize];
-                neighbor_neighbors =
-                    self.select_neighbors_heuristic(&neighbor_neighbors, m, neighbor_vec);
+                let pruned = self.select_neighbors_heuristic(&neighbor_neighbors, m, neighbor_vec);
+                self.neighbors.set_neighbors(neighbor_id, level, pruned);
             }
-
-            // Set neighbors (handles locking internally)
-            self.neighbors
-                .set_neighbors(neighbor_id, level, neighbor_neighbors);
         }
     }
 

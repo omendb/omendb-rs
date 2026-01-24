@@ -1467,8 +1467,8 @@ impl Level0Storage {
         self.counts[idx].store(count as u16, Ordering::Release);
     }
 
-    /// Add a single neighbor - O(1) per neighbor (used in tests)
-    #[cfg(test)]
+    /// Add a single neighbor with locking - O(1) append
+    /// Returns false if at capacity
     pub fn add_neighbor(&self, node_id: u32, neighbor: u32) -> bool {
         let idx = node_id as usize;
         if idx >= self.write_locks.len() {
@@ -1704,8 +1704,8 @@ impl UpperLevelStorage {
         }
     }
 
-    /// Add neighbor at upper level (used in tests)
-    #[cfg(test)]
+    /// Add neighbor at upper level with locking - O(1) append
+    /// Returns false if at capacity
     pub fn add_neighbor(&self, node_id: u32, level: u8, neighbor: u32) -> bool {
         let idx = node_id as usize;
         if idx >= self.locks.len() {
@@ -1925,6 +1925,17 @@ impl NeighborStorage {
     /// Set neighbors (parallel version, for use during parallel construction)
     pub fn set_neighbors_parallel(&self, node_id: u32, level: u8, neighbors: Vec<u32>) {
         self.set_neighbors(node_id, level, neighbors);
+    }
+
+    /// Add a single neighbor with locking - O(1) append
+    /// Returns false if at capacity (caller should prune and retry)
+    #[inline]
+    pub fn add_neighbor(&self, node_id: u32, level: u8, neighbor: u32) -> bool {
+        if level == 0 {
+            self.level0.add_neighbor(node_id, neighbor)
+        } else {
+            self.upper.add_neighbor(node_id, level, neighbor)
+        }
     }
 
     /// Add bidirectional link with deadlock prevention
