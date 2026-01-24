@@ -2,6 +2,7 @@
 
 pub mod hnsw;
 pub mod hnsw_index;
+pub mod muvera;
 pub mod store;
 pub mod types;
 
