@@ -41,5 +41,5 @@ mod encoder;
 mod storage;
 
 pub use config::MuveraConfig;
-pub use encoder::{maxsim, AggMode, MuveraEncoder};
+pub use encoder::{maxsim, maxsim_batch, maxsim_batch_par, AggMode, MuveraEncoder};
 pub use storage::MultiVecStorage;

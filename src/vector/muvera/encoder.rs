@@ -189,6 +189,79 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
+/// Compute MaxSim scores for multiple documents in batch (optimized).
+///
+/// Uses matrix multiply pattern: Q @ D.T → row-wise max → sum.
+/// This is faster than calling `maxsim()` repeatedly when reranking many candidates.
+///
+/// # Arguments
+///
+/// * `query_tokens` - Query token embeddings (borrowed)
+/// * `doc_tokens_list` - List of document token sets (each document is a Vec of borrowed slices)
+///
+/// # Returns
+///
+/// MaxSim score for each document in the same order as `doc_tokens_list`.
+#[must_use]
+pub fn maxsim_batch(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]) -> Vec<f32> {
+    if query_tokens.is_empty() {
+        return vec![0.0; doc_tokens_list.len()];
+    }
+
+    doc_tokens_list
+        .iter()
+        .map(|doc_tokens| {
+            if doc_tokens.is_empty() {
+                return 0.0;
+            }
+            // For each query token, find max similarity across all doc tokens
+            // This is the matrix multiply pattern: Q @ D.T, then row-wise max
+            let mut total = 0.0;
+            for q in query_tokens {
+                let max_sim = doc_tokens
+                    .iter()
+                    .map(|d| dot(q, d))
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0);
+                total += max_sim;
+            }
+            total
+        })
+        .collect()
+}
+
+/// Compute MaxSim scores for multiple documents in batch using parallel iteration.
+///
+/// Same as `maxsim_batch` but uses rayon for parallel computation.
+/// Use when reranking many candidates (>100).
+#[must_use]
+pub fn maxsim_batch_par(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]) -> Vec<f32> {
+    use rayon::prelude::*;
+
+    if query_tokens.is_empty() {
+        return vec![0.0; doc_tokens_list.len()];
+    }
+
+    doc_tokens_list
+        .par_iter()
+        .map(|doc_tokens| {
+            if doc_tokens.is_empty() {
+                return 0.0;
+            }
+            let mut total = 0.0;
+            for q in query_tokens {
+                let max_sim = doc_tokens
+                    .iter()
+                    .map(|d| dot(q, d))
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0);
+                total += max_sim;
+            }
+            total
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,5 +538,139 @@ mod tests {
             i = j;
         }
         ranks
+    }
+
+    #[test]
+    fn test_maxsim_batch_matches_individual() {
+        // maxsim_batch should produce same results as calling maxsim repeatedly
+        let q1 = [1.0, 0.0, 0.0, 0.0];
+        let q2 = [0.0, 1.0, 0.0, 0.0];
+        let query: Vec<&[f32]> = vec![&q1, &q2];
+
+        let d1_t1 = [1.0, 0.0, 0.0, 0.0];
+        let d1_t2 = [0.0, 0.0, 1.0, 0.0];
+        let doc1: Vec<&[f32]> = vec![&d1_t1, &d1_t2];
+
+        let d2_t1 = [0.0, 1.0, 0.0, 0.0];
+        let d2_t2 = [0.0, 0.0, 0.0, 1.0];
+        let doc2: Vec<&[f32]> = vec![&d2_t1, &d2_t2];
+
+        let d3_t1 = [0.5, 0.5, 0.0, 0.0];
+        let doc3: Vec<&[f32]> = vec![&d3_t1];
+
+        let docs = vec![doc1.clone(), doc2.clone(), doc3.clone()];
+
+        // Batch computation
+        let batch_scores = super::maxsim_batch(&query, &docs);
+
+        // Individual computation
+        let individual_scores: Vec<f32> =
+            docs.iter().map(|doc| super::maxsim(&query, doc)).collect();
+
+        assert_eq!(batch_scores.len(), 3);
+        for (batch, individual) in batch_scores.iter().zip(individual_scores.iter()) {
+            assert!(
+                (batch - individual).abs() < 1e-6,
+                "Batch {batch} != individual {individual}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_maxsim_batch_empty_inputs() {
+        let q1 = [1.0, 0.0];
+        let query: Vec<&[f32]> = vec![&q1];
+        let empty_query: Vec<&[f32]> = vec![];
+
+        let d1 = [1.0, 0.0];
+        let doc1: Vec<&[f32]> = vec![&d1];
+        let empty_doc: Vec<&[f32]> = vec![];
+
+        // Empty query -> all zeros
+        let scores = super::maxsim_batch(&empty_query, &[doc1.clone()]);
+        assert_eq!(scores, vec![0.0]);
+
+        // Empty doc -> zero score
+        let scores = super::maxsim_batch(&query, &[empty_doc]);
+        assert_eq!(scores, vec![0.0]);
+
+        // Empty doc list -> empty scores
+        let scores = super::maxsim_batch(&query, &[]);
+        assert!(scores.is_empty());
+    }
+
+    #[test]
+    fn test_maxsim_batch_par_matches_sequential() {
+        use rand::prelude::*;
+
+        let mut rng = StdRng::seed_from_u64(99999);
+        let dim = 32;
+
+        // Generate query with 10 tokens
+        let query_vecs: Vec<Vec<f32>> = (0..10)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect())
+            .collect();
+        let query: Vec<&[f32]> = query_vecs.iter().map(|v| v.as_slice()).collect();
+
+        // Generate 50 documents with varying token counts
+        let docs: Vec<Vec<Vec<f32>>> = (0..50)
+            .map(|_| {
+                let num_tokens = rng.gen_range(5..20);
+                (0..num_tokens)
+                    .map(|_| (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect())
+                    .collect()
+            })
+            .collect();
+
+        let docs_refs: Vec<Vec<&[f32]>> = docs
+            .iter()
+            .map(|doc| doc.iter().map(|v| v.as_slice()).collect())
+            .collect();
+
+        // Compare sequential and parallel
+        let seq_scores = super::maxsim_batch(&query, &docs_refs);
+        let par_scores = super::maxsim_batch_par(&query, &docs_refs);
+
+        assert_eq!(seq_scores.len(), par_scores.len());
+        for (seq, par) in seq_scores.iter().zip(par_scores.iter()) {
+            assert!(
+                (seq - par).abs() < 1e-6,
+                "Sequential {seq} != parallel {par}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_maxsim_batch_ordering() {
+        // Verify that batch scores maintain correct ordering for reranking
+        let q1 = [1.0, 0.0, 0.0, 0.0];
+        let query: Vec<&[f32]> = vec![&q1];
+
+        // doc1: perfect match
+        let d1 = [1.0, 0.0, 0.0, 0.0];
+        let doc1: Vec<&[f32]> = vec![&d1];
+
+        // doc2: partial match
+        let d2 = [0.5, 0.5, 0.0, 0.0];
+        let doc2: Vec<&[f32]> = vec![&d2];
+
+        // doc3: no match
+        let d3 = [0.0, 0.0, 1.0, 0.0];
+        let doc3: Vec<&[f32]> = vec![&d3];
+
+        let docs = vec![doc3.clone(), doc1.clone(), doc2.clone()]; // Scrambled order
+        let scores = super::maxsim_batch(&query, &docs);
+
+        // Scores should be: [0.0, 1.0, 0.5] (doc3, doc1, doc2)
+        assert!((scores[0] - 0.0).abs() < 1e-6, "doc3 should score 0");
+        assert!((scores[1] - 1.0).abs() < 1e-6, "doc1 should score 1");
+
+        // doc2 score is dot(q1, d2) = 1.0*0.5 + 0 + 0 + 0 = 0.5
+        let expected_d2 = 0.5;
+        assert!(
+            (scores[2] - expected_d2).abs() < 1e-6,
+            "doc2 should score {expected_d2}, got {}",
+            scores[2]
+        );
     }
 }

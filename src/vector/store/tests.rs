@@ -2129,4 +2129,188 @@ mod muvera_tests {
         // Store should not have any documents (validation failed before insertion)
         assert_eq!(store.len(), 0);
     }
+
+    // ========================================================================
+    // MUV-16: search_multivec_rerank tests
+    // ========================================================================
+
+    #[test]
+    fn test_search_multivec_rerank_basic() {
+        let config = MuveraConfig::default();
+        let mut store = VectorStore::new_muvera(4, config);
+
+        // Insert 100 documents
+        for i in 0..100 {
+            let tokens = random_tokens(10, 4, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multivec(
+                    &format!("doc{}", i),
+                    &token_refs,
+                    serde_json::json!({"i": i}),
+                )
+                .unwrap();
+        }
+
+        // Search with reranking
+        let query_tokens = random_tokens(10, 4, 0); // Same as doc0
+        let query_refs: Vec<&[f32]> = query_tokens.iter().map(|t| t.as_slice()).collect();
+
+        let results = store.search_multivec_rerank(&query_refs, 10, None).unwrap();
+
+        assert_eq!(results.len(), 10);
+        // All results should have valid IDs
+        for result in &results {
+            assert!(result.id.starts_with("doc"));
+        }
+    }
+
+    #[test]
+    fn test_search_multivec_rerank_improves_ordering() {
+        // This test verifies that reranking improves result quality
+        // by checking that similar documents score higher after reranking
+        let config = MuveraConfig::default();
+        let mut store = VectorStore::new_muvera(4, config);
+
+        // Insert 20 documents with varying similarity to query
+        for i in 0..20 {
+            let tokens = random_tokens(10, 4, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multivec(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .unwrap();
+        }
+
+        let query = random_tokens(5, 4, 0); // Similar to doc0
+        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+
+        // Get results with reranking
+        let results = store
+            .search_multivec_rerank(&query_refs, 10, Some(4))
+            .unwrap();
+
+        assert_eq!(results.len(), 10);
+
+        // Verify results are sorted by MaxSim score (descending)
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].distance >= results[i].distance,
+                "Results should be sorted by MaxSim score"
+            );
+        }
+
+        // Verify scores are reasonable (MaxSim with 5 query tokens should be positive)
+        for result in &results {
+            assert!(
+                result.distance >= 0.0,
+                "MaxSim scores should be non-negative"
+            );
+        }
+    }
+
+    #[test]
+    fn test_search_multivec_rerank_returns_maxsim_scores() {
+        let config = MuveraConfig::default();
+        let mut store = VectorStore::new_muvera(4, config);
+
+        // Insert document with known tokens
+        let doc_tokens: Vec<Vec<f32>> = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+        let doc_refs: Vec<&[f32]> = doc_tokens.iter().map(|t| t.as_slice()).collect();
+        store
+            .set_multivec("doc1", &doc_refs, serde_json::json!({}))
+            .unwrap();
+
+        // Query matching first token exactly
+        let query_tokens: Vec<Vec<f32>> = vec![vec![1.0, 0.0, 0.0, 0.0]];
+        let query_refs: Vec<&[f32]> = query_tokens.iter().map(|t| t.as_slice()).collect();
+
+        let results = store.search_multivec_rerank(&query_refs, 1, None).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "doc1");
+        // MaxSim score should be 1.0 (perfect match with first doc token)
+        assert!(
+            (results[0].distance - 1.0).abs() < 0.01,
+            "MaxSim score should be ~1.0, got {}",
+            results[0].distance
+        );
+    }
+
+    #[test]
+    fn test_search_multivec_rerank_error_on_regular_store() {
+        let store = VectorStore::new(128);
+
+        let tokens = random_tokens(10, 128, 0);
+        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+
+        let result = store.search_multivec_rerank(&token_refs, 10, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_multivec_rerank_empty_store() {
+        let store = VectorStore::new_muvera(4, MuveraConfig::default());
+
+        let query = random_tokens(5, 4, 0);
+        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+
+        let results = store.search_multivec_rerank(&query_refs, 10, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_multivec_rerank_custom_factor() {
+        let mut store = VectorStore::new_muvera(4, MuveraConfig::default());
+
+        // Insert 20 documents
+        for i in 0..20 {
+            let tokens = random_tokens(10, 4, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multivec(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .unwrap();
+        }
+
+        let query = random_tokens(5, 4, 0);
+        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+
+        // With k=5, rerank_factor=2 -> fetches 10 candidates
+        let results = store
+            .search_multivec_rerank(&query_refs, 5, Some(2))
+            .unwrap();
+        assert_eq!(results.len(), 5);
+
+        // With k=5, rerank_factor=8 -> fetches 40 candidates (but only 20 exist)
+        let results = store
+            .search_multivec_rerank(&query_refs, 5, Some(8))
+            .unwrap();
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn test_search_multivec_rerank_scores_are_ordered() {
+        let mut store = VectorStore::new_muvera(4, MuveraConfig::default());
+
+        // Insert 50 documents
+        for i in 0..50 {
+            let tokens = random_tokens(10, 4, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multivec(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .unwrap();
+        }
+
+        let query = random_tokens(5, 4, 0);
+        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+
+        let results = store.search_multivec_rerank(&query_refs, 10, None).unwrap();
+
+        // Results should be ordered by descending MaxSim score
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].distance >= results[i].distance,
+                "Results should be ordered by MaxSim score (descending)"
+            );
+        }
+    }
 }

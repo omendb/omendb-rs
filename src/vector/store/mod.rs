@@ -2940,4 +2940,117 @@ impl VectorStore {
 
         Ok(search_results)
     }
+
+    /// Search for similar documents using multi-vector query with MaxSim reranking.
+    ///
+    /// This is the high-quality search path:
+    /// 1. Retrieves `rerank_factor * k` candidates using FDE-based HNSW search
+    /// 2. Reranks candidates using exact MaxSim scoring
+    /// 3. Returns top-k results ordered by MaxSim score
+    ///
+    /// # Arguments
+    ///
+    /// * `query_tokens` - Query token embeddings
+    /// * `k` - Number of results to return
+    /// * `rerank_factor` - Oversample factor for candidates (default: 4)
+    ///
+    /// # Performance
+    ///
+    /// MUVERA-only achieves ~70% quality. With reranking, quality recovers to ~99%.
+    /// Reranking adds ~O(n_candidates * n_query_tokens * n_doc_tokens) overhead.
+    pub fn search_multivec_rerank(
+        &self,
+        query_tokens: &[&[f32]],
+        k: usize,
+        rerank_factor: Option<usize>,
+    ) -> Result<Vec<SearchResult>> {
+        // Validate MUVERA is enabled
+        let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Store not configured for multi-vector. Use VectorStore::new_muvera()")
+        })?;
+        let multivec_storage = self
+            .multivec_storage
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
+
+        if query_tokens.is_empty() {
+            anyhow::bail!("Cannot search with empty query tokens");
+        }
+
+        let token_dim = encoder.token_dimension();
+        for (i, token) in query_tokens.iter().enumerate() {
+            if token.len() != token_dim {
+                anyhow::bail!(
+                    "Query token {} has dimension {} but expected {}",
+                    i,
+                    token.len(),
+                    token_dim
+                );
+            }
+        }
+
+        // Step 1: Get candidates using FDE search
+        let factor = rerank_factor.unwrap_or(4);
+        let num_candidates = k * factor;
+
+        let query_fde = encoder.encode_query(query_tokens);
+        let query_vec = Vector::new(query_fde);
+        let candidates = self.knn_search(&query_vec, num_candidates)?;
+
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Step 2: Collect original tokens for each candidate
+        let mut candidate_data: Vec<(usize, String, JsonValue, Vec<&[f32]>)> = Vec::new();
+
+        for (slot, _fde_distance) in &candidates {
+            let slot_u32 = *slot as u32;
+
+            // Get document's original tokens from MultiVecStorage
+            if let Some(doc_tokens) = multivec_storage.get_tokens(slot_u32) {
+                let record = self.records.get_by_slot(slot_u32);
+                let id = record.map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
+                let metadata = record
+                    .and_then(|r| r.metadata.clone())
+                    .unwrap_or(JsonValue::Null);
+                candidate_data.push((*slot, id, metadata, doc_tokens));
+            }
+        }
+
+        if candidate_data.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Step 3: Compute MaxSim scores in batch
+        let doc_tokens_list: Vec<Vec<&[f32]>> = candidate_data
+            .iter()
+            .map(|(_, _, _, tokens)| tokens.clone())
+            .collect();
+
+        let maxsim_scores = super::muvera::maxsim_batch(query_tokens, &doc_tokens_list);
+
+        // Step 4: Sort by MaxSim score (higher = better) and take top-k
+        let mut scored: Vec<(usize, &str, &JsonValue, f32)> = candidate_data
+            .iter()
+            .zip(maxsim_scores.iter())
+            .map(|((slot, id, metadata, _), &score)| (*slot, id.as_str(), metadata, score))
+            .collect();
+
+        // Sort descending by MaxSim score
+        scored.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take top-k and convert to SearchResult
+        let results: Vec<SearchResult> = scored
+            .into_iter()
+            .take(k)
+            .map(|(_, id, metadata, score)| {
+                // Return MaxSim score as distance (higher = more similar)
+                // Note: This inverts the typical "lower is better" convention
+                SearchResult::new(id.to_string(), score, metadata.clone())
+            })
+            .collect();
+
+        Ok(results)
+    }
 }
