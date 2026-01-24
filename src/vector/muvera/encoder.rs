@@ -284,7 +284,14 @@ mod tests {
 
     #[test]
     fn test_single_token() {
-        let encoder = MuveraEncoder::new(4, MuveraConfig::custom(2, 2, 42));
+        let encoder = MuveraEncoder::new(
+            4,
+            MuveraConfig {
+                repetitions: 2,
+                partition_bits: 2,
+                seed: 42,
+            },
+        );
         let token = [1.0, 0.0, 0.0, 0.0];
         let fde = encoder.encode_query(&[&token]);
         assert_eq!(fde.len(), 2 * 4 * 4); // r_reps=2, 2^k_sim=4, dim=4
@@ -293,7 +300,14 @@ mod tests {
 
     #[test]
     fn test_query_vs_document_encoding() {
-        let encoder = MuveraEncoder::new(4, MuveraConfig::custom(2, 2, 42));
+        let encoder = MuveraEncoder::new(
+            4,
+            MuveraConfig {
+                repetitions: 2,
+                partition_bits: 2,
+                seed: 42,
+            },
+        );
         let tokens: Vec<&[f32]> = vec![&[1.0, 0.0, 0.0, 0.0], &[0.0, 1.0, 0.0, 0.0]];
 
         let query_fde = encoder.encode_query(&tokens);
@@ -376,7 +390,7 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(12345);
         let dim = 64; // More realistic dimension
-        let encoder = MuveraEncoder::new(dim, MuveraConfig::custom(5, 3, 42));
+        let encoder = MuveraEncoder::new(dim, MuveraConfig::default());
 
         let num_pairs = 200; // More samples for stability
         let mut fde_scores = Vec::with_capacity(num_pairs);
@@ -444,7 +458,14 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(54321);
         let dim = 64;
-        let encoder = MuveraEncoder::new(dim, MuveraConfig::custom(10, 4, 42));
+        let encoder = MuveraEncoder::new(
+            dim,
+            MuveraConfig {
+                repetitions: 10,
+                partition_bits: 4,
+                seed: 42,
+            },
+        );
 
         let num_pairs = 200;
         let mut fde_scores = Vec::with_capacity(num_pairs);

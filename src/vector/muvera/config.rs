@@ -5,42 +5,47 @@
 /// Multi-vector stores encode documents as sets of token embeddings, enabling
 /// late-interaction retrieval patterns like ColBERT's MaxSim scoring.
 ///
-/// # Quick Start
+/// # Example
 ///
 /// ```rust
 /// use omendb::MultiVectorConfig;
 ///
-/// // Sensible defaults (good for most use cases)
+/// // Use defaults (good for most cases)
 /// let config = MultiVectorConfig::default();
 ///
-/// // Higher quality (larger index, better recall)
-/// let config = MultiVectorConfig::quality();
-///
-/// // Faster search (smaller index, lower recall)
-/// let config = MultiVectorConfig::fast();
+/// // Customize for higher quality
+/// let config = MultiVectorConfig {
+///     repetitions: 10,
+///     ..Default::default()
+/// };
 /// ```
 ///
-/// # How It Works
+/// # Parameters
 ///
-/// Documents with variable-length token sets are encoded into fixed-dimensional
-/// vectors (FDEs) that approximate MaxSim similarity via dot product. This enables
-/// efficient ANN search followed by exact MaxSim reranking.
+/// - `repetitions`: Number of independent hash functions. Higher = better quality,
+///   larger index. Default: 5, range: 3-40.
 ///
-/// The encoding dimension is: `repetitions × 2^partition_bits × token_dim`
+/// - `partition_bits`: Log2 of bucket count per repetition. Default: 3 (8 buckets).
+///   Higher values give finer granularity but larger encodings.
 ///
-/// | Preset    | Repetitions | Partitions | FDE Size (128D tokens) |
-/// |-----------|-------------|------------|------------------------|
-/// | fast()    | 3           | 8          | 3,072                  |
-/// | default() | 5           | 8          | 5,120                  |
-/// | quality() | 10          | 16         | 20,480                 |
+/// # Encoded Dimension
+///
+/// The encoded vector size is: `repetitions × 2^partition_bits × token_dim`
+///
+/// | Config | Encoded Size (128D tokens) |
+/// |--------|---------------------------|
+/// | default (5, 3) | 5,120 |
+/// | (10, 3) | 10,240 |
+/// | (5, 4) | 10,240 |
+/// | (10, 4) | 20,480 |
 #[derive(Debug, Clone)]
 pub struct MultiVectorConfig {
-    /// Number of independent hash repetitions. Higher = better approximation quality.
-    /// Range: 3-40, default: 5.
+    /// Number of independent hash repetitions. Higher = better quality, larger index.
+    /// Default: 5, range: 3-40.
     pub repetitions: u8,
 
-    /// Log2 of partition count (creates 2^partition_bits buckets per repetition).
-    /// Range: 3-6, default: 3 (8 partitions).
+    /// Log2 of partition count (2^partition_bits buckets per repetition).
+    /// Default: 3 (8 partitions), range: 3-6.
     pub partition_bits: u8,
 
     /// Random seed for reproducible encoding. Default: 42.
@@ -51,53 +56,13 @@ impl Default for MultiVectorConfig {
     fn default() -> Self {
         Self {
             repetitions: 5,
-            partition_bits: 3, // 8 partitions
+            partition_bits: 3,
             seed: 42,
         }
     }
 }
 
 impl MultiVectorConfig {
-    /// Fast preset: smaller index, faster search, lower recall.
-    ///
-    /// Good for prototyping or when search speed is critical.
-    #[must_use]
-    pub fn fast() -> Self {
-        Self {
-            repetitions: 3,
-            partition_bits: 3, // 8 partitions
-            seed: 42,
-        }
-    }
-
-    /// Quality preset: larger index, slower search, higher recall.
-    ///
-    /// Good for production when recall matters more than latency.
-    #[must_use]
-    pub fn quality() -> Self {
-        Self {
-            repetitions: 10,
-            partition_bits: 4, // 16 partitions
-            seed: 42,
-        }
-    }
-
-    /// Create custom configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `repetitions` - Number of hash repetitions (3-40). More = better quality.
-    /// * `partition_bits` - Log2 of partitions (3-6). More = finer granularity.
-    /// * `seed` - Random seed for reproducibility.
-    #[must_use]
-    pub fn custom(repetitions: u8, partition_bits: u8, seed: u64) -> Self {
-        Self {
-            repetitions,
-            partition_bits,
-            seed,
-        }
-    }
-
     /// Calculate the encoded vector dimension for a given token dimension.
     #[must_use]
     pub fn encoded_dimension(&self, token_dim: usize) -> usize {
@@ -136,30 +101,28 @@ mod tests {
     }
 
     #[test]
-    fn test_presets() {
-        let fast = MultiVectorConfig::fast();
-        assert_eq!(fast.repetitions, 3);
-        assert_eq!(fast.partitions(), 8);
-
-        let quality = MultiVectorConfig::quality();
-        assert_eq!(quality.repetitions, 10);
-        assert_eq!(quality.partitions(), 16);
-    }
-
-    #[test]
     fn test_encoded_dimension() {
         let config = MultiVectorConfig::default();
         // 5 reps * 8 partitions * 128 = 5,120
         assert_eq!(config.encoded_dimension(128), 5120);
 
-        let quality = MultiVectorConfig::quality();
+        // Higher quality config
+        let config = MultiVectorConfig {
+            repetitions: 10,
+            partition_bits: 4,
+            ..Default::default()
+        };
         // 10 reps * 16 partitions * 128 = 20,480
-        assert_eq!(quality.encoded_dimension(128), 20480);
+        assert_eq!(config.encoded_dimension(128), 20480);
     }
 
     #[test]
-    fn test_custom() {
-        let config = MultiVectorConfig::custom(20, 5, 123);
+    fn test_struct_init() {
+        let config = MultiVectorConfig {
+            repetitions: 20,
+            partition_bits: 5,
+            seed: 123,
+        };
         assert_eq!(config.repetitions, 20);
         assert_eq!(config.partitions(), 32);
         assert_eq!(config.seed, 123);

@@ -4,7 +4,7 @@
 //!
 //! Run: cargo bench --bench muvera_quality
 
-use omendb::vector::muvera::{maxsim, MuveraConfig, MuveraEncoder};
+use omendb::vector::muvera::{maxsim, MultiVectorConfig, MuveraEncoder};
 use rand::prelude::*;
 use std::time::Instant;
 
@@ -106,7 +106,11 @@ fn main() {
     let rerank_factor = 4;
 
     // Config - higher params for better quality
-    let config = MuveraConfig::custom(10, 4, 42); // k_sim=4, r_reps=10
+    let config = MultiVectorConfig {
+        repetitions: 10,
+        partition_bits: 4,
+        seed: 42,
+    };
     let encoder = MuveraEncoder::new(dim, config);
 
     println!("Configuration:");
