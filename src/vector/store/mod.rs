@@ -2794,6 +2794,92 @@ impl VectorStore {
         Ok(())
     }
 
+    /// Batch insert multi-vector documents.
+    ///
+    /// More efficient than calling `set_multivec()` in a loop because it
+    /// encodes all FDEs in parallel and uses batch HNSW insertion.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch` - Vector of (id, tokens, metadata) tuples
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any document fails validation (same rules as `set_multivec`).
+    pub fn set_multivec_batch(
+        &mut self,
+        batch: Vec<(&str, Vec<Vec<f32>>, JsonValue)>,
+    ) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        // Validate MUVERA is enabled
+        let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Store not configured for multi-vector. Use VectorStore::new_muvera()")
+        })?;
+
+        let token_dim = encoder.token_dimension();
+
+        // Validate all documents first
+        for (i, (id, tokens, _)) in batch.iter().enumerate() {
+            if tokens.is_empty() {
+                anyhow::bail!("Document '{}' (index {}) has empty tokens", id, i);
+            }
+            if tokens.len() > self.max_tokens {
+                anyhow::bail!(
+                    "Document '{}' has {} tokens, exceeds maximum {}",
+                    id,
+                    tokens.len(),
+                    self.max_tokens
+                );
+            }
+            for (j, token) in tokens.iter().enumerate() {
+                if token.len() != token_dim {
+                    anyhow::bail!(
+                        "Document '{}' token {} has dimension {} but expected {}",
+                        id,
+                        j,
+                        token.len(),
+                        token_dim
+                    );
+                }
+            }
+        }
+
+        // Encode all documents to FDEs in parallel
+        let fdes: Vec<Vec<f32>> = batch
+            .par_iter()
+            .map(|(_, tokens, _)| {
+                let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+                encoder.encode_document(&token_refs)
+            })
+            .collect();
+
+        // Store original tokens (must be sequential for slot ordering)
+        let multivec_storage = self
+            .multivec_storage
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
+
+        for (_, tokens, _) in &batch {
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            multivec_storage.add(&token_refs);
+        }
+
+        // Prepare batch for set_batch
+        let fde_batch: Vec<(String, Vector, JsonValue)> = batch
+            .into_iter()
+            .zip(fdes)
+            .map(|((id, _, metadata), fde)| (id.to_string(), Vector::new(fde), metadata))
+            .collect();
+
+        // Use existing set_batch for efficient HNSW insertion
+        self.set_batch(fde_batch)?;
+
+        Ok(())
+    }
+
     /// Search for similar documents using multi-vector query.
     ///
     /// Transforms the query tokens into an FDE and searches the HNSW index.

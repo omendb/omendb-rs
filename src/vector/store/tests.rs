@@ -2053,4 +2053,80 @@ mod muvera_tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
     }
+
+    #[test]
+    fn test_set_multivec_batch_basic() {
+        let mut store = VectorStore::new_muvera(4, MuveraConfig::default());
+
+        // Create batch of documents
+        let batch: Vec<(&str, Vec<Vec<f32>>, serde_json::Value)> = (0..100)
+            .map(|i| {
+                let tokens = random_tokens(10 + (i % 10), 4, i);
+                (
+                    format!("doc{}", i).leak() as &str,
+                    tokens,
+                    serde_json::json!({"i": i}),
+                )
+            })
+            .collect();
+
+        store.set_multivec_batch(batch).unwrap();
+
+        assert_eq!(store.len(), 100);
+        for i in 0..100 {
+            assert!(store.contains(&format!("doc{}", i)));
+        }
+    }
+
+    #[test]
+    fn test_set_multivec_batch_searchable() {
+        let mut store = VectorStore::new_muvera(4, MuveraConfig::default());
+
+        // Batch insert
+        let batch: Vec<(&str, Vec<Vec<f32>>, serde_json::Value)> = (0..50)
+            .map(|i| {
+                let tokens = random_tokens(10, 4, i);
+                (
+                    format!("doc{}", i).leak() as &str,
+                    tokens,
+                    serde_json::json!({"i": i}),
+                )
+            })
+            .collect();
+
+        store.set_multivec_batch(batch).unwrap();
+
+        // Search
+        let query = random_tokens(5, 4, 25);
+        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let results = store.search_multivec(&query_refs, 10).unwrap();
+
+        assert_eq!(results.len(), 10);
+    }
+
+    #[test]
+    fn test_set_multivec_batch_empty() {
+        let mut store = VectorStore::new_muvera(4, MuveraConfig::default());
+
+        let batch: Vec<(&str, Vec<Vec<f32>>, serde_json::Value)> = vec![];
+        store.set_multivec_batch(batch).unwrap();
+
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn test_set_multivec_batch_error_on_invalid_doc() {
+        let mut store = VectorStore::new_muvera(4, MuveraConfig::default());
+
+        // One valid doc, one with wrong dimension
+        let batch: Vec<(&str, Vec<Vec<f32>>, serde_json::Value)> = vec![
+            ("doc1", random_tokens(10, 4, 0), serde_json::json!({})),
+            ("doc2", random_tokens(10, 8, 1), serde_json::json!({})), // Wrong dim
+        ];
+
+        let result = store.set_multivec_batch(batch);
+        assert!(result.is_err());
+        // Store should not have any documents (validation failed before insertion)
+        assert_eq!(store.len(), 0);
+    }
 }
