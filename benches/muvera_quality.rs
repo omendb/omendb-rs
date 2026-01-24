@@ -106,7 +106,7 @@ fn main() {
     let rerank_factor = 4;
 
     // Config - higher params for better quality
-    let config = MuveraConfig::new(4, 10, 42); // k_sim=4, r_reps=10
+    let config = MuveraConfig::custom(10, 4, 42); // k_sim=4, r_reps=10
     let encoder = MuveraEncoder::new(dim, config);
 
     println!("Configuration:");

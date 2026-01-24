@@ -22,7 +22,7 @@ pub use thread_safe::ThreadSafeVectorStore;
 
 use super::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use super::hnsw_index::HNSWIndex;
-use super::muvera::{MultiVecStorage, MuveraConfig, MuveraEncoder};
+use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraConfig, MuveraEncoder};
 use super::types::Vector;
 use super::QuantizationMode;
 use crate::distance::l2_distance;
@@ -345,24 +345,56 @@ impl VectorStore {
         }
     }
 
-    /// Create new vector store for multi-vector documents (MUVERA).
+    /// Create a multi-vector store for ColBERT-style token embeddings.
     ///
-    /// Multi-vector stores use FDE (Fixed Dimensional Encoding) to transform
-    /// variable-length token sets into fixed-size vectors for HNSW search.
+    /// Multi-vector stores let you index documents as sets of token embeddings,
+    /// enabling late-interaction retrieval patterns like ColBERT's MaxSim scoring.
     ///
     /// # Arguments
     ///
     /// * `token_dim` - Dimension of each token embedding (e.g., 128 for ColBERT)
-    /// * `config` - MUVERA configuration (k_sim, r_reps, seed)
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// let config = MuveraConfig::default();  // k_sim=3, r_reps=5
-    /// let store = VectorStore::new_muvera(128, config);  // 128D tokens -> 5,120D FDE
+    /// ```rust
+    /// use omendb::VectorStore;
+    ///
+    /// // Create store for 128-dimensional token embeddings
+    /// let mut store = VectorStore::multi_vector(128);
+    ///
+    /// // Insert document with token embeddings
+    /// let tokens: Vec<Vec<f32>> = vec![vec![0.1; 128]; 10]; // 10 tokens
+    /// let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+    /// store.set_multi("doc1", &refs, serde_json::json!({})).unwrap();
+    ///
+    /// // Search with query tokens
+    /// let results = store.search_multi(&refs, 10).unwrap();
     /// ```
     #[must_use]
-    pub fn new_muvera(token_dim: usize, config: MuveraConfig) -> Self {
+    pub fn multi_vector(token_dim: usize) -> Self {
+        Self::multi_vector_with(token_dim, MultiVectorConfig::default())
+    }
+
+    /// Create a multi-vector store with custom configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `token_dim` - Dimension of each token embedding
+    /// * `config` - Configuration controlling quality/size tradeoff
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use omendb::{VectorStore, MultiVectorConfig};
+    ///
+    /// // High-quality configuration for production
+    /// let store = VectorStore::multi_vector_with(128, MultiVectorConfig::quality());
+    ///
+    /// // Fast configuration for prototyping
+    /// let store = VectorStore::multi_vector_with(128, MultiVectorConfig::fast());
+    /// ```
+    #[must_use]
+    pub fn multi_vector_with(token_dim: usize, config: MultiVectorConfig) -> Self {
         let encoder = MuveraEncoder::new(token_dim, config);
         let fde_dim = encoder.fde_dimension();
 
@@ -386,6 +418,16 @@ impl VectorStore {
             multivec_storage: Some(MultiVecStorage::new(token_dim)),
             max_tokens: DEFAULT_MAX_TOKENS,
         }
+    }
+
+    /// Backwards-compatible alias for `multi_vector_with`.
+    #[deprecated(
+        since = "0.0.25",
+        note = "Use `multi_vector` or `multi_vector_with` instead"
+    )]
+    #[must_use]
+    pub fn new_muvera(token_dim: usize, config: MuveraConfig) -> Self {
+        Self::multi_vector_with(token_dim, config)
     }
 
     // Compatibility accessors for fields moved to RecordStore
@@ -2709,46 +2751,74 @@ impl VectorStore {
     }
 
     // ============================================================================
-    // MUVERA (Multi-Vector) Methods
+    // Multi-Vector Methods (ColBERT-style token embeddings)
     // ============================================================================
 
     /// Check if this store is configured for multi-vector documents.
     #[must_use]
-    pub fn is_muvera(&self) -> bool {
+    pub fn is_multi_vector(&self) -> bool {
         self.muvera_encoder.is_some()
     }
 
-    /// Get the token dimension (for MUVERA stores).
+    /// Backwards-compatible alias.
+    #[deprecated(since = "0.0.25", note = "Use `is_multi_vector` instead")]
+    #[must_use]
+    pub fn is_muvera(&self) -> bool {
+        self.is_multi_vector()
+    }
+
+    /// Get the token dimension (for multi-vector stores).
     #[must_use]
     pub fn token_dimension(&self) -> Option<usize> {
         self.muvera_encoder.as_ref().map(|e| e.token_dimension())
     }
 
-    /// Get the FDE dimension (for MUVERA stores).
+    /// Get the encoded dimension (for multi-vector stores).
     #[must_use]
-    pub fn fde_dimension(&self) -> Option<usize> {
+    pub fn encoded_dimension(&self) -> Option<usize> {
         self.muvera_encoder.as_ref().map(|e| e.fde_dimension())
     }
 
-    /// Insert a multi-vector document.
+    /// Backwards-compatible alias.
+    #[deprecated(since = "0.0.25", note = "Use `encoded_dimension` instead")]
+    #[must_use]
+    pub fn fde_dimension(&self) -> Option<usize> {
+        self.encoded_dimension()
+    }
+
+    /// Insert a document with token embeddings.
     ///
-    /// Transforms the token set into an FDE (Fixed Dimensional Encoding) and stores both
-    /// the FDE in the HNSW index and the original tokens for later MaxSim reranking.
+    /// Use this for ColBERT-style retrieval where documents are represented as
+    /// sets of token embeddings rather than single vectors.
     ///
     /// # Arguments
     ///
     /// * `id` - Unique document identifier
-    /// * `tokens` - Token embeddings (variable length, each token has same dimension)
+    /// * `tokens` - Token embeddings (each token must have the configured dimension)
     /// * `metadata` - Optional JSON metadata
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use omendb::VectorStore;
+    ///
+    /// let mut store = VectorStore::multi_vector(128);
+    ///
+    /// // Document with 10 token embeddings
+    /// let tokens: Vec<Vec<f32>> = vec![vec![0.1; 128]; 10];
+    /// let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+    ///
+    /// store.set_multi("doc1", &refs, serde_json::json!({"title": "Example"})).unwrap();
+    /// ```
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - Store is not configured for MUVERA (`new_muvera()` not used)
+    /// - Store is not configured for multi-vector (use `VectorStore::multi_vector()`)
     /// - Token array is empty
-    /// - Token dimension doesn't match configured token dimension
+    /// - Token dimension doesn't match configured dimension
     /// - Token count exceeds `max_tokens` (default 512)
-    pub fn set_multivec(&mut self, id: &str, tokens: &[&[f32]], metadata: JsonValue) -> Result<()> {
+    pub fn set_multi(&mut self, id: &str, tokens: &[&[f32]], metadata: JsonValue) -> Result<()> {
         // Validate MUVERA is enabled
         let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Store not configured for multi-vector. Use VectorStore::new_muvera()")
@@ -2794,10 +2864,16 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Batch insert multi-vector documents.
+    /// Backwards-compatible alias for `set_multi`.
+    #[deprecated(since = "0.0.25", note = "Use `set_multi` instead")]
+    pub fn set_multivec(&mut self, id: &str, tokens: &[&[f32]], metadata: JsonValue) -> Result<()> {
+        self.set_multi(id, tokens, metadata)
+    }
+
+    /// Batch insert documents with token embeddings.
     ///
-    /// More efficient than calling `set_multivec()` in a loop because it
-    /// encodes all FDEs in parallel and uses batch HNSW insertion.
+    /// More efficient than calling `set_multi()` in a loop because it
+    /// encodes all documents in parallel and uses batch HNSW insertion.
     ///
     /// # Arguments
     ///
@@ -2805,11 +2881,8 @@ impl VectorStore {
     ///
     /// # Errors
     ///
-    /// Returns an error if any document fails validation (same rules as `set_multivec`).
-    pub fn set_multivec_batch(
-        &mut self,
-        batch: Vec<(&str, Vec<Vec<f32>>, JsonValue)>,
-    ) -> Result<()> {
+    /// Returns an error if any document fails validation (same rules as `set_multi`).
+    pub fn set_multi_batch(&mut self, batch: Vec<(&str, Vec<Vec<f32>>, JsonValue)>) -> Result<()> {
         if batch.is_empty() {
             return Ok(());
         }
@@ -2880,25 +2953,61 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Search for similar documents using multi-vector query.
+    /// Backwards-compatible alias for `set_multi_batch`.
+    #[deprecated(since = "0.0.25", note = "Use `set_multi_batch` instead")]
+    pub fn set_multivec_batch(
+        &mut self,
+        batch: Vec<(&str, Vec<Vec<f32>>, JsonValue)>,
+    ) -> Result<()> {
+        self.set_multi_batch(batch)
+    }
+
+    /// Search for similar documents using query tokens.
     ///
-    /// Transforms the query tokens into an FDE and searches the HNSW index.
-    /// Returns results ranked by FDE similarity (approximate MaxSim).
+    /// This is the recommended search method for multi-vector stores. It:
+    /// 1. Finds candidate documents using fast approximate search
+    /// 2. Reranks candidates using exact MaxSim scoring
+    /// 3. Returns top-k results ordered by similarity
     ///
     /// # Arguments
     ///
     /// * `query_tokens` - Query token embeddings
     /// * `k` - Number of results to return
     ///
-    /// # Note
+    /// # Example
     ///
-    /// This returns approximate results based on FDE similarity.
-    /// For higher quality, use `search_multivec_rerank()` which applies
-    /// exact MaxSim scoring to the top candidates.
-    pub fn search_multivec(&self, query_tokens: &[&[f32]], k: usize) -> Result<Vec<SearchResult>> {
-        // Validate MUVERA is enabled
+    /// ```rust
+    /// use omendb::VectorStore;
+    ///
+    /// let store = VectorStore::multi_vector(128);
+    /// // ... insert documents ...
+    ///
+    /// let query: Vec<Vec<f32>> = vec![vec![0.1; 128]; 5]; // 5 query tokens
+    /// let refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+    ///
+    /// let results = store.search_multi(&refs, 10).unwrap();
+    /// ```
+    pub fn search_multi(&self, query_tokens: &[&[f32]], k: usize) -> Result<Vec<SearchResult>> {
+        // Default rerank factor of 4 (fetch 4x candidates, rerank to k)
+        self.search_multi_rerank(query_tokens, k, 4)
+    }
+
+    /// Fast approximate search without MaxSim reranking.
+    ///
+    /// Use this when search speed is more important than quality. Returns
+    /// results based on FDE (Fixed Dimensional Encoding) similarity only.
+    ///
+    /// For higher quality results, use `search_multi()` which includes reranking.
+    pub fn search_multi_approx(
+        &self,
+        query_tokens: &[&[f32]],
+        k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        // Validate multi-vector is enabled
         let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Store not configured for multi-vector. Use VectorStore::new_muvera()")
+            anyhow::anyhow!(
+                "Store not configured for multi-vector. Use VectorStore::multi_vector()"
+            )
         })?;
 
         if query_tokens.is_empty() {
@@ -2941,32 +3050,36 @@ impl VectorStore {
         Ok(search_results)
     }
 
-    /// Search for similar documents using multi-vector query with MaxSim reranking.
+    /// Backwards-compatible alias for `search_multi_approx`.
+    #[deprecated(
+        since = "0.0.25",
+        note = "Use `search_multi` (with reranking) or `search_multi_approx` (fast)"
+    )]
+    pub fn search_multivec(&self, query_tokens: &[&[f32]], k: usize) -> Result<Vec<SearchResult>> {
+        self.search_multi_approx(query_tokens, k)
+    }
+
+    /// Search with custom rerank factor.
     ///
-    /// This is the high-quality search path:
-    /// 1. Retrieves `rerank_factor * k` candidates using FDE-based HNSW search
-    /// 2. Reranks candidates using exact MaxSim scoring
-    /// 3. Returns top-k results ordered by MaxSim score
+    /// Lower factor = faster but lower quality.
+    /// Higher factor = slower but higher quality.
     ///
     /// # Arguments
     ///
     /// * `query_tokens` - Query token embeddings
     /// * `k` - Number of results to return
-    /// * `rerank_factor` - Oversample factor for candidates (default: 4)
-    ///
-    /// # Performance
-    ///
-    /// MUVERA-only achieves ~70% quality. With reranking, quality recovers to ~99%.
-    /// Reranking adds ~O(n_candidates * n_query_tokens * n_doc_tokens) overhead.
-    pub fn search_multivec_rerank(
+    /// * `rerank_factor` - Fetch this many times k candidates before reranking
+    pub fn search_multi_rerank(
         &self,
         query_tokens: &[&[f32]],
         k: usize,
-        rerank_factor: Option<usize>,
+        rerank_factor: usize,
     ) -> Result<Vec<SearchResult>> {
-        // Validate MUVERA is enabled
+        // Validate multi-vector is enabled
         let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Store not configured for multi-vector. Use VectorStore::new_muvera()")
+            anyhow::anyhow!(
+                "Store not configured for multi-vector. Use VectorStore::multi_vector()"
+            )
         })?;
         let multivec_storage = self
             .multivec_storage
@@ -2990,8 +3103,7 @@ impl VectorStore {
         }
 
         // Step 1: Get candidates using FDE search
-        let factor = rerank_factor.unwrap_or(4);
-        let num_candidates = k * factor;
+        let num_candidates = k * rerank_factor;
 
         let query_fde = encoder.encode_query(query_tokens);
         let query_vec = Vector::new(query_fde);
@@ -3052,5 +3164,19 @@ impl VectorStore {
             .collect();
 
         Ok(results)
+    }
+
+    /// Backwards-compatible alias for `search_multi_rerank`.
+    #[deprecated(
+        since = "0.0.25",
+        note = "Use `search_multi` or `search_multi_rerank` instead"
+    )]
+    pub fn search_multivec_rerank(
+        &self,
+        query_tokens: &[&[f32]],
+        k: usize,
+        rerank_factor: Option<usize>,
+    ) -> Result<Vec<SearchResult>> {
+        self.search_multi_rerank(query_tokens, k, rerank_factor.unwrap_or(4))
     }
 }

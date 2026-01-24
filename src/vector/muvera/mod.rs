@@ -40,6 +40,6 @@ mod config;
 mod encoder;
 mod storage;
 
-pub use config::MuveraConfig;
+pub use config::{MultiVectorConfig, MuveraConfig}; // MuveraConfig is alias for backwards compat
 pub use encoder::{maxsim, maxsim_batch, maxsim_batch_par, AggMode, MuveraEncoder};
 pub use storage::MultiVecStorage;
