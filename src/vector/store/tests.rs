@@ -1862,3 +1862,195 @@ mod persistence_proptest {
         }
     }
 }
+
+// ============================================================================
+// MUVERA (Multi-Vector) Tests
+// ============================================================================
+
+mod muvera_tests {
+    use super::*;
+    use crate::vector::muvera::MuveraConfig;
+
+    fn random_tokens(num_tokens: usize, dim: usize, seed: usize) -> Vec<Vec<f32>> {
+        (0..num_tokens)
+            .map(|i| {
+                (0..dim)
+                    .map(|j| ((seed + i * dim + j) as f32 * 0.01) - 0.5)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_new_muvera_creates_encoder() {
+        let config = MuveraConfig::default();
+        let store = VectorStore::new_muvera(128, config);
+
+        assert!(store.is_muvera());
+        assert_eq!(store.token_dimension(), Some(128));
+        assert_eq!(store.fde_dimension(), Some(5120)); // 5 * 8 * 128
+    }
+
+    #[test]
+    fn test_regular_store_not_muvera() {
+        let store = VectorStore::new(128);
+
+        assert!(!store.is_muvera());
+        assert_eq!(store.token_dimension(), None);
+        assert_eq!(store.fde_dimension(), None);
+    }
+
+    #[test]
+    fn test_set_multivec_basic() {
+        let config = MuveraConfig::default();
+        let mut store = VectorStore::new_muvera(4, config);
+
+        let tokens = random_tokens(10, 4, 0);
+        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+
+        store
+            .set_multivec("doc1", &token_refs, serde_json::json!({"title": "test"}))
+            .unwrap();
+
+        assert_eq!(store.len(), 1);
+        assert!(store.contains("doc1"));
+    }
+
+    #[test]
+    fn test_set_multivec_multiple_docs() {
+        let config = MuveraConfig::default();
+        let mut store = VectorStore::new_muvera(4, config);
+
+        for i in 0..10 {
+            let tokens = random_tokens(5 + i, 4, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multivec(
+                    &format!("doc{}", i),
+                    &token_refs,
+                    serde_json::json!({"i": i}),
+                )
+                .unwrap();
+        }
+
+        assert_eq!(store.len(), 10);
+    }
+
+    #[test]
+    fn test_set_multivec_error_on_regular_store() {
+        let mut store = VectorStore::new(128);
+
+        let tokens = random_tokens(10, 128, 0);
+        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+
+        let result = store.set_multivec("doc1", &token_refs, serde_json::json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not configured"));
+    }
+
+    #[test]
+    fn test_set_multivec_error_on_empty_tokens() {
+        let mut store = VectorStore::new_muvera(128, MuveraConfig::default());
+
+        let tokens: Vec<&[f32]> = vec![];
+        let result = store.set_multivec("doc1", &tokens, serde_json::json!({}));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_set_multivec_error_on_wrong_dimension() {
+        let mut store = VectorStore::new_muvera(128, MuveraConfig::default());
+
+        let tokens = random_tokens(10, 64, 0); // Wrong dimension
+        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+
+        let result = store.set_multivec("doc1", &token_refs, serde_json::json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("dimension"));
+    }
+
+    #[test]
+    fn test_search_multivec_basic() {
+        let config = MuveraConfig::default();
+        let mut store = VectorStore::new_muvera(4, config);
+
+        // Insert 100 documents
+        for i in 0..100 {
+            let tokens = random_tokens(10, 4, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multivec(
+                    &format!("doc{}", i),
+                    &token_refs,
+                    serde_json::json!({"i": i}),
+                )
+                .unwrap();
+        }
+
+        // Search - use exact same tokens as a document to ensure it's found
+        let query_tokens = random_tokens(10, 4, 0); // Same as doc0
+        let query_refs: Vec<&[f32]> = query_tokens.iter().map(|t| t.as_slice()).collect();
+
+        let results = store.search_multivec(&query_refs, 10).unwrap();
+
+        assert_eq!(results.len(), 10);
+        // All results should have valid IDs
+        for result in &results {
+            assert!(result.id.starts_with("doc"));
+        }
+    }
+
+    #[test]
+    fn test_search_multivec_returns_correct_metadata() {
+        let config = MuveraConfig::default();
+        let mut store = VectorStore::new_muvera(4, config);
+
+        let tokens = random_tokens(10, 4, 0);
+        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        store
+            .set_multivec(
+                "doc1",
+                &token_refs,
+                serde_json::json!({"title": "Test Document"}),
+            )
+            .unwrap();
+
+        let results = store.search_multivec(&token_refs, 1).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "doc1");
+        assert_eq!(results[0].metadata["title"], "Test Document");
+    }
+
+    #[test]
+    fn test_search_multivec_error_on_regular_store() {
+        let store = VectorStore::new(128);
+
+        let tokens = random_tokens(10, 128, 0);
+        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+
+        let result = store.search_multivec(&token_refs, 10);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_multivec_error_on_empty_query() {
+        let mut store = VectorStore::new_muvera(128, MuveraConfig::default());
+
+        // Insert a document first
+        let tokens = random_tokens(10, 128, 0);
+        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        store
+            .set_multivec("doc1", &token_refs, serde_json::json!({}))
+            .unwrap();
+
+        // Empty query
+        let empty: Vec<&[f32]> = vec![];
+        let result = store.search_multivec(&empty, 10);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+}

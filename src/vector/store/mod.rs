@@ -22,6 +22,7 @@ pub use thread_safe::ThreadSafeVectorStore;
 
 use super::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use super::hnsw_index::HNSWIndex;
+use super::muvera::{MultiVecStorage, MuveraConfig, MuveraEncoder};
 use super::types::Vector;
 use super::QuantizationMode;
 use crate::distance::l2_distance;
@@ -296,7 +297,23 @@ pub struct VectorStore {
 
     /// Distance metric for similarity search (default: L2)
     distance_metric: Metric,
+
+    // ============================================================================
+    // MUVERA (Multi-Vector) Support
+    // ============================================================================
+    /// MUVERA encoder for multi-vector to FDE transformation.
+    /// Present when store is created with `new_muvera()`.
+    muvera_encoder: Option<MuveraEncoder>,
+
+    /// Storage for original multi-vector tokens (for MaxSim reranking).
+    multivec_storage: Option<MultiVecStorage>,
+
+    /// Maximum tokens per document (default: 512, matches ColBERT).
+    max_tokens: usize,
 }
+
+/// Default maximum tokens per multi-vector document.
+const DEFAULT_MAX_TOKENS: usize = 512;
 
 impl VectorStore {
     // ============================================================================
@@ -322,6 +339,52 @@ impl VectorStore {
             hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
             hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
             distance_metric: Metric::L2,
+            muvera_encoder: None,
+            multivec_storage: None,
+            max_tokens: DEFAULT_MAX_TOKENS,
+        }
+    }
+
+    /// Create new vector store for multi-vector documents (MUVERA).
+    ///
+    /// Multi-vector stores use FDE (Fixed Dimensional Encoding) to transform
+    /// variable-length token sets into fixed-size vectors for HNSW search.
+    ///
+    /// # Arguments
+    ///
+    /// * `token_dim` - Dimension of each token embedding (e.g., 128 for ColBERT)
+    /// * `config` - MUVERA configuration (k_sim, r_reps, seed)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let config = MuveraConfig::default();  // k_sim=3, r_reps=5
+    /// let store = VectorStore::new_muvera(128, config);  // 128D tokens -> 5,120D FDE
+    /// ```
+    #[must_use]
+    pub fn new_muvera(token_dim: usize, config: MuveraConfig) -> Self {
+        let encoder = MuveraEncoder::new(token_dim, config);
+        let fde_dim = encoder.fde_dimension();
+
+        Self {
+            records: RecordStore::new(fde_dim as u32),
+            segments: None,
+            hnsw_index: None,
+            rescore_enabled: false,
+            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
+            metadata_index: MetadataIndex::new(),
+            storage: None,
+            storage_path: None,
+            text_index: None,
+            text_search_config: None,
+            pending_quantization: None,
+            hnsw_m: DEFAULT_HNSW_M,
+            hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
+            hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
+            distance_metric: Metric::InnerProduct, // FDEs use inner product
+            muvera_encoder: Some(encoder),
+            multivec_storage: Some(MultiVecStorage::new(token_dim)),
+            max_tokens: DEFAULT_MAX_TOKENS,
         }
     }
 
@@ -348,6 +411,9 @@ impl VectorStore {
             text_search_config: None,
             pending_quantization: Some(mode),
             hnsw_m: DEFAULT_HNSW_M,
+            muvera_encoder: None,
+            multivec_storage: None,
+            max_tokens: DEFAULT_MAX_TOKENS,
             hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
             hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
             distance_metric: Metric::L2,
@@ -387,6 +453,9 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
+            muvera_encoder: None,
+            multivec_storage: None,
+            max_tokens: DEFAULT_MAX_TOKENS,
         })
     }
 
@@ -643,6 +712,9 @@ impl VectorStore {
             hnsw_ef_construction: hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION),
             hnsw_ef_search: hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH),
             distance_metric,
+            muvera_encoder: None,
+            multivec_storage: None,
+            max_tokens: DEFAULT_MAX_TOKENS,
         })
     }
 
@@ -762,6 +834,9 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
+            muvera_encoder: None,
+            multivec_storage: None,
+            max_tokens: DEFAULT_MAX_TOKENS,
         })
     }
 
@@ -829,6 +904,9 @@ impl VectorStore {
             hnsw_ef_construction: ef_construction,
             hnsw_ef_search: ef_search,
             distance_metric,
+            muvera_encoder: None,
+            multivec_storage: None,
+            max_tokens: DEFAULT_MAX_TOKENS,
         })
     }
 
@@ -2628,5 +2706,152 @@ impl VectorStore {
     #[must_use]
     pub fn storage(&self) -> Option<&OmenFile> {
         self.storage.as_ref()
+    }
+
+    // ============================================================================
+    // MUVERA (Multi-Vector) Methods
+    // ============================================================================
+
+    /// Check if this store is configured for multi-vector documents.
+    #[must_use]
+    pub fn is_muvera(&self) -> bool {
+        self.muvera_encoder.is_some()
+    }
+
+    /// Get the token dimension (for MUVERA stores).
+    #[must_use]
+    pub fn token_dimension(&self) -> Option<usize> {
+        self.muvera_encoder.as_ref().map(|e| e.token_dimension())
+    }
+
+    /// Get the FDE dimension (for MUVERA stores).
+    #[must_use]
+    pub fn fde_dimension(&self) -> Option<usize> {
+        self.muvera_encoder.as_ref().map(|e| e.fde_dimension())
+    }
+
+    /// Insert a multi-vector document.
+    ///
+    /// Transforms the token set into an FDE (Fixed Dimensional Encoding) and stores both
+    /// the FDE in the HNSW index and the original tokens for later MaxSim reranking.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique document identifier
+    /// * `tokens` - Token embeddings (variable length, each token has same dimension)
+    /// * `metadata` - Optional JSON metadata
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Store is not configured for MUVERA (`new_muvera()` not used)
+    /// - Token array is empty
+    /// - Token dimension doesn't match configured token dimension
+    /// - Token count exceeds `max_tokens` (default 512)
+    pub fn set_multivec(&mut self, id: &str, tokens: &[&[f32]], metadata: JsonValue) -> Result<()> {
+        // Validate MUVERA is enabled
+        let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Store not configured for multi-vector. Use VectorStore::new_muvera()")
+        })?;
+
+        // Validate tokens
+        if tokens.is_empty() {
+            anyhow::bail!("Cannot insert document with empty tokens");
+        }
+
+        if tokens.len() > self.max_tokens {
+            anyhow::bail!(
+                "Token count {} exceeds maximum {} (configure with max_tokens)",
+                tokens.len(),
+                self.max_tokens
+            );
+        }
+
+        let token_dim = encoder.token_dimension();
+        for (i, token) in tokens.iter().enumerate() {
+            if token.len() != token_dim {
+                anyhow::bail!(
+                    "Token {} has dimension {} but expected {}",
+                    i,
+                    token.len(),
+                    token_dim
+                );
+            }
+        }
+
+        // Encode tokens to FDE (document mode = AVERAGE)
+        let fde = encoder.encode_document(tokens);
+
+        // Store original tokens for reranking
+        let multivec_storage = self
+            .multivec_storage
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
+        let _token_slot = multivec_storage.add(tokens);
+
+        // Use the standard set() method to store the FDE
+        self.set(id.to_string(), Vector::new(fde), metadata)?;
+        Ok(())
+    }
+
+    /// Search for similar documents using multi-vector query.
+    ///
+    /// Transforms the query tokens into an FDE and searches the HNSW index.
+    /// Returns results ranked by FDE similarity (approximate MaxSim).
+    ///
+    /// # Arguments
+    ///
+    /// * `query_tokens` - Query token embeddings
+    /// * `k` - Number of results to return
+    ///
+    /// # Note
+    ///
+    /// This returns approximate results based on FDE similarity.
+    /// For higher quality, use `search_multivec_rerank()` which applies
+    /// exact MaxSim scoring to the top candidates.
+    pub fn search_multivec(&self, query_tokens: &[&[f32]], k: usize) -> Result<Vec<SearchResult>> {
+        // Validate MUVERA is enabled
+        let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Store not configured for multi-vector. Use VectorStore::new_muvera()")
+        })?;
+
+        if query_tokens.is_empty() {
+            anyhow::bail!("Cannot search with empty query tokens");
+        }
+
+        let token_dim = encoder.token_dimension();
+        for (i, token) in query_tokens.iter().enumerate() {
+            if token.len() != token_dim {
+                anyhow::bail!(
+                    "Query token {} has dimension {} but expected {}",
+                    i,
+                    token.len(),
+                    token_dim
+                );
+            }
+        }
+
+        // Encode query tokens to FDE (query mode = SUM)
+        let query_fde = encoder.encode_query(query_tokens);
+
+        // Search HNSW with FDE
+        // For inner product, lower distance = higher similarity, so results are already ordered
+        let query_vec = Vector::new(query_fde);
+        let results = self.knn_search(&query_vec, k)?;
+
+        // Convert to SearchResult
+        let search_results = results
+            .into_iter()
+            .map(|(slot, distance)| {
+                let record = self.records.get_by_slot(slot as u32);
+                let id = record.map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
+                let metadata = record
+                    .and_then(|r| r.metadata.clone())
+                    .unwrap_or(JsonValue::Null);
+                SearchResult::new(id, distance, metadata)
+            })
+            .collect();
+
+        Ok(search_results)
     }
 }

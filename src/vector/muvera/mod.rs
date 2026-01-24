@@ -38,6 +38,8 @@
 
 mod config;
 mod encoder;
+mod storage;
 
 pub use config::MuveraConfig;
 pub use encoder::{maxsim, AggMode, MuveraEncoder};
+pub use storage::MultiVecStorage;
