@@ -12,6 +12,7 @@ mod helpers;
 mod input;
 mod options;
 mod record_store;
+mod search;
 mod thread_safe;
 
 pub use crate::omen::Metric;
@@ -28,7 +29,6 @@ use super::hnsw_index::HNSWIndex;
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::types::Vector;
 use super::QuantizationMode;
-use crate::distance::l2_distance;
 use crate::omen::{parse_wal_delete, parse_wal_insert, MetadataIndex, OmenFile, WalEntryType};
 use crate::text::{
     weighted_reciprocal_rank_fusion, weighted_reciprocal_rank_fusion_with_subscores, HybridResult,
@@ -1913,90 +1913,20 @@ impl VectorStore {
             );
         }
 
-        let has_data = !self.records.is_empty()
-            || self.segments.as_ref().is_some_and(|s| !s.is_empty())
-            || self.hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
+        let config = search::SearchConfig {
+            rescore_enabled: self.rescore_enabled,
+            oversample_factor: self.oversample_factor,
+        };
 
-        if !has_data {
-            return Ok(Vec::new());
-        }
-
-        // Use segments if available (preferred path)
-        if let Some(ref segments) = self.segments {
-            let segment_results = segments
-                .search(&query.data, k, ef)
-                .map_err(|e| anyhow::anyhow!("Segment search failed: {e}"))?;
-
-            // Convert SegmentSearchResult to (slot, distance)
-            let results: Vec<(usize, f32)> = segment_results
-                .into_iter()
-                .map(|r| (r.slot as usize, r.distance))
-                .collect();
-
-            // Fall back to brute force if segments return nothing but we have data
-            if results.is_empty() && self.has_live_vectors() {
-                return self.knn_search_brute_force(query, k);
-            }
-            return Ok(results);
-        }
-
-        // Legacy path: use hnsw_index directly
-        if let Some(ref index) = self.hnsw_index {
-            let results = if index.is_asymmetric() {
-                // Rescore if we have storage (fetch from disk) OR records in RAM
-                let can_rescore = self.storage.is_some() || !self.records.is_empty();
-                if self.rescore_enabled && can_rescore {
-                    self.knn_search_with_rescore(query, k, ef)?
-                } else {
-                    index.search_ef(&query.data, k, ef)?
-                }
-            } else {
-                index.search_ef(&query.data, k, ef)?
-            };
-
-            // Fall back to brute force if HNSW returns nothing but we have data
-            if results.is_empty() && self.has_live_vectors() {
-                return self.knn_search_brute_force(query, k);
-            }
-            return Ok(results);
-        }
-
-        self.knn_search_brute_force(query, k)
-    }
-
-    /// K-nearest neighbors search with rescore using original vectors
-    fn knn_search_with_rescore(
-        &self,
-        query: &Vector,
-        k: usize,
-        ef: usize,
-    ) -> Result<Vec<(usize, f32)>> {
-        let index = self
-            .hnsw_index
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("HNSW index required for rescore"))?;
-
-        let oversample_k = ((k as f32) * self.oversample_factor).ceil() as usize;
-        let candidates = index.search_ef(&query.data, oversample_k, ef)?;
-
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Rescore candidates with exact L2 distance from RecordStore (source of truth)
-        let mut rescored: Vec<(usize, f32)> = candidates
-            .iter()
-            .filter_map(|&(id, _quantized_dist)| {
-                self.records
-                    .get_vector(id as u32)
-                    .map(|v| (id, l2_distance(&query.data, v)))
-            })
-            .collect();
-
-        rescored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        rescored.truncate(k);
-
-        Ok(rescored)
+        search::knn_search_core(
+            &self.records,
+            self.segments.as_ref(),
+            self.hnsw_index.as_ref(),
+            &query.data,
+            k,
+            ef,
+            &config,
+        )
     }
 
     /// K-nearest neighbors search with metadata filtering
@@ -2035,84 +1965,17 @@ impl VectorStore {
         filter: &MetadataFilter,
         ef: Option<usize>,
     ) -> Result<Vec<SearchResult>> {
-        // Use provided ef, or fall back to stored hnsw_ef_search
-        // Ensure ef >= k (HNSW requirement)
         let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
 
-        // Try bitmap-based filtering (O(1) per candidate)
-        let filter_bitmap = filter.evaluate_bitmap(&self.metadata_index);
-
-        if let Some(ref hnsw) = self.hnsw_index {
-            let records = &self.records;
-
-            let search_results = if let Some(ref bitmap) = filter_bitmap {
-                // Fast path: bitmap-based filtering
-                let filter_fn =
-                    |node_id: u32| -> bool { records.is_live(node_id) && bitmap.contains(node_id) };
-                hnsw.search_with_filter_ef(&query.data, k, Some(effective_ef), filter_fn)?
-            } else {
-                // Slow path: JSON-based filtering
-                let filter_fn = |node_id: u32| -> bool {
-                    if !records.is_live(node_id) {
-                        return false;
-                    }
-                    let metadata = records
-                        .get_by_slot(node_id)
-                        .and_then(|r| r.metadata.clone())
-                        .unwrap_or_else(helpers::default_metadata);
-                    filter.matches(&metadata)
-                };
-                hnsw.search_with_filter_ef(&query.data, k, Some(effective_ef), filter_fn)?
-            };
-
-            let filtered_results: Vec<SearchResult> = search_results
-                .into_iter()
-                .filter_map(|(slot, distance)| {
-                    let record = self.records.get_by_slot(slot as u32)?;
-                    let metadata = record
-                        .metadata
-                        .clone()
-                        .unwrap_or_else(helpers::default_metadata);
-                    Some(SearchResult::new(record.id.clone(), distance, metadata))
-                })
-                .collect();
-
-            return Ok(filtered_results);
-        }
-
-        // Fallback: brute-force search with filtering
-        let mut all_results: Vec<SearchResult> = self
-            .records
-            .iter_live()
-            .filter_map(|(slot, record)| {
-                // Use bitmap if available, otherwise JSON
-                let passes_filter = if let Some(ref bitmap) = filter_bitmap {
-                    bitmap.contains(slot)
-                } else {
-                    let metadata = record
-                        .metadata
-                        .clone()
-                        .unwrap_or_else(helpers::default_metadata);
-                    filter.matches(&metadata)
-                };
-
-                if !passes_filter {
-                    return None;
-                }
-
-                let metadata = record
-                    .metadata
-                    .clone()
-                    .unwrap_or_else(helpers::default_metadata);
-                let distance = l2_distance(&query.data, &record.vector);
-                Some(SearchResult::new(record.id.clone(), distance, metadata))
-            })
-            .collect();
-
-        all_results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-        all_results.truncate(k);
-
-        Ok(all_results)
+        search::knn_search_filtered_core(
+            &self.records,
+            &self.metadata_index,
+            self.hnsw_index.as_ref(),
+            &query.data,
+            k,
+            effective_ef,
+            filter,
+        )
     }
 
     /// Search with optional filter (convenience method)
@@ -2177,25 +2040,8 @@ impl VectorStore {
         let mut results = if let Some(f) = filter {
             self.knn_search_with_filter_ef_readonly(query, k, f, ef)?
         } else {
-            let results = self.knn_search_readonly(query, k, ef)?;
-            let filtered: Vec<SearchResult> = results
-                .into_iter()
-                .filter_map(|(slot, distance)| {
-                    let record = self.records.get_by_slot(slot as u32)?;
-                    let metadata = record
-                        .metadata
-                        .clone()
-                        .unwrap_or_else(helpers::default_metadata);
-                    Some(SearchResult::new(record.id.clone(), distance, metadata))
-                })
-                .collect();
-
-            // Fall back to brute force if HNSW results were all deleted
-            if filtered.is_empty() && self.has_live_vectors() {
-                self.knn_search_brute_force_with_metadata(query, k)?
-            } else {
-                filtered
-            }
+            let slot_results = self.knn_search_readonly(query, k, ef)?;
+            search::slots_to_results_with_fallback(&self.records, slot_results, &query.data, k)
         };
 
         if let Some(max_dist) = max_distance {
@@ -2203,31 +2049,6 @@ impl VectorStore {
         }
 
         Ok(results)
-    }
-
-    /// Check if there are any non-deleted vectors
-    fn has_live_vectors(&self) -> bool {
-        !self.records.is_empty()
-    }
-
-    /// Brute-force search with metadata (fallback for orphaned nodes)
-    fn knn_search_brute_force_with_metadata(
-        &self,
-        query: &Vector,
-        k: usize,
-    ) -> Result<Vec<SearchResult>> {
-        let results = self.knn_search_brute_force(query, k)?;
-        Ok(results
-            .into_iter()
-            .filter_map(|(slot, distance)| {
-                let record = self.records.get_by_slot(slot as u32)?;
-                let metadata = record
-                    .metadata
-                    .clone()
-                    .unwrap_or_else(helpers::default_metadata);
-                Some(SearchResult::new(record.id.clone(), distance, metadata))
-            })
-            .collect())
     }
 
     /// Parallel batch search for multiple queries
@@ -2271,22 +2092,7 @@ impl VectorStore {
             );
         }
 
-        // Brute force search using RecordStore
-        if self.records.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut distances: Vec<(usize, f32)> = self
-            .records
-            .iter_live()
-            .map(|(slot, record)| {
-                let dist = l2_distance(&query.data, &record.vector);
-                (slot as usize, dist)
-            })
-            .collect();
-
-        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
-        Ok(distances.into_iter().take(k).collect())
+        Ok(search::brute_force_search(&self.records, &query.data, k))
     }
 
     // ============================================================================
