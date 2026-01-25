@@ -66,6 +66,7 @@ dev = [
     "sentence-transformers>=5.1.2",
     "ty>=0.0.2",
     "h5py>=3.10.0",
+    "fastembed>=0.7.4",
 ]
 
 [tool.ruff]
