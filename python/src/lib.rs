@@ -5,8 +5,10 @@
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use omendb_lib::text::TextSearchConfig;
 use omendb_lib::vector::{
-    MetadataFilter, QuantizationMode, SearchResult, Vector, VectorStore, VectorStoreOptions,
+    muvera::MultiVectorConfig, MetadataFilter, QuantizationMode, SearchResult, Vector, VectorStore,
+    VectorStoreOptions,
 };
+use omendb_lib::{Rerank, SearchOptions};
 use parking_lot::RwLock;
 use pyo3::conversion::IntoPyObject;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -54,6 +56,86 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
 
     Err(PyValueError::new_err(
         "quantization must be True, False, or 'sq8'/'scalar' (4x smaller, ~99% recall)",
+    ))
+}
+
+/// Parse multi_vector parameter and return MultiVectorConfig if enabled
+///
+/// Accepts:
+/// - True → Default config (repetitions=5, partition_bits=3)
+/// - dict → Custom config {"repetitions": N, "partition_bits": M}
+/// - None/False → disabled
+///
+/// Returns Ok(Some(config)) if enabled, Ok(None) if disabled
+fn parse_multi_vector(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<MultiVectorConfig>> {
+    let Some(value) = ob else {
+        return Ok(None);
+    };
+
+    // Handle boolean: True enables with defaults, False disables
+    if let Ok(b) = value.extract::<bool>() {
+        return if b {
+            Ok(Some(MultiVectorConfig::default()))
+        } else {
+            Ok(None)
+        };
+    }
+
+    // Handle dict with custom config
+    if let Ok(dict) = value.cast::<PyDict>() {
+        let mut config = MultiVectorConfig::default();
+
+        if let Some(reps) = dict.get_item("repetitions")? {
+            config.repetitions = reps.extract()?;
+        }
+        if let Some(bits) = dict.get_item("partition_bits")? {
+            config.partition_bits = bits.extract()?;
+        }
+        if let Some(seed) = dict.get_item("seed")? {
+            config.seed = seed.extract()?;
+        }
+
+        return Ok(Some(config));
+    }
+
+    Err(PyValueError::new_err(
+        "multi_vector must be True, False, or dict with {repetitions, partition_bits}",
+    ))
+}
+
+/// Extract multi-vector query (list of lists or 2D numpy array)
+fn extract_multi_vector_query(ob: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f32>>> {
+    // Try 2D numpy array first (most efficient)
+    if let Ok(arr) = ob.extract::<PyReadonlyArray2<'_, f32>>() {
+        let shape = arr.shape();
+        let n_tokens = shape[0];
+        let dim = shape[1];
+        let mut tokens = Vec::with_capacity(n_tokens);
+
+        if let Ok(slice) = arr.as_slice() {
+            for i in 0..n_tokens {
+                let start = i * dim;
+                let end = start + dim;
+                tokens.push(slice[start..end].to_vec());
+            }
+            return Ok(tokens);
+        } else {
+            return Err(PyValueError::new_err("2D array must be contiguous"));
+        }
+    }
+
+    // Try list of lists
+    if let Ok(outer) = ob.cast::<PyList>() {
+        let mut tokens = Vec::with_capacity(outer.len());
+        for item in outer.iter() {
+            let token: Vec<f32> = item.extract()?;
+            tokens.push(token);
+        }
+        return Ok(tokens);
+    }
+
+    Err(PyValueError::new_err(
+        "multi-vector query must be a 2D numpy array or list of lists",
     ))
 }
 
@@ -167,6 +249,7 @@ struct VectorDatabaseInner {
 /// - 20,000-28,000 vec/s insert throughput
 /// - SQ8 quantization (4x compression, ~99% recall)
 /// - ACORN-1 filtered search (37.79x speedup)
+/// - Multi-vector support for ColBERT-style retrieval
 ///
 /// Auto-persists to disk for seamless data durability.
 ///
@@ -183,6 +266,7 @@ pub struct VectorDatabase {
     path: String,
     dimensions: usize,
     is_persistent: bool,
+    is_multi_vector: bool,
     /// Cache of open collection handles (same name = same object)
     collections_cache: RwLock<HashMap<String, Py<VectorDatabase>>>,
 }
@@ -410,6 +494,24 @@ impl VectorDatabase {
 
             // Handle batch: set([{...}, {...}])
             if let Ok(items) = id_or_items.cast::<PyList>() {
+                // Multi-vector store: use "vectors" key
+                if self.is_multi_vector {
+                    let parsed = parse_multi_vec_items(items)?;
+                    let inner_arc = Arc::clone(&self.inner);
+                    let count = py.detach(move || -> PyResult<usize> {
+                        let mut inner = inner_arc.write();
+                        for item in &parsed {
+                            inner
+                                .store
+                                .store(&item.id, item.vectors.clone(), item.metadata.clone())
+                                .map_err(convert_error)?;
+                        }
+                        Ok(parsed.len())
+                    })?;
+                    return Ok(count);
+                }
+
+                // Single-vector store: use "vector" key
                 let parsed = parse_batch_items_with_text(items)?;
 
                 // Check if any items have text
@@ -473,10 +575,14 @@ impl VectorDatabase {
     /// Releases the GIL during search for better concurrency with Python threads.
     ///
     /// Args:
-    ///     query: Query vector (list of floats or 1D numpy array)
+    ///     query: Query vector (list of floats or 1D numpy array).
+    ///         For multi-vector stores: list of lists or 2D numpy array.
     ///     k (int): Number of nearest neighbors to return
     ///     ef (int, optional): Search width override (default: auto-tuned)
     ///     filter (dict, optional): MongoDB-style metadata filter
+    ///     max_distance (float, optional): Filter out results beyond this distance
+    ///     rerank (bool, optional): Enable MaxSim reranking for multi-vector stores (default: True)
+    ///     rerank_factor (int, optional): Candidates multiplier for reranking (default: 4)
     ///
     /// Returns:
     ///     list[dict]: Results with keys {id, distance, metadata}
@@ -491,7 +597,11 @@ impl VectorDatabase {
     ///
     ///     With max_distance (filter out distant results):
     ///     >>> db.search([...], k=10, max_distance=0.5)
-    #[pyo3(name = "search", signature = (query, k, ef=None, filter=None, max_distance=None))]
+    ///
+    ///     Multi-vector search (ColBERT-style):
+    ///     >>> results = db.search([[0.1]*128, [0.2]*128], k=10)
+    ///     >>> results = db.search(query_tokens, k=10, rerank=False)  # Skip reranking
+    #[pyo3(name = "search", signature = (query, k, ef=None, filter=None, max_distance=None, rerank=None, rerank_factor=None))]
     fn search(
         &self,
         py: Python<'_>,
@@ -500,6 +610,8 @@ impl VectorDatabase {
         ef: Option<usize>,
         filter: Option<&Bound<'_, PyDict>>,
         max_distance: Option<f32>,
+        rerank: Option<bool>,
+        rerank_factor: Option<usize>,
     ) -> PyResult<Vec<Py<PyDict>>> {
         if k == 0 {
             return Err(PyValueError::new_err("k must be greater than 0"));
@@ -518,9 +630,55 @@ impl VectorDatabase {
             }
         }
 
-        // Extract Python objects before releasing GIL
-        let query_vec = Vector::new(extract_query_vector(query)?);
         let rust_filter = filter.map(parse_filter).transpose()?;
+
+        // Multi-vector store: use query() with SearchOptions
+        if self.is_multi_vector {
+            let query_tokens = extract_multi_vector_query(query)?;
+
+            // Build rerank mode
+            let rerank_mode = match (rerank, rerank_factor) {
+                (Some(false), _) => Rerank::Off,
+                (_, Some(factor)) => Rerank::Factor(factor),
+                _ => Rerank::On, // Default: rerank enabled
+            };
+
+            // Build search options
+            let mut options = SearchOptions::default().rerank(rerank_mode);
+            if let Some(ef_val) = ef {
+                options = options.ef(ef_val);
+            }
+            if let Some(f) = rust_filter {
+                options = options.filter(f);
+            }
+            if let Some(max_dist) = max_distance {
+                options = options.max_distance(max_dist);
+            }
+
+            // Ensure index is ready
+            {
+                let inner = self.inner.read();
+                if inner.store.needs_index_rebuild() {
+                    drop(inner);
+                    let mut inner = self.inner.write();
+                    inner.store.ensure_index_ready().map_err(convert_error)?;
+                }
+            }
+
+            let inner_arc = Arc::clone(&self.inner);
+            let results = py.detach(move || {
+                let inner = inner_arc.read();
+                inner
+                    .store
+                    .query_with_options(&query_tokens, k, &options)
+                    .map_err(convert_error)
+            })?;
+
+            return results_to_py(py, &results);
+        }
+
+        // Single-vector store: original logic
+        let query_vec = Vector::new(extract_query_vector(query)?);
 
         // Ensure index is ready before releasing GIL
         {
@@ -1085,6 +1243,12 @@ impl VectorDatabase {
         self.dimensions
     }
 
+    /// Whether this is a multi-vector store (for ColBERT-style retrieval).
+    #[getter]
+    fn is_multi_vector(&self) -> bool {
+        self.is_multi_vector
+    }
+
     /// Check if database is empty.
     fn is_empty(&self) -> bool {
         let inner = self.inner.read();
@@ -1318,6 +1482,7 @@ impl VectorDatabase {
             path: collection_path.to_string_lossy().to_string(),
             dimensions: self.dimensions,
             is_persistent: true,
+            is_multi_vector: false, // Collections don't support multi-vector yet
             collections_cache: RwLock::new(HashMap::new()),
         };
 
@@ -1760,6 +1925,10 @@ impl VectorDatabase {
 ///         - "l2" or "euclidean": Euclidean distance (default)
 ///         - "cosine": Cosine distance (1 - cosine similarity)
 ///         - "dot" or "ip": Inner product (for MIPS)
+///     multi_vector (bool|dict): Enable multi-vector mode for ColBERT-style retrieval
+///         - True: Enable with default config (repetitions=5, partition_bits=3)
+///         - dict: Custom config {"repetitions": 10, "partition_bits": 4}
+///         - False/None: Single-vector mode (default)
 ///     config (dict): Advanced config (deprecated, use top-level params instead)
 ///
 /// Returns:
@@ -1782,13 +1951,18 @@ impl VectorDatabase {
 ///     # Disable rescore for max speed (~1-3% recall loss)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, rescore=False)
 ///
+///     # Multi-vector mode for ColBERT-style retrieval
+///     >>> db = omendb.open("./vectors", dimensions=128, multi_vector=True)
+///     >>> db.set([{"id": "doc1", "vectors": [[0.1]*128, [0.2]*128], "metadata": {}}])
+///     >>> results = db.search([[0.1]*128], k=10)
+///
 ///     # Custom oversample factor (default 3.0)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, oversample=5.0)
 ///
 ///     # With cosine distance metric
 ///     >>> db = omendb.open("./vectors", dimensions=768, metric="cosine")
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, rescore=None, oversample=None, metric=None, config=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, rescore=None, oversample=None, metric=None, multi_vector=None, config=None))]
 fn open(
     path: String,
     dimensions: usize,
@@ -1799,6 +1973,7 @@ fn open(
     rescore: Option<bool>,
     oversample: Option<f32>,
     metric: Option<String>,
+    multi_vector: Option<&Bound<'_, PyAny>>,
     config: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<VectorDatabase> {
     use std::path::{Path, PathBuf};
@@ -1851,8 +2026,41 @@ fn open(
     // Resolve effective dimensions (use 128 as default if not specified)
     let effective_dims = if dimensions == 0 { 128 } else { dimensions };
 
+    // Parse multi-vector config
+    let mv_config = parse_multi_vector(multi_vector)?;
+    let is_multi_vec = mv_config.is_some();
+
+    // Multi-vector stores don't support persistence or quantization yet
+    if is_multi_vec {
+        if quant_mode.is_some() {
+            return Err(PyValueError::new_err(
+                "Multi-vector stores don't support quantization yet",
+            ));
+        }
+        if path != ":memory:" {
+            return Err(PyValueError::new_err(
+                "Multi-vector stores only support in-memory mode (:memory:) - persistence coming soon",
+            ));
+        }
+    }
+
     // Handle :memory: for in-memory database (must check BEFORE path existence checks)
     if path == ":memory:" {
+        // Multi-vector mode: use VectorStore::multi_vector() constructor
+        if let Some(config) = mv_config {
+            let store = VectorStore::multi_vector_with(effective_dims, config);
+
+            return Ok(VectorDatabase {
+                inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+                path,
+                dimensions: effective_dims,
+                is_persistent: false,
+                is_multi_vector: true,
+                collections_cache: RwLock::new(HashMap::new()),
+            });
+        }
+
+        // Single-vector mode (original logic)
         let options = build_store_options(
             effective_dims,
             m,
@@ -1873,6 +2081,7 @@ fn open(
             path,
             dimensions: effective_dims,
             is_persistent: false,
+            is_multi_vector: false,
             collections_cache: RwLock::new(HashMap::new()),
         });
     }
@@ -1943,6 +2152,7 @@ fn open(
             path,
             dimensions: effective_dims,
             is_persistent: true,
+            is_multi_vector: false,
             collections_cache: RwLock::new(HashMap::new()),
         });
     }
@@ -1968,6 +2178,7 @@ fn open(
         path,
         dimensions: effective_dims,
         is_persistent: false,
+        is_multi_vector: false,
         collections_cache: RwLock::new(HashMap::new()),
     })
 }
@@ -2141,6 +2352,62 @@ fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<Parsed
             vector: Vector::new(vector_data),
             metadata: metadata_json,
             text,
+        });
+    }
+
+    Ok(batch)
+}
+
+/// Parsed multi-vector batch item
+struct ParsedMultiVecItem {
+    id: String,
+    vectors: Vec<Vec<f32>>,
+    metadata: JsonValue,
+}
+
+/// Helper: Parse batch items for multi-vector store (uses "vectors" key)
+fn parse_multi_vec_items(items: &Bound<'_, PyList>) -> PyResult<Vec<ParsedMultiVecItem>> {
+    let mut batch = Vec::new();
+
+    for (idx, item) in items.iter().enumerate() {
+        let dict = item
+            .cast::<PyDict>()
+            .map_err(|_| PyValueError::new_err(format!("Item at index {} must be a dict", idx)))?;
+
+        let id: String = dict
+            .get_item("id")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!("Item at index {} missing 'id' field", idx))
+            })?
+            .extract()?;
+
+        // Multi-vector uses "vectors" key (list of lists)
+        let vectors_obj = dict.get_item("vectors")?.ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "Item '{}' missing 'vectors' field (multi-vector store)",
+                id
+            ))
+        })?;
+
+        let vectors = extract_multi_vector_query(&vectors_obj)?;
+
+        if vectors.is_empty() {
+            return Err(PyValueError::new_err(format!(
+                "Item '{}': 'vectors' must not be empty",
+                id
+            )));
+        }
+
+        let metadata_json = if let Some(metadata_dict) = dict.get_item("metadata")? {
+            pyobject_to_json(&metadata_dict)?
+        } else {
+            serde_json::json!({})
+        };
+
+        batch.push(ParsedMultiVecItem {
+            id,
+            vectors,
+            metadata: metadata_json,
         });
     }
 
