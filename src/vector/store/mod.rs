@@ -8,6 +8,7 @@
 //! Optional tantivy-based full-text search for hybrid (vector + BM25) retrieval.
 
 mod filter;
+mod helpers;
 mod input;
 mod options;
 mod record_store;
@@ -52,186 +53,13 @@ const DEFAULT_HNSW_EF_SEARCH: usize = 100;
 const DEFAULT_OVERSAMPLE_FACTOR: f32 = 3.0;
 
 // ============================================================================
-// Helper Functions
+// Helper Functions (moved to helpers.rs)
 // ============================================================================
-
-/// Compute effective ef_search value.
-///
-/// Ensures ef >= k (HNSW requirement) and falls back to default if not specified.
-#[inline]
-fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> usize {
-    ef.unwrap_or(stored_ef).max(k)
-}
 
 #[cfg(test)]
 mod stress_tests;
 #[cfg(test)]
 mod tests;
-
-/// Compute optimal oversample factor based on quantization mode.
-///
-/// Different quantization modes have different baseline recall:
-/// - SQ8: ~99% accurate, needs minimal oversampling (2.0x)
-/// - No quantization: 1.0 (rescore disabled)
-fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
-    match mode {
-        None => 1.0,
-        Some(QuantizationMode::SQ8) => 2.0,
-    }
-}
-
-/// Convert stored quantization mode ID to QuantizationMode.
-///
-/// Mode IDs: 0=none, 1=sq8
-fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
-    match mode_id {
-        1 => Some(QuantizationMode::SQ8),
-        _ => None,
-    }
-}
-
-/// Convert QuantizationMode to storage mode ID.
-fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
-    match mode {
-        QuantizationMode::SQ8 => 1,
-    }
-}
-
-/// Create HNSW index with quantization mode.
-fn create_hnsw_index(
-    dimensions: usize,
-    hnsw_m: usize,
-    hnsw_ef_construction: usize,
-    hnsw_ef_search: usize,
-    distance_metric: Metric,
-    quantization_mode: Option<&QuantizationMode>,
-    training_vectors: &[Vec<f32>],
-) -> Result<HNSWIndex> {
-    use super::hnsw_index::HNSWQuantization;
-
-    let m = hnsw_m.max(DEFAULT_HNSW_M);
-    let ef_construction = hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION);
-    let ef_search = hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH);
-
-    let quantization = match quantization_mode {
-        Some(QuantizationMode::SQ8) => HNSWQuantization::SQ8,
-        None => HNSWQuantization::None,
-    };
-
-    HNSWIndex::builder()
-        .dimensions(dimensions)
-        .max_elements(training_vectors.len().max(10_000))
-        .m(m)
-        .ef_construction(ef_construction)
-        .ef_search(ef_search)
-        .metric(distance_metric.into())
-        .quantization(quantization)
-        .build_with_training(training_vectors)
-}
-
-/// Rebuild HNSW index maintaining slot-index correspondence
-///
-/// Inserts vectors in slot order so HNSW indices match RecordStore slots.
-/// For deleted slots, inserts zero vectors and marks them deleted.
-#[allow(clippy::too_many_arguments)]
-fn rebuild_hnsw_with_slots(
-    records: &RecordStore,
-    deleted: &roaring::RoaringBitmap,
-    dimensions: usize,
-    hnsw_m: usize,
-    hnsw_ef_construction: usize,
-    hnsw_ef_search: usize,
-    distance_metric: Metric,
-    quantization_mode: Option<&QuantizationMode>,
-) -> Result<HNSWIndex> {
-    // Collect live vectors for training (PQ/SQ codebooks)
-    let training_vectors: Vec<Vec<f32>> = records.collect_vectors();
-
-    let mut index = create_hnsw_index(
-        dimensions,
-        hnsw_m,
-        hnsw_ef_construction,
-        hnsw_ef_search,
-        distance_metric,
-        quantization_mode,
-        &training_vectors,
-    )?;
-
-    // Insert vectors in slot order to maintain index == slot correspondence
-    let zero_vector = vec![0.0f32; dimensions];
-    let mut deleted_slots = Vec::new();
-
-    for slot in 0..records.slot_count() {
-        if deleted.contains(slot) {
-            // Insert placeholder for deleted slot, mark deleted after
-            index.insert(&zero_vector)?;
-            deleted_slots.push(slot);
-        } else if let Some(record) = records.get_by_slot(slot) {
-            index.insert(&record.vector)?;
-        } else {
-            // Empty slot without delete marker - shouldn't happen but handle it
-            index.insert(&zero_vector)?;
-            deleted_slots.push(slot);
-        }
-    }
-
-    // Mark all deleted slots in HNSW
-    if !deleted_slots.is_empty() {
-        index.mark_deleted_batch(&deleted_slots)?;
-    }
-
-    Ok(index)
-}
-
-/// Initialize HNSW index from quantization mode.
-#[allow(dead_code)]
-fn initialize_quantized_hnsw(
-    dimensions: usize,
-    hnsw_m: usize,
-    hnsw_ef_construction: usize,
-    hnsw_ef_search: usize,
-    distance_metric: Metric,
-    quant_mode: QuantizationMode,
-    _training_vectors: &[Vec<f32>],
-) -> Result<HNSWIndex> {
-    // Note: ef_search is a runtime parameter passed to search(), not stored in HNSWParams
-    let _ = hnsw_ef_search; // Silence unused warning - caller passes it to search() at runtime
-    let hnsw_params = HNSWParams::default()
-        .with_m(hnsw_m)
-        .with_ef_construction(hnsw_ef_construction);
-
-    match quant_mode {
-        QuantizationMode::SQ8 => {
-            HNSWIndex::new_with_sq8(dimensions, hnsw_params, distance_metric.into())
-        }
-    }
-}
-
-/// Initialize standard (non-quantized) HNSW index.
-#[allow(dead_code)]
-fn initialize_standard_hnsw(
-    dimensions: usize,
-    hnsw_m: usize,
-    hnsw_ef_construction: usize,
-    hnsw_ef_search: usize,
-    distance_metric: Metric,
-    capacity: usize,
-) -> Result<HNSWIndex> {
-    HNSWIndex::new_with_params(
-        capacity,
-        dimensions,
-        hnsw_m,
-        hnsw_ef_construction,
-        hnsw_ef_search,
-        distance_metric.into(),
-    )
-}
-
-/// Default empty JSON object for missing metadata.
-#[inline]
-fn default_metadata() -> JsonValue {
-    serde_json::json!({})
-}
 
 /// Search result with user ID, distance, and metadata
 #[derive(Debug, Clone)]
@@ -536,7 +364,7 @@ impl VectorStore {
         // Check quantization
         let _is_quantized = storage.is_quantized()?;
         let quantization_mode =
-            quantization_mode_from_id(storage.get_quantization_mode()?.unwrap_or(0));
+            helpers::quantization_mode_from_id(storage.get_quantization_mode()?.unwrap_or(0));
 
         // Build RecordStore from snapshot
         let mut deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
@@ -641,7 +469,7 @@ impl VectorStore {
                             index.len(),
                             slot_count
                         );
-                        Some(rebuild_hnsw_with_slots(
+                        Some(helpers::rebuild_hnsw_with_slots(
                             &records,
                             &deleted_bitmap,
                             dimensions,
@@ -658,7 +486,7 @@ impl VectorStore {
                 Err(e) => {
                     tracing::warn!("Failed to deserialize HNSW index, rebuilding: {}", e);
                     if active_count > 0 {
-                        Some(rebuild_hnsw_with_slots(
+                        Some(helpers::rebuild_hnsw_with_slots(
                             &records,
                             &deleted_bitmap,
                             dimensions,
@@ -674,7 +502,7 @@ impl VectorStore {
                 }
             }
         } else if active_count > 0 {
-            Some(rebuild_hnsw_with_slots(
+            Some(helpers::rebuild_hnsw_with_slots(
                 &records,
                 &deleted_bitmap,
                 dimensions,
@@ -835,7 +663,7 @@ impl VectorStore {
 
         // Save quantization mode to storage if set
         if let Some(ref q) = options.quantization {
-            storage.put_quantization_mode(quantization_mode_to_id(q))?;
+            storage.put_quantization_mode(helpers::quantization_mode_to_id(q))?;
         }
 
         // Initialize text index if enabled
@@ -848,9 +676,9 @@ impl VectorStore {
 
         // Determine rescore settings
         let rescore_enabled = options.rescore.unwrap_or(options.quantization.is_some());
-        let oversample_factor = options
-            .oversample
-            .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
+        let oversample_factor = options.oversample.unwrap_or_else(|| {
+            helpers::default_oversample_for_quantization(options.quantization.as_ref())
+        });
 
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
@@ -918,9 +746,9 @@ impl VectorStore {
 
         // Determine rescore settings
         let rescore_enabled = options.rescore.unwrap_or(options.quantization.is_some());
-        let oversample_factor = options
-            .oversample
-            .unwrap_or_else(|| default_oversample_for_quantization(options.quantization.as_ref()));
+        let oversample_factor = options.oversample.unwrap_or_else(|| {
+            helpers::default_oversample_for_quantization(options.quantization.as_ref())
+        });
 
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
@@ -983,9 +811,9 @@ impl VectorStore {
     ) -> Result<HNSWIndex> {
         if let Some(quant_mode) = self.pending_quantization.take() {
             if let Some(ref mut storage) = self.storage {
-                storage.put_quantization_mode(quantization_mode_to_id(&quant_mode))?;
+                storage.put_quantization_mode(helpers::quantization_mode_to_id(&quant_mode))?;
             }
-            initialize_quantized_hnsw(
+            helpers::initialize_quantized_hnsw(
                 dimensions,
                 self.hnsw_m,
                 self.hnsw_ef_construction,
@@ -995,7 +823,7 @@ impl VectorStore {
                 training_vectors,
             )
         } else {
-            initialize_standard_hnsw(
+            helpers::initialize_standard_hnsw(
                 dimensions,
                 self.hnsw_m,
                 self.hnsw_ef_construction,
@@ -1016,7 +844,7 @@ impl VectorStore {
         let slot = self.records.slot_count();
         let id = format!("__auto_{slot}");
 
-        self.set(id, vector, default_metadata())
+        self.set(id, vector, helpers::default_metadata())
     }
 
     /// Insert vector with string ID and metadata
@@ -1225,7 +1053,8 @@ impl VectorStore {
                 // Handle quantization mode persistence
                 if let Some(quant_mode) = self.pending_quantization.take() {
                     if let Some(ref mut storage) = self.storage {
-                        storage.put_quantization_mode(quantization_mode_to_id(&quant_mode))?;
+                        storage
+                            .put_quantization_mode(helpers::quantization_mode_to_id(&quant_mode))?;
                     }
                 }
 
@@ -1505,7 +1334,7 @@ impl VectorStore {
                     .records
                     .get(&id)
                     .and_then(|r| r.metadata.clone())
-                    .unwrap_or_else(default_metadata);
+                    .unwrap_or_else(helpers::default_metadata);
                 (id, score, metadata)
             })
             .collect()
@@ -1622,7 +1451,7 @@ impl VectorStore {
                     .records
                     .get(&result.id)
                     .and_then(|r| r.metadata.clone())
-                    .unwrap_or_else(default_metadata);
+                    .unwrap_or_else(helpers::default_metadata);
                 (result, metadata)
             })
             .collect()
@@ -1842,7 +1671,10 @@ impl VectorStore {
     #[must_use]
     pub fn get(&self, id: &str) -> Option<(Vector, JsonValue)> {
         let record = self.records.get(id)?;
-        let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+        let metadata = record
+            .metadata
+            .clone()
+            .unwrap_or_else(helpers::default_metadata);
         Some((Vector::new(record.vector.clone()), metadata))
     }
 
@@ -2066,7 +1898,7 @@ impl VectorStore {
     ) -> Result<Vec<(usize, f32)>> {
         // Use provided ef, or fall back to stored hnsw_ef_search
         // Ensure ef >= k (HNSW requirement)
-        let effective_ef = compute_effective_ef(ef, self.hnsw_ef_search, k);
+        let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
         self.knn_search_ef(query, k, effective_ef)
     }
 
@@ -2205,7 +2037,7 @@ impl VectorStore {
     ) -> Result<Vec<SearchResult>> {
         // Use provided ef, or fall back to stored hnsw_ef_search
         // Ensure ef >= k (HNSW requirement)
-        let effective_ef = compute_effective_ef(ef, self.hnsw_ef_search, k);
+        let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
 
         // Try bitmap-based filtering (O(1) per candidate)
         let filter_bitmap = filter.evaluate_bitmap(&self.metadata_index);
@@ -2227,7 +2059,7 @@ impl VectorStore {
                     let metadata = records
                         .get_by_slot(node_id)
                         .and_then(|r| r.metadata.clone())
-                        .unwrap_or_else(default_metadata);
+                        .unwrap_or_else(helpers::default_metadata);
                     filter.matches(&metadata)
                 };
                 hnsw.search_with_filter_ef(&query.data, k, Some(effective_ef), filter_fn)?
@@ -2237,7 +2069,10 @@ impl VectorStore {
                 .into_iter()
                 .filter_map(|(slot, distance)| {
                     let record = self.records.get_by_slot(slot as u32)?;
-                    let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                    let metadata = record
+                        .metadata
+                        .clone()
+                        .unwrap_or_else(helpers::default_metadata);
                     Some(SearchResult::new(record.id.clone(), distance, metadata))
                 })
                 .collect();
@@ -2254,7 +2089,10 @@ impl VectorStore {
                 let passes_filter = if let Some(ref bitmap) = filter_bitmap {
                     bitmap.contains(slot)
                 } else {
-                    let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                    let metadata = record
+                        .metadata
+                        .clone()
+                        .unwrap_or_else(helpers::default_metadata);
                     filter.matches(&metadata)
                 };
 
@@ -2262,7 +2100,10 @@ impl VectorStore {
                     return None;
                 }
 
-                let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                let metadata = record
+                    .metadata
+                    .clone()
+                    .unwrap_or_else(helpers::default_metadata);
                 let distance = l2_distance(&query.data, &record.vector);
                 Some(SearchResult::new(record.id.clone(), distance, metadata))
             })
@@ -2341,7 +2182,10 @@ impl VectorStore {
                 .into_iter()
                 .filter_map(|(slot, distance)| {
                     let record = self.records.get_by_slot(slot as u32)?;
-                    let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                    let metadata = record
+                        .metadata
+                        .clone()
+                        .unwrap_or_else(helpers::default_metadata);
                     Some(SearchResult::new(record.id.clone(), distance, metadata))
                 })
                 .collect();
@@ -2377,7 +2221,10 @@ impl VectorStore {
             .into_iter()
             .filter_map(|(slot, distance)| {
                 let record = self.records.get_by_slot(slot as u32)?;
-                let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+                let metadata = record
+                    .metadata
+                    .clone()
+                    .unwrap_or_else(helpers::default_metadata);
                 Some(SearchResult::new(record.id.clone(), distance, metadata))
             })
             .collect())
@@ -2393,7 +2240,7 @@ impl VectorStore {
     ) -> Vec<Result<Vec<(usize, f32)>>> {
         // Use provided ef, or fall back to stored hnsw_ef_search
         // Ensure ef >= k (HNSW requirement)
-        let effective_ef = compute_effective_ef(ef, self.hnsw_ef_search, k);
+        let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
         queries
             .par_iter()
             .map(|q| self.knn_search_ef(q, k, effective_ef))
@@ -3371,7 +3218,10 @@ impl VectorStore {
     /// Internal: get single vector.
     fn get_vector_internal(&self, id: &str) -> Option<(Vec<f32>, JsonValue)> {
         let record = self.records.get(id)?;
-        let metadata = record.metadata.clone().unwrap_or_else(default_metadata);
+        let metadata = record
+            .metadata
+            .clone()
+            .unwrap_or_else(helpers::default_metadata);
         Some((record.vector.clone(), metadata))
     }
 
@@ -3386,7 +3236,7 @@ impl VectorStore {
             .get(id)?
             .metadata
             .clone()
-            .unwrap_or_else(default_metadata);
+            .unwrap_or_else(helpers::default_metadata);
         Some((tokens, metadata))
     }
 
