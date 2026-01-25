@@ -46,7 +46,6 @@ mod tests;
 
 // Re-export builders
 pub use parallel::ParallelBuilder;
-pub use sequential::SequentialBuilder;
 
 use super::error::{HNSWError, Result};
 use super::node_storage::NodeStorage;

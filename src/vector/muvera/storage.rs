@@ -90,7 +90,7 @@ impl MultiVecStorage {
     /// Get tokens as a Vec of slices (convenience method for reranking).
     #[must_use]
     pub fn get_tokens(&self, slot: u32) -> Option<Vec<&[f32]>> {
-        self.get(slot).map(|iter| iter.collect())
+        self.get(slot).map(std::iter::Iterator::collect)
     }
 
     /// Number of documents stored.

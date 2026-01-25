@@ -115,9 +115,9 @@ impl MuveraEncoder {
 
             // Copy to FDE output
             let rep_offset = rep * num_partitions * self.token_dim;
-            for p in 0..num_partitions {
+            for (p, partition_sum) in partition_sums.iter().enumerate().take(num_partitions) {
                 let start = rep_offset + p * self.token_dim;
-                fde[start..start + self.token_dim].copy_from_slice(&partition_sums[p]);
+                fde[start..start + self.token_dim].copy_from_slice(partition_sum);
             }
         }
 
@@ -155,7 +155,7 @@ fn matmul_vec(vec: &[f32], matrix: &[Vec<f32>]) -> Vec<f32> {
 fn simhash_gray_code(sketch: &[f32]) -> usize {
     let mut gray = 0usize;
     for &val in sketch {
-        let bit = if val > 0.0 { 1 } else { 0 };
+        let bit = usize::from(val > 0.0);
         gray = (gray << 1) + (bit ^ (gray & 1));
     }
     gray

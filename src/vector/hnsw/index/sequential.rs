@@ -9,6 +9,10 @@
 //! - Reusable search result buffers (no allocation per search)
 //! - Passes distances from search to heuristic (no redundant computation)
 
+// Experimental builder, not yet integrated
+#![allow(dead_code)]
+#![allow(clippy::unnecessary_wraps)]
+
 use super::HNSWIndex;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::NodeStorage;
@@ -266,7 +270,7 @@ impl SequentialBuilder {
 
                     // Check if dominated by worst in working set
                     let dominated = self.working.len() >= ef
-                        && self.working.peek().map_or(false, |w| dist > w.distance.0);
+                        && self.working.peek().is_some_and(|w| dist > w.distance.0);
 
                     if !dominated {
                         self.candidates

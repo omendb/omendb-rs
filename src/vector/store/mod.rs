@@ -24,7 +24,7 @@ pub use thread_safe::ThreadSafeVectorStore;
 
 use super::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use super::hnsw_index::HNSWIndex;
-use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraConfig, MuveraEncoder};
+use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::types::Vector;
 use super::QuantizationMode;
 use crate::distance::l2_distance;
@@ -2755,13 +2755,17 @@ impl VectorStore {
     /// Get the token dimension (for multi-vector stores).
     #[must_use]
     pub fn token_dimension(&self) -> Option<usize> {
-        self.muvera_encoder.as_ref().map(|e| e.token_dimension())
+        self.muvera_encoder
+            .as_ref()
+            .map(MuveraEncoder::token_dimension)
     }
 
     /// Get the encoded dimension (for multi-vector stores).
     #[must_use]
     pub fn encoded_dimension(&self) -> Option<usize> {
-        self.muvera_encoder.as_ref().map(|e| e.fde_dimension())
+        self.muvera_encoder
+            .as_ref()
+            .map(MuveraEncoder::fde_dimension)
     }
 
     /// Insert a document with token embeddings.
@@ -2869,7 +2873,7 @@ impl VectorStore {
         // Validate all documents first
         for (i, (id, tokens, _)) in batch.iter().enumerate() {
             if tokens.is_empty() {
-                anyhow::bail!("Document '{}' (index {}) has empty tokens", id, i);
+                anyhow::bail!("Document '{id}' (index {i}) has empty tokens");
             }
             if tokens.len() > self.max_tokens {
                 anyhow::bail!(
@@ -2896,7 +2900,7 @@ impl VectorStore {
         let fdes: Vec<Vec<f32>> = batch
             .par_iter()
             .map(|(_, tokens, _)| {
-                let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+                let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
                 encoder.encode_document(&token_refs)
             })
             .collect();
@@ -2908,7 +2912,7 @@ impl VectorStore {
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
 
         for (_, tokens, _) in &batch {
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             multivec_storage.add(&token_refs);
         }
 
@@ -3163,7 +3167,7 @@ impl VectorStore {
             }
             // Multi-vector store, multi-vector data
             (Some(_), VectorData::Multi(tokens)) => {
-                let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+                let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
                 self.store_multi_internal(&token_refs, id, metadata)
             }
             // Error: wrong type for store
@@ -3387,7 +3391,7 @@ impl VectorStore {
     fn get_tokens_internal(&self, id: &str) -> Option<(Vec<Vec<f32>>, JsonValue)> {
         let slot = self.records.get_slot(id)?;
         let multivec_storage = self.multivec_storage.as_ref()?;
-        let token_refs = multivec_storage.get_tokens(slot as u32)?;
+        let token_refs = multivec_storage.get_tokens(slot)?;
         let tokens: Vec<Vec<f32>> = token_refs.iter().map(|t| t.to_vec()).collect();
         let metadata = self
             .records
@@ -3426,15 +3430,14 @@ impl VectorStore {
         }
 
         // Check first item to determine type
-        let is_multi = items.first().map_or(false, |(_, data, _)| data.is_multi());
+        let is_multi = items.first().is_some_and(|(_, data, _)| data.is_multi());
 
         // Validate all items are same type
         for (i, (_, data, _)) in items.iter().enumerate() {
             if data.is_multi() != is_multi {
                 anyhow::bail!(
-                    "Batch item {} has different type than item 0. \
-                    All items must be same type (all single vectors or all token embeddings)",
-                    i
+                    "Batch item {i} has different type than item 0. \
+                    All items must be same type (all single vectors or all token embeddings)"
                 );
             }
         }
