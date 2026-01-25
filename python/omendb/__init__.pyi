@@ -10,6 +10,8 @@ from typing_extensions import Self
 # Type aliases for vectors
 Vector = Sequence[float] | npt.NDArray[np.floating[Any]]
 VectorBatch = Sequence[Sequence[float]] | npt.NDArray[np.floating[Any]]
+MultiVector = Sequence[Sequence[float]] | list[npt.NDArray[np.floating[Any]]]
+MultiVectorBatch = Sequence[Sequence[Sequence[float]]] | list[list[npt.NDArray[np.floating[Any]]]]
 
 class SearchResult(TypedDict):
     """Single search result."""
@@ -42,12 +44,25 @@ class HybridSearchResultWithSubscores(TypedDict):
     semantic_score: float | None  # Vector distance (None if only matched text search)
 
 class VectorRecord(TypedDict, total=False):
-    """Input record for set()."""
+    """Input record for set().
+
+    Works for both single-vector and multi-vector stores:
+    - Single-vector stores: use `vector` field
+    - Multi-vector stores: use `vectors` field (list of vectors)
+    """
 
     id: str  # Required
-    vector: list[float]  # Required
+    vector: list[float]  # For single-vector stores
+    vectors: list[list[float]]  # For multi-vector stores
     metadata: dict[str, Any]
     text: str  # For hybrid search - indexed AND auto-stored in metadata["text"]
+
+class MultiVectorConfig(TypedDict, total=False):
+    """Configuration for multi-vector (MUVERA) stores."""
+
+    repetitions: int  # Number of MUVERA repetitions (default: 5)
+    partition_bits: int  # Partition bits for MUVERA (default: 3)
+    seed: int  # Random seed for reproducibility
 
 class GetResult(TypedDict):
     """Result from get()."""
@@ -96,6 +111,11 @@ class VectorDatabase:
     @property
     def dimensions(self) -> int:
         """Vector dimensionality of this database."""
+        ...
+
+    @property
+    def is_multi_vector(self) -> bool:
+        """Check if this is a multi-vector store."""
         ...
 
     # Set methods with multiple signatures
@@ -160,28 +180,43 @@ class VectorDatabase:
 
     def search(
         self,
-        query: Vector,
+        query: Vector | MultiVector,
         k: int,
         ef: int | None = None,
         filter: MetadataFilter | None = None,
         max_distance: float | None = None,
+        rerank: bool | None = None,
+        rerank_factor: int | None = None,
     ) -> list[SearchResult]:
         """Search for k nearest neighbors.
 
+        Works for both single-vector and multi-vector stores:
+        - Single-vector: query is a list/array of floats
+        - Multi-vector: query is a list of vectors (list of lists/arrays)
+
         Args:
-            query: Query vector (list or 1D numpy array).
+            query: Query vector(s). Single vector for regular stores,
+                   list of vectors for multi-vector stores.
             k: Number of nearest neighbors to return.
-            ef: Search width override (default: auto-tuned).
-            filter: MongoDB-style metadata filter.
-            max_distance: Maximum distance threshold (filters out distant results).
+            ef: Search width override (single-vector stores, default: auto-tuned).
+            filter: MongoDB-style metadata filter (single-vector stores).
+            max_distance: Maximum distance threshold (single-vector stores).
+            rerank: Enable MaxSim reranking (multi-vector stores, default: True).
+            rerank_factor: Fetch k*rerank_factor candidates before reranking
+                          (multi-vector stores, default: 4).
 
         Returns:
             List of results with id, distance, metadata.
 
         Examples:
+            >>> # Single-vector store
             >>> results = db.search([0.1, 0.2, 0.3], k=5)
             >>> results = db.search([...], k=10, filter={"category": "A"})
             >>> results = db.search([...], k=10, max_distance=0.5)
+            >>>
+            >>> # Multi-vector store
+            >>> results = mvdb.search([[0.1, ...], [0.2, ...]], k=10)
+            >>> results = mvdb.search(query_vecs, k=10, rerank=True, rerank_factor=8)
         """
         ...
 
@@ -553,6 +588,7 @@ def open(
     rescore: bool | None = None,
     oversample: float | None = None,
     metric: Literal["l2", "euclidean", "cosine", "dot", "ip"] | None = None,
+    multi_vector: bool | MultiVectorConfig | None = None,
     config: dict[str, Any] | None = None,
 ) -> VectorDatabase:
     """Open or create a vector database.
@@ -572,15 +608,26 @@ def open(
             - "l2" or "euclidean": Euclidean distance (default)
             - "cosine": Cosine distance (1 - cosine similarity)
             - "dot" or "ip": Inner product (for MIPS)
+        multi_vector: Enable multi-vector mode for ColBERT-style retrieval:
+            - True: Enable with default config (repetitions=5, partition_bits=3)
+            - MultiVectorConfig: Custom config dict
+            - None/False: Disabled (default, single-vector mode)
+            Note: Multi-vector stores only support in-memory mode (:memory:).
         config: Advanced config dict (deprecated).
 
     Returns:
         VectorDatabase instance.
 
     Examples:
+        >>> # Single-vector store
         >>> db = omendb.open("./vectors", dimensions=768)
         >>> db = omendb.open("./vectors", dimensions=768, quantization=True)
         >>> db = omendb.open(":memory:", dimensions=128)
+        >>>
+        >>> # Multi-vector store
+        >>> mvdb = omendb.open(":memory:", dimensions=128, multi_vector=True)
+        >>> mvdb = omendb.open(":memory:", dimensions=128,
+        ...                    multi_vector={"repetitions": 10, "partition_bits": 4})
     """
     ...
 

@@ -224,7 +224,7 @@ pub struct SearchResult {
 }
 
 // ============================================================================
-// Vector Item - input for set operations
+// Vector Item - input for set operations (single-vector stores)
 // ============================================================================
 
 #[napi(object)]
@@ -240,7 +240,7 @@ pub struct VectorItem {
 }
 
 // ============================================================================
-// Multi-Vector Item - input for multi-vector set operations
+// Multi-Vector Item - input for set operations (multi-vector stores)
 // ============================================================================
 
 #[napi(object)]
@@ -252,6 +252,25 @@ pub struct MultiVectorItem {
     /// Optional metadata
     #[napi(ts_type = "Record<string, unknown> | undefined")]
     pub metadata: Option<JsonValue>,
+}
+
+// ============================================================================
+// Unified Item - input for set() on any store type
+// ============================================================================
+
+#[napi(object)]
+pub struct SetItem {
+    pub id: String,
+    /// Single vector data (for regular stores)
+    pub vector: Option<Float32Array>,
+    /// Multi-vector data (for multi-vector stores)
+    #[napi(ts_type = "Float32Array[] | undefined")]
+    pub vectors: Option<Vec<Float32Array>>,
+    /// Optional metadata
+    #[napi(ts_type = "Record<string, unknown> | undefined")]
+    pub metadata: Option<JsonValue>,
+    /// Optional document text (stored in metadata.document)
+    pub document: Option<String>,
 }
 
 // ============================================================================
@@ -347,38 +366,91 @@ pub struct VectorDatabase {
 impl VectorDatabase {
     /// Insert or update vectors.
     ///
-    /// Accepts an array of items with id, vector, and optional metadata.
+    /// Works for both single-vector and multi-vector stores:
+    /// - Single-vector: items have `vector` field
+    /// - Multi-vector: items have `vectors` field (array of vectors)
+    ///
+    /// @param items - Array of {id, vector, metadata?} or {id, vectors, metadata?}
+    /// @returns Array of internal indices
     #[napi]
-    pub fn set(&self, items: Vec<VectorItem>) -> Result<Vec<u32>> {
-        let batch: Vec<(String, Vector, JsonValue)> = items
-            .into_iter()
-            .map(|item| {
-                let mut metadata = item.metadata.unwrap_or(serde_json::json!({}));
+    pub fn set(&self, items: Vec<SetItem>) -> Result<Vec<u32>> {
+        if self.is_multi_vector {
+            // Multi-vector store: use "vectors" field
+            let mut inner = self.inner.write();
+            let count = items.len();
 
-                // Handle document field - requires metadata to be an object
-                if let Some(doc) = item.document {
-                    match metadata.as_object_mut() {
-                        Some(obj) => {
-                            obj.insert("document".to_string(), serde_json::json!(doc));
-                        }
-                        None => {
-                            return Err(Error::from_reason(
-                                "metadata must be an object when document field is provided",
-                            ));
-                        }
-                    }
+            for item in items {
+                let vectors = item.vectors.ok_or_else(|| {
+                    Error::new(
+                        Status::InvalidArg,
+                        format!(
+                            "Multi-vector store requires 'vectors' field for item '{}'. Got 'vector' field - use an array of vectors instead.",
+                            item.id
+                        ),
+                    )
+                })?;
+
+                if vectors.is_empty() {
+                    return Err(Error::new(
+                        Status::InvalidArg,
+                        format!("vectors for '{}' must not be empty", item.id),
+                    ));
                 }
 
-                Ok((item.id, Vector::new(item.vector.to_vec()), metadata))
-            })
-            .collect::<Result<Vec<_>>>()?;
+                let tokens: Vec<Vec<f32>> = vectors.into_iter().map(|v| v.to_vec()).collect();
+                let metadata = item.metadata.unwrap_or(serde_json::json!({}));
 
-        let mut inner = self.inner.write();
-        let result = inner.store.set_batch(batch).map_err(convert_error)?;
-        Ok(result.into_iter().map(|x| x as u32).collect())
+                inner
+                    .store
+                    .store(&item.id, tokens, metadata)
+                    .map_err(convert_error)?;
+            }
+
+            Ok((0..count as u32).collect())
+        } else {
+            // Single-vector store: use "vector" field
+            let batch: Vec<(String, Vector, JsonValue)> = items
+                .into_iter()
+                .map(|item| {
+                    let vector = item.vector.ok_or_else(|| {
+                        Error::new(
+                            Status::InvalidArg,
+                            format!(
+                                "Single-vector store requires 'vector' field for item '{}'. Got 'vectors' field - use multiVector: true when opening the database.",
+                                item.id
+                            ),
+                        )
+                    })?;
+
+                    let mut metadata = item.metadata.unwrap_or(serde_json::json!({}));
+
+                    // Handle document field - requires metadata to be an object
+                    if let Some(doc) = item.document {
+                        match metadata.as_object_mut() {
+                            Some(obj) => {
+                                obj.insert("document".to_string(), serde_json::json!(doc));
+                            }
+                            None => {
+                                return Err(Error::from_reason(
+                                    "metadata must be an object when document field is provided",
+                                ));
+                            }
+                        }
+                    }
+
+                    Ok((item.id, Vector::new(vector.to_vec()), metadata))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let mut inner = self.inner.write();
+            let result = inner.store.set_batch(batch).map_err(convert_error)?;
+            Ok(result.into_iter().map(|x| x as u32).collect())
+        }
     }
 
     /// Insert or update multi-vector documents.
+    ///
+    /// @deprecated Use set() with vectors field instead
     ///
     /// For multi-vector stores (ColBERT-style). Each document has multiple token vectors.
     ///
@@ -418,6 +490,8 @@ impl VectorDatabase {
     }
 
     /// Search multi-vector store with optional reranking.
+    ///
+    /// @deprecated Use search() with options instead
     ///
     /// For multi-vector stores (ColBERT-style). Query is multiple token vectors.
     ///

@@ -35,7 +35,53 @@ describe("Multi-Vector (MUVERA)", () => {
 		});
 	});
 
-	describe("insert", () => {
+	describe("unified API - insert", () => {
+		let db: VectorDatabase;
+
+		beforeEach(() => {
+			db = open(":memory:", { dimensions: 8, multiVector: true });
+		});
+
+		it("should insert using unified set() with vectors field", () => {
+			const vectors = [
+				new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
+				new Float32Array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]),
+			];
+			const indices = db.set([{ id: "doc1", vectors, metadata: { title: "Test" } }]);
+			expect(indices).toHaveLength(1);
+			expect(db.count()).toBe(1);
+		});
+
+		it("should insert multiple docs using unified set() with vectors field", () => {
+			const items = Array.from({ length: 10 }, (_, i) => ({
+				id: `doc${i}`,
+				vectors: Array.from({ length: 5 }, () =>
+					new Float32Array(8).fill(i / 10)
+				),
+				metadata: { index: i },
+			}));
+			const indices = db.set(items);
+			expect(indices).toHaveLength(10);
+			expect(db.count()).toBe(10);
+		});
+
+		it("should reject empty vectors array with unified set()", () => {
+			expect(() =>
+				db.set([{ id: "doc1", vectors: [], metadata: {} }])
+			).toThrow(/must not be empty/);
+		});
+
+		it("should reject vectors field on regular store", () => {
+			const regularDb = open(":memory:", { dimensions: 8 });
+			expect(() =>
+				regularDb.set([
+					{ id: "doc1", vectors: [new Float32Array(8).fill(0.1)], metadata: {} },
+				])
+			).toThrow(/multiVector: true/);
+		});
+	});
+
+	describe("insert (deprecated API)", () => {
 		let db: VectorDatabase;
 
 		beforeEach(() => {
@@ -81,7 +127,65 @@ describe("Multi-Vector (MUVERA)", () => {
 		});
 	});
 
-	describe("search", () => {
+	describe("unified API - search", () => {
+		let db: VectorDatabase;
+
+		beforeEach(() => {
+			db = open(":memory:", { dimensions: 8, multiVector: true });
+
+			// Insert 100 docs with distinct patterns using unified API
+			const items = Array.from({ length: 100 }, (_, i) => {
+				const base = i / 100;
+				const vectors = Array.from({ length: 5 }, (_, j) =>
+					new Float32Array(8).fill(base + j * 0.01)
+				);
+				return { id: `doc${i}`, vectors, metadata: { index: i } };
+			});
+			db.set(items);
+		});
+
+		it("should perform basic multi-vector search with unified search()", () => {
+			const query = [
+				[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+				[0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51],
+			];
+			const results = db.search(query, 5);
+
+			expect(results).toHaveLength(5);
+			expect(results.every((r) => "id" in r && "distance" in r && "metadata" in r)).toBe(true);
+		});
+
+		it("should search with Float32Array query using unified search()", () => {
+			const query = [
+				new Float32Array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]),
+				new Float32Array([0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51]),
+			];
+			const results = db.search(query, 5);
+			expect(results).toHaveLength(5);
+		});
+
+		it("should search with rerank disabled via options", () => {
+			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
+			const results = db.search(query, 5, { rerank: false });
+			expect(results).toHaveLength(5);
+		});
+
+		it("should search with custom rerank factor via options", () => {
+			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
+			const results = db.search(query, 5, { rerank: true, rerankFactor: 8 });
+			expect(results).toHaveLength(5);
+		});
+
+		it("should return metadata in results", () => {
+			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
+			const results = db.search(query, 1);
+
+			expect(results).toHaveLength(1);
+			expect(results[0].metadata).toHaveProperty("index");
+		});
+	});
+
+	describe("search (deprecated API)", () => {
 		let db: VectorDatabase;
 
 		beforeEach(() => {
@@ -145,6 +249,42 @@ describe("Multi-Vector (MUVERA)", () => {
 			expect(() =>
 				regularDb.searchMultiVec([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]], 1)
 			).toThrow(/multi-vector store/);
+		});
+	});
+
+	describe("unified API - single-vector store", () => {
+		it("should use unified search() with options on single-vector store", () => {
+			const db = open(":memory:", { dimensions: 8 });
+
+			// Insert with unified API (vector field)
+			db.set([
+				{ id: "doc1", vector: new Float32Array(8).fill(0.1), metadata: { category: "A" } },
+				{ id: "doc2", vector: new Float32Array(8).fill(0.2), metadata: { category: "B" } },
+				{ id: "doc3", vector: new Float32Array(8).fill(0.3), metadata: { category: "A" } },
+			]);
+
+			// Search with options object
+			const results = db.search([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 2, {
+				ef: 100,
+				filter: { category: "A" },
+			});
+
+			expect(results).toHaveLength(2);
+			expect(results.every(r => r.metadata.category === "A")).toBe(true);
+		});
+
+		it("should maintain backward compatibility with positional args on single-vector store", () => {
+			const db = open(":memory:", { dimensions: 8 });
+
+			db.set([
+				{ id: "doc1", vector: new Float32Array(8).fill(0.1) },
+				{ id: "doc2", vector: new Float32Array(8).fill(0.2) },
+			]);
+
+			// Old positional args style: search(query, k, ef, filter, maxDistance)
+			const results = db.search([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 2, 100);
+
+			expect(results).toHaveLength(2);
 		});
 	});
 

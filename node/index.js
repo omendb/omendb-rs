@@ -125,6 +125,11 @@ function convertMultiVectorItem(item) {
 	};
 }
 
+// Check if items contain multi-vector data (vectors field)
+function isMultiVectorItem(item) {
+	return item.vectors !== undefined && item.vectors !== null;
+}
+
 // Wrap VectorDatabase to handle array conversion
 const NativeVectorDatabase = nativeBinding.VectorDatabase;
 
@@ -133,18 +138,81 @@ class VectorDatabase {
 		this._native = nativeDb;
 	}
 
+	/**
+	 * Insert or update vectors.
+	 *
+	 * Works for both single-vector and multi-vector stores:
+	 * - Single-vector: items have `vector` field
+	 * - Multi-vector: items have `vectors` field (array of vectors)
+	 *
+	 * @param {Array<{id: string, vector?: Float32Array|number[], vectors?: Float32Array[]|number[][], metadata?: object}>} items
+	 * @returns {number[]} Array of internal indices
+	 */
 	set(items) {
-		return this._native.set(items.map(convertVectorItem));
+		// Detect if items are multi-vector (have vectors field)
+		if (items.length > 0 && isMultiVectorItem(items[0])) {
+			// Multi-vector items - call setMultiVec
+			return this._native.setMultiVec(items.map(convertMultiVectorItem));
+		} else {
+			// Single-vector items - call set
+			return this._native.set(items.map(convertVectorItem));
+		}
 	}
 
+	/**
+	 * @deprecated Use set() with vectors field instead
+	 */
 	setMultiVec(items) {
 		return this._native.setMultiVec(items.map(convertMultiVectorItem));
 	}
 
-	search(query, k, ef, filter, maxDistance) {
-		return this._native.search(query, k, ef, filter, maxDistance);
+	/**
+	 * Search for k nearest neighbors.
+	 *
+	 * Works for both single-vector and multi-vector stores:
+	 * - Single-vector: query is number[] or Float32Array
+	 * - Multi-vector: query is number[][] or Float32Array[]
+	 *
+	 * @param {number[]|Float32Array|number[][]|Float32Array[]} query - Query vector(s)
+	 * @param {number} k - Number of results to return
+	 * @param {object} [options] - Search options
+	 * @param {number} [options.ef] - Search width override (single-vector only)
+	 * @param {object} [options.filter] - Metadata filter (single-vector only)
+	 * @param {number} [options.maxDistance] - Max distance threshold (single-vector only)
+	 * @param {boolean} [options.rerank] - Enable MaxSim reranking (multi-vector, default: true)
+	 * @param {number} [options.rerankFactor] - Rerank candidate multiplier (multi-vector, default: 4)
+	 * @returns {Array<{id: string, distance: number, metadata: object}>}
+	 */
+	search(query, k, options) {
+		if (this._native.isMultiVector) {
+			// Multi-vector store
+			const rerank = options?.rerank;
+			const rerankFactor = options?.rerankFactor;
+			return this._native.searchMultiVec(query, k, rerank, rerankFactor);
+		} else {
+			// Single-vector store - support both old positional args and new options object
+			if (typeof options === "object" && options !== null && !Array.isArray(options)) {
+				// New options object style
+				return this._native.search(
+					query,
+					k,
+					options.ef,
+					options.filter,
+					options.maxDistance,
+				);
+			} else {
+				// Legacy positional args: search(query, k, ef, filter, maxDistance)
+				const ef = options; // 3rd arg was ef in old API
+				const filter = arguments[3];
+				const maxDistance = arguments[4];
+				return this._native.search(query, k, ef, filter, maxDistance);
+			}
+		}
 	}
 
+	/**
+	 * @deprecated Use search() instead
+	 */
 	searchMultiVec(query, k, rerank, rerankFactor) {
 		return this._native.searchMultiVec(query, k, rerank, rerankFactor);
 	}
