@@ -1,5 +1,7 @@
 //! Storage for original multi-vector tokens (used for MaxSim reranking).
 
+use std::hash::BuildHasher;
+
 use serde::{Deserialize, Serialize};
 
 /// Storage for original multi-vector documents.
@@ -123,6 +125,34 @@ impl MultiVecStorage {
         self.vectors.len() * std::mem::size_of::<f32>()
             + self.offsets.len() * std::mem::size_of::<(u32, u16)>()
     }
+
+    /// Remap slots after RecordStore compaction.
+    ///
+    /// `old_to_new` maps old_slot -> new_slot for live records only.
+    /// Deleted slots (not in the map) have their offsets cleared.
+    ///
+    /// Note: This remaps the offset table but does not reclaim vector memory.
+    /// Orphaned vectors remain in storage until the next full rebuild.
+    pub fn compact<S: BuildHasher>(&mut self, old_to_new: &std::collections::HashMap<u32, u32, S>) {
+        if old_to_new.is_empty() {
+            // No live records - clear everything
+            self.offsets.clear();
+            self.vectors.clear();
+            return;
+        }
+
+        let max_new_slot = old_to_new.values().copied().max().unwrap_or(0) as usize;
+        let old_offsets = std::mem::take(&mut self.offsets);
+        let mut new_offsets = vec![(0u32, 0u16); max_new_slot + 1];
+
+        for (old_slot, &(start, count)) in old_offsets.iter().enumerate() {
+            if let Some(&new_slot) = old_to_new.get(&(old_slot as u32)) {
+                new_offsets[new_slot as usize] = (start, count);
+            }
+        }
+
+        self.offsets = new_offsets;
+    }
 }
 
 #[cfg(test)]
@@ -219,5 +249,61 @@ mod tests {
         // 1 doc * size_of::<(u32, u16)>() bytes for offset (8 bytes due to alignment)
         let expected = 100 * 128 * 4 + std::mem::size_of::<(u32, u16)>();
         assert_eq!(storage.memory_bytes(), expected);
+    }
+
+    #[test]
+    fn test_compact_remaps_slots() {
+        let mut storage = MultiVecStorage::new(4);
+
+        // Add 5 documents
+        let doc0: Vec<&[f32]> = vec![&[1.0, 2.0, 3.0, 4.0]];
+        let doc1: Vec<&[f32]> = vec![&[5.0, 6.0, 7.0, 8.0]];
+        let doc2: Vec<&[f32]> = vec![&[9.0, 10.0, 11.0, 12.0]];
+        let doc3: Vec<&[f32]> = vec![&[13.0, 14.0, 15.0, 16.0]];
+        let doc4: Vec<&[f32]> = vec![&[17.0, 18.0, 19.0, 20.0]];
+
+        storage.add(&doc0); // slot 0
+        storage.add(&doc1); // slot 1
+        storage.add(&doc2); // slot 2
+        storage.add(&doc3); // slot 3
+        storage.add(&doc4); // slot 4
+
+        // Simulate deleting slots 1 and 3 (keep 0, 2, 4)
+        // After compaction: 0->0, 2->1, 4->2
+        let mut old_to_new = std::collections::HashMap::new();
+        old_to_new.insert(0u32, 0u32);
+        old_to_new.insert(2u32, 1u32);
+        old_to_new.insert(4u32, 2u32);
+
+        storage.compact(&old_to_new);
+
+        // Verify remapped slots
+        assert_eq!(storage.len(), 3);
+
+        // New slot 0 should have doc0's tokens
+        let tokens0: Vec<&[f32]> = storage.get(0).unwrap().collect();
+        assert_eq!(tokens0[0], &[1.0, 2.0, 3.0, 4.0]);
+
+        // New slot 1 should have doc2's tokens (was slot 2)
+        let tokens1: Vec<&[f32]> = storage.get(1).unwrap().collect();
+        assert_eq!(tokens1[0], &[9.0, 10.0, 11.0, 12.0]);
+
+        // New slot 2 should have doc4's tokens (was slot 4)
+        let tokens2: Vec<&[f32]> = storage.get(2).unwrap().collect();
+        assert_eq!(tokens2[0], &[17.0, 18.0, 19.0, 20.0]);
+    }
+
+    #[test]
+    fn test_compact_empty() {
+        let mut storage = MultiVecStorage::new(4);
+        let doc: Vec<&[f32]> = vec![&[1.0, 2.0, 3.0, 4.0]];
+        storage.add(&doc);
+
+        // All deleted - empty mapping
+        let old_to_new: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        storage.compact(&old_to_new);
+
+        assert!(storage.is_empty());
+        assert_eq!(storage.total_tokens(), 0);
     }
 }

@@ -2653,7 +2653,12 @@ impl VectorStore {
         }
 
         // Compact RecordStore - reassigns slots, clears tombstones
-        let _old_to_new = self.records.compact();
+        let old_to_new = self.records.compact();
+
+        // Compact multi-vector storage if present
+        if let Some(ref mut multivec_storage) = self.multivec_storage {
+            multivec_storage.compact(&old_to_new);
+        }
 
         // Rebuild HNSW index with new contiguous slots
         if self.records.is_empty() {
@@ -2801,49 +2806,8 @@ impl VectorStore {
     /// - Token dimension doesn't match configured dimension
     /// - Token count exceeds `max_tokens` (default 512)
     pub fn set_multi(&mut self, id: &str, tokens: &[&[f32]], metadata: JsonValue) -> Result<()> {
-        // Validate MUVERA is enabled
-        let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Store not configured for multi-vector. Use VectorStore::new_muvera()")
-        })?;
-
-        // Validate tokens
-        if tokens.is_empty() {
-            anyhow::bail!("Cannot insert document with empty tokens");
-        }
-
-        if tokens.len() > self.max_tokens {
-            anyhow::bail!(
-                "Token count {} exceeds maximum {} (configure with max_tokens)",
-                tokens.len(),
-                self.max_tokens
-            );
-        }
-
-        let token_dim = encoder.token_dimension();
-        for (i, token) in tokens.iter().enumerate() {
-            if token.len() != token_dim {
-                anyhow::bail!(
-                    "Token {} has dimension {} but expected {}",
-                    i,
-                    token.len(),
-                    token_dim
-                );
-            }
-        }
-
-        // Encode tokens to FDE (document mode = AVERAGE)
-        let fde = encoder.encode_document(tokens);
-
-        // Store original tokens for reranking
-        let multivec_storage = self
-            .multivec_storage
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
-        let _token_slot = multivec_storage.add(tokens);
-
-        // Use the standard set() method to store the FDE
-        self.set(id.to_string(), Vector::new(fde), metadata)?;
-        Ok(())
+        // Delegate to internal implementation (deduplication)
+        self.store_multi_internal(tokens, id, metadata)
     }
 
     /// Batch insert documents with token embeddings.
@@ -2905,18 +2869,30 @@ impl VectorStore {
             })
             .collect();
 
-        // Store original tokens (must be sequential for slot ordering)
+        // Determine update vs insert order to match set_batch processing
+        // set_batch processes updates first, then inserts, so we must store tokens in that order
+        let mut update_indices = Vec::new();
+        let mut insert_indices = Vec::new();
+        for (i, (id, _, _)) in batch.iter().enumerate() {
+            if self.records.get_slot(id).is_some() {
+                update_indices.push(i);
+            } else {
+                insert_indices.push(i);
+            }
+        }
+
+        // Store tokens in set_batch's processing order (updates first, then inserts)
         let multivec_storage = self
             .multivec_storage
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
 
-        for (_, tokens, _) in &batch {
-            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
+        for &i in update_indices.iter().chain(insert_indices.iter()) {
+            let token_refs: Vec<&[f32]> = batch[i].1.iter().map(std::vec::Vec::as_slice).collect();
             multivec_storage.add(&token_refs);
         }
 
-        // Prepare batch for set_batch
+        // Prepare batch for set_batch (maintains original batch order - set_batch reorders internally)
         let fde_batch: Vec<(String, Vector, JsonValue)> = batch
             .into_iter()
             .zip(fdes)
@@ -3001,9 +2977,10 @@ impl VectorStore {
         let query_vec = Vector::new(query_fde);
         let results = self.knn_search(&query_vec, k)?;
 
-        // Convert to SearchResult
+        // Convert to SearchResult (filter deleted nodes)
         let search_results = results
             .into_iter()
+            .filter(|(slot, _)| self.records.is_live(*slot as u32))
             .map(|(slot, distance)| {
                 let record = self.records.get_by_slot(slot as u32);
                 let id = record.map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
@@ -3071,11 +3048,16 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // Step 2: Collect original tokens for each candidate
+        // Step 2: Collect original tokens for each candidate (filter deleted nodes)
         let mut candidate_data: Vec<(usize, String, JsonValue, Vec<&[f32]>)> = Vec::new();
 
         for (slot, _fde_distance) in &candidates {
             let slot_u32 = *slot as u32;
+
+            // Skip deleted nodes (HNSW may return stale references)
+            if !self.records.is_live(slot_u32) {
+                continue;
+            }
 
             // Get document's original tokens from MultiVecStorage
             if let Some(doc_tokens) = multivec_storage.get_tokens(slot_u32) {
@@ -3228,15 +3210,21 @@ impl VectorStore {
         // Encode tokens to FDE (document mode = AVERAGE)
         let fde = encoder.encode_document(tokens);
 
-        // Store original tokens for reranking
+        // Store FDE first (can fail without corrupting multivec_storage)
+        let slot = self.set(id.to_string(), Vector::new(fde), metadata)?;
+
+        // Then add tokens - slot already committed
         let multivec_storage = self
             .multivec_storage
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
-        let _token_slot = multivec_storage.add(tokens);
+        let token_slot = multivec_storage.add(tokens);
 
-        // Use the standard set() method to store the FDE
-        self.set(id.to_string(), Vector::new(fde), metadata)?;
+        debug_assert_eq!(
+            slot as u32, token_slot,
+            "Slot mismatch: RecordStore={slot}, MultiVecStorage={token_slot}"
+        );
+
         Ok(())
     }
 
