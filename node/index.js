@@ -117,6 +117,14 @@ function convertVectorItem(item) {
 	};
 }
 
+// Convert MultiVectorItem to use Float32Arrays
+function convertMultiVectorItem(item) {
+	return {
+		...item,
+		vectors: item.vectors.map(toFloat32Array),
+	};
+}
+
 // Wrap VectorDatabase to handle array conversion
 const NativeVectorDatabase = nativeBinding.VectorDatabase;
 
@@ -129,8 +137,16 @@ class VectorDatabase {
 		return this._native.set(items.map(convertVectorItem));
 	}
 
+	setMultiVec(items) {
+		return this._native.setMultiVec(items.map(convertMultiVectorItem));
+	}
+
 	search(query, k, ef, filter, maxDistance) {
 		return this._native.search(query, k, ef, filter, maxDistance);
+	}
+
+	searchMultiVec(query, k, rerank, rerankFactor) {
+		return this._native.searchMultiVec(query, k, rerank, rerankFactor);
 	}
 
 	searchBatch(queries, k, ef) {
@@ -163,6 +179,10 @@ class VectorDatabase {
 
 	get dimensions() {
 		return this._native.dimensions;
+	}
+
+	get isMultiVector() {
+		return this._native.isMultiVector;
 	}
 
 	isEmpty() {

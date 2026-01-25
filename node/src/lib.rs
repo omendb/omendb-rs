@@ -9,8 +9,10 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use omendb_lib::vector::{
-    MetadataFilter, QuantizationMode, Vector, VectorStore, VectorStoreOptions,
+    muvera::MultiVectorConfig, MetadataFilter, QuantizationMode, Vector, VectorStore,
+    VectorStoreOptions,
 };
+use omendb_lib::{Rerank, SearchOptions};
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -25,6 +27,67 @@ fn extract_query_vector(query: Either<Vec<f64>, Float32Array>) -> Vec<f32> {
     match query {
         Either::A(arr) => arr.into_iter().map(|x| x as f32).collect(),
         Either::B(typed) => typed.to_vec(),
+    }
+}
+
+/// Extract multi-vector query from JS - accepts number[][] or Float32Array[]
+fn extract_multi_vector_query(
+    query: Either<Vec<Vec<f64>>, Vec<Float32Array>>,
+) -> Result<Vec<Vec<f32>>> {
+    match query {
+        Either::A(nested) => {
+            if nested.is_empty() {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    "multi-vector query must not be empty",
+                ));
+            }
+            Ok(nested
+                .into_iter()
+                .map(|arr| arr.into_iter().map(|x| x as f32).collect())
+                .collect())
+        }
+        Either::B(typed_arrays) => {
+            if typed_arrays.is_empty() {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    "multi-vector query must not be empty",
+                ));
+            }
+            Ok(typed_arrays.into_iter().map(|t| t.to_vec()).collect())
+        }
+    }
+}
+
+/// Parse multi_vector option from JS value
+fn parse_multi_vector(value: &serde_json::Value) -> Result<Option<MultiVectorConfig>> {
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Bool(true) => Ok(Some(MultiVectorConfig::default())),
+        serde_json::Value::Bool(false) => Ok(None),
+        serde_json::Value::Object(obj) => {
+            let mut config = MultiVectorConfig::default();
+            if let Some(reps) = obj.get("repetitions") {
+                config.repetitions = reps.as_u64().ok_or_else(|| {
+                    Error::new(Status::InvalidArg, "repetitions must be a number")
+                })? as u8;
+            }
+            if let Some(bits) = obj.get("partitionBits") {
+                config.partition_bits = bits.as_u64().ok_or_else(|| {
+                    Error::new(Status::InvalidArg, "partitionBits must be a number")
+                })? as u8;
+            }
+            if let Some(seed) = obj.get("seed") {
+                config.seed = seed
+                    .as_u64()
+                    .ok_or_else(|| Error::new(Status::InvalidArg, "seed must be a number"))?;
+            }
+            Ok(Some(config))
+        }
+        _ => Err(Error::new(
+            Status::InvalidArg,
+            "multiVector must be true, false, or { repetitions?, partitionBits?, seed? }",
+        )),
     }
 }
 
@@ -177,6 +240,21 @@ pub struct VectorItem {
 }
 
 // ============================================================================
+// Multi-Vector Item - input for multi-vector set operations
+// ============================================================================
+
+#[napi(object)]
+pub struct MultiVectorItem {
+    pub id: String,
+    /// Multi-vector data as array of Float32Arrays
+    #[napi(ts_type = "Float32Array[]")]
+    pub vectors: Vec<Float32Array>,
+    /// Optional metadata
+    #[napi(ts_type = "Record<string, unknown> | undefined")]
+    pub metadata: Option<JsonValue>,
+}
+
+// ============================================================================
 // Get Result - returned from get operations
 // ============================================================================
 
@@ -260,6 +338,7 @@ pub struct VectorDatabase {
     path: String,
     dimensions: u32,
     is_persistent: bool,
+    is_multi_vector: bool,
     /// Cache of open collection handles (same name = shared state)
     collections_cache: RwLock<HashMap<String, Arc<RwLock<VectorDatabaseInner>>>>,
 }
@@ -297,6 +376,99 @@ impl VectorDatabase {
         let mut inner = self.inner.write();
         let result = inner.store.set_batch(batch).map_err(convert_error)?;
         Ok(result.into_iter().map(|x| x as u32).collect())
+    }
+
+    /// Insert or update multi-vector documents.
+    ///
+    /// For multi-vector stores (ColBERT-style). Each document has multiple token vectors.
+    ///
+    /// @param items - Array of {id, vectors: Float32Array[], metadata?}
+    /// @returns Array of internal indices
+    #[napi]
+    pub fn set_multi_vec(&self, items: Vec<MultiVectorItem>) -> Result<Vec<u32>> {
+        if !self.is_multi_vector {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "setMultiVec requires a multi-vector store. Use open() with multiVector: true",
+            ));
+        }
+
+        let mut inner = self.inner.write();
+        let count = items.len();
+
+        for item in items {
+            if item.vectors.is_empty() {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    format!("vectors for '{}' must not be empty", item.id),
+                ));
+            }
+
+            let tokens: Vec<Vec<f32>> = item.vectors.into_iter().map(|v| v.to_vec()).collect();
+            let metadata = item.metadata.unwrap_or(serde_json::json!({}));
+
+            inner
+                .store
+                .store(&item.id, tokens, metadata)
+                .map_err(convert_error)?;
+        }
+
+        // Return indices for compatibility (0, 1, 2, ...)
+        Ok((0..count as u32).collect())
+    }
+
+    /// Search multi-vector store with optional reranking.
+    ///
+    /// For multi-vector stores (ColBERT-style). Query is multiple token vectors.
+    ///
+    /// @param query - Query tokens (number[][] or Float32Array[])
+    /// @param k - Number of results to return
+    /// @param rerank - Enable MaxSim reranking for better quality (default: true)
+    /// @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 4)
+    /// @returns Array of {id, distance, metadata}
+    #[napi]
+    pub fn search_multi_vec(
+        &self,
+        query: Either<Vec<Vec<f64>>, Vec<Float32Array>>,
+        k: u32,
+        rerank: Option<bool>,
+        rerank_factor: Option<u32>,
+    ) -> Result<Vec<SearchResult>> {
+        if !self.is_multi_vector {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "searchMultiVec requires a multi-vector store. Use open() with multiVector: true",
+            ));
+        }
+
+        if k == 0 {
+            return Err(Error::from_reason("k must be greater than 0"));
+        }
+
+        let query_tokens = extract_multi_vector_query(query)?;
+
+        // Build search options
+        let rerank_opt = match (rerank, rerank_factor) {
+            (Some(false), _) => Rerank::Off,
+            (_, Some(factor)) => Rerank::Factor(factor as usize),
+            _ => Rerank::On, // default: rerank enabled
+        };
+        let options = SearchOptions::default().rerank(rerank_opt);
+
+        let inner = self.inner.read();
+        let results = inner
+            .store
+            .query_with_options(&query_tokens, k as usize, &options)
+            .map_err(convert_error)?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.id,
+                distance: r.distance as f64,
+                metadata: r.metadata,
+            })
+            .collect())
     }
 
     /// Search for k nearest neighbors.
@@ -563,6 +735,12 @@ impl VectorDatabase {
         self.dimensions
     }
 
+    /// Check if this is a multi-vector store.
+    #[napi(getter, js_name = "isMultiVector")]
+    pub fn is_multi_vector(&self) -> bool {
+        self.is_multi_vector
+    }
+
     /// Check if database is empty.
     #[napi]
     pub fn is_empty(&self) -> bool {
@@ -633,6 +811,7 @@ impl VectorDatabase {
                     path: collection_path.to_string_lossy().to_string(),
                     dimensions: self.dimensions,
                     is_persistent: true,
+                    is_multi_vector: false,
                     collections_cache: RwLock::new(HashMap::new()),
                 });
             }
@@ -650,6 +829,7 @@ impl VectorDatabase {
                 path: collection_path.to_string_lossy().to_string(),
                 dimensions: self.dimensions,
                 is_persistent: true,
+                is_multi_vector: false,
                 collections_cache: RwLock::new(HashMap::new()),
             });
         }
@@ -681,6 +861,7 @@ impl VectorDatabase {
             path: collection_path.to_string_lossy().to_string(),
             dimensions: self.dimensions,
             is_persistent: true,
+            is_multi_vector: false,
             collections_cache: RwLock::new(HashMap::new()),
         })
     }
@@ -1171,6 +1352,12 @@ pub struct OpenOptions {
     pub oversample: Option<f64>,
     /// Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip"
     pub metric: Option<String>,
+    /// Enable multi-vector mode for ColBERT-style retrieval
+    /// - true: Enable with default config (repetitions=5, partition_bits=3)
+    /// - { repetitions?, partitionBits?, seed? }: Custom config
+    /// - false/null: Disabled (default, single-vector mode)
+    #[napi(ts_type = "boolean | { repetitions?: number; partitionBits?: number; seed?: number } | null | undefined")]
+    pub multi_vector: Option<serde_json::Value>,
 }
 
 // ============================================================================
@@ -1221,6 +1408,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         rescore: None,
         oversample: None,
         metric: None,
+        multi_vector: None,
     });
 
     let dimensions = opts.dimensions.unwrap_or(128) as usize;
@@ -1237,6 +1425,33 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         .map(parse_quantization)
         .transpose()?
         .flatten();
+
+    // Parse multi_vector config
+    let multi_vector_config = opts
+        .multi_vector
+        .as_ref()
+        .map(parse_multi_vector)
+        .transpose()?
+        .flatten();
+
+    // Check if multi-vector mode is enabled
+    let is_multi_vector = multi_vector_config.is_some();
+
+    // Validate multi-vector constraints
+    if is_multi_vector {
+        if quant_mode.is_some() {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "multi-vector stores do not support quantization yet",
+            ));
+        }
+        if path != ":memory:" {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "multi-vector stores only support in-memory mode (:memory:) - persistence not yet implemented",
+            ));
+        }
+    }
 
     // Validate parameters
     if dimensions == 0 {
@@ -1318,18 +1533,23 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
 
     // Handle :memory: for in-memory database
     if path == ":memory:" {
-        let store = store_options.build().map_err(|e| {
-            Error::new(
-                Status::GenericFailure,
-                format!("Failed to create store: {}", e),
-            )
-        })?;
+        let store = if let Some(mv_config) = multi_vector_config {
+            VectorStore::multi_vector_with(dimensions, mv_config)
+        } else {
+            store_options.build().map_err(|e| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Failed to create store: {}", e),
+                )
+            })?
+        };
 
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
             dimensions: dimensions as u32,
             is_persistent: false,
+            is_multi_vector,
             collections_cache: RwLock::new(HashMap::new()),
         });
     }
@@ -1354,6 +1574,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         path,
         dimensions: dimensions as u32,
         is_persistent: true,
+        is_multi_vector: false, // Persistent multi-vector not yet supported
         collections_cache: RwLock::new(HashMap::new()),
     })
 }

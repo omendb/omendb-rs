@@ -41,7 +41,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.5.0",
+    "@napi-rs/cli": "^3.5.1",
     "vitest": "^2.1.0"
   },
   "files": [
