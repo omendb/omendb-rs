@@ -111,6 +111,14 @@ function toFloat32Array(arr) {
 
 // Convert VectorItem to use Float32Array
 function convertVectorItem(item) {
+	if (item.vector === undefined || item.vector === null) {
+		if (Array.isArray(item.vectors)) {
+			throw new Error(
+				`Item '${item.id}' has 'vectors' field but store is single-vector. Use multiVector: true when opening the database.`,
+			);
+		}
+		throw new Error(`Item '${item.id}' missing required 'vector' field`);
+	}
 	return {
 		...item,
 		vector: toFloat32Array(item.vector),
@@ -119,15 +127,23 @@ function convertVectorItem(item) {
 
 // Convert MultiVectorItem to use Float32Arrays
 function convertMultiVectorItem(item) {
+	if (!Array.isArray(item.vectors)) {
+		if (item.vector !== undefined) {
+			throw new Error(
+				`Item '${item.id}' has 'vector' field but store is multi-vector. Use 'vectors' field (array of vectors) instead.`,
+			);
+		}
+		throw new Error(`Item '${item.id}' missing required 'vectors' field`);
+	}
 	return {
 		...item,
 		vectors: item.vectors.map(toFloat32Array),
 	};
 }
 
-// Check if items contain multi-vector data (vectors field)
+// Check if items contain multi-vector data (vectors field must be an array)
 function isMultiVectorItem(item) {
-	return item.vectors !== undefined && item.vectors !== null;
+	return Array.isArray(item.vectors);
 }
 
 // Wrap VectorDatabase to handle array conversion
@@ -149,12 +165,16 @@ class VectorDatabase {
 	 * @returns {number[]} Array of internal indices
 	 */
 	set(items) {
-		// Detect if items are multi-vector (have vectors field)
-		if (items.length > 0 && isMultiVectorItem(items[0])) {
-			// Multi-vector items - call setMultiVec
+		if (!Array.isArray(items)) {
+			throw new Error("set() requires an array of items");
+		}
+		if (items.length === 0) {
+			return [];
+		}
+		// Use store type to determine which native method to call (consistent with search())
+		if (this._native.isMultiVector) {
 			return this._native.setMultiVec(items.map(convertMultiVectorItem));
 		} else {
-			// Single-vector items - call set
 			return this._native.set(items.map(convertVectorItem));
 		}
 	}

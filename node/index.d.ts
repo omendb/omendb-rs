@@ -8,17 +8,8 @@ export declare class VectorDatabase {
    * - Single-vector: items have `vector` field
    * - Multi-vector: items have `vectors` field (array of vectors)
    *
-   * @param items - Array of {id, vector?, vectors?, metadata?}
+   * @param items - Array of {id, vector, metadata?} or {id, vectors, metadata?}
    * @returns Array of internal indices
-   *
-   * @example
-   * ```typescript
-   * // Single-vector store
-   * db.set([{ id: 'doc1', vector: new Float32Array(128), metadata: {} }]);
-   *
-   * // Multi-vector store
-   * mvdb.set([{ id: 'doc1', vectors: [vec1, vec2, vec3], metadata: {} }]);
-   * ```
    */
   set(items: Array<SetItem>): Array<number>
   /**
@@ -49,31 +40,14 @@ export declare class VectorDatabase {
   /**
    * Search for k nearest neighbors.
    *
-   * Works for both single-vector and multi-vector stores:
-   * - Single-vector: query is number[] or Float32Array
-   * - Multi-vector: query is number[][] or Float32Array[]
-   *
-   * @param query - Query vector(s)
+   * @param query - Query vector (number[] or Float32Array)
    * @param k - Number of results to return
-   * @param options - Search options (ef, filter, maxDistance for single-vector; rerank, rerankFactor for multi-vector)
+   * @param ef - Optional search width override
+   * @param filter - Optional metadata filter (e.g., {category: "foo"} or {price: {$gt: 10}})
+   * @param maxDistance - Optional max distance threshold (filter out distant results)
    * @returns Array of {id, distance, metadata}
-   *
-   * @example
-   * ```typescript
-   * // Single-vector store
-   * const results = db.search([0.1, ...], 10);
-   * const results = db.search([0.1, ...], 10, { ef: 200, filter: { category: 'A' } });
-   *
-   * // Multi-vector store
-   * const results = mvdb.search([query1, query2], 10);
-   * const results = mvdb.search([query1, query2], 10, { rerank: true, rerankFactor: 8 });
-   * ```
    */
-  search(
-    query: number[] | Float32Array | number[][] | Float32Array[],
-    k: number,
-    options?: SearchOptions
-  ): Array<SearchResult>
+  search(query: Array<number> | Float32Array, k: number, ef?: number | undefined | null, filter?: Record<string, unknown> | undefined, maxDistance?: number | undefined | null): Array<SearchResult>
   /**
    * Batch search with parallel execution (async).
    *
@@ -393,6 +367,18 @@ export interface SearchResult {
   metadata: Record<string, unknown>
 }
 
+export interface SetItem {
+  id: string
+  /** Single vector data (for regular stores) */
+  vector?: Float32Array
+  /** Multi-vector data (for multi-vector stores) */
+  vectors?: Float32Array[] | undefined
+  /** Optional metadata */
+  metadata?: Record<string, unknown> | undefined
+  /** Optional document text (stored in metadata.document) */
+  document?: string
+}
+
 export interface StatsResult {
   dimensions: number
   count: number
@@ -413,40 +399,6 @@ export interface VectorItem {
   metadata?: Record<string, unknown> | undefined
   /** Optional document text (stored in metadata.document) */
   document?: string
-}
-
-/**
- * Unified item type for set() - works with both single and multi-vector stores.
- *
- * - For single-vector stores: use `vector` field
- * - For multi-vector stores: use `vectors` field
- */
-export interface SetItem {
-  id: string
-  /** Single vector data (for single-vector stores) */
-  vector?: Float32Array | number[]
-  /** Multi-vector data (for multi-vector stores) */
-  vectors?: Float32Array[] | number[][]
-  /** Optional metadata */
-  metadata?: Record<string, unknown>
-  /** Optional document text (stored in metadata.document) */
-  document?: string
-}
-
-/**
- * Search options for the unified search() method.
- */
-export interface SearchOptions {
-  /** Search width override (single-vector stores) */
-  ef?: number
-  /** Metadata filter (single-vector stores) */
-  filter?: Record<string, unknown>
-  /** Max distance threshold (single-vector stores) */
-  maxDistance?: number
-  /** Enable MaxSim reranking (multi-vector stores, default: true) */
-  rerank?: boolean
-  /** Fetch k*rerankFactor candidates before reranking (multi-vector stores, default: 4) */
-  rerankFactor?: number
 }
 
 export interface VectorItemWithText {

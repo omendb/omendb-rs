@@ -194,16 +194,22 @@ class VectorDatabase:
         - Single-vector: query is a list/array of floats
         - Multi-vector: query is a list of vectors (list of lists/arrays)
 
+        Note:
+            Parameters are mutually exclusive by store type:
+            - Single-vector stores: use `ef`, `filter`, `max_distance`
+            - Multi-vector stores: use `rerank`, `rerank_factor`
+            Passing params for the wrong store type has no effect.
+
         Args:
             query: Query vector(s). Single vector for regular stores,
                    list of vectors for multi-vector stores.
             k: Number of nearest neighbors to return.
-            ef: Search width override (single-vector stores, default: auto-tuned).
-            filter: MongoDB-style metadata filter (single-vector stores).
-            max_distance: Maximum distance threshold (single-vector stores).
-            rerank: Enable MaxSim reranking (multi-vector stores, default: True).
+            ef: Search width override (single-vector stores only, default: auto-tuned).
+            filter: MongoDB-style metadata filter (single-vector stores only).
+            max_distance: Maximum distance threshold (single-vector stores only).
+            rerank: Enable MaxSim reranking (multi-vector stores only, default: True).
             rerank_factor: Fetch k*rerank_factor candidates before reranking
-                          (multi-vector stores, default: 4).
+                          (multi-vector stores only, default: 4).
 
         Returns:
             List of results with id, distance, metadata.
