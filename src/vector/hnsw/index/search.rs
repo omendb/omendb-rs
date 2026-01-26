@@ -128,8 +128,8 @@ impl NeighborCollector for StandardCollector<'_> {
                 }
             }
         } else {
-            // Upper levels: sparse storage
-            for id in self.storage.neighbors_at_level(node_id, level) {
+            // Upper levels: sparse storage (zero-copy via Cow)
+            for &id in &*self.storage.neighbors_at_level_cow(node_id, level) {
                 if !visited.contains(id) {
                     output.push(id);
                 }
@@ -713,9 +713,9 @@ impl HNSWIndex {
         F: Fn(u32) -> bool,
     {
         output.clear();
-        let neighbors_1hop = self.storage.neighbors_at_level(source_node, level);
+        let neighbors_1hop = self.storage.neighbors_at_level_cow(source_node, level);
 
-        for neighbor_id in neighbors_1hop {
+        for &neighbor_id in &*neighbors_1hop {
             if visited.contains(neighbor_id) {
                 continue;
             }
@@ -725,9 +725,9 @@ impl HNSWIndex {
                     return;
                 }
             } else {
-                // 2-hop expansion for non-matching neighbors
-                let second_hop = self.storage.neighbors_at_level(neighbor_id, level);
-                for second_hop_id in second_hop {
+                // 2-hop expansion for non-matching neighbors (zero-copy via Cow)
+                let second_hop = self.storage.neighbors_at_level_cow(neighbor_id, level);
+                for &second_hop_id in &*second_hop {
                     if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
                         output.push(second_hop_id);
                         if output.len() >= m {

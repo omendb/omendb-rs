@@ -150,9 +150,11 @@ impl VectorStore {
     // Constructors
     // ============================================================================
 
-    /// Create new vector store
-    #[must_use]
-    pub fn new(dimensions: usize) -> Self {
+    /// Create base VectorStore with default field values.
+    ///
+    /// All optional fields are None, HNSW params are defaults.
+    /// Used by public constructors to avoid field duplication.
+    fn with_defaults(dimensions: usize, distance_metric: Metric) -> Self {
         Self {
             records: RecordStore::new(dimensions as u32),
             segments: None,
@@ -168,11 +170,17 @@ impl VectorStore {
             hnsw_m: DEFAULT_HNSW_M,
             hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
             hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
-            distance_metric: Metric::L2,
+            distance_metric,
             muvera_encoder: None,
             multivec_storage: None,
             max_tokens: DEFAULT_MAX_TOKENS,
         }
+    }
+
+    /// Create new vector store
+    #[must_use]
+    pub fn new(dimensions: usize) -> Self {
+        Self::with_defaults(dimensions, Metric::L2)
     }
 
     /// Create a multi-vector store for ColBERT-style token embeddings.
@@ -228,26 +236,10 @@ impl VectorStore {
         let encoder = MuveraEncoder::new(token_dim, config);
         let fde_dim = encoder.fde_dimension();
 
-        Self {
-            records: RecordStore::new(fde_dim as u32),
-            segments: None,
-            hnsw_index: None,
-            rescore_enabled: false,
-            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
-            metadata_index: MetadataIndex::new(),
-            storage: None,
-            storage_path: None,
-            text_index: None,
-            text_search_config: None,
-            pending_quantization: None,
-            hnsw_m: DEFAULT_HNSW_M,
-            hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
-            hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
-            distance_metric: Metric::InnerProduct, // FDEs use inner product
-            muvera_encoder: Some(encoder),
-            multivec_storage: Some(MultiVecStorage::new(token_dim)),
-            max_tokens: DEFAULT_MAX_TOKENS,
-        }
+        let mut store = Self::with_defaults(fde_dim, Metric::InnerProduct);
+        store.muvera_encoder = Some(encoder);
+        store.multivec_storage = Some(MultiVecStorage::new(token_dim));
+        store
     }
 
     // Compatibility accessors for fields moved to RecordStore
@@ -260,26 +252,10 @@ impl VectorStore {
     /// Quantization is trained on the first batch of vectors inserted.
     #[must_use]
     pub fn new_with_quantization(dimensions: usize, mode: QuantizationMode) -> Self {
-        Self {
-            records: RecordStore::new(dimensions as u32),
-            segments: None,
-            hnsw_index: None,
-            rescore_enabled: true,
-            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
-            metadata_index: MetadataIndex::new(),
-            storage: None,
-            storage_path: None,
-            text_index: None,
-            text_search_config: None,
-            pending_quantization: Some(mode),
-            hnsw_m: DEFAULT_HNSW_M,
-            muvera_encoder: None,
-            multivec_storage: None,
-            max_tokens: DEFAULT_MAX_TOKENS,
-            hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
-            hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
-            distance_metric: Metric::L2,
-        }
+        let mut store = Self::with_defaults(dimensions, Metric::L2);
+        store.rescore_enabled = true;
+        store.pending_quantization = Some(mode);
+        store
     }
 
     /// Create new vector store with custom HNSW parameters
@@ -290,35 +266,21 @@ impl VectorStore {
         ef_search: usize,
         distance_metric: Metric,
     ) -> Result<Self> {
-        let hnsw_index = Some(HNSWIndex::new_with_params(
+        let hnsw_index = HNSWIndex::new_with_params(
             1_000_000,
             dimensions,
             m,
             ef_construction,
             ef_search,
             distance_metric.into(),
-        )?);
+        )?;
 
-        Ok(Self {
-            records: RecordStore::new(dimensions as u32),
-            segments: None,
-            hnsw_index,
-            rescore_enabled: false,
-            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
-            metadata_index: MetadataIndex::new(),
-            storage: None,
-            storage_path: None,
-            text_index: None,
-            text_search_config: None,
-            pending_quantization: None,
-            hnsw_m: m,
-            hnsw_ef_construction: ef_construction,
-            hnsw_ef_search: ef_search,
-            distance_metric,
-            muvera_encoder: None,
-            multivec_storage: None,
-            max_tokens: DEFAULT_MAX_TOKENS,
-        })
+        let mut store = Self::with_defaults(dimensions, distance_metric);
+        store.hnsw_index = Some(hnsw_index);
+        store.hnsw_m = m;
+        store.hnsw_ef_construction = ef_construction;
+        store.hnsw_ef_search = ef_search;
+        Ok(store)
     }
 
     // ============================================================================

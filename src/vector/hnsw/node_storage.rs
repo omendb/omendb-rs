@@ -740,9 +740,10 @@ impl NodeStorage {
         }
     }
 
-    /// Get neighbors at any level as Cow (zero-copy for level 0)
+    /// Get neighbors at any level as Cow (zero-copy for all levels)
     ///
     /// Use this in performance-critical paths to avoid allocation.
+    /// Returns borrowed slice for both level 0 (colocated) and upper levels (sparse).
     #[inline]
     #[must_use]
     pub fn neighbors_at_level_cow(&self, id: u32, level: u8) -> std::borrow::Cow<'_, [u32]> {
@@ -754,12 +755,12 @@ impl NodeStorage {
                 Some(levels) => {
                     let level_idx = level as usize - 1;
                     if level_idx < levels.len() {
-                        Cow::Owned(levels[level_idx].clone())
+                        Cow::Borrowed(&levels[level_idx])
                     } else {
-                        Cow::Owned(Vec::new())
+                        Cow::Borrowed(&[])
                     }
                 }
-                None => Cow::Owned(Vec::new()),
+                None => Cow::Borrowed(&[]),
             }
         }
     }
