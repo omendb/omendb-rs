@@ -2963,10 +2963,12 @@ impl VectorStore {
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
         let token_slot = multivec_storage.add(tokens);
 
-        debug_assert_eq!(
-            slot as u32, token_slot,
-            "Slot mismatch: RecordStore={slot}, MultiVecStorage={token_slot}"
-        );
+        if slot as u32 != token_slot {
+            anyhow::bail!(
+                "Internal error: slot mismatch RecordStore={slot} MultiVecStorage={token_slot}. \
+                 This indicates a bug - please report it."
+            );
+        }
 
         Ok(())
     }

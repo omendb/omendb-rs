@@ -171,19 +171,8 @@ class VectorDatabase {
 		if (items.length === 0) {
 			return [];
 		}
-		// Use store type to determine which native method to call (consistent with search())
-		if (this._native.isMultiVector) {
-			return this._native.setMultiVec(items.map(convertMultiVectorItem));
-		} else {
-			return this._native.set(items.map(convertVectorItem));
-		}
-	}
-
-	/**
-	 * @deprecated Use set() with vectors field instead
-	 */
-	setMultiVec(items) {
-		return this._native.setMultiVec(items.map(convertMultiVectorItem));
+		// Unified set() handles both single and multi-vector via native set()
+		return this._native.set(items.map(this._native.isMultiVector ? convertMultiVectorItem : convertVectorItem));
 	}
 
 	/**
@@ -208,7 +197,7 @@ class VectorDatabase {
 			// Multi-vector store
 			const rerank = options?.rerank;
 			const rerankFactor = options?.rerankFactor;
-			return this._native.searchMultiVec(query, k, rerank, rerankFactor);
+			return this._native.searchMulti(query, k, rerank, rerankFactor);
 		} else {
 			// Single-vector store - support both old positional args and new options object
 			if (typeof options === "object" && options !== null && !Array.isArray(options)) {
@@ -228,13 +217,6 @@ class VectorDatabase {
 				return this._native.search(query, k, ef, filter, maxDistance);
 			}
 		}
-	}
-
-	/**
-	 * @deprecated Use search() instead
-	 */
-	searchMultiVec(query, k, rerank, rerankFactor) {
-		return this._native.searchMultiVec(query, k, rerank, rerankFactor);
 	}
 
 	searchBatch(queries, k, ef) {

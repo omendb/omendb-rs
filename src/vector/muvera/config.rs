@@ -63,6 +63,32 @@ impl Default for MultiVectorConfig {
 }
 
 impl MultiVectorConfig {
+    /// Fast configuration - smaller encoding, faster search.
+    ///
+    /// Good for prototyping. Use reranking to maintain quality.
+    /// Encoded size: 3 × 8 × token_dim = 24 × token_dim
+    #[must_use]
+    pub fn fast() -> Self {
+        Self {
+            repetitions: 3,
+            partition_bits: 3,
+            seed: 42,
+        }
+    }
+
+    /// Quality configuration - larger encoding, better approximation.
+    ///
+    /// Use for production when recall matters.
+    /// Encoded size: 10 × 16 × token_dim = 160 × token_dim
+    #[must_use]
+    pub fn quality() -> Self {
+        Self {
+            repetitions: 10,
+            partition_bits: 4,
+            seed: 42,
+        }
+    }
+
     /// Calculate the encoded vector dimension for a given token dimension.
     #[must_use]
     pub fn encoded_dimension(&self, token_dim: usize) -> usize {
@@ -73,15 +99,6 @@ impl MultiVectorConfig {
     #[must_use]
     pub fn partitions(&self) -> usize {
         1 << self.partition_bits
-    }
-
-    // Internal: for backwards compatibility with encoder
-    pub(crate) fn k_sim(&self) -> u8 {
-        self.partition_bits
-    }
-
-    pub(crate) fn r_reps(&self) -> u8 {
-        self.repetitions
     }
 }
 
@@ -126,5 +143,25 @@ mod tests {
         assert_eq!(config.repetitions, 20);
         assert_eq!(config.partitions(), 32);
         assert_eq!(config.seed, 123);
+    }
+
+    #[test]
+    fn test_fast_preset() {
+        let config = MultiVectorConfig::fast();
+        assert_eq!(config.repetitions, 3);
+        assert_eq!(config.partition_bits, 3);
+        assert_eq!(config.partitions(), 8);
+        // 3 * 8 * 128 = 3,072
+        assert_eq!(config.encoded_dimension(128), 3072);
+    }
+
+    #[test]
+    fn test_quality_preset() {
+        let config = MultiVectorConfig::quality();
+        assert_eq!(config.repetitions, 10);
+        assert_eq!(config.partition_bits, 4);
+        assert_eq!(config.partitions(), 16);
+        // 10 * 16 * 128 = 20,480
+        assert_eq!(config.encoded_dimension(128), 20480);
     }
 }

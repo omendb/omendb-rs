@@ -168,7 +168,7 @@ impl MultiVecStorage {
     /// Returns error if bytes are malformed or don't match expected layout.
     pub fn from_bytes(vec_bytes: &[u8], off_bytes: &[u8], dim: usize) -> std::io::Result<Self> {
         // Validate vector bytes length
-        if vec_bytes.len() % 4 != 0 {
+        if !vec_bytes.len().is_multiple_of(4) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Vector bytes not aligned to f32",
@@ -176,7 +176,7 @@ impl MultiVecStorage {
         }
 
         // Validate offset bytes length
-        if off_bytes.len() % 6 != 0 {
+        if !off_bytes.len().is_multiple_of(6) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Offset bytes not aligned to (u32, u16)",
@@ -200,13 +200,12 @@ impl MultiVecStorage {
             .collect();
 
         // Validate vector count matches dimension
-        if !vectors.is_empty() && vectors.len() % dim != 0 {
+        if !vectors.is_empty() && !vectors.len().is_multiple_of(dim) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "Vector count {} not divisible by dimension {}",
-                    vectors.len(),
-                    dim
+                    "Vector count {} not divisible by dimension {dim}",
+                    vectors.len()
                 ),
             ));
         }

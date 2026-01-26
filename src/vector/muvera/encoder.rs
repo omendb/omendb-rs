@@ -17,11 +17,15 @@ pub enum AggMode {
 ///
 /// Encodes variable-length sets of token vectors into fixed-dimensional
 /// encodings. The inner product of two FDEs approximates MaxSim similarity.
+///
+/// Hyperplanes are pre-computed and cached for efficient repeated encoding.
 #[derive(Debug, Clone)]
 pub struct MuveraEncoder {
     config: MuveraConfig,
     token_dim: usize,
     fde_dim: usize,
+    /// Cached hyperplanes: [repetition][hyperplane][dimension]
+    hyperplanes: Vec<Vec<Vec<f32>>>,
 }
 
 impl MuveraEncoder {
@@ -29,10 +33,20 @@ impl MuveraEncoder {
     #[must_use]
     pub fn new(token_dim: usize, config: MuveraConfig) -> Self {
         let fde_dim = config.encoded_dimension(token_dim);
+
+        // Pre-compute hyperplanes for all repetitions
+        let hyperplanes = (0..config.repetitions as usize)
+            .map(|rep| {
+                let seed = config.seed + rep as u64;
+                gaussian_matrix(token_dim, config.partition_bits as usize, seed)
+            })
+            .collect();
+
         Self {
             config,
             token_dim,
             fde_dim,
+            hyperplanes,
         }
     }
 
@@ -80,10 +94,7 @@ impl MuveraEncoder {
         let num_partitions = self.config.partitions();
         let mut fde = vec![0.0; self.fde_dim];
 
-        for rep in 0..self.config.r_reps() as usize {
-            let seed = self.config.seed + rep as u64;
-            let hyperplanes = gaussian_matrix(self.token_dim, self.config.k_sim() as usize, seed);
-
+        for (rep, hyperplanes) in self.hyperplanes.iter().enumerate() {
             // Accumulate tokens per partition
             let mut partition_sums = vec![vec![0.0; self.token_dim]; num_partitions];
             let mut partition_counts = vec![0usize; num_partitions];
@@ -91,7 +102,7 @@ impl MuveraEncoder {
             for token in tokens {
                 debug_assert_eq!(token.len(), self.token_dim, "Token dimension mismatch");
 
-                let sketch = matmul_vec(token, &hyperplanes);
+                let sketch = matmul_vec(token, hyperplanes);
                 let partition = simhash_gray_code(&sketch);
 
                 // Add token to partition

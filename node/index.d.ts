@@ -13,31 +13,6 @@ export declare class VectorDatabase {
    */
   set(items: Array<SetItem>): Array<number>
   /**
-   * Insert or update multi-vector documents.
-   *
-   * @deprecated Use set() with vectors field instead
-   *
-   * For multi-vector stores (ColBERT-style). Each document has multiple token vectors.
-   *
-   * @param items - Array of {id, vectors: Float32Array[], metadata?}
-   * @returns Array of internal indices
-   */
-  setMultiVec(items: Array<MultiVectorItem>): Array<number>
-  /**
-   * Search multi-vector store with optional reranking.
-   *
-   * @deprecated Use search() with options instead
-   *
-   * For multi-vector stores (ColBERT-style). Query is multiple token vectors.
-   *
-   * @param query - Query tokens (number[][] or Float32Array[])
-   * @param k - Number of results to return
-   * @param rerank - Enable MaxSim reranking for better quality (default: true)
-   * @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 4)
-   * @returns Array of {id, distance, metadata}
-   */
-  searchMultiVec(query: Array<Array<number>> | Array<Float32Array>, k: number, rerank?: boolean | undefined | null, rerankFactor?: number | undefined | null): Array<SearchResult>
-  /**
    * Search for k nearest neighbors.
    *
    * @param query - Query vector (number[] or Float32Array)
@@ -48,6 +23,18 @@ export declare class VectorDatabase {
    * @returns Array of {id, distance, metadata}
    */
   search(query: Array<number> | Float32Array, k: number, ef?: number | undefined | null, filter?: Record<string, unknown> | undefined, maxDistance?: number | undefined | null): Array<SearchResult>
+  /**
+   * Search multi-vector store with query tokens.
+   *
+   * Internal method used by unified search() for multi-vector stores.
+   *
+   * @param query - Query tokens (number[][] or Float32Array[])
+   * @param k - Number of results to return
+   * @param rerank - Enable MaxSim reranking for better quality (default: true)
+   * @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 4)
+   * @returns Array of {id, distance, metadata}
+   */
+  searchMulti(query: Array<Array<number>> | Array<Float32Array>, k: number, rerank?: boolean | undefined | null, rerankFactor?: number | undefined | null): Array<SearchResult>
   /**
    * Batch search with parallel execution (async).
    *

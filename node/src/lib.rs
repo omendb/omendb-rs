@@ -448,103 +448,6 @@ impl VectorDatabase {
         }
     }
 
-    /// Insert or update multi-vector documents.
-    ///
-    /// @deprecated Use set() with vectors field instead
-    ///
-    /// For multi-vector stores (ColBERT-style). Each document has multiple token vectors.
-    ///
-    /// @param items - Array of {id, vectors: Float32Array[], metadata?}
-    /// @returns Array of internal indices
-    #[napi]
-    pub fn set_multi_vec(&self, items: Vec<MultiVectorItem>) -> Result<Vec<u32>> {
-        if !self.is_multi_vector {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "setMultiVec requires a multi-vector store. Use open() with multiVector: true",
-            ));
-        }
-
-        let mut inner = self.inner.write();
-        let count = items.len();
-
-        for item in items {
-            if item.vectors.is_empty() {
-                return Err(Error::new(
-                    Status::InvalidArg,
-                    format!("vectors for '{}' must not be empty", item.id),
-                ));
-            }
-
-            let tokens: Vec<Vec<f32>> = item.vectors.into_iter().map(|v| v.to_vec()).collect();
-            let metadata = item.metadata.unwrap_or(serde_json::json!({}));
-
-            inner
-                .store
-                .store(&item.id, tokens, metadata)
-                .map_err(convert_error)?;
-        }
-
-        // Return indices for compatibility (0, 1, 2, ...)
-        Ok((0..count as u32).collect())
-    }
-
-    /// Search multi-vector store with optional reranking.
-    ///
-    /// @deprecated Use search() with options instead
-    ///
-    /// For multi-vector stores (ColBERT-style). Query is multiple token vectors.
-    ///
-    /// @param query - Query tokens (number[][] or Float32Array[])
-    /// @param k - Number of results to return
-    /// @param rerank - Enable MaxSim reranking for better quality (default: true)
-    /// @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 4)
-    /// @returns Array of {id, distance, metadata}
-    #[napi]
-    pub fn search_multi_vec(
-        &self,
-        query: Either<Vec<Vec<f64>>, Vec<Float32Array>>,
-        k: u32,
-        rerank: Option<bool>,
-        rerank_factor: Option<u32>,
-    ) -> Result<Vec<SearchResult>> {
-        if !self.is_multi_vector {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "searchMultiVec requires a multi-vector store. Use open() with multiVector: true",
-            ));
-        }
-
-        if k == 0 {
-            return Err(Error::from_reason("k must be greater than 0"));
-        }
-
-        let query_tokens = extract_multi_vector_query(query)?;
-
-        // Build search options
-        let rerank_opt = match (rerank, rerank_factor) {
-            (Some(false), _) => Rerank::Off,
-            (_, Some(factor)) => Rerank::Factor(factor as usize),
-            _ => Rerank::On, // default: rerank enabled
-        };
-        let options = SearchOptions::default().rerank(rerank_opt);
-
-        let inner = self.inner.read();
-        let results = inner
-            .store
-            .query_with_options(&query_tokens, k as usize, &options)
-            .map_err(convert_error)?;
-
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.id,
-                distance: r.distance as f64,
-                metadata: r.metadata,
-            })
-            .collect())
-    }
-
     /// Search for k nearest neighbors.
     ///
     /// @param query - Query vector (number[] or Float32Array)
@@ -604,6 +507,60 @@ impl VectorDatabase {
                 ef_usize,
                 max_dist_f32,
             )
+            .map_err(convert_error)?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.id,
+                distance: r.distance as f64,
+                metadata: r.metadata,
+            })
+            .collect())
+    }
+
+    /// Search multi-vector store with query tokens.
+    ///
+    /// Internal method used by unified search() for multi-vector stores.
+    ///
+    /// @param query - Query tokens (number[][] or Float32Array[])
+    /// @param k - Number of results to return
+    /// @param rerank - Enable MaxSim reranking for better quality (default: true)
+    /// @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 4)
+    /// @returns Array of {id, distance, metadata}
+    #[napi]
+    pub fn search_multi(
+        &self,
+        query: Either<Vec<Vec<f64>>, Vec<Float32Array>>,
+        k: u32,
+        rerank: Option<bool>,
+        rerank_factor: Option<u32>,
+    ) -> Result<Vec<SearchResult>> {
+        if !self.is_multi_vector {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "searchMulti requires a multi-vector store. Use open() with multiVector: true",
+            ));
+        }
+
+        if k == 0 {
+            return Err(Error::from_reason("k must be greater than 0"));
+        }
+
+        let query_tokens = extract_multi_vector_query(query)?;
+
+        // Build search options
+        let rerank_opt = match (rerank, rerank_factor) {
+            (Some(false), _) => Rerank::Off,
+            (_, Some(factor)) => Rerank::Factor(factor as usize),
+            _ => Rerank::On, // default: rerank enabled
+        };
+        let options = SearchOptions::default().rerank(rerank_opt);
+
+        let inner = self.inner.read();
+        let results = inner
+            .store
+            .query_with_options(&query_tokens, k as usize, &options)
             .map_err(convert_error)?;
 
         Ok(results

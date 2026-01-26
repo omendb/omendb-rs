@@ -75,52 +75,6 @@ describe("Multi-Vector (MUVERA)", () => {
 		});
 	});
 
-	describe("insert (deprecated API)", () => {
-		let db: VectorDatabase;
-
-		beforeEach(() => {
-			db = open(":memory:", { dimensions: 8, multiVector: true });
-		});
-
-		it("should insert a single multi-vector document", () => {
-			const vectors = [
-				new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
-				new Float32Array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]),
-			];
-			const indices = db.setMultiVec([{ id: "doc1", vectors, metadata: { title: "Test" } }]);
-			expect(indices).toHaveLength(1);
-			expect(db.count()).toBe(1);
-		});
-
-		it("should insert multiple multi-vector documents", () => {
-			const items = Array.from({ length: 10 }, (_, i) => ({
-				id: `doc${i}`,
-				vectors: Array.from({ length: 5 }, () =>
-					new Float32Array(8).fill(i / 10)
-				),
-				metadata: { index: i },
-			}));
-			const indices = db.setMultiVec(items);
-			expect(indices).toHaveLength(10);
-			expect(db.count()).toBe(10);
-		});
-
-		it("should reject empty vectors array", () => {
-			expect(() =>
-				db.setMultiVec([{ id: "doc1", vectors: [], metadata: {} }])
-			).toThrow(/must not be empty/);
-		});
-
-		it("should reject setMultiVec on regular store", () => {
-			const regularDb = open(":memory:", { dimensions: 8 });
-			expect(() =>
-				regularDb.setMultiVec([
-					{ id: "doc1", vectors: [new Float32Array(8).fill(0.1)], metadata: {} },
-				])
-			).toThrow(/multi-vector store/);
-		});
-	});
-
 	describe("unified API - search", () => {
 		let db: VectorDatabase;
 
@@ -179,73 +133,6 @@ describe("Multi-Vector (MUVERA)", () => {
 		});
 	});
 
-	describe("search (deprecated API)", () => {
-		let db: VectorDatabase;
-
-		beforeEach(() => {
-			db = open(":memory:", { dimensions: 8, multiVector: true });
-
-			// Insert 100 docs with distinct patterns
-			const items = Array.from({ length: 100 }, (_, i) => {
-				const base = i / 100;
-				const vectors = Array.from({ length: 5 }, (_, j) =>
-					new Float32Array(8).fill(base + j * 0.01)
-				);
-				return { id: `doc${i}`, vectors, metadata: { index: i } };
-			});
-			db.setMultiVec(items);
-		});
-
-		it("should perform basic multi-vector search", () => {
-			const query = [
-				[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
-				[0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51],
-			];
-			const results = db.searchMultiVec(query, 5);
-
-			expect(results).toHaveLength(5);
-			expect(results.every((r) => "id" in r && "distance" in r && "metadata" in r)).toBe(true);
-		});
-
-		it("should search with Float32Array query", () => {
-			const query = [
-				new Float32Array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]),
-				new Float32Array([0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51]),
-			];
-			const results = db.searchMultiVec(query, 5);
-			expect(results).toHaveLength(5);
-		});
-
-		it("should search with rerank disabled", () => {
-			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
-			const results = db.searchMultiVec(query, 5, false);
-			expect(results).toHaveLength(5);
-		});
-
-		it("should search with custom rerank factor", () => {
-			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
-			const results = db.searchMultiVec(query, 5, true, 8);
-			expect(results).toHaveLength(5);
-		});
-
-		it("should return metadata in results", () => {
-			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
-			const results = db.searchMultiVec(query, 1);
-
-			expect(results).toHaveLength(1);
-			expect(results[0].metadata).toHaveProperty("index");
-		});
-
-		it("should reject searchMultiVec on regular store", () => {
-			const regularDb = open(":memory:", { dimensions: 8 });
-			regularDb.set([{ id: "doc1", vector: new Float32Array(8).fill(0.1) }]);
-
-			expect(() =>
-				regularDb.searchMultiVec([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]], 1)
-			).toThrow(/multi-vector store/);
-		});
-	});
-
 	describe("unified API - single-vector store", () => {
 		it("should use unified search() with options on single-vector store", () => {
 			const db = open(":memory:", { dimensions: 8 });
@@ -299,7 +186,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				});
 				return { id: `doc${i}`, vectors, metadata: { numTokens } };
 			});
-			db.setMultiVec(items);
+			db.set(items);
 		});
 
 		it("should return valid results with and without reranking", () => {
@@ -316,8 +203,8 @@ describe("Multi-Vector (MUVERA)", () => {
 				})(),
 			];
 
-			const resultsNoRerank = db.searchMultiVec(query, 10, false);
-			const resultsRerank = db.searchMultiVec(query, 10, true);
+			const resultsNoRerank = db.search(query, 10, { rerank: false });
+			const resultsRerank = db.search(query, 10, { rerank: true });
 
 			expect(resultsNoRerank).toHaveLength(10);
 			expect(resultsRerank).toHaveLength(10);
@@ -450,7 +337,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				}),
 				metadata: { index: i },
 			}));
-			db.setMultiVec(items);
+			db.set(items);
 			expect(db.count()).toBe(1000);
 
 			// Search
@@ -461,7 +348,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				}
 				return vec;
 			});
-			const results = db.searchMultiVec(query, 10);
+			const results = db.search(query, 10);
 			expect(results).toHaveLength(10);
 		});
 
@@ -480,7 +367,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				}),
 				metadata: { numTokens: 1 + (i % 20) },
 			}));
-			db.setMultiVec(items);
+			db.set(items);
 			expect(db.count()).toBe(100);
 
 			// Search with varying query sizes
@@ -492,7 +379,7 @@ describe("Multi-Vector (MUVERA)", () => {
 					}
 					return vec;
 				});
-				const results = db.searchMultiVec(query, 5);
+				const results = db.search(query, 5);
 				expect(results).toHaveLength(5);
 			}
 		});
