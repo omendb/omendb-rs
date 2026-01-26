@@ -22,12 +22,6 @@ describe("Multi-Vector (MUVERA)", () => {
 			expect(db.isMultiVector).toBe(true);
 		});
 
-		it("should reject multi-vector with persistence", () => {
-			expect(() => open("./test_mv", { dimensions: 128, multiVector: true })).toThrow(
-				/in-memory/
-			);
-		});
-
 		it("should reject multi-vector with quantization", () => {
 			expect(() =>
 				open(":memory:", { dimensions: 128, multiVector: true, quantization: true })
@@ -331,6 +325,112 @@ describe("Multi-Vector (MUVERA)", () => {
 			// All results should have valid doc IDs
 			expect(resultsNoRerank.every((r) => r.id.startsWith("doc"))).toBe(true);
 			expect(resultsRerank.every((r) => r.id.startsWith("doc"))).toBe(true);
+		});
+	});
+
+	describe("persistence (MUV-13)", () => {
+		const fs = require("fs");
+		const os = require("os");
+		const path = require("path");
+
+		function tempPath(): string {
+			return path.join(os.tmpdir(), `omendb_test_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+		}
+
+		it("should persist multi-vector data across close/reopen", () => {
+			const dbPath = tempPath();
+			try {
+				// Create and populate
+				const db1 = open(dbPath, { dimensions: 8, multiVector: true });
+				db1.set([
+					{ id: "doc1", vectors: [new Float32Array(8).fill(0.1), new Float32Array(8).fill(0.2)], metadata: { title: "first" } },
+					{ id: "doc2", vectors: [new Float32Array(8).fill(0.3)], metadata: { title: "second" } },
+				]);
+				db1.flush();
+				expect(db1.count()).toBe(2);
+				db1.close();
+
+				// Reopen and verify
+				const db2 = open(dbPath, { dimensions: 8 });
+				expect(db2.isMultiVector).toBe(true);
+				expect(db2.count()).toBe(2);
+
+				// Verify search works
+				const results = db2.search([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]], 2);
+				expect(results.length).toBe(2);
+				db2.close();
+			} finally {
+				// Cleanup
+				try { fs.unlinkSync(dbPath + ".omen"); } catch {}
+				try { fs.unlinkSync(dbPath + ".wal"); } catch {}
+			}
+		});
+
+		it("should support reranking after reload", () => {
+			const dbPath = tempPath();
+			try {
+				// Create store with docs
+				const db1 = open(dbPath, { dimensions: 4, multiVector: true });
+				db1.set([
+					{ id: "doc1", vectors: [[1, 0, 0, 0], [0, 1, 0, 0]], metadata: {} },
+					{ id: "doc2", vectors: [[0.3, 0.3, 0.3, 0]], metadata: {} },
+				]);
+				db1.flush();
+				db1.close();
+
+				// Reopen and search with reranking
+				const db2 = open(dbPath, { dimensions: 4 });
+				expect(db2.isMultiVector).toBe(true);
+
+				const query = [[1, 0, 0, 0], [0, 1, 0, 0]];
+				const results = db2.search(query, 2, { rerank: true });
+
+				expect(results.length).toBe(2);
+				// doc1 should be first (better MaxSim match)
+				expect(results[0].id).toBe("doc1");
+				db2.close();
+			} finally {
+				try { fs.unlinkSync(dbPath + ".omen"); } catch {}
+				try { fs.unlinkSync(dbPath + ".wal"); } catch {}
+			}
+		});
+
+		it("should handle large persistent multi-vector store", () => {
+			const dbPath = tempPath();
+			try {
+				// Create store with 100 docs
+				const db1 = open(dbPath, { dimensions: 32, multiVector: true });
+				const items = Array.from({ length: 100 }, (_, i) => ({
+					id: `doc${i}`,
+					vectors: Array.from({ length: (i % 5) + 1 }, () => {
+						const vec = new Float32Array(32);
+						for (let j = 0; j < 32; j++) vec[j] = Math.random();
+						return vec;
+					}),
+					metadata: { idx: i },
+				}));
+				db1.set(items);
+				db1.flush();
+				db1.close();
+
+				// Reopen and verify
+				const db2 = open(dbPath, { dimensions: 32 });
+				expect(db2.isMultiVector).toBe(true);
+				expect(db2.count()).toBe(100);
+
+				// Search should work
+				const query = Array.from({ length: 3 }, () => {
+					const vec = new Float32Array(32);
+					for (let j = 0; j < 32; j++) vec[j] = Math.random();
+					return vec;
+				});
+				const results = db2.search(query, 5);
+				expect(results.length).toBe(5);
+				db2.close();
+			} finally {
+				try { fs.unlinkSync(dbPath + ".omen"); } catch {}
+				try { fs.unlinkSync(dbPath + ".wal"); } catch {}
+			}
 		});
 	});
 

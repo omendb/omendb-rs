@@ -126,6 +126,98 @@ impl MultiVecStorage {
             + self.offsets.len() * std::mem::size_of::<(u32, u16)>()
     }
 
+    // ========================================================================
+    // Serialization for persistence
+    // ========================================================================
+
+    /// Serialize vectors to bytes for persistence.
+    ///
+    /// Layout: flat f32 array in little-endian format.
+    #[must_use]
+    pub fn vectors_to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.vectors.len() * 4);
+        for &val in &self.vectors {
+            bytes.extend_from_slice(&val.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// Serialize offsets to bytes for persistence.
+    ///
+    /// Layout: [(start: u32, count: u16), ...] packed as 6 bytes each.
+    #[must_use]
+    pub fn offsets_to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.offsets.len() * 6);
+        for &(start, count) in &self.offsets {
+            bytes.extend_from_slice(&start.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// Reconstruct storage from persisted bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `vec_bytes` - Serialized vectors from `vectors_to_bytes()`
+    /// * `off_bytes` - Serialized offsets from `offsets_to_bytes()`
+    /// * `dim` - Token embedding dimension
+    ///
+    /// # Errors
+    ///
+    /// Returns error if bytes are malformed or don't match expected layout.
+    pub fn from_bytes(vec_bytes: &[u8], off_bytes: &[u8], dim: usize) -> std::io::Result<Self> {
+        // Validate vector bytes length
+        if vec_bytes.len() % 4 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Vector bytes not aligned to f32",
+            ));
+        }
+
+        // Validate offset bytes length
+        if off_bytes.len() % 6 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Offset bytes not aligned to (u32, u16)",
+            ));
+        }
+
+        // Parse vectors
+        let vectors: Vec<f32> = vec_bytes
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+
+        // Parse offsets
+        let offsets: Vec<(u32, u16)> = off_bytes
+            .chunks_exact(6)
+            .map(|chunk| {
+                let start = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
+                let count = u16::from_le_bytes(chunk[4..6].try_into().unwrap());
+                (start, count)
+            })
+            .collect();
+
+        // Validate vector count matches dimension
+        if !vectors.is_empty() && vectors.len() % dim != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Vector count {} not divisible by dimension {}",
+                    vectors.len(),
+                    dim
+                ),
+            ));
+        }
+
+        Ok(Self {
+            vectors,
+            offsets,
+            dim,
+        })
+    }
+
     /// Remap slots after RecordStore compaction.
     ///
     /// `old_to_new` maps old_slot -> new_slot for live records only.
@@ -305,5 +397,124 @@ mod tests {
 
         assert!(storage.is_empty());
         assert_eq!(storage.total_tokens(), 0);
+    }
+
+    // ========================================================================
+    // Serialization Tests
+    // ========================================================================
+
+    #[test]
+    fn test_serialization_empty() {
+        let storage = MultiVecStorage::new(128);
+        let vec_bytes = storage.vectors_to_bytes();
+        let off_bytes = storage.offsets_to_bytes();
+
+        assert!(vec_bytes.is_empty());
+        assert!(off_bytes.is_empty());
+
+        let restored = MultiVecStorage::from_bytes(&vec_bytes, &off_bytes, 128).unwrap();
+        assert!(restored.is_empty());
+        assert_eq!(restored.dim(), 128);
+    }
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        let mut storage = MultiVecStorage::new(4);
+        let doc1: Vec<&[f32]> = vec![&[1.0, 2.0, 3.0, 4.0], &[5.0, 6.0, 7.0, 8.0]];
+        let doc2: Vec<&[f32]> = vec![
+            &[9.0, 10.0, 11.0, 12.0],
+            &[13.0, 14.0, 15.0, 16.0],
+            &[17.0, 18.0, 19.0, 20.0],
+        ];
+
+        storage.add(&doc1);
+        storage.add(&doc2);
+
+        // Serialize
+        let vec_bytes = storage.vectors_to_bytes();
+        let off_bytes = storage.offsets_to_bytes();
+
+        // Expected sizes
+        assert_eq!(vec_bytes.len(), 5 * 4 * 4); // 5 tokens * 4 dims * 4 bytes
+        assert_eq!(off_bytes.len(), 2 * 6); // 2 docs * 6 bytes
+
+        // Deserialize
+        let restored = MultiVecStorage::from_bytes(&vec_bytes, &off_bytes, 4).unwrap();
+
+        // Verify
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored.total_tokens(), 5);
+        assert_eq!(restored.dim(), 4);
+
+        // Verify doc1 tokens
+        let tokens1: Vec<&[f32]> = restored.get(0).unwrap().collect();
+        assert_eq!(tokens1.len(), 2);
+        assert_eq!(tokens1[0], &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(tokens1[1], &[5.0, 6.0, 7.0, 8.0]);
+
+        // Verify doc2 tokens
+        let tokens2: Vec<&[f32]> = restored.get(1).unwrap().collect();
+        assert_eq!(tokens2.len(), 3);
+        assert_eq!(tokens2[0], &[9.0, 10.0, 11.0, 12.0]);
+        assert_eq!(tokens2[1], &[13.0, 14.0, 15.0, 16.0]);
+        assert_eq!(tokens2[2], &[17.0, 18.0, 19.0, 20.0]);
+    }
+
+    #[test]
+    fn test_serialization_invalid_vec_bytes() {
+        // Not divisible by 4
+        let result = MultiVecStorage::from_bytes(&[0, 1, 2], &[], 4);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_serialization_invalid_off_bytes() {
+        // Not divisible by 6
+        let result = MultiVecStorage::from_bytes(&[], &[0, 1, 2, 3, 4], 4);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_serialization_dimension_mismatch() {
+        // 5 floats not divisible by dim=4
+        let vec_bytes: Vec<u8> = (0..5).flat_map(|i| (i as f32).to_le_bytes()).collect();
+        let result = MultiVecStorage::from_bytes(&vec_bytes, &[], 4);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_serialization_large_store() {
+        let mut storage = MultiVecStorage::new(128);
+
+        // Add 100 documents with varying token counts
+        for i in 0..100 {
+            let num_tokens = (i % 10) + 1; // 1-10 tokens
+            let tokens: Vec<Vec<f32>> = (0..num_tokens)
+                .map(|t| vec![(i * num_tokens + t) as f32; 128])
+                .collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|v| v.as_slice()).collect();
+            storage.add(&token_refs);
+        }
+
+        // Serialize
+        let vec_bytes = storage.vectors_to_bytes();
+        let off_bytes = storage.offsets_to_bytes();
+
+        // Deserialize
+        let restored = MultiVecStorage::from_bytes(&vec_bytes, &off_bytes, 128).unwrap();
+
+        // Verify
+        assert_eq!(restored.len(), 100);
+        assert_eq!(restored.total_tokens(), storage.total_tokens());
+
+        // Spot check a few documents
+        for slot in [0, 50, 99] {
+            let orig_tokens: Vec<&[f32]> = storage.get(slot).unwrap().collect();
+            let restored_tokens: Vec<&[f32]> = restored.get(slot).unwrap().collect();
+            assert_eq!(orig_tokens.len(), restored_tokens.len());
+            for (orig, rest) in orig_tokens.iter().zip(restored_tokens.iter()) {
+                assert_eq!(*orig, *rest);
+            }
+        }
     }
 }

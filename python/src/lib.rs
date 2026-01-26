@@ -2030,18 +2030,11 @@ fn open(
     let mv_config = parse_multi_vector(multi_vector)?;
     let is_multi_vec = mv_config.is_some();
 
-    // Multi-vector stores don't support persistence or quantization yet
-    if is_multi_vec {
-        if quant_mode.is_some() {
-            return Err(PyValueError::new_err(
-                "Multi-vector stores don't support quantization yet",
-            ));
-        }
-        if path != ":memory:" {
-            return Err(PyValueError::new_err(
-                "Multi-vector stores only support in-memory mode (:memory:) - persistence coming soon",
-            ));
-        }
+    // Multi-vector stores don't support quantization yet
+    if is_multi_vec && quant_mode.is_some() {
+        return Err(PyValueError::new_err(
+            "Multi-vector stores don't support quantization yet",
+        ));
     }
 
     // Handle :memory: for in-memory database (must check BEFORE path existence checks)
@@ -2098,6 +2091,46 @@ fn open(
 
     // Check if this is a directory (persistent storage) or .omen file exists
     if db_path.is_dir() || omen_path.exists() || !db_path.exists() {
+        // Check for existing database that may have multi-vector config
+        if omen_path.exists() {
+            let store = VectorStore::open(&path).map_err(convert_error)?;
+            let is_mv = store.is_multi_vector();
+
+            // If multi_vector param conflicts with existing store, error
+            if is_multi_vec && !is_mv {
+                return Err(PyValueError::new_err(
+                    "Cannot open existing single-vector database with multi_vector=True",
+                ));
+            }
+
+            return Ok(VectorDatabase {
+                inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+                path,
+                dimensions: effective_dims,
+                is_persistent: true,
+                is_multi_vector: is_mv,
+                collections_cache: RwLock::new(HashMap::new()),
+            });
+        }
+
+        // Create new persistent store
+        if let Some(mv_cfg) = mv_config {
+            // Create new multi-vector persistent store
+            let store = VectorStore::multi_vector_with(effective_dims, mv_cfg)
+                .persist(&path)
+                .map_err(convert_error)?;
+
+            return Ok(VectorDatabase {
+                inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+                path,
+                dimensions: effective_dims,
+                is_persistent: true,
+                is_multi_vector: true,
+                collections_cache: RwLock::new(HashMap::new()),
+            });
+        }
+
+        // Single-vector persistent store
         let mut options = build_store_options(
             effective_dims,
             m,

@@ -508,6 +508,27 @@ pub struct OmenSnapshot {
     pub hnsw_bytes: Option<Vec<u8>>,
     /// Serialized MetadataIndex (if persisted)
     pub metadata_index_bytes: Option<Vec<u8>>,
+    /// Multi-vector token data (if persisted)
+    pub multivec_bytes: Option<Vec<u8>>,
+    /// Multi-vector offset table (if persisted)
+    pub multivec_offsets: Option<Vec<u8>>,
+    /// MUVERA config: (repetitions, partition_bits, seed, token_dim)
+    pub multivec_config: Option<(u8, u8, u64, usize)>,
+}
+
+/// Options for checkpoint_from_snapshot
+#[derive(Debug, Default)]
+pub struct CheckpointOptions<'a> {
+    /// Serialized HNSW index bytes
+    pub hnsw_bytes: Option<&'a [u8]>,
+    /// Serialized MetadataIndex bytes
+    pub metadata_index_bytes: Option<&'a [u8]>,
+    /// Multi-vector token data (from MultiVecStorage::vectors_to_bytes)
+    pub multivec_bytes: Option<&'a [u8]>,
+    /// Multi-vector offset table (from MultiVecStorage::offsets_to_bytes)
+    pub multivec_offsets: Option<&'a [u8]>,
+    /// MUVERA config: (repetitions, partition_bits, seed, token_dim)
+    pub multivec_config: Option<(u8, u8, u64, usize)>,
 }
 
 impl OmenFile {
@@ -618,6 +639,37 @@ impl OmenFile {
             .metadata_index_bytes
             .clone_from(&self.manifest.metadata_index);
 
+        // Load multi-vector data if present
+        if let Some(ref mmap) = self.mmap {
+            // Load MultiVectors segment (token vectors)
+            for location in &self.manifest.nodes {
+                if location.segment_type == SegmentType::MultiVectors {
+                    let start = location.offset as usize;
+                    let end = start + location.length as usize;
+                    if end <= mmap.len() {
+                        snapshot.multivec_bytes = Some(mmap[start..end].to_vec());
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Load multi-vector offsets from manifest
+        snapshot
+            .multivec_offsets
+            .clone_from(&self.manifest.multivec_offsets);
+
+        // Extract MUVERA config from manifest.config if present
+        let reps = self.manifest.config.get("muvera_repetitions").copied();
+        let bits = self.manifest.config.get("muvera_partition_bits").copied();
+        let seed = self.manifest.config.get("muvera_seed").copied();
+        let token_dim = self.manifest.config.get("muvera_token_dim").copied();
+
+        if let (Some(reps), Some(bits), Some(seed), Some(token_dim)) = (reps, bits, seed, token_dim)
+        {
+            snapshot.multivec_config = Some((reps as u8, bits as u8, seed, token_dim as usize));
+        }
+
         Ok(snapshot)
     }
 
@@ -632,8 +684,7 @@ impl OmenFile {
         id_to_slot: &HashMap<String, u32>,
         deleted: &[u32],
         metadata: &HashMap<u32, serde_json::Value>,
-        hnsw_bytes: Option<&[u8]>,
-        metadata_index_bytes: Option<&[u8]>,
+        options: CheckpointOptions<'_>,
     ) -> io::Result<()> {
         // Drop mmap before writing
         self.mmap = None;
@@ -658,6 +709,7 @@ impl OmenFile {
                     .filter(|n| {
                         n.segment_type == SegmentType::Vectors
                             || n.segment_type == SegmentType::IndexMetadata
+                            || n.segment_type == SegmentType::MultiVectors
                     })
                     .map(|n| n.offset + n.length as u64)
                     .max()
@@ -716,8 +768,14 @@ impl OmenFile {
         }
 
         // Write HNSW index if provided
-        if let Some(hnsw_data) = hnsw_bytes {
+        if let Some(hnsw_data) = options.hnsw_bytes {
             let location = writer.write_aligned(hnsw_data, SegmentType::IndexMetadata)?;
+            new_nodes.push(location);
+        }
+
+        // Write MultiVectors segment if provided
+        if let Some(multivec_data) = options.multivec_bytes {
+            let location = writer.write_aligned(multivec_data, SegmentType::MultiVectors)?;
             new_nodes.push(location);
         }
 
@@ -746,7 +804,10 @@ impl OmenFile {
             }
         }
         manifest.metadata = metadata_bytes;
-        manifest.metadata_index = metadata_index_bytes.map(<[u8]>::to_vec);
+        manifest.metadata_index = options.metadata_index_bytes.map(<[u8]>::to_vec);
+
+        // Store multi-vector offsets in manifest (small, atomic with manifest)
+        manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
 
         // Update config
         let live_count = vectors.len().saturating_sub(deleted.len());
@@ -770,6 +831,20 @@ impl OmenFile {
         manifest
             .config
             .insert("metric".to_string(), self.header.metric as u64);
+
+        // Store MUVERA config in manifest.config
+        if let Some((reps, bits, seed, token_dim)) = options.multivec_config {
+            manifest
+                .config
+                .insert("muvera_repetitions".to_string(), reps as u64);
+            manifest
+                .config
+                .insert("muvera_partition_bits".to_string(), bits as u64);
+            manifest.config.insert("muvera_seed".to_string(), seed);
+            manifest
+                .config
+                .insert("muvera_token_dim".to_string(), token_dim as u64);
+        }
 
         // Write Manifest with CRC header
         let manifest_bytes = postcard::to_allocvec(&manifest)
@@ -1053,8 +1128,14 @@ mod tests {
         metadata.insert(1, serde_json::json!({"key": "value2"}));
 
         // Checkpoint from external snapshot
-        db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None, None)
-            .unwrap();
+        db.checkpoint_from_snapshot(
+            &vectors,
+            &id_to_slot,
+            &deleted,
+            &metadata,
+            CheckpointOptions::default(),
+        )
+        .unwrap();
 
         // Verify header count updated
         assert_eq!(db.len(), 2);
@@ -1092,8 +1173,14 @@ mod tests {
             metadata.insert(0, serde_json::json!({"k":"v1"}));
             metadata.insert(1, serde_json::json!({"k":"v2"}));
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &deleted, &metadata, None, None)
-                .unwrap();
+            db.checkpoint_from_snapshot(
+                &vectors,
+                &id_to_slot,
+                &deleted,
+                &metadata,
+                CheckpointOptions::default(),
+            )
+            .unwrap();
         }
 
         // Reopen and load snapshot
@@ -1145,8 +1232,14 @@ mod tests {
             id_to_slot.insert("vec1".to_string(), 0);
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None, None)
-                .unwrap();
+            db.checkpoint_from_snapshot(
+                &vectors,
+                &id_to_slot,
+                &[],
+                &metadata,
+                CheckpointOptions::default(),
+            )
+            .unwrap();
 
             // WAL has 1 entry (checkpoint marker)
             assert_eq!(db.wal_len(), 1);
@@ -1175,8 +1268,14 @@ mod tests {
             id_to_slot.insert("vec1".to_string(), 0);
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None, None)
-                .unwrap();
+            db.checkpoint_from_snapshot(
+                &vectors,
+                &id_to_slot,
+                &[],
+                &metadata,
+                CheckpointOptions::default(),
+            )
+            .unwrap();
 
             // Check that footer is there
             let file = File::open(&db_path).unwrap();
@@ -1212,8 +1311,14 @@ mod tests {
             let id_to_slot: HashMap<String, u32> = HashMap::new();
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None, None)
-                .unwrap();
+            db.checkpoint_from_snapshot(
+                &vectors,
+                &id_to_slot,
+                &[],
+                &metadata,
+                CheckpointOptions::default(),
+            )
+            .unwrap();
         }
 
         {
@@ -1239,8 +1344,14 @@ mod tests {
             id_to_slot.insert("vec1".to_string(), 0);
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
 
-            db.checkpoint_from_snapshot(&vectors, &id_to_slot, &[], &metadata, None, None)
-                .unwrap();
+            db.checkpoint_from_snapshot(
+                &vectors,
+                &id_to_slot,
+                &[],
+                &metadata,
+                CheckpointOptions::default(),
+            )
+            .unwrap();
         }
 
         // Verify it opens successfully

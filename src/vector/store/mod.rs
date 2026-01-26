@@ -29,7 +29,9 @@ use super::hnsw_index::HNSWIndex;
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::types::Vector;
 use super::QuantizationMode;
-use crate::omen::{parse_wal_delete, parse_wal_insert, MetadataIndex, OmenFile, WalEntryType};
+use crate::omen::{
+    parse_wal_delete, parse_wal_insert, CheckpointOptions, MetadataIndex, OmenFile, WalEntryType,
+};
 use crate::text::{
     weighted_reciprocal_rank_fusion, weighted_reciprocal_rank_fusion_with_subscores, HybridResult,
     TextIndex, TextSearchConfig, DEFAULT_RRF_K,
@@ -558,6 +560,39 @@ impl VectorStore {
             .as_ref()
             .is_some_and(super::hnsw_index::HNSWIndex::is_asymmetric);
 
+        // Reconstruct multi-vector state if config is present
+        let (muvera_encoder, multivec_storage, distance_metric) =
+            if let Some((reps, bits, seed, token_dim)) = snapshot.multivec_config {
+                let config = MultiVectorConfig {
+                    repetitions: reps,
+                    partition_bits: bits,
+                    seed,
+                };
+                let encoder = MuveraEncoder::new(token_dim, config);
+
+                // Reconstruct storage from persisted bytes
+                let storage = match (&snapshot.multivec_bytes, &snapshot.multivec_offsets) {
+                    (Some(vec_bytes), Some(off_bytes)) => {
+                        match MultiVecStorage::from_bytes(vec_bytes, off_bytes, token_dim) {
+                            Ok(s) => Some(s),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to restore MultiVecStorage, creating empty: {}",
+                                    e
+                                );
+                                Some(MultiVecStorage::new(token_dim))
+                            }
+                        }
+                    }
+                    _ => Some(MultiVecStorage::new(token_dim)),
+                };
+
+                // FDEs use inner product
+                (Some(encoder), storage, Metric::InnerProduct)
+            } else {
+                (None, None, distance_metric)
+            };
+
         Ok(Self {
             records,
             segments: None,
@@ -574,8 +609,8 @@ impl VectorStore {
             hnsw_ef_construction: hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION),
             hnsw_ef_search: hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH),
             distance_metric,
-            muvera_encoder: None,
-            multivec_storage: None,
+            muvera_encoder,
+            multivec_storage,
             max_tokens: DEFAULT_MAX_TOKENS,
         })
     }
@@ -2370,14 +2405,39 @@ impl VectorStore {
             // Serialize MetadataIndex for fast recovery
             let metadata_index_bytes = self.metadata_index.to_bytes().ok();
 
+            // Export multi-vector data if present
+            let (multivec_bytes, multivec_offsets, multivec_config) =
+                if let (Some(ref mvs), Some(ref enc)) =
+                    (&self.multivec_storage, &self.muvera_encoder)
+                {
+                    let config = enc.config();
+                    (
+                        Some(mvs.vectors_to_bytes()),
+                        Some(mvs.offsets_to_bytes()),
+                        Some((
+                            config.repetitions,
+                            config.partition_bits,
+                            config.seed,
+                            enc.token_dimension(),
+                        )),
+                    )
+                } else {
+                    (None, None, None)
+                };
+
             // Checkpoint from RecordStore data (not OmenFile's internal state)
             storage.checkpoint_from_snapshot(
                 &vectors,
                 &id_to_slot,
                 &deleted,
                 &metadata,
-                hnsw_bytes.as_deref(),
-                metadata_index_bytes.as_deref(),
+                CheckpointOptions {
+                    hnsw_bytes: hnsw_bytes.as_deref(),
+                    metadata_index_bytes: metadata_index_bytes.as_deref(),
+                    multivec_bytes: multivec_bytes.as_deref(),
+                    multivec_offsets: multivec_offsets.as_deref(),
+                    multivec_config,
+                },
             )?;
         }
 
@@ -2398,6 +2458,36 @@ impl VectorStore {
     #[must_use]
     pub fn storage(&self) -> Option<&OmenFile> {
         self.storage.as_ref()
+    }
+
+    /// Enable persistence for this store (builder pattern).
+    ///
+    /// Creates or opens an .omen file at the given path. Use `flush()` to persist data.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut store = VectorStore::multi_vector(128);
+    /// store = store.persist("my_store.omen")?;
+    /// store.store("doc1", tokens, metadata)?;
+    /// store.flush()?;
+    /// ```
+    pub fn persist(mut self, path: impl AsRef<Path>) -> Result<Self> {
+        if self.storage.is_some() {
+            anyhow::bail!("Store already has persistence enabled");
+        }
+
+        let path = path.as_ref();
+        let omen_path = OmenFile::compute_omen_path(path);
+        let storage = if omen_path.exists() {
+            OmenFile::open(path)?
+        } else {
+            OmenFile::create(path, self.dimensions() as u32)?
+        };
+
+        self.storage = Some(storage);
+        self.storage_path = Some(path.to_path_buf());
+        Ok(self)
     }
 
     // ============================================================================

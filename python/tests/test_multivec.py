@@ -189,20 +189,122 @@ class TestMultiVectorErrors:
         with pytest.raises((ValueError, RuntimeError, TypeError)):
             db.search([0.1] * 8, k=1)
 
-    def test_multi_vector_with_persistence_fails(self):
-        """Test that multi-vector with persistence is not yet supported."""
-        import os
-        import tempfile
+    def test_single_vector_query_dimension_mismatch(self):
+        """Test that mismatched dimensions are handled."""
+        db = omendb.open(":memory:", dimensions=8, multi_vector=True)
+        db.set([{"id": "doc1", "vectors": [[0.1] * 8, [0.2] * 8], "metadata": {}}])
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "test_db")
-            with pytest.raises(ValueError, match="in-memory"):
-                omendb.open(path, dimensions=8, multi_vector=True)
+        # Wrong dimension should fail
+        with pytest.raises((ValueError, RuntimeError)):
+            db.search([[0.1] * 16], k=1)  # Wrong dimension
 
     def test_multi_vector_with_quantization_fails(self):
         """Test that multi-vector with quantization is not yet supported."""
         with pytest.raises(ValueError, match="quantization"):
             omendb.open(":memory:", dimensions=8, multi_vector=True, quantization=True)
+
+
+class TestMultiVectorPersistence:
+    """Tests for multi-vector persistence (MUV-13)."""
+
+    def test_persistence_roundtrip(self):
+        """Test that multi-vector data persists across close/reopen."""
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test_multivec.omen")
+
+            # Create and populate
+            db = omendb.open(path, dimensions=8, multi_vector=True)
+            db.set(
+                [
+                    {
+                        "id": "doc1",
+                        "vectors": [[0.1] * 8, [0.2] * 8],
+                        "metadata": {"title": "first"},
+                    },
+                    {"id": "doc2", "vectors": [[0.3] * 8], "metadata": {"title": "second"}},
+                ]
+            )
+            db.flush()
+            assert len(db) == 2
+            db.close()
+
+            # Reopen and verify
+            db2 = omendb.open(path)
+            assert db2.is_multi_vector is True
+            assert len(db2) == 2
+
+            # Verify docs by searching
+            query = [[0.1] * 8]
+            results = db2.search(query, k=2)
+            ids = [r["id"] for r in results]
+            assert "doc1" in ids or "doc2" in ids
+            db2.close()
+
+    def test_persistence_rerank_after_reload(self):
+        """Test that reranking works after reload."""
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test_rerank.omen")
+
+            # Create store with docs
+            db = omendb.open(path, dimensions=4, multi_vector=True)
+            db.set(
+                [
+                    {
+                        "id": "doc1",
+                        "vectors": [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+                        "metadata": {},
+                    },
+                    {"id": "doc2", "vectors": [[0.3, 0.3, 0.3, 0.0]], "metadata": {}},
+                ]
+            )
+            db.flush()
+            db.close()
+
+            # Reopen and search with reranking
+            db2 = omendb.open(path)
+            query = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
+            results = db2.search(query, k=2, rerank=True)
+
+            assert len(results) == 2
+            # doc1 should be first (better MaxSim match)
+            assert results[0]["id"] == "doc1"
+            db2.close()
+
+    def test_persistence_large_store(self):
+        """Test persistence with larger dataset."""
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test_large.omen")
+
+            # Create store with 100 docs
+            db = omendb.open(path, dimensions=32, multi_vector=True)
+            docs = []
+            for i in range(100):
+                num_tokens = (i % 5) + 1
+                tokens = np.random.rand(num_tokens, 32).astype(np.float32).tolist()
+                docs.append({"id": f"doc{i}", "vectors": tokens, "metadata": {"idx": i}})
+            db.set(docs)
+            db.flush()
+            db.close()
+
+            # Reopen and verify
+            db2 = omendb.open(path)
+            assert db2.is_multi_vector is True
+            assert len(db2) == 100
+
+            # Search should work
+            query = np.random.rand(3, 32).astype(np.float32).tolist()
+            results = db2.search(query, k=5)
+            assert len(results) == 5
+            db2.close()
 
 
 class TestMultiVectorScale:

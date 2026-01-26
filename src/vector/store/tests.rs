@@ -2638,3 +2638,247 @@ mod unified_api_tests {
         assert_eq!(results.len(), 1);
     }
 }
+
+// ============================================================================
+// Multi-vector persistence tests (MUV-13)
+// ============================================================================
+
+mod multivec_persistence_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn random_tokens(num_tokens: usize, dim: usize, seed: usize) -> Vec<Vec<f32>> {
+        (0..num_tokens)
+            .map(|i| {
+                (0..dim)
+                    .map(|j| ((seed + i * dim + j) as f32 * 0.01) - 0.5)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_multivec_persistence_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_multivec.omen");
+
+        let token_dim = 8;
+
+        // Create store, add documents, flush
+        {
+            let mut store = VectorStore::multi_vector(token_dim);
+            store = store.persist(&path).unwrap();
+
+            let doc1_tokens = random_tokens(5, token_dim, 100);
+            let doc2_tokens = random_tokens(3, token_dim, 200);
+
+            store
+                .store(
+                    "doc1",
+                    doc1_tokens.clone(),
+                    serde_json::json!({"title": "first"}),
+                )
+                .unwrap();
+            store
+                .store(
+                    "doc2",
+                    doc2_tokens.clone(),
+                    serde_json::json!({"title": "second"}),
+                )
+                .unwrap();
+
+            store.flush().unwrap();
+
+            // Verify before close
+            assert!(store.is_multi_vector());
+            assert_eq!(store.len(), 2);
+        }
+
+        // Reopen and verify
+        {
+            let store = VectorStore::open(&path).unwrap();
+
+            // Should detect multi-vector from persisted config
+            assert!(store.is_multi_vector());
+            assert_eq!(store.len(), 2);
+            assert_eq!(store.token_dimension(), Some(token_dim));
+
+            // Verify documents exist
+            assert!(store.contains("doc1"));
+            assert!(store.contains("doc2"));
+        }
+    }
+
+    #[test]
+    fn test_multivec_persistence_empty_store() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_empty_multivec.omen");
+
+        // Create empty multi-vector store and flush
+        {
+            let mut store = VectorStore::multi_vector(128);
+            store = store.persist(&path).unwrap();
+            store.flush().unwrap();
+        }
+
+        // Reopen - should detect multi-vector config
+        {
+            let store = VectorStore::open(&path).unwrap();
+            assert!(store.is_multi_vector());
+            assert_eq!(store.len(), 0);
+            assert_eq!(store.token_dimension(), Some(128));
+        }
+    }
+
+    #[test]
+    fn test_multivec_persistence_large_store() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_large_multivec.omen");
+
+        let token_dim = 32;
+        let num_docs = 100;
+
+        // Create store with 100 documents
+        {
+            let mut store = VectorStore::multi_vector(token_dim);
+            store = store.persist(&path).unwrap();
+
+            for i in 0..num_docs {
+                let num_tokens = (i % 5) + 1; // 1-5 tokens
+                let tokens = random_tokens(num_tokens, token_dim, i * 1000);
+                store
+                    .store(&format!("doc{i}"), tokens, serde_json::json!({"idx": i}))
+                    .unwrap();
+            }
+
+            store.flush().unwrap();
+        }
+
+        // Reopen and verify
+        {
+            let store = VectorStore::open(&path).unwrap();
+            assert!(store.is_multi_vector());
+            assert_eq!(store.len(), num_docs);
+
+            // Spot check a few documents
+            for i in [0, 50, 99] {
+                assert!(store.contains(&format!("doc{i}")));
+            }
+        }
+    }
+
+    #[test]
+    fn test_multivec_rerank_after_reload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_rerank_reload.omen");
+
+        let token_dim = 4;
+
+        // Create store with documents that have different relevance patterns
+        {
+            let mut store = VectorStore::multi_vector(token_dim);
+            store = store.persist(&path).unwrap();
+
+            // doc1: tokens aligned with query
+            store
+                .store(
+                    "doc1",
+                    vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]],
+                    serde_json::json!({}),
+                )
+                .unwrap();
+
+            // doc2: tokens less aligned
+            store
+                .store(
+                    "doc2",
+                    vec![vec![0.3, 0.3, 0.3, 0.0], vec![0.0, 0.0, 0.5, 0.5]],
+                    serde_json::json!({}),
+                )
+                .unwrap();
+
+            store.flush().unwrap();
+        }
+
+        // Reopen and search with reranking
+        {
+            let store = VectorStore::open(&path).unwrap();
+            assert!(store.is_multi_vector());
+
+            // Query tokens aligned with doc1
+            let query = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+            let query_refs: Vec<&[f32]> = query.iter().map(|v| v.as_slice()).collect();
+
+            let results = store.search_multi_rerank(&query_refs, 2, 10).unwrap();
+
+            assert_eq!(results.len(), 2);
+            // doc1 should rank higher (better MaxSim alignment)
+            assert_eq!(results[0].id, "doc1");
+        }
+    }
+
+    #[test]
+    fn test_multivec_config_persisted_correctly() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_config.omen");
+
+        use crate::vector::muvera::MultiVectorConfig;
+
+        let token_dim = 64;
+        let custom_config = MultiVectorConfig {
+            repetitions: 10,
+            partition_bits: 4,
+            seed: 12345,
+        };
+
+        // Create with custom config
+        {
+            let mut store = VectorStore::multi_vector_with(token_dim, custom_config.clone());
+            store = store.persist(&path).unwrap();
+
+            store
+                .store("doc1", vec![vec![0.1f32; token_dim]], serde_json::json!({}))
+                .unwrap();
+
+            store.flush().unwrap();
+        }
+
+        // Reopen and verify config
+        {
+            let store = VectorStore::open(&path).unwrap();
+            assert!(store.is_multi_vector());
+            assert_eq!(store.token_dimension(), Some(token_dim));
+
+            // Encoded dimension should match the custom config
+            // encoded_dim = repetitions * 2^partition_bits * token_dim
+            // = 10 * 16 * 64 = 10240
+            let expected_encoded_dim = 10 * 16 * token_dim;
+            assert_eq!(store.encoded_dimension(), Some(expected_encoded_dim));
+        }
+    }
+
+    #[test]
+    fn test_regular_store_no_multivec_after_reload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_regular.omen");
+
+        // Create regular (non-multi-vector) store
+        {
+            let mut store = VectorStore::new(4);
+            store = store.persist(&path).unwrap();
+
+            store
+                .store("doc1", vec![1.0, 2.0, 3.0, 4.0], serde_json::json!({}))
+                .unwrap();
+
+            store.flush().unwrap();
+        }
+
+        // Reopen - should NOT be multi-vector
+        {
+            let store = VectorStore::open(&path).unwrap();
+            assert!(!store.is_multi_vector());
+            assert_eq!(store.len(), 1);
+        }
+    }
+}

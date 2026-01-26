@@ -164,9 +164,11 @@ pub enum SegmentType {
     /// Columnar metadata (tantivy-columnar)
     Metadata = 4,
     /// Metadata (HNSW, etc.)
-    IndexMetadata,
+    IndexMetadata = 5,
     /// Manifest segment itself
-    Manifest,
+    Manifest = 6,
+    /// Multi-vector token storage (for MaxSim reranking)
+    MultiVectors = 7,
 }
 
 /// Location of a node's data in the file
@@ -203,6 +205,9 @@ pub struct OmenManifest {
     pub metadata_index: Option<Vec<u8>>,
     /// Global configuration
     pub config: std::collections::HashMap<String, u64>,
+    /// Multi-vector token offsets (serialized as bytes for efficiency)
+    #[serde(default)]
+    pub multivec_offsets: Option<Vec<u8>>,
 }
 
 impl OmenManifest {
@@ -218,6 +223,7 @@ impl OmenManifest {
             metadata: std::collections::HashMap::new(),
             metadata_index: None,
             config: std::collections::HashMap::new(),
+            multivec_offsets: None,
         }
     }
 

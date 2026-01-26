@@ -1511,19 +1511,11 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let is_multi_vector = multi_vector_config.is_some();
 
     // Validate multi-vector constraints
-    if is_multi_vector {
-        if quant_mode.is_some() {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "multi-vector stores do not support quantization yet",
-            ));
-        }
-        if path != ":memory:" {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "multi-vector stores only support in-memory mode (:memory:) - persistence not yet implemented",
-            ));
-        }
+    if is_multi_vector && quant_mode.is_some() {
+        return Err(Error::new(
+            Status::InvalidArg,
+            "multi-vector stores do not support quantization yet",
+        ));
     }
 
     // Validate parameters
@@ -1627,8 +1619,57 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         });
     }
 
-    // Check if enabling quantization on existing non-empty database
+    // Check if .omen file exists
     let db_path = std::path::Path::new(&path);
+    let omen_path = if db_path.extension().is_some_and(|ext| ext == "omen") {
+        db_path.to_path_buf()
+    } else {
+        let mut omen = db_path.as_os_str().to_os_string();
+        omen.push(".omen");
+        std::path::PathBuf::from(omen)
+    };
+
+    // Open existing database (may have multi-vector config)
+    if omen_path.exists() {
+        let store = VectorStore::open(&path).map_err(convert_error)?;
+        let is_mv = store.is_multi_vector();
+
+        // Conflict check: opening existing single-vector store with multiVector: true
+        if is_multi_vector && !is_mv {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Cannot open existing single-vector database with multiVector: true",
+            ));
+        }
+
+        return Ok(VectorDatabase {
+            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+            path,
+            dimensions: dimensions as u32,
+            is_persistent: true,
+            is_multi_vector: is_mv,
+            collections_cache: RwLock::new(HashMap::new()),
+        });
+    }
+
+    // Create new persistent store
+    if let Some(mv_config) = multi_vector_config {
+        // New multi-vector persistent store
+        let store = VectorStore::multi_vector_with(dimensions, mv_config)
+            .persist(&path)
+            .map_err(convert_error)?;
+
+        return Ok(VectorDatabase {
+            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+            path,
+            dimensions: dimensions as u32,
+            is_persistent: true,
+            is_multi_vector: true,
+            collections_cache: RwLock::new(HashMap::new()),
+        });
+    }
+
+    // Check if enabling quantization on existing non-empty database
     if db_path.exists() && quant_mode.is_some() {
         let existing = VectorStore::open(&path).map_err(convert_error)?;
         if !existing.is_empty() {
@@ -1639,7 +1680,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         }
     }
 
-    // Open persistent store with options
+    // Open single-vector persistent store with options
     let store = store_options.open(&path).map_err(convert_error)?;
 
     Ok(VectorDatabase {
@@ -1647,7 +1688,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         path,
         dimensions: dimensions as u32,
         is_persistent: true,
-        is_multi_vector: false, // Persistent multi-vector not yet supported
+        is_multi_vector: false,
         collections_cache: RwLock::new(HashMap::new()),
     })
 }
