@@ -742,39 +742,32 @@ impl VectorDatabase {
         }
         let t_search_total = t0.elapsed().as_micros() as f64;
 
-        // Time knn_search_ef directly (bypass VectorStore wrapper)
+        // Time segments search directly (bypass VectorStore wrapper)
         let t0 = Instant::now();
         for _ in 0..n_iterations {
             py.detach(|| {
                 let inner = inner_arc.read();
-                if let Some(ref idx) = inner.store.hnsw_index {
-                    let _ = idx.search_ef(&query_vec.data, k, 100);
+                if let Some(ref segments) = inner.store.segments {
+                    let _ = segments.search(&query_vec.data, k, 100);
                 }
             });
         }
         let t_hnsw_total = t0.elapsed().as_micros() as f64;
 
-        // Time HNSW search in tight Rust loop (no GIL release per iteration)
+        // Time segments search in tight Rust loop (no GIL release per iteration)
         let t0 = Instant::now();
         py.detach(|| {
             let inner = inner_arc.read();
-            if let Some(ref idx) = inner.store.hnsw_index {
+            if let Some(ref segments) = inner.store.segments {
                 for _ in 0..n_iterations {
-                    let _ = idx.search_ef(&query_vec.data, k, 100);
+                    let _ = segments.search(&query_vec.data, k, 100);
                 }
             }
         });
         let t_hnsw_tight_total = t0.elapsed().as_micros() as f64;
 
         // Check storage properties
-        let is_sq8 = {
-            let inner = inner_arc.read();
-            if let Some(ref idx) = inner.store.hnsw_index {
-                idx.is_sq8()
-            } else {
-                false
-            }
-        };
+        let is_sq8 = false; // Quantization info not accessible from segments
 
         let mut result = HashMap::new();
         result.insert(

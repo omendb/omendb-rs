@@ -626,21 +626,6 @@ impl ParallelBuilder {
         self.distance_fn.distance_for_comparison(vec_a, vec_b)
     }
 
-    /// Batch distance computation from one source to multiple targets
-    ///
-    /// Computes distances from source vector to all target vectors in a single pass.
-    /// More cache-friendly than individual calls for diversity heuristic.
-    #[inline]
-    fn distance_between_batch(&self, source_id: u32, targets: &[u32], out: &mut [f32]) {
-        debug_assert_eq!(targets.len(), out.len());
-        let source = &self.vectors[source_id as usize];
-        for (i, &target_id) in targets.iter().enumerate() {
-            out[i] = self
-                .distance_fn
-                .distance_for_comparison(source, &self.vectors[target_id as usize]);
-        }
-    }
-
     /// Convert builder to HNSWIndex
     ///
     /// Builds NodeStorage from vectors and neighbors.
@@ -748,36 +733,6 @@ mod tests {
         (0..n)
             .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
             .collect()
-    }
-
-    #[test]
-    fn test_batch_distance_correctness() {
-        let vectors = random_vectors(100, 32);
-        let params = HNSWParams::default();
-        let builder = ParallelBuilder::new(32, params, DistanceFunction::L2, false).unwrap();
-
-        // Manually set vectors (normally done in build())
-        let mut builder = builder;
-        builder.vectors = vectors;
-
-        // Test batch vs individual distance computation
-        let source_id = 0u32;
-        let targets: Vec<u32> = (1..20).collect();
-        let mut batch_results = vec![0.0f32; targets.len()];
-
-        builder.distance_between_batch(source_id, &targets, &mut batch_results);
-
-        // Compare with individual computations
-        for (i, &target_id) in targets.iter().enumerate() {
-            let individual = builder.distance_between_cmp(source_id, target_id);
-            assert!(
-                (batch_results[i] - individual).abs() < 1e-6,
-                "Mismatch at target {}: batch={}, individual={}",
-                target_id,
-                batch_results[i],
-                individual
-            );
-        }
     }
 
     #[test]

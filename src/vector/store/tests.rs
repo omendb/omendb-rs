@@ -96,13 +96,12 @@ fn test_rebuild_index() {
         store.insert(random_vector(128, i)).unwrap();
     }
 
-    // Verify index exists (segments or hnsw_index)
-    assert!(store.segments.is_some() || store.hnsw_index.is_some());
+    // Verify segments exist
+    assert!(store.segments.is_some());
 
     // Clear the index
     store.segments = None;
-    store.hnsw_index = None;
-    assert!(store.segments.is_none() && store.hnsw_index.is_none());
+    assert!(store.segments.is_none());
 
     // Rebuild index
     store.rebuild_index().unwrap();
@@ -261,7 +260,7 @@ fn test_quantization_batch_insert() {
 #[test]
 fn test_new_with_params_functional() {
     // Verify new_with_params works functionally
-    let mut store = VectorStore::new_with_params(128, 16, 100, 100, Metric::L2).unwrap();
+    let mut store = VectorStore::new_with_params(128, 16, 100, 100, Metric::L2);
 
     // Insert vectors
     for i in 0..100 {

@@ -14,7 +14,7 @@ use crate::omen::{
     parse_wal_delete, parse_wal_insert, CheckpointOptions, MetadataIndex, OmenFile, WalEntryType,
 };
 use crate::text::TextIndex;
-use crate::vector::hnsw_index::HNSWIndex;
+use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use crate::vector::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use crate::vector::store::options::VectorStoreOptions;
 use anyhow::Result;
@@ -157,63 +157,33 @@ impl VectorStore {
         // Update deleted bitmap after WAL replay
         deleted_bitmap.clone_from(records.deleted_bitmap());
 
-        // Build HNSW index - must maintain slot index correspondence
-        let slot_count = records.slot_count() as usize;
+        // Build segments from vectors
         let active_count = records.len() as usize;
 
-        let hnsw_index = if let Some(hnsw_bytes) = snapshot.hnsw_bytes {
-            match HNSWIndex::from_bytes(&hnsw_bytes) {
-                Ok(index) => {
-                    // Compare with total slots, not just live count, since HNSW includes deleted
-                    if index.len() != slot_count && slot_count > 0 {
-                        tracing::info!(
-                            "HNSW index count ({}) differs from slot count ({}), rebuilding",
-                            index.len(),
-                            slot_count
-                        );
-                        Some(helpers::rebuild_hnsw_with_slots(
-                            &records,
-                            &deleted_bitmap,
-                            dimensions,
-                            hnsw_m,
-                            hnsw_ef_construction,
-                            hnsw_ef_search,
-                            distance_metric,
-                            quantization_mode.as_ref(),
-                        )?)
-                    } else {
-                        Some(index)
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to deserialize HNSW index, rebuilding: {}", e);
-                    if active_count > 0 {
-                        Some(helpers::rebuild_hnsw_with_slots(
-                            &records,
-                            &deleted_bitmap,
-                            dimensions,
-                            hnsw_m,
-                            hnsw_ef_construction,
-                            hnsw_ef_search,
-                            distance_metric,
-                            quantization_mode.as_ref(),
-                        )?)
-                    } else {
-                        None
-                    }
-                }
+        let segments = if active_count > 0 && dimensions > 0 {
+            // Collect vectors and slots for parallel build
+            let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(active_count);
+            let mut slots: Vec<u32> = Vec::with_capacity(active_count);
+            for (slot, record) in records.iter_live() {
+                vectors.push(record.vector.clone());
+                slots.push(slot);
             }
-        } else if active_count > 0 {
-            Some(helpers::rebuild_hnsw_with_slots(
-                &records,
-                &deleted_bitmap,
-                dimensions,
-                hnsw_m,
-                hnsw_ef_construction,
-                hnsw_ef_search,
-                distance_metric,
-                quantization_mode.as_ref(),
-            )?)
+
+            // Build segment config
+            let config = SegmentConfig::new(dimensions)
+                .with_params(HNSWParams {
+                    m: hnsw_m,
+                    ef_construction: hnsw_ef_construction,
+                    ..Default::default()
+                })
+                .with_distance(distance_metric.into())
+                .with_quantization(quantization_mode.is_some());
+
+            // Build segments with parallel construction
+            Some(
+                SegmentManager::build_parallel_with_slots(config, vectors, &slots)
+                    .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?,
+            )
         } else {
             None
         };
@@ -256,7 +226,7 @@ impl VectorStore {
         };
 
         // Enable rescore if quantized
-        let rescore_enabled = hnsw_index.as_ref().is_some_and(HNSWIndex::is_asymmetric);
+        let rescore_enabled = quantization_mode.is_some();
 
         // Reconstruct multi-vector state if config is present
         let (muvera_encoder, multivec_storage, distance_metric) =
@@ -293,8 +263,7 @@ impl VectorStore {
 
         Ok(Self {
             records,
-            segments: None,
-            hnsw_index,
+            segments,
             rescore_enabled,
             oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata_index,
@@ -366,28 +335,8 @@ impl VectorStore {
         // Get distance metric from options (default: L2)
         let distance_metric = options.metric.unwrap_or(Metric::L2);
 
-        // Initialize HNSW - defer when quantization enabled
-        let (hnsw_index, pending_quantization) = if options.quantization.is_some() {
-            (None, options.quantization.clone())
-        } else if dimensions > 0 {
-            if options.m.is_some() || options.ef_construction.is_some() {
-                (
-                    Some(HNSWIndex::new_with_params(
-                        10_000,
-                        dimensions,
-                        m,
-                        ef_construction,
-                        ef_search,
-                        distance_metric.into(),
-                    )?),
-                    None,
-                )
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
+        // Quantization is deferred until first insert
+        let pending_quantization = options.quantization.clone();
 
         // Save dimensions to storage if set
         if dimensions > 0 {
@@ -416,7 +365,6 @@ impl VectorStore {
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
             segments: None,
-            hnsw_index,
             rescore_enabled,
             oversample_factor,
             metadata_index: MetadataIndex::new(),
@@ -447,28 +395,8 @@ impl VectorStore {
         // Get distance metric from options (default: L2)
         let distance_metric = options.metric.unwrap_or(Metric::L2);
 
-        // Initialize HNSW - defer when quantization enabled
-        let (hnsw_index, pending_quantization) = if options.quantization.is_some() {
-            (None, options.quantization.clone())
-        } else if dimensions > 0 {
-            if options.m.is_some() || options.ef_construction.is_some() {
-                (
-                    Some(HNSWIndex::new_with_params(
-                        10_000,
-                        dimensions,
-                        m,
-                        ef_construction,
-                        ef_search,
-                        distance_metric.into(),
-                    )?),
-                    None,
-                )
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
+        // Quantization is deferred until first insert
+        let pending_quantization = options.quantization.clone();
 
         // Initialize in-memory text index if enabled
         let text_index = if let Some(ref config) = options.text_search_config {
@@ -486,7 +414,6 @@ impl VectorStore {
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
             segments: None,
-            hnsw_index,
             rescore_enabled,
             oversample_factor,
             metadata_index: MetadataIndex::new(),
@@ -534,13 +461,6 @@ impl VectorStore {
             let deleted = self.records.export_deleted();
             let metadata = self.records.export_metadata();
 
-            // Serialize HNSW index
-            let hnsw_bytes = self
-                .hnsw_index
-                .as_ref()
-                .map(HNSWIndex::to_bytes)
-                .transpose()?;
-
             // Serialize MetadataIndex for fast recovery
             let metadata_index_bytes = self.metadata_index.to_bytes().ok();
 
@@ -571,7 +491,7 @@ impl VectorStore {
                 &deleted,
                 &metadata,
                 CheckpointOptions {
-                    hnsw_bytes: hnsw_bytes.as_deref(),
+                    hnsw_bytes: None,
                     metadata_index_bytes: metadata_index_bytes.as_deref(),
                     multivec_bytes: multivec_bytes.as_deref(),
                     multivec_offsets: multivec_offsets.as_deref(),

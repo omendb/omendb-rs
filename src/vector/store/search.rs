@@ -9,7 +9,6 @@ use super::{MetadataFilter, SearchResult};
 use crate::distance::l2_distance;
 use crate::omen::MetadataIndex;
 use crate::vector::hnsw::SegmentManager;
-use crate::vector::hnsw_index::HNSWIndex;
 use anyhow::Result;
 use rayon::prelude::*;
 
@@ -36,38 +35,6 @@ pub fn brute_force_search(records: &RecordStore, query: &[f32], k: usize) -> Vec
 
     distances.sort_by(|a, b| a.1.total_cmp(&b.1));
     distances.into_iter().take(k).collect()
-}
-
-// ============================================================================
-// Rescore
-// ============================================================================
-
-/// Rescore HNSW candidates using original vectors from RecordStore.
-///
-/// Takes quantized HNSW candidates and computes exact L2 distances
-/// from the original vectors stored in RecordStore.
-pub fn rescore_candidates(
-    records: &RecordStore,
-    candidates: &[(usize, f32)],
-    query: &[f32],
-    k: usize,
-) -> Vec<(usize, f32)> {
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-
-    let mut rescored: Vec<(usize, f32)> = candidates
-        .iter()
-        .filter_map(|&(id, _quantized_dist)| {
-            records
-                .get_vector(id as u32)
-                .map(|v| (id, l2_distance(query, v)))
-        })
-        .collect();
-
-    rescored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    rescored.truncate(k);
-    rescored
 }
 
 // ============================================================================
@@ -115,6 +82,9 @@ pub fn slots_to_results_with_fallback(
 // ============================================================================
 
 /// Configuration for search operations.
+///
+/// Fields reserved for future quantization-based rescoring.
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct SearchConfig {
     /// Whether to rescore quantized results
@@ -132,29 +102,25 @@ impl Default for SearchConfig {
     }
 }
 
-/// Core K-NN search using HNSW or segments.
+/// Core K-NN search using segments.
 ///
-/// Tries segments first (if available), then HNSW, then falls back to brute force.
-/// Handles rescore for quantized indices.
-#[allow(clippy::too_many_arguments)]
+/// Uses segments if available, falls back to brute force.
+#[allow(dead_code)] // config parameter reserved for future quantization rescore
 pub fn knn_search_core(
     records: &RecordStore,
     segments: Option<&SegmentManager>,
-    hnsw_index: Option<&HNSWIndex>,
     query: &[f32],
     k: usize,
     ef: usize,
-    config: &SearchConfig,
+    _config: &SearchConfig,
 ) -> Result<Vec<(usize, f32)>> {
-    let has_data = !records.is_empty()
-        || segments.as_ref().is_some_and(|s| !s.is_empty())
-        || hnsw_index.as_ref().is_some_and(|idx| !idx.is_empty());
+    let has_data = !records.is_empty() || segments.as_ref().is_some_and(|s| !s.is_empty());
 
     if !has_data {
         return Ok(Vec::new());
     }
 
-    // Use segments if available (preferred path)
+    // Use segments if available
     if let Some(segments) = segments {
         let segment_results = segments
             .search(query, k, ef)
@@ -172,46 +138,8 @@ pub fn knn_search_core(
         return Ok(results);
     }
 
-    // Legacy path: use hnsw_index directly
-    if let Some(index) = hnsw_index {
-        let results = if index.is_asymmetric() {
-            let can_rescore = !records.is_empty();
-            if config.rescore_enabled && can_rescore {
-                knn_search_with_rescore(records, index, query, k, ef, config.oversample_factor)?
-            } else {
-                index.search_ef(query, k, ef)?
-            }
-        } else {
-            index.search_ef(query, k, ef)?
-        };
-
-        // Fall back to brute force if HNSW returns nothing but we have data
-        if results.is_empty() && !records.is_empty() {
-            return Ok(brute_force_search(records, query, k));
-        }
-        return Ok(results);
-    }
-
+    // No segments - use brute force
     Ok(brute_force_search(records, query, k))
-}
-
-/// K-NN search with rescore using original vectors.
-fn knn_search_with_rescore(
-    records: &RecordStore,
-    index: &HNSWIndex,
-    query: &[f32],
-    k: usize,
-    ef: usize,
-    oversample_factor: f32,
-) -> Result<Vec<(usize, f32)>> {
-    let oversample_k = ((k as f32) * oversample_factor).ceil() as usize;
-    let candidates = index.search_ef(query, oversample_k, ef)?;
-
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    Ok(rescore_candidates(records, &candidates, query, k))
 }
 
 // ============================================================================
@@ -221,13 +149,11 @@ fn knn_search_with_rescore(
 /// Core filtered search implementation.
 ///
 /// Uses bitmap-based filtering when possible, falls back to JSON matching.
-/// Prefers segments (ACORN-1) when available, falls back to hnsw_index or brute-force.
-#[allow(clippy::too_many_arguments)]
+/// Uses segments (ACORN-1) when available, falls back to brute-force.
 pub fn knn_search_filtered_core(
     records: &RecordStore,
     metadata_index: &MetadataIndex,
     segments: Option<&SegmentManager>,
-    hnsw_index: Option<&HNSWIndex>,
     query: &[f32],
     k: usize,
     ef: usize,
@@ -236,7 +162,7 @@ pub fn knn_search_filtered_core(
     // Try bitmap-based filtering (O(1) per candidate)
     let filter_bitmap = filter.evaluate_bitmap(metadata_index);
 
-    // Try segments first (ACORN-1 filtered search)
+    // Use segments (ACORN-1 filtered search)
     if let Some(seg_mgr) = segments {
         if !seg_mgr.is_empty() {
             let segment_results = if let Some(ref bitmap) = filter_bitmap {
@@ -277,34 +203,7 @@ pub fn knn_search_filtered_core(
             if !results.is_empty() {
                 return Ok(results);
             }
-            // Fall through to legacy path if no results
         }
-    }
-
-    // Legacy path: use hnsw_index
-    if let Some(hnsw) = hnsw_index {
-        let search_results = if let Some(ref bitmap) = filter_bitmap {
-            // Fast path: bitmap-based filtering
-            let filter_fn =
-                |node_id: u32| -> bool { records.is_live(node_id) && bitmap.contains(node_id) };
-            hnsw.search_with_filter_ef(query, k, Some(ef), filter_fn)?
-        } else {
-            // Slow path: JSON-based filtering
-            let filter_fn = |node_id: u32| -> bool {
-                if !records.is_live(node_id) {
-                    return false;
-                }
-                let metadata = records
-                    .get_by_slot(node_id)
-                    .and_then(|r| r.metadata.clone())
-                    .unwrap_or_else(helpers::default_metadata);
-                filter.matches(&metadata)
-            };
-            hnsw.search_with_filter_ef(query, k, Some(ef), filter_fn)?
-        };
-
-        let filtered_results = slots_to_search_results(records, search_results);
-        return Ok(filtered_results);
     }
 
     // Fallback: brute-force search with filtering
@@ -387,15 +286,6 @@ mod tests {
         let records = RecordStore::new(3);
         let query = vec![1.0, 2.0, 3.0];
         let results = brute_force_search(&records, &query, 10);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_rescore_empty_candidates() {
-        let records = RecordStore::new(3);
-        let candidates: Vec<(usize, f32)> = vec![];
-        let query = vec![1.0, 2.0, 3.0];
-        let results = rescore_candidates(&records, &candidates, &query, 10);
         assert!(results.is_empty());
     }
 
