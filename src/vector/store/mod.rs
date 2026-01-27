@@ -479,7 +479,7 @@ impl VectorStore {
 
                 // Use parallel build with slot mapping
                 self.segments = Some(
-                    SegmentManager::build_parallel_with_slots(config, vectors_data.clone(), &slots)
+                    SegmentManager::build_parallel_with_slots(config, vectors_data, &slots)
                         .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?,
                 );
 
