@@ -75,6 +75,8 @@ pub struct ParallelBuilder {
     levels: Vec<u8>,
     /// Bitmap tracking which nodes are fully connected
     ready_bitmap: AtomicBitVec,
+    /// Bitmap tracking which nodes need pruning (deferred until end)
+    needs_pruning: AtomicBitVec,
     /// Atomic entry point (u32::MAX = None)
     entry_point: AtomicU32,
     /// Construction parameters
@@ -106,6 +108,7 @@ impl ParallelBuilder {
             neighbors: NeighborStorage::new(params.max_level as usize, params.m),
             levels: Vec::new(),
             ready_bitmap: AtomicBitVec::empty(),
+            needs_pruning: AtomicBitVec::empty(),
             entry_point: AtomicU32::new(u32::MAX),
             rng_state: AtomicU64::new(params.seed),
             params,
@@ -167,6 +170,9 @@ impl ParallelBuilder {
             debug!(parallel_count, "Parallel insertion complete");
         }
 
+        // Phase 5: Batch prune all overflow nodes (deferred pruning)
+        self.prune_all_overflows();
+
         let elapsed = start.elapsed();
         let rate = batch_size as f64 / elapsed.as_secs_f64();
         info!(
@@ -196,6 +202,7 @@ impl ParallelBuilder {
     /// Initialize concurrency structures
     fn init_concurrency(&mut self, capacity: usize) {
         self.ready_bitmap = AtomicBitVec::new(capacity);
+        self.needs_pruning = AtomicBitVec::new(capacity);
     }
 
     /// Assign random level using atomic RNG
@@ -423,6 +430,7 @@ impl ParallelBuilder {
     /// Connect node to neighbors with fine-grained locking
     ///
     /// Uses NeighborStorage's internal per-node locking for thread safety.
+    /// Uses deferred pruning: marks overflow nodes for batch pruning at end.
     fn connect_with_locks(&self, node_id: u32, neighbors: &[u32], level: u8) {
         let m = self.params.m_for_level(level);
 
@@ -443,17 +451,12 @@ impl ParallelBuilder {
 
             // Try O(1) atomic append - avoids Vec allocation in common case
             if self.neighbors.add_neighbor(neighbor_id, level, node_id) {
-                // Successfully added. Check if pruning needed (rare).
+                // Successfully added. Mark for deferred pruning if overflow.
                 if self.neighbors.neighbor_count(neighbor_id, level) > m {
-                    // Only allocate when pruning is actually needed
-                    let neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, level);
-                    let neighbor_vec = &self.vectors[neighbor_id as usize];
-                    let pruned =
-                        self.select_neighbors_heuristic(&neighbor_neighbors, m, neighbor_vec);
-                    self.neighbors.set_neighbors(neighbor_id, level, pruned);
+                    self.needs_pruning.set(neighbor_id as usize);
                 }
             } else {
-                // Capacity full - need to prune (very rare during normal construction)
+                // Capacity full - must prune immediately to make room
                 let mut neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, level);
                 neighbor_neighbors.push(node_id);
                 let neighbor_vec = &self.vectors[neighbor_id as usize];
@@ -461,6 +464,44 @@ impl ParallelBuilder {
                 self.neighbors.set_neighbors(neighbor_id, level, pruned);
             }
         }
+    }
+
+    /// Batch prune all nodes marked as needing pruning
+    ///
+    /// Called after all nodes are inserted. Processes overflows in parallel.
+    fn prune_all_overflows(&self) {
+        let n = self.vectors.len();
+
+        // Collect nodes that need pruning
+        let overflow_nodes: Vec<u32> = (0..n as u32)
+            .filter(|&id| self.needs_pruning.is_ready(id as usize))
+            .collect();
+
+        if overflow_nodes.is_empty() {
+            return;
+        }
+
+        debug!(
+            count = overflow_nodes.len(),
+            "Pruning overflow nodes in batch"
+        );
+
+        // Prune in parallel
+        overflow_nodes.into_par_iter().for_each(|node_id| {
+            let level = self.levels[node_id as usize];
+            let node_vec = &self.vectors[node_id as usize];
+
+            // Check and prune each level
+            for l in 0..=level {
+                let m = self.params.m_for_level(l);
+                let neighbors = self.neighbors.get_neighbors(node_id, l);
+
+                if neighbors.len() > m {
+                    let pruned = self.select_neighbors_heuristic(&neighbors, m, node_vec);
+                    self.neighbors.set_neighbors(node_id, l, pruned);
+                }
+            }
+        });
     }
 
     /// Select neighbors using diversity heuristic (with pre-computed distances)
@@ -585,6 +626,21 @@ impl ParallelBuilder {
         self.distance_fn.distance_for_comparison(vec_a, vec_b)
     }
 
+    /// Batch distance computation from one source to multiple targets
+    ///
+    /// Computes distances from source vector to all target vectors in a single pass.
+    /// More cache-friendly than individual calls for diversity heuristic.
+    #[inline]
+    fn distance_between_batch(&self, source_id: u32, targets: &[u32], out: &mut [f32]) {
+        debug_assert_eq!(targets.len(), out.len());
+        let source = &self.vectors[source_id as usize];
+        for (i, &target_id) in targets.iter().enumerate() {
+            out[i] = self
+                .distance_fn
+                .distance_for_comparison(source, &self.vectors[target_id as usize]);
+        }
+    }
+
     /// Convert builder to HNSWIndex
     ///
     /// Builds NodeStorage from vectors and neighbors.
@@ -651,11 +707,12 @@ impl ParallelBuilder {
 // 2. `neighbors` (NeighborStorage) - uses atomic operations and internal per-node locks
 // 3. `levels` (Vec<u8>) - immutable after allocation, safe to share
 // 4. `ready_bitmap` (AtomicBitVec) - uses atomics, safe to share
-// 5. `entry_point` (AtomicU32) - atomic, safe to share
-// 6. `params` (HNSWParams) - immutable, safe to share
-// 7. `distance_fn` (DistanceFunction) - immutable, safe to share
-// 8. `rng_state` (AtomicU64) - atomic, safe to share
-// 9. `dimensions`, `use_quantization` - immutable primitives, safe to share
+// 5. `needs_pruning` (AtomicBitVec) - uses atomics, safe to share
+// 6. `entry_point` (AtomicU32) - atomic, safe to share
+// 7. `params` (HNSWParams) - immutable, safe to share
+// 8. `distance_fn` (DistanceFunction) - immutable, safe to share
+// 9. `rng_state` (AtomicU64) - atomic, safe to share
+// 10. `dimensions`, `use_quantization` - immutable primitives, safe to share
 unsafe impl Sync for ParallelBuilder {}
 
 impl HNSWIndex {
@@ -691,6 +748,36 @@ mod tests {
         (0..n)
             .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
             .collect()
+    }
+
+    #[test]
+    fn test_batch_distance_correctness() {
+        let vectors = random_vectors(100, 32);
+        let params = HNSWParams::default();
+        let builder = ParallelBuilder::new(32, params, DistanceFunction::L2, false).unwrap();
+
+        // Manually set vectors (normally done in build())
+        let mut builder = builder;
+        builder.vectors = vectors;
+
+        // Test batch vs individual distance computation
+        let source_id = 0u32;
+        let targets: Vec<u32> = (1..20).collect();
+        let mut batch_results = vec![0.0f32; targets.len()];
+
+        builder.distance_between_batch(source_id, &targets, &mut batch_results);
+
+        // Compare with individual computations
+        for (i, &target_id) in targets.iter().enumerate() {
+            let individual = builder.distance_between_cmp(source_id, target_id);
+            assert!(
+                (batch_results[i] - individual).abs() < 1e-6,
+                "Mismatch at target {}: batch={}, individual={}",
+                target_id,
+                batch_results[i],
+                individual
+            );
+        }
     }
 
     #[test]
