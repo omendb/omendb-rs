@@ -1565,6 +1565,14 @@ impl Drop for NodeStorage {
 unsafe impl Send for NodeStorage {}
 unsafe impl Sync for NodeStorage {}
 
+// Implement NeighborStorage trait for ACORN-1 shared algorithm
+impl super::acorn::NeighborStorage for NodeStorage {
+    #[inline]
+    fn neighbors_at_level_cow(&self, node: u32, level: u8) -> std::borrow::Cow<'_, [u32]> {
+        self.neighbors_at_level_cow(node, level)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

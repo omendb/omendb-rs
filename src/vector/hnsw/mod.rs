@@ -7,6 +7,7 @@
 // - SQ8 scalar quantization support (4x compression)
 // - Parallel construction with fine-grained locking
 
+mod acorn;
 mod atomic_bitvec;
 mod batch_builder;
 mod error;

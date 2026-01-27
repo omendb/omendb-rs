@@ -740,8 +740,9 @@ impl FrozenSegment {
                 }
             }
 
-            // ACORN-1: collect matching neighbors with 2-hop expansion
-            self.collect_matching_neighbors_acorn1(
+            // ACORN-1: collect matching neighbors with 2-hop expansion (shared impl)
+            super::acorn::collect_matching_neighbors(
+                &self.storage,
                 c_id,
                 level,
                 visited,
@@ -777,53 +778,6 @@ impl FrozenSegment {
         }
 
         results.into_iter().map(|(_, id)| id).collect()
-    }
-
-    /// ACORN-1 GET-NEIGHBORS: Collect matching neighbors with 2-hop expansion
-    ///
-    /// From arXiv:2403.04871:
-    /// - If a 1-hop neighbor matches the filter, add it directly
-    /// - If a 1-hop neighbor doesn't match, expand to its neighbors (2-hop)
-    /// - Stop early once M matching neighbors are found
-    #[inline]
-    fn collect_matching_neighbors_acorn1<F>(
-        &self,
-        source_node: u32,
-        level: u8,
-        visited: &VisitedList,
-        filter_fn: &F,
-        m: usize,
-        output: &mut Vec<u32>,
-    ) where
-        F: Fn(u32) -> bool,
-    {
-        output.clear();
-
-        // Use Cow for zero-copy where possible
-        let neighbors_1hop = self.storage.neighbors_at_level_cow(source_node, level);
-
-        for &neighbor_id in &*neighbors_1hop {
-            if visited.contains(neighbor_id) {
-                continue;
-            }
-            if filter_fn(neighbor_id) {
-                output.push(neighbor_id);
-                if output.len() >= m {
-                    return;
-                }
-            } else {
-                // 2-hop expansion for non-matching neighbors
-                let second_hop = self.storage.neighbors_at_level_cow(neighbor_id, level);
-                for &second_hop_id in &*second_hop {
-                    if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
-                        output.push(second_hop_id);
-                        if output.len() >= m {
-                            return;
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

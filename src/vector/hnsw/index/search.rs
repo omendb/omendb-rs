@@ -156,11 +156,13 @@ impl NeighborCollector for StandardCollector<'_> {
 }
 
 /// ACORN-1 filtered neighbor collector (arXiv:2403.04871)
+///
+/// Uses shared acorn module for 2-hop neighbor expansion.
 struct AcornCollector<'a, F>
 where
     F: Fn(u32) -> bool,
 {
-    index: &'a HNSWIndex,
+    storage: &'a NodeStorage,
     filter_fn: &'a F,
     m: usize,
 }
@@ -177,7 +179,8 @@ where
         visited: &crate::vector::hnsw::query_buffers::VisitedList,
         output: &mut Vec<u32>,
     ) {
-        self.index.collect_matching_neighbors_acorn1(
+        crate::vector::hnsw::acorn::collect_matching_neighbors(
+            self.storage,
             node_id,
             level,
             visited,
@@ -207,7 +210,8 @@ where
                 output.push(ep);
             } else {
                 // Expand entry point to find matching neighbors
-                self.index.collect_matching_neighbors_acorn1(
+                crate::vector::hnsw::acorn::collect_matching_neighbors(
+                    self.storage,
                     ep,
                     level,
                     visited,
@@ -694,51 +698,6 @@ impl HNSWIndex {
         })
     }
 
-    /// ACORN-1 GET-NEIGHBORS: Collect matching neighbors with 2-hop expansion.
-    ///
-    /// Implements the per-neighbor adaptive expansion from ACORN-1 (arXiv:2403.04871):
-    /// - If a 1-hop neighbor matches the filter, add it directly
-    /// - If a 1-hop neighbor doesn't match, expand to its neighbors (2-hop)
-    /// - Stop early once M matching neighbors are found (truncation)
-    #[inline]
-    fn collect_matching_neighbors_acorn1<F>(
-        &self,
-        source_node: u32,
-        level: u8,
-        visited: &super::super::query_buffers::VisitedList,
-        filter_fn: &F,
-        m: usize,
-        output: &mut Vec<u32>,
-    ) where
-        F: Fn(u32) -> bool,
-    {
-        output.clear();
-        let neighbors_1hop = self.storage.neighbors_at_level_cow(source_node, level);
-
-        for &neighbor_id in &*neighbors_1hop {
-            if visited.contains(neighbor_id) {
-                continue;
-            }
-            if filter_fn(neighbor_id) {
-                output.push(neighbor_id);
-                if output.len() >= m {
-                    return;
-                }
-            } else {
-                // 2-hop expansion for non-matching neighbors (zero-copy via Cow)
-                let second_hop = self.storage.neighbors_at_level_cow(neighbor_id, level);
-                for &second_hop_id in &*second_hop {
-                    if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
-                        output.push(second_hop_id);
-                        if output.len() >= m {
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     /// Monomorphized filtered search layer (static dispatch, no match in hot loop)
     ///
     /// Implements ACORN-1 algorithm from arXiv:2403.04871 with Weaviate optimization:
@@ -760,7 +719,7 @@ impl HNSWIndex {
     {
         let ctx = DistanceContext::new(query, self, false);
         let collector = AcornCollector {
-            index: self,
+            storage: &self.storage,
             filter_fn,
             m: self.params.m,
         };
