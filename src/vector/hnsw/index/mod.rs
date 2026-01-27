@@ -537,27 +537,4 @@ impl HNSWIndex {
             Ok(self.distance_fn.distance(query, vec))
         }
     }
-
-    /// Check if L2 decomposition optimization is available.
-    ///
-    /// Returns true if storage is SQ8 AND distance function is L2.
-    #[inline]
-    #[allow(dead_code)]
-    pub(super) fn supports_l2_decomposition(&self) -> bool {
-        matches!(self.distance_fn, DistanceFunction::L2) && self.storage.is_sq8()
-    }
-
-    /// Check if SQ8 training is complete (always true for full precision)
-    #[inline]
-    #[allow(dead_code)]
-    pub(super) fn is_trained(&self) -> bool {
-        self.storage.is_trained()
-    }
-
-    /// Prefetch node data for cache efficiency
-    #[inline]
-    #[allow(dead_code)]
-    pub(super) fn prefetch(&self, node_id: u32) {
-        self.storage.prefetch(node_id);
-    }
 }

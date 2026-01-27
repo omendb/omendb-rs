@@ -10,7 +10,6 @@ use crate::distance::l2_distance;
 use crate::omen::MetadataIndex;
 use crate::vector::hnsw::SegmentManager;
 use anyhow::Result;
-use rayon::prelude::*;
 
 // ============================================================================
 // Brute Force Search
@@ -255,26 +254,6 @@ fn brute_force_filtered(
     all_results.truncate(k);
 
     all_results
-}
-
-// ============================================================================
-// Batch Search
-// ============================================================================
-
-/// Parallel batch search for multiple queries.
-///
-/// Uses rayon for parallel execution across queries.
-#[allow(dead_code)]
-pub fn search_batch_parallel<F>(
-    queries: &[&[f32]],
-    k: usize,
-    ef: usize,
-    search_fn: F,
-) -> Vec<Result<Vec<(usize, f32)>>>
-where
-    F: Fn(&[f32], usize, usize) -> Result<Vec<(usize, f32)>> + Sync,
-{
-    queries.par_iter().map(|q| search_fn(q, k, ef)).collect()
 }
 
 #[cfg(test)]
