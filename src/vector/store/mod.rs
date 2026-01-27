@@ -1146,6 +1146,7 @@ impl VectorStore {
         search::knn_search_filtered_core(
             &self.records,
             &self.metadata_index,
+            self.segments.as_ref(),
             self.hnsw_index.as_ref(),
             &query.data,
             k,

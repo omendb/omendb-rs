@@ -413,6 +413,40 @@ impl SegmentManager {
         Ok(results)
     }
 
+    /// Search across all segments with a filter predicate
+    ///
+    /// Uses ACORN-1 algorithm for efficient filtered search.
+    /// The filter predicate receives global slots.
+    pub fn search_with_filter<F>(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: F,
+    ) -> Result<Vec<SegmentSearchResult>>
+    where
+        F: Fn(u32) -> bool + Sync,
+    {
+        // Search mutable segment
+        let mut results = self.mutable.search_with_filter(query, k, ef, &filter_fn)?;
+
+        // Search frozen segments
+        for frozen in &self.frozen {
+            let frozen_results = frozen.search_with_filter(query, k, ef, &filter_fn);
+            results.extend(frozen_results);
+        }
+
+        // Sort by distance and take top k
+        results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(k);
+
+        Ok(results)
+    }
+
     /// Force freeze current mutable segment
     ///
     /// Useful before persistence or when you want to ensure all data
@@ -1434,5 +1468,63 @@ mod tests {
             assert_eq!(before.id, after.id);
             assert!((before.distance - after.distance).abs() < 0.001);
         }
+    }
+
+    // ============== Filtered Search Tests ==============
+
+    #[test]
+    fn test_segment_manager_filtered_search() {
+        let config = test_config().with_capacity(10);
+        let policy = MergePolicy::disabled();
+        let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
+
+        // Insert 25 vectors (will create 2 frozen + 5 in mutable)
+        for i in 0..25 {
+            let vector = vec![i as f32, 0.0, 0.0, 0.0];
+            manager.insert(&vector).unwrap();
+        }
+
+        assert_eq!(manager.frozen_count(), 2);
+        assert_eq!(manager.mutable_len(), 5);
+
+        // Filter: only multiples of 5 (0, 5, 10, 15, 20)
+        let results = manager
+            .search_with_filter(&[10.0, 0.0, 0.0, 0.0], 3, 50, |slot| slot % 5 == 0)
+            .unwrap();
+
+        assert!(!results.is_empty());
+        for r in &results {
+            assert!(r.slot % 5 == 0, "slot {} should be multiple of 5", r.slot);
+        }
+        // Closest multiple of 5 to 10 is 10 itself
+        assert_eq!(results[0].slot, 10);
+    }
+
+    #[test]
+    fn test_segment_manager_filtered_search_across_segments() {
+        let config = test_config().with_capacity(5);
+        let policy = MergePolicy::disabled();
+        let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
+
+        // Insert 15 vectors (3 frozen segments of 5 each)
+        for i in 0..15 {
+            let vector = vec![i as f32, 0.0, 0.0, 0.0];
+            manager.insert(&vector).unwrap();
+        }
+        manager.flush().unwrap();
+
+        assert_eq!(manager.frozen_count(), 3);
+
+        // Filter: only slots in first segment (0-4)
+        let results = manager
+            .search_with_filter(&[2.0, 0.0, 0.0, 0.0], 3, 50, |slot| slot < 5)
+            .unwrap();
+
+        assert_eq!(results.len(), 3);
+        for r in &results {
+            assert!(r.slot < 5, "slot {} should be < 5", r.slot);
+        }
+        // Closest to 2.0 in [0-4] is 2
+        assert_eq!(results[0].slot, 2);
     }
 }
