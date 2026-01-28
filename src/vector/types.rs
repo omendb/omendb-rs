@@ -5,6 +5,7 @@
 //! - Dot product (inner product)
 //! - Cosine distance
 
+use crate::distance;
 use anyhow::{anyhow, Result};
 
 /// High-dimensional vector (1536 dimensions for `OpenAI` embeddings)
@@ -37,17 +38,7 @@ impl Vector {
             ));
         }
 
-        let sum: f32 = self
-            .data
-            .iter()
-            .zip(other.data.iter())
-            .map(|(a, b)| {
-                let diff = a - b;
-                diff * diff
-            })
-            .sum();
-
-        Ok(sum.sqrt())
+        Ok(distance::l2_distance(&self.data, &other.data))
     }
 
     /// Compute dot product (for inner product similarity)
@@ -60,19 +51,19 @@ impl Vector {
             ));
         }
 
-        let sum: f32 = self
-            .data
-            .iter()
-            .zip(other.data.iter())
-            .map(|(a, b)| a * b)
-            .sum();
-
-        Ok(sum)
+        Ok(distance::dot_product(&self.data, &other.data))
     }
 
     /// Compute cosine distance (1 - cosine similarity)
     pub fn cosine_distance(&self, other: &Vector) -> Result<f32> {
-        let dot = self.dot_product(other)?;
+        if self.dim() != other.dim() {
+            return Err(anyhow!(
+                "Dimension mismatch: {} vs {}",
+                self.dim(),
+                other.dim()
+            ));
+        }
+
         let norm_self = self.l2_norm();
         let norm_other = other.l2_norm();
 
@@ -80,14 +71,13 @@ impl Vector {
             return Err(anyhow!("Cannot compute cosine distance for zero vector"));
         }
 
-        let cosine_sim = dot / (norm_self * norm_other);
-        Ok(1.0 - cosine_sim)
+        Ok(distance::cosine_distance(&self.data, &other.data))
     }
 
     /// Compute L2 norm (magnitude) of vector
     #[must_use]
     pub fn l2_norm(&self) -> f32 {
-        self.data.iter().map(|x| x * x).sum::<f32>().sqrt()
+        distance::norm_squared(&self.data).sqrt()
     }
 
     /// Normalize vector to unit length (L2 norm = 1.0)

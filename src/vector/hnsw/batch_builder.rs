@@ -10,6 +10,7 @@
 //!
 //! Expected: 5-10x faster batch construction vs sequential insert.
 
+use crate::distance::l2_distance_squared;
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::GraphMerger;
@@ -183,18 +184,6 @@ fn build_clusters_from_assignments(
     clusters.retain(|c| !c.is_empty());
 
     clusters
-}
-
-/// Squared L2 distance between two vectors
-#[inline]
-fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| {
-            let diff = x - y;
-            diff * diff
-        })
-        .sum()
 }
 
 /// Batch builder using clustering for parallel construction

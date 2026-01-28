@@ -155,10 +155,7 @@ fn gaussian_matrix(dim: usize, k_sim: usize, seed: u64) -> Vec<Vec<f32>> {
 ///
 /// Returns a vector of length k_sim (one dot product per hyperplane).
 fn matmul_vec(vec: &[f32], matrix: &[Vec<f32>]) -> Vec<f32> {
-    matrix
-        .iter()
-        .map(|row| vec.iter().zip(row.iter()).map(|(a, b)| a * b).sum())
-        .collect()
+    matrix.iter().map(|row| dot(vec, row)).collect()
 }
 
 /// Map a sketch to a partition index using SimHash with Gray code.

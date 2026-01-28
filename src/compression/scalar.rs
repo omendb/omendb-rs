@@ -210,7 +210,7 @@ impl ScalarParams {
             .map(|&v| ((v - self.offset) * inv_scale).clamp(0.0, 255.0).round() as u8)
             .collect();
 
-        let norm_sq: f32 = query.iter().map(|x| x * x).sum();
+        let norm_sq: f32 = crate::distance::norm_squared(query);
         let sum: i32 = quantized.iter().map(|&x| x as i32).sum();
 
         QueryPrep {
