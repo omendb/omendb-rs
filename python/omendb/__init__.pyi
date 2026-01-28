@@ -60,8 +60,8 @@ class VectorRecord(TypedDict, total=False):
 class MultiVectorConfig(TypedDict, total=False):
     """Configuration for multi-vector (MUVERA) stores."""
 
-    repetitions: int  # Number of MUVERA repetitions (default: 5)
-    partition_bits: int  # Partition bits for MUVERA (default: 3)
+    repetitions: int  # Number of MUVERA repetitions (default: 8)
+    partition_bits: int  # Partition bits for MUVERA (default: 4)
     seed: int  # Random seed for reproducibility
 
 class GetResult(TypedDict):
@@ -615,7 +615,7 @@ def open(
             - "cosine": Cosine distance (1 - cosine similarity)
             - "dot" or "ip": Inner product (for MIPS)
         multi_vector: Enable multi-vector mode for ColBERT-style retrieval:
-            - True: Enable with default config (repetitions=5, partition_bits=3)
+            - True: Enable with default config (repetitions=8, partition_bits=4)
             - MultiVectorConfig: Custom config dict
             - None/False: Disabled (default, single-vector mode)
             Note: Multi-vector stores only support in-memory mode (:memory:).

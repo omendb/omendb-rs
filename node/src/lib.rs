@@ -1383,7 +1383,7 @@ pub struct OpenOptions {
     /// Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip"
     pub metric: Option<String>,
     /// Enable multi-vector mode for ColBERT-style retrieval
-    /// - true: Enable with default config (repetitions=5, partition_bits=3)
+    /// - true: Enable with default config (repetitions=8, partition_bits=4)
     /// - { repetitions?, partitionBits?, seed? }: Custom config
     /// - false/null: Disabled (default, single-vector mode)
     #[napi(ts_type = "boolean | { repetitions?: number; partitionBits?: number; seed?: number } | null | undefined")]

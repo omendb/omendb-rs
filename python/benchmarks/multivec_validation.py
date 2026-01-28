@@ -116,9 +116,9 @@ def run_benchmark(cfg: Config):
 
     # MUVERA presets - tradeoff between speed and FDE approximation quality
     presets = {
-        "fast": {"repetitions": 5, "partition_bits": 3},  # 5*8*D dims
-        "balanced": {"repetitions": 8, "partition_bits": 3},  # 8*8*D dims
-        "quality": {"repetitions": 10, "partition_bits": 4},  # 10*16*D dims
+        "fast": {"repetitions": 5, "partition_bits": 3},  # 5*8*D = 5,120D
+        "balanced": {"repetitions": 8, "partition_bits": 4},  # 8*16*D = 16,384D
+        "quality": {"repetitions": 10, "partition_bits": 4},  # 10*16*D = 20,480D
     }
     muvera_config = presets[cfg.muvera_preset]
     fde_dim = muvera_config["repetitions"] * (2 ** muvera_config["partition_bits"]) * cfg.token_dim

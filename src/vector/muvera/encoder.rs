@@ -274,7 +274,8 @@ mod tests {
     fn test_encoder_dimensions() {
         let config = MuveraConfig::default();
         let encoder = MuveraEncoder::new(128, config);
-        assert_eq!(encoder.fde_dimension(), 5120);
+        // 8 reps * 16 partitions * 128 = 16,384
+        assert_eq!(encoder.fde_dimension(), 16384);
         assert_eq!(encoder.token_dimension(), 128);
     }
 
@@ -282,7 +283,7 @@ mod tests {
     fn test_empty_tokens() {
         let encoder = MuveraEncoder::new(128, MuveraConfig::default());
         let fde = encoder.encode_query(&[]);
-        assert_eq!(fde.len(), 5120);
+        assert_eq!(fde.len(), 16384);
         assert!(fde.iter().all(|&v| v == 0.0));
     }
 

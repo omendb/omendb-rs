@@ -62,7 +62,7 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
 /// Parse multi_vector parameter and return MultiVectorConfig if enabled
 ///
 /// Accepts:
-/// - True → Default config (repetitions=5, partition_bits=3)
+/// - True → Default config (repetitions=8, partition_bits=4)
 /// - dict → Custom config {"repetitions": N, "partition_bits": M}
 /// - None/False → disabled
 ///
@@ -1919,7 +1919,7 @@ impl VectorDatabase {
 ///         - "cosine": Cosine distance (1 - cosine similarity)
 ///         - "dot" or "ip": Inner product (for MIPS)
 ///     multi_vector (bool|dict): Enable multi-vector mode for ColBERT-style retrieval
-///         - True: Enable with default config (repetitions=5, partition_bits=3)
+///         - True: Enable with default config (repetitions=8, partition_bits=4)
 ///         - dict: Custom config {"repetitions": 10, "partition_bits": 4}
 ///         - False/None: Single-vector mode (default)
 ///     config (dict): Advanced config (deprecated, use top-level params instead)

@@ -21,8 +21,8 @@
 //! ```ignore
 //! use omendb::vector::muvera::{MuveraConfig, MuveraEncoder};
 //!
-//! let config = MuveraConfig::default();  // k_sim=3, r_reps=5
-//! let encoder = MuveraEncoder::new(128, config);  // 128D tokens -> 5,120D FDE
+//! let config = MuveraConfig::default();  // k_sim=4, r_reps=8
+//! let encoder = MuveraEncoder::new(128, config);  // 128D tokens -> 16,384D FDE
 //!
 //! let doc_fde = encoder.encode_document(&doc_tokens);
 //! let query_fde = encoder.encode_query(&query_tokens);

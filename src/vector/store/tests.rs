@@ -1887,7 +1887,7 @@ mod muvera_tests {
 
         assert!(store.is_multi_vector());
         assert_eq!(store.token_dimension(), Some(128));
-        assert_eq!(store.encoded_dimension(), Some(5120)); // 5 * 8 * 128
+        assert_eq!(store.encoded_dimension(), Some(16384)); // 8 * 16 * 128
     }
 
     #[test]

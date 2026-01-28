@@ -23,29 +23,29 @@
 /// # Parameters
 ///
 /// - `repetitions`: Number of independent hash functions. Higher = better quality,
-///   larger index. Default: 5, range: 3-40.
+///   larger index. Default: 8, range: 3-40.
 ///
-/// - `partition_bits`: Log2 of bucket count per repetition. Default: 3 (8 buckets).
-///   Higher values give finer granularity but larger encodings.
+/// - `partition_bits`: Log2 of bucket count per repetition. Default: 4 (16 buckets).
+///   Higher values give finer granularity but larger encodings. The MUVERA paper
+///   uses 5-6 bits (32-64 buckets) for best quality.
 ///
 /// # Encoded Dimension
 ///
 /// The encoded vector size is: `repetitions × 2^partition_bits × token_dim`
 ///
-/// | Config | Encoded Size (128D tokens) |
-/// |--------|---------------------------|
-/// | default (5, 3) | 5,120 |
-/// | (10, 3) | 10,240 |
-/// | (5, 4) | 10,240 |
-/// | (10, 4) | 20,480 |
+/// | Preset | Config | Encoded Size (128D tokens) |
+/// |--------|--------|---------------------------|
+/// | fast | (5, 3) | 5,120 |
+/// | default | (8, 4) | 16,384 |
+/// | quality | (10, 4) | 20,480 |
 #[derive(Debug, Clone)]
 pub struct MultiVectorConfig {
     /// Number of independent hash repetitions. Higher = better quality, larger index.
-    /// Default: 5, range: 3-40.
+    /// Default: 8, range: 3-40.
     pub repetitions: u8,
 
     /// Log2 of partition count (2^partition_bits buckets per repetition).
-    /// Default: 3 (8 partitions), range: 3-6.
+    /// Default: 4 (16 partitions), range: 3-6.
     pub partition_bits: u8,
 
     /// Random seed for reproducible encoding. Default: 42.
@@ -55,8 +55,8 @@ pub struct MultiVectorConfig {
 impl Default for MultiVectorConfig {
     fn default() -> Self {
         Self {
-            repetitions: 5,
-            partition_bits: 3,
+            repetitions: 8,
+            partition_bits: 4,
             seed: 42,
         }
     }
@@ -66,11 +66,11 @@ impl MultiVectorConfig {
     /// Fast configuration - smaller encoding, faster search.
     ///
     /// Good for prototyping. Use reranking to maintain quality.
-    /// Encoded size: 3 × 8 × token_dim = 24 × token_dim
+    /// Encoded size: 5 × 8 × token_dim = 40 × token_dim
     #[must_use]
     pub fn fast() -> Self {
         Self {
-            repetitions: 3,
+            repetitions: 5,
             partition_bits: 3,
             seed: 42,
         }
@@ -112,23 +112,19 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = MultiVectorConfig::default();
-        assert_eq!(config.repetitions, 5);
-        assert_eq!(config.partition_bits, 3);
-        assert_eq!(config.partitions(), 8);
+        assert_eq!(config.repetitions, 8);
+        assert_eq!(config.partition_bits, 4);
+        assert_eq!(config.partitions(), 16);
     }
 
     #[test]
     fn test_encoded_dimension() {
         let config = MultiVectorConfig::default();
-        // 5 reps * 8 partitions * 128 = 5,120
-        assert_eq!(config.encoded_dimension(128), 5120);
+        // 8 reps * 16 partitions * 128 = 16,384
+        assert_eq!(config.encoded_dimension(128), 16384);
 
-        // Higher quality config
-        let config = MultiVectorConfig {
-            repetitions: 10,
-            partition_bits: 4,
-            ..Default::default()
-        };
+        // Quality config
+        let config = MultiVectorConfig::quality();
         // 10 reps * 16 partitions * 128 = 20,480
         assert_eq!(config.encoded_dimension(128), 20480);
     }
@@ -148,11 +144,11 @@ mod tests {
     #[test]
     fn test_fast_preset() {
         let config = MultiVectorConfig::fast();
-        assert_eq!(config.repetitions, 3);
+        assert_eq!(config.repetitions, 5);
         assert_eq!(config.partition_bits, 3);
         assert_eq!(config.partitions(), 8);
-        // 3 * 8 * 128 = 3,072
-        assert_eq!(config.encoded_dimension(128), 3072);
+        // 5 * 8 * 128 = 5,120
+        assert_eq!(config.encoded_dimension(128), 5120);
     }
 
     #[test]
