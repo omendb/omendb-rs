@@ -205,8 +205,8 @@ impl VectorStore {
     /// let results = store.search_multi(&refs, 10).unwrap();
     /// ```
     pub fn search_multi(&self, query_tokens: &[&[f32]], k: usize) -> Result<Vec<SearchResult>> {
-        // Default rerank factor of 4 (fetch 4x candidates, rerank to k)
-        self.search_multi_rerank(query_tokens, k, 4)
+        // Default rerank factor of 32 (fetch 32x candidates, rerank to k)
+        self.search_multi_rerank(query_tokens, k, 32)
     }
 
     /// Fast approximate search without MaxSim reranking.
@@ -569,7 +569,7 @@ impl VectorStore {
     ) -> Result<Vec<SearchResult>> {
         match options.rerank {
             Rerank::Off => self.search_multi_approx(query_tokens, k),
-            Rerank::On => self.search_multi_rerank(query_tokens, k, 4),
+            Rerank::On => self.search_multi_rerank(query_tokens, k, 32),
             Rerank::Factor(f) => self.search_multi_rerank(query_tokens, k, f),
         }
     }

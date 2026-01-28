@@ -526,7 +526,7 @@ impl VectorDatabase {
     /// @param query - Query tokens (number[][] or Float32Array[])
     /// @param k - Number of results to return
     /// @param rerank - Enable MaxSim reranking for better quality (default: true)
-    /// @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 4)
+    /// @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 32)
     /// @returns Array of {id, distance, metadata}
     #[napi]
     pub fn search_multi(

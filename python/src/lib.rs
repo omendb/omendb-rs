@@ -582,7 +582,7 @@ impl VectorDatabase {
     ///     filter (dict, optional): MongoDB-style metadata filter
     ///     max_distance (float, optional): Filter out results beyond this distance
     ///     rerank (bool, optional): Enable MaxSim reranking for multi-vector stores (default: True)
-    ///     rerank_factor (int, optional): Candidates multiplier for reranking (default: 4)
+    ///     rerank_factor (int, optional): Candidates multiplier for reranking (default: 32)
     ///
     /// Returns:
     ///     list[dict]: Results with keys {id, distance, metadata}

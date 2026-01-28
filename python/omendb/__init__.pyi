@@ -209,7 +209,7 @@ class VectorDatabase:
             max_distance: Maximum distance threshold (single-vector stores only).
             rerank: Enable MaxSim reranking (multi-vector stores only, default: True).
             rerank_factor: Fetch k*rerank_factor candidates before reranking
-                          (multi-vector stores only, default: 4).
+                          (multi-vector stores only, default: 32).
 
         Returns:
             List of results with id, distance, metadata.
