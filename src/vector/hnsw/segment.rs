@@ -504,37 +504,12 @@ impl FrozenSegment {
         })
     }
 
-    /// Compute distance between query and candidate vector
+    /// Compute distance between query and candidate vector (SIMD-accelerated)
     #[inline]
     fn compute_distance(&self, query: &[f32], candidate: &[f32]) -> f32 {
-        match self.distance_fn {
-            DistanceFunction::L2 => {
-                // Squared L2 distance
-                query
-                    .iter()
-                    .zip(candidate.iter())
-                    .map(|(a, b)| {
-                        let diff = a - b;
-                        diff * diff
-                    })
-                    .sum()
-            }
-            DistanceFunction::Cosine => {
-                // Cosine distance = 1 - cosine_similarity
-                let dot: f32 = query.iter().zip(candidate.iter()).map(|(a, b)| a * b).sum();
-                let norm_q: f32 = query.iter().map(|x| x * x).sum::<f32>().sqrt();
-                let norm_c: f32 = candidate.iter().map(|x| x * x).sum::<f32>().sqrt();
-                1.0 - dot / (norm_q * norm_c + 1e-10)
-            }
-            DistanceFunction::NegativeDotProduct => {
-                // Negative dot product (for max inner product search)
-                -query
-                    .iter()
-                    .zip(candidate.iter())
-                    .map(|(a, b)| a * b)
-                    .sum::<f32>()
-            }
-        }
+        // Use SIMD-accelerated distance from DistanceFunction
+        // For L2: returns squared distance (skips sqrt for faster comparisons)
+        self.distance_fn.distance_for_comparison(query, candidate)
     }
 
     /// Access underlying storage (for advanced operations)

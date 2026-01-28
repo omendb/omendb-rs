@@ -1,5 +1,6 @@
 //! MUVERA encoder for multi-vector to FDE transformation.
 
+use crate::distance::dot_product as dot;
 use crate::vector::muvera::MuveraConfig;
 use rand::prelude::*;
 use rand_distr::StandardNormal;
@@ -193,11 +194,6 @@ pub fn maxsim(query_tokens: &[&[f32]], doc_tokens: &[&[f32]]) -> f32 {
         total += max_sim;
     }
     total
-}
-
-/// Dot product of two vectors.
-fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 /// Compute MaxSim scores for multiple documents in batch (optimized).
