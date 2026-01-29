@@ -758,7 +758,16 @@ impl OmenFile {
 
         // Append only NEW vectors
         let dim = self.header.dimensions as usize;
-        let vec_size = (dim * 4) as u32;
+        // SAFETY: MAX_VECTOR_DIM (1M) * 4 = 4MB, fits in u32
+        let vec_size = dim
+            .checked_mul(4)
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Vector size overflow: dim={dim}"),
+                )
+            })?;
         let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
 
         for (idx, vec_opt) in vectors.iter().enumerate().skip(persisted_count) {

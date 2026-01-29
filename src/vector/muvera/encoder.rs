@@ -242,7 +242,7 @@ pub fn maxsim(query_tokens: &[&[f32]], doc_tokens: &[&[f32]]) -> f32 {
         let max_sim = doc_tokens
             .iter()
             .map(|d| dot(q, d))
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or(0.0);
         total += max_sim;
     }
@@ -281,7 +281,7 @@ pub fn maxsim_batch(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]) ->
                 let max_sim = doc_tokens
                     .iter()
                     .map(|d| dot(q, d))
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(0.0);
                 total += max_sim;
             }
@@ -313,7 +313,7 @@ pub fn maxsim_batch_par(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]
                 let max_sim = doc_tokens
                     .iter()
                     .map(|d| dot(q, d))
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(0.0);
                 total += max_sim;
             }

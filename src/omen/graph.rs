@@ -52,10 +52,25 @@ impl GraphSection {
 
         let ptr = mmap.as_ptr().add(offset);
 
-        // Calculate section boundaries
-        let levels_size = count as usize;
-        let offsets_size = count as usize * 4; // u32 offsets
-        let level0_neighbors_start = levels_size + offsets_size;
+        // Calculate section boundaries with overflow checks
+        let levels_size = usize::try_from(count).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Graph count {count} exceeds usize"),
+            )
+        })?;
+        let offsets_size = levels_size.checked_mul(4).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Graph offsets size overflow: count={count}"),
+            )
+        })?;
+        let level0_neighbors_start = levels_size.checked_add(offsets_size).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Graph level0_neighbors_start overflow",
+            )
+        })?;
 
         Ok(Self {
             count,

@@ -498,7 +498,11 @@ impl FrozenSegment {
                 })
                 .collect();
 
-            output.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            output.sort_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             output.truncate(k);
             output
         })
@@ -612,7 +616,11 @@ impl FrozenSegment {
                 })
                 .collect();
 
-            results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            results.sort_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             results.truncate(k);
 
             // Fallback if ACORN-1 found too few results

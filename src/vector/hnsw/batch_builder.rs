@@ -65,7 +65,7 @@ pub fn kmeans_cluster(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<C
                     .iter()
                     .enumerate()
                     .map(|(i, c)| (i, l2_distance_squared(v, c)))
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .map_or(0, |(i, _)| i);
 
                 let old = *assignment;
@@ -328,7 +328,8 @@ impl BatchBuilder {
             }
 
             // Sort by distance to other centroids (ascending = closest first)
-            boundary_candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            boundary_candidates
+                .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
             // Take top boundary_ratio as boundary nodes
             let num_boundary = (cluster.len() as f32 * boundary_ratio).ceil() as usize;

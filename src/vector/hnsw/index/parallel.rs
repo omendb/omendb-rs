@@ -403,9 +403,9 @@ impl ParallelBuilder {
                     .results_with_dist
                     .push((c.node_id, c.distance.into_inner()));
             }
-            buffers
-                .results_with_dist
-                .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            buffers.results_with_dist.sort_unstable_by(|a, b| {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             // Return a clone (buffer stays for next use)
             buffers.results_with_dist.clone()
