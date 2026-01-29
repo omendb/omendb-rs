@@ -31,7 +31,7 @@ export declare class VectorDatabase {
    * @param query - Query tokens (number[][] or Float32Array[])
    * @param k - Number of results to return
    * @param rerank - Enable MaxSim reranking for better quality (default: true)
-   * @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 4)
+   * @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 32)
    * @returns Array of {id, distance, metadata}
    */
   searchMulti(query: Array<Array<number>> | Array<Float32Array>, k: number, rerank?: boolean | undefined | null, rerankFactor?: number | undefined | null): Array<SearchResult>
@@ -340,11 +340,12 @@ export interface OpenOptions {
   metric?: string
   /**
    * Enable multi-vector mode for ColBERT-style retrieval
-   * - true: Enable with default config (repetitions=5, partition_bits=3)
-   * - { repetitions?, partitionBits?, seed? }: Custom config
+   * - true: Enable with default config (repetitions=8, partition_bits=4, dProj=16)
+   * - { repetitions?, partitionBits?, seed?, dProj? }: Custom config
+   * - dProj: Dimension projection (16 = 8x smaller FDE, null = full token dim)
    * - false/null: Disabled (default, single-vector mode)
    */
-  multiVector?: boolean | { repetitions?: number; partitionBits?: number; seed?: number } | null | undefined
+  multiVector?: boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null } | null | undefined
 }
 
 export interface SearchResult {

@@ -82,11 +82,20 @@ fn parse_multi_vector(value: &serde_json::Value) -> Result<Option<MultiVectorCon
                     .as_u64()
                     .ok_or_else(|| Error::new(Status::InvalidArg, "seed must be a number"))?;
             }
+            if let Some(d_proj) = obj.get("dProj") {
+                config.d_proj = if d_proj.is_null() {
+                    None
+                } else {
+                    Some(d_proj.as_u64().ok_or_else(|| {
+                        Error::new(Status::InvalidArg, "dProj must be a number or null")
+                    })? as u8)
+                };
+            }
             Ok(Some(config))
         }
         _ => Err(Error::new(
             Status::InvalidArg,
-            "multiVector must be true, false, or { repetitions?, partitionBits?, seed? }",
+            "multiVector must be true, false, or { repetitions?, partitionBits?, seed?, dProj? }",
         )),
     }
 }
@@ -1383,10 +1392,11 @@ pub struct OpenOptions {
     /// Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip"
     pub metric: Option<String>,
     /// Enable multi-vector mode for ColBERT-style retrieval
-    /// - true: Enable with default config (repetitions=8, partition_bits=4)
-    /// - { repetitions?, partitionBits?, seed? }: Custom config
+    /// - true: Enable with default config (repetitions=8, partition_bits=4, dProj=16)
+    /// - { repetitions?, partitionBits?, seed?, dProj? }: Custom config
+    /// - dProj: Dimension projection (16 = 8x smaller FDE, null = full token dim)
     /// - false/null: Disabled (default, single-vector mode)
-    #[napi(ts_type = "boolean | { repetitions?: number; partitionBits?: number; seed?: number } | null | undefined")]
+    #[napi(ts_type = "boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null } | null | undefined")]
     pub multi_vector: Option<serde_json::Value>,
 }
 

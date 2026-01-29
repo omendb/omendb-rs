@@ -62,8 +62,8 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
 /// Parse multi_vector parameter and return MultiVectorConfig if enabled
 ///
 /// Accepts:
-/// - True → Default config (repetitions=8, partition_bits=4)
-/// - dict → Custom config {"repetitions": N, "partition_bits": M}
+/// - True → Default config (repetitions=8, partition_bits=4, d_proj=16)
+/// - dict → Custom config {"repetitions": N, "partition_bits": M, "d_proj": D}
 /// - None/False → disabled
 ///
 /// Returns Ok(Some(config)) if enabled, Ok(None) if disabled
@@ -94,12 +94,16 @@ fn parse_multi_vector(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<MultiVec
         if let Some(seed) = dict.get_item("seed")? {
             config.seed = seed.extract()?;
         }
+        if let Some(d_proj) = dict.get_item("d_proj")? {
+            let val: Option<u8> = d_proj.extract()?;
+            config.d_proj = val;
+        }
 
         return Ok(Some(config));
     }
 
     Err(PyValueError::new_err(
-        "multi_vector must be True, False, or dict with {repetitions, partition_bits}",
+        "multi_vector must be True, False, or dict with {repetitions, partition_bits, d_proj}",
     ))
 }
 
@@ -1919,8 +1923,9 @@ impl VectorDatabase {
 ///         - "cosine": Cosine distance (1 - cosine similarity)
 ///         - "dot" or "ip": Inner product (for MIPS)
 ///     multi_vector (bool|dict): Enable multi-vector mode for ColBERT-style retrieval
-///         - True: Enable with default config (repetitions=8, partition_bits=4)
-///         - dict: Custom config {"repetitions": 10, "partition_bits": 4}
+///         - True: Enable with default config (repetitions=8, partition_bits=4, d_proj=16)
+///         - dict: Custom config {"repetitions": 10, "partition_bits": 4, "d_proj": 16}
+///         - d_proj: Dimension projection (16 = 8x smaller FDE, None = full token dim)
 ///         - False/None: Single-vector mode (default)
 ///     config (dict): Advanced config (deprecated, use top-level params instead)
 ///

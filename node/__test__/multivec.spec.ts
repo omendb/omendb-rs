@@ -33,7 +33,7 @@ describe("Multi-Vector (MUVERA)", () => {
 		let db: VectorDatabase;
 
 		beforeEach(() => {
-			db = open(":memory:", { dimensions: 8, multiVector: true });
+			db = open(":memory:", { dimensions: 8, multiVector: { dProj: null } });
 		});
 
 		it("should insert using unified set() with vectors field", () => {
@@ -79,7 +79,7 @@ describe("Multi-Vector (MUVERA)", () => {
 		let db: VectorDatabase;
 
 		beforeEach(() => {
-			db = open(":memory:", { dimensions: 8, multiVector: true });
+			db = open(":memory:", { dimensions: 8, multiVector: { dProj: null } });
 
 			// Insert 100 docs with distinct patterns using unified API
 			const items = Array.from({ length: 100 }, (_, i) => {
@@ -173,7 +173,7 @@ describe("Multi-Vector (MUVERA)", () => {
 		let db: VectorDatabase;
 
 		beforeEach(() => {
-			db = open(":memory:", { dimensions: 16, multiVector: true });
+			db = open(":memory:", { dimensions: 16, multiVector: { dProj: null } });
 
 			// Create docs with overlapping patterns where reranking matters
 			const items = Array.from({ length: 50 }, (_, i) => {
@@ -227,8 +227,8 @@ describe("Multi-Vector (MUVERA)", () => {
 		it("should persist multi-vector data across close/reopen", () => {
 			const dbPath = tempPath();
 			try {
-				// Create and populate
-				const db1 = open(dbPath, { dimensions: 8, multiVector: true });
+				// Create and populate (dProj: null for small dim)
+				const db1 = open(dbPath, { dimensions: 8, multiVector: { dProj: null } });
 				db1.set([
 					{ id: "doc1", vectors: [new Float32Array(8).fill(0.1), new Float32Array(8).fill(0.2)], metadata: { title: "first" } },
 					{ id: "doc2", vectors: [new Float32Array(8).fill(0.3)], metadata: { title: "second" } },
@@ -256,8 +256,8 @@ describe("Multi-Vector (MUVERA)", () => {
 		it("should support reranking after reload", () => {
 			const dbPath = tempPath();
 			try {
-				// Create store with docs
-				const db1 = open(dbPath, { dimensions: 4, multiVector: true });
+				// Create store with docs (dProj: null for small dim)
+				const db1 = open(dbPath, { dimensions: 4, multiVector: { dProj: null } });
 				db1.set([
 					{ id: "doc1", vectors: [[1, 0, 0, 0], [0, 1, 0, 0]], metadata: {} },
 					{ id: "doc2", vectors: [[0.3, 0.3, 0.3, 0]], metadata: {} },
@@ -353,7 +353,7 @@ describe("Multi-Vector (MUVERA)", () => {
 		});
 
 		it("should handle variable token counts", () => {
-			const db = open(":memory:", { dimensions: 16, multiVector: true });
+			const db = open(":memory:", { dimensions: 16, multiVector: { dProj: null } });
 
 			// 1 to 20 tokens per doc
 			const items = Array.from({ length: 100 }, (_, i) => ({

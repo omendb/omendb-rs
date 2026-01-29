@@ -18,6 +18,12 @@
 ///     repetitions: 10,
 ///     ..Default::default()
 /// };
+///
+/// // Disable projection for backwards compatibility
+/// let config = MultiVectorConfig {
+///     d_proj: None,
+///     ..Default::default()
+/// };
 /// ```
 ///
 /// # Parameters
@@ -29,15 +35,20 @@
 ///   Higher values give finer granularity but larger encodings. The MUVERA paper
 ///   uses 5-6 bits (32-64 buckets) for best quality.
 ///
+/// - `d_proj`: Dimension to project tokens to before encoding. Default: Some(16).
+///   Set to None to use full token dimension (backwards compatible but 8x larger).
+///   Weaviate and Qdrant both use d_proj=16.
+///
 /// # Encoded Dimension
 ///
-/// The encoded vector size is: `repetitions × 2^partition_bits × token_dim`
+/// The encoded vector size is: `repetitions × 2^partition_bits × proj_dim`
+/// where proj_dim = d_proj (if set) or token_dim (if None).
 ///
-/// | Preset | Config | Encoded Size (128D tokens) |
-/// |--------|--------|---------------------------|
-/// | fast | (5, 3) | 5,120 |
-/// | default | (8, 4) | 16,384 |
-/// | quality | (10, 4) | 20,480 |
+/// | Preset  | Config         | Encoded Size (128D tokens) |
+/// |---------|----------------|---------------------------|
+/// | fast    | (5, 3, 16)     | 640                       |
+/// | default | (8, 4, 16)     | 2,048                     |
+/// | quality | (10, 4, 32)    | 5,120                     |
 #[derive(Debug, Clone)]
 pub struct MultiVectorConfig {
     /// Number of independent hash repetitions. Higher = better quality, larger index.
@@ -48,6 +59,11 @@ pub struct MultiVectorConfig {
     /// Default: 4 (16 partitions), range: 3-6.
     pub partition_bits: u8,
 
+    /// Dimension to project tokens to before FDE encoding.
+    /// Default: Some(16). Set to None to use full token dimension.
+    /// Must be <= token_dim when set.
+    pub d_proj: Option<u8>,
+
     /// Random seed for reproducible encoding. Default: 42.
     pub seed: u64,
 }
@@ -57,6 +73,7 @@ impl Default for MultiVectorConfig {
         Self {
             repetitions: 8,
             partition_bits: 4,
+            d_proj: Some(16),
             seed: 42,
         }
     }
@@ -66,12 +83,13 @@ impl MultiVectorConfig {
     /// Fast configuration - smaller encoding, faster search.
     ///
     /// Good for prototyping. Use reranking to maintain quality.
-    /// Encoded size: 5 × 8 × token_dim = 40 × token_dim
+    /// Encoded size: 5 × 8 × 16 = 640
     #[must_use]
     pub fn fast() -> Self {
         Self {
             repetitions: 5,
             partition_bits: 3,
+            d_proj: Some(16),
             seed: 42,
         }
     }
@@ -79,20 +97,33 @@ impl MultiVectorConfig {
     /// Quality configuration - larger encoding, better approximation.
     ///
     /// Use for production when recall matters.
-    /// Encoded size: 10 × 16 × token_dim = 160 × token_dim
+    /// Encoded size: 10 × 16 × 32 = 5,120
     #[must_use]
     pub fn quality() -> Self {
         Self {
             repetitions: 10,
             partition_bits: 4,
+            d_proj: Some(32),
             seed: 42,
         }
     }
 
     /// Calculate the encoded vector dimension for a given token dimension.
+    ///
+    /// Returns `repetitions × partitions × proj_dim` where proj_dim is
+    /// d_proj (if set) or token_dim (if None).
     #[must_use]
     pub fn encoded_dimension(&self, token_dim: usize) -> usize {
-        self.repetitions as usize * self.partitions() * token_dim
+        let proj_dim = self.d_proj.map_or(token_dim, |d| d as usize);
+        self.repetitions as usize * self.partitions() * proj_dim
+    }
+
+    /// Get the projection dimension for a given token dimension.
+    ///
+    /// Returns d_proj if set, otherwise token_dim.
+    #[must_use]
+    pub fn proj_dim(&self, token_dim: usize) -> usize {
+        self.d_proj.map_or(token_dim, |d| d as usize)
     }
 
     /// Number of partitions per repetition (2^partition_bits).
@@ -114,19 +145,47 @@ mod tests {
         let config = MultiVectorConfig::default();
         assert_eq!(config.repetitions, 8);
         assert_eq!(config.partition_bits, 4);
+        assert_eq!(config.d_proj, Some(16));
         assert_eq!(config.partitions(), 16);
     }
 
     #[test]
-    fn test_encoded_dimension() {
+    fn test_encoded_dimension_with_dproj() {
         let config = MultiVectorConfig::default();
-        // 8 reps * 16 partitions * 128 = 16,384
-        assert_eq!(config.encoded_dimension(128), 16384);
+        // 8 reps * 16 partitions * 16 (d_proj) = 2,048
+        assert_eq!(config.encoded_dimension(128), 2048);
 
-        // Quality config
+        // Quality config: 10 reps * 16 partitions * 32 (d_proj) = 5,120
         let config = MultiVectorConfig::quality();
-        // 10 reps * 16 partitions * 128 = 20,480
-        assert_eq!(config.encoded_dimension(128), 20480);
+        assert_eq!(config.encoded_dimension(128), 5120);
+    }
+
+    #[test]
+    fn test_encoded_dimension_no_dproj() {
+        let config = MultiVectorConfig {
+            d_proj: None,
+            ..Default::default()
+        };
+        // 8 reps * 16 partitions * 128 (token_dim) = 16,384
+        assert_eq!(config.encoded_dimension(128), 16384);
+    }
+
+    #[test]
+    fn test_proj_dim() {
+        let config = MultiVectorConfig::default();
+        assert_eq!(config.proj_dim(128), 16);
+
+        let config = MultiVectorConfig {
+            d_proj: None,
+            ..Default::default()
+        };
+        assert_eq!(config.proj_dim(128), 128);
+
+        let config = MultiVectorConfig {
+            d_proj: Some(32),
+            ..Default::default()
+        };
+        assert_eq!(config.proj_dim(128), 32);
     }
 
     #[test]
@@ -134,10 +193,12 @@ mod tests {
         let config = MultiVectorConfig {
             repetitions: 20,
             partition_bits: 5,
+            d_proj: Some(24),
             seed: 123,
         };
         assert_eq!(config.repetitions, 20);
         assert_eq!(config.partitions(), 32);
+        assert_eq!(config.d_proj, Some(24));
         assert_eq!(config.seed, 123);
     }
 
@@ -146,9 +207,10 @@ mod tests {
         let config = MultiVectorConfig::fast();
         assert_eq!(config.repetitions, 5);
         assert_eq!(config.partition_bits, 3);
+        assert_eq!(config.d_proj, Some(16));
         assert_eq!(config.partitions(), 8);
-        // 5 * 8 * 128 = 5,120
-        assert_eq!(config.encoded_dimension(128), 5120);
+        // 5 * 8 * 16 = 640
+        assert_eq!(config.encoded_dimension(128), 640);
     }
 
     #[test]
@@ -156,8 +218,9 @@ mod tests {
         let config = MultiVectorConfig::quality();
         assert_eq!(config.repetitions, 10);
         assert_eq!(config.partition_bits, 4);
+        assert_eq!(config.d_proj, Some(32));
         assert_eq!(config.partitions(), 16);
-        // 10 * 16 * 128 = 20,480
-        assert_eq!(config.encoded_dimension(128), 20480);
+        // 10 * 16 * 32 = 5,120
+        assert_eq!(config.encoded_dimension(128), 5120);
     }
 }

@@ -88,7 +88,7 @@ class TestMuveraRecall:
         """Create and populate multi-vector store."""
         docs, _, dim = synthetic_dataset
 
-        db = omendb.open(":memory:", dimensions=dim, multi_vector=True)
+        db = omendb.open(":memory:", dimensions=dim, multi_vector={"d_proj": None})
 
         items = [
             {"id": doc_id, "vectors": tokens.tolist(), "metadata": {"index": i}}
@@ -287,8 +287,8 @@ class TestMuveraScaleRecall:
             tokens /= np.linalg.norm(tokens, axis=1, keepdims=True)
             docs.append((f"doc{i}", tokens))
 
-        # Create store
-        db = omendb.open(":memory:", dimensions=dim, multi_vector=True)
+        # Create store (d_proj=None to test baseline FDE quality)
+        db = omendb.open(":memory:", dimensions=dim, multi_vector={"d_proj": None})
         items = [
             {"id": doc_id, "vectors": tokens.tolist(), "metadata": {}} for doc_id, tokens in docs
         ]
@@ -340,7 +340,7 @@ class TestMuveraScaleRecall:
             tokens /= np.linalg.norm(tokens, axis=1, keepdims=True)
             docs.append((f"doc{i}", tokens))
 
-        db = omendb.open(":memory:", dimensions=dim, multi_vector=True)
+        db = omendb.open(":memory:", dimensions=dim, multi_vector={"d_proj": None})
         items = [
             {"id": doc_id, "vectors": tokens.tolist(), "metadata": {}} for doc_id, tokens in docs
         ]

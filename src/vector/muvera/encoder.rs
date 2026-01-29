@@ -19,35 +19,64 @@ pub enum AggMode {
 /// Encodes variable-length sets of token vectors into fixed-dimensional
 /// encodings. The inner product of two FDEs approximates MaxSim similarity.
 ///
-/// Hyperplanes are pre-computed and cached for efficient repeated encoding.
+/// When d_proj is configured, tokens are projected to a lower dimension before
+/// encoding, reducing FDE size (e.g., 16,384D → 2,048D with d_proj=16).
+///
+/// Hyperplanes and projection matrix are pre-computed and cached.
 #[derive(Debug, Clone)]
 pub struct MuveraEncoder {
     config: MuveraConfig,
     token_dim: usize,
+    proj_dim: usize,
     fde_dim: usize,
-    /// Cached hyperplanes: [repetition][hyperplane][dimension]
+    /// Cached hyperplanes: [repetition][hyperplane][proj_dim]
     hyperplanes: Vec<Vec<Vec<f32>>>,
+    /// Projection matrix: [d_proj][token_dim], or None if d_proj not set
+    projection: Option<Vec<Vec<f32>>>,
 }
 
 impl MuveraEncoder {
     /// Create a new encoder for the given token dimension and config.
+    ///
+    /// # Panics
+    ///
+    /// Panics if d_proj exceeds token_dim.
     #[must_use]
     pub fn new(token_dim: usize, config: MuveraConfig) -> Self {
+        let proj_dim = config.proj_dim(token_dim);
+
+        // Validate d_proj <= token_dim
+        if let Some(d) = config.d_proj {
+            assert!(
+                (d as usize) <= token_dim,
+                "d_proj ({d}) cannot exceed token_dim ({token_dim})"
+            );
+        }
+
         let fde_dim = config.encoded_dimension(token_dim);
 
-        // Pre-compute hyperplanes for all repetitions
+        // Generate projection matrix if d_proj is set
+        // Use seed offset to avoid correlation with hyperplanes
+        let projection = config.d_proj.map(|d| {
+            let proj_seed = config.seed.wrapping_add(1_000_000);
+            projection_matrix(token_dim, d as usize, proj_seed)
+        });
+
+        // Hyperplanes operate on projected dimension
         let hyperplanes = (0..config.repetitions as usize)
             .map(|rep| {
                 let seed = config.seed + rep as u64;
-                gaussian_matrix(token_dim, config.partition_bits as usize, seed)
+                gaussian_matrix(proj_dim, config.partition_bits as usize, seed)
             })
             .collect();
 
         Self {
             config,
             token_dim,
+            proj_dim,
             fde_dim,
             hyperplanes,
+            projection,
         }
     }
 
@@ -61,6 +90,12 @@ impl MuveraEncoder {
     #[must_use]
     pub fn token_dimension(&self) -> usize {
         self.token_dim
+    }
+
+    /// Get the projection dimension (d_proj or token_dim).
+    #[must_use]
+    pub fn proj_dimension(&self) -> usize {
+        self.proj_dim
     }
 
     /// Get the configuration.
@@ -96,18 +131,24 @@ impl MuveraEncoder {
         let mut fde = vec![0.0; self.fde_dim];
 
         for (rep, hyperplanes) in self.hyperplanes.iter().enumerate() {
-            // Accumulate tokens per partition
-            let mut partition_sums = vec![vec![0.0; self.token_dim]; num_partitions];
+            // Accumulate tokens per partition (using proj_dim)
+            let mut partition_sums = vec![vec![0.0; self.proj_dim]; num_partitions];
             let mut partition_counts = vec![0usize; num_partitions];
 
             for token in tokens {
                 debug_assert_eq!(token.len(), self.token_dim, "Token dimension mismatch");
 
-                let sketch = matmul_vec(token, hyperplanes);
+                // Project token if d_proj is set
+                let projected: Vec<f32> = match &self.projection {
+                    Some(proj) => proj.iter().map(|row| dot(token, row)).collect(),
+                    None => token.to_vec(),
+                };
+
+                let sketch = matmul_vec(&projected, hyperplanes);
                 let partition = simhash_gray_code(&sketch);
 
-                // Add token to partition
-                for (sum, &val) in partition_sums[partition].iter_mut().zip(token.iter()) {
+                // Add projected token to partition
+                for (sum, &val) in partition_sums[partition].iter_mut().zip(projected.iter()) {
                     *sum += val;
                 }
                 partition_counts[partition] += 1;
@@ -125,16 +166,31 @@ impl MuveraEncoder {
                 }
             }
 
-            // Copy to FDE output
-            let rep_offset = rep * num_partitions * self.token_dim;
+            // Copy to FDE output (using proj_dim)
+            let rep_offset = rep * num_partitions * self.proj_dim;
             for (p, partition_sum) in partition_sums.iter().enumerate().take(num_partitions) {
-                let start = rep_offset + p * self.token_dim;
-                fde[start..start + self.token_dim].copy_from_slice(partition_sum);
+                let start = rep_offset + p * self.proj_dim;
+                fde[start..start + self.proj_dim].copy_from_slice(partition_sum);
             }
         }
 
         fde
     }
+}
+
+/// Generate projection matrix: d_proj rows × token_dim cols.
+///
+/// Each row is a Gaussian random vector scaled by 1/sqrt(d_proj) for variance preservation.
+fn projection_matrix(token_dim: usize, d_proj: usize, seed: u64) -> Vec<Vec<f32>> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let scale = 1.0 / (d_proj as f32).sqrt();
+    (0..d_proj)
+        .map(|_| {
+            (0..token_dim)
+                .map(|_| rng.sample::<f32, _>(StandardNormal) * scale)
+                .collect()
+        })
+        .collect()
 }
 
 /// Generate a matrix of Gaussian random vectors for SimHash.
@@ -271,29 +327,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_encoder_dimensions() {
-        let config = MuveraConfig::default();
+    fn test_encoder_dimensions_with_dproj() {
+        let config = MuveraConfig::default(); // d_proj=Some(16)
         let encoder = MuveraEncoder::new(128, config);
-        // 8 reps * 16 partitions * 128 = 16,384
+        // 8 reps * 16 partitions * 16 (d_proj) = 2,048
+        assert_eq!(encoder.fde_dimension(), 2048);
+        assert_eq!(encoder.token_dimension(), 128);
+        assert_eq!(encoder.proj_dimension(), 16);
+    }
+
+    #[test]
+    fn test_encoder_dimensions_no_dproj() {
+        let config = MuveraConfig {
+            d_proj: None,
+            ..Default::default()
+        };
+        let encoder = MuveraEncoder::new(128, config);
+        // 8 reps * 16 partitions * 128 (token_dim) = 16,384
         assert_eq!(encoder.fde_dimension(), 16384);
         assert_eq!(encoder.token_dimension(), 128);
+        assert_eq!(encoder.proj_dimension(), 128);
     }
 
     #[test]
     fn test_empty_tokens() {
         let encoder = MuveraEncoder::new(128, MuveraConfig::default());
         let fde = encoder.encode_query(&[]);
-        assert_eq!(fde.len(), 16384);
+        assert_eq!(fde.len(), 2048); // With d_proj=16
         assert!(fde.iter().all(|&v| v == 0.0));
     }
 
     #[test]
     fn test_single_token() {
+        // Use d_proj=None since token_dim=4 < default d_proj=16
         let encoder = MuveraEncoder::new(
             4,
             MuveraConfig {
                 repetitions: 2,
                 partition_bits: 2,
+                d_proj: None,
                 seed: 42,
             },
         );
@@ -305,11 +377,13 @@ mod tests {
 
     #[test]
     fn test_query_vs_document_encoding() {
+        // Use d_proj=None since token_dim=4 < default d_proj=16
         let encoder = MuveraEncoder::new(
             4,
             MuveraConfig {
                 repetitions: 2,
                 partition_bits: 2,
+                d_proj: None,
                 seed: 42,
             },
         );
@@ -332,6 +406,30 @@ mod tests {
         let fde2 = encoder.encode_query(&tokens);
 
         assert_eq!(fde1, fde2);
+    }
+
+    #[test]
+    #[should_panic(expected = "d_proj")]
+    fn test_dproj_exceeds_token_dim() {
+        let config = MuveraConfig {
+            d_proj: Some(200),
+            ..Default::default()
+        };
+        let _encoder = MuveraEncoder::new(128, config); // Should panic
+    }
+
+    #[test]
+    fn test_projection_matrix_deterministic() {
+        let m1 = projection_matrix(128, 16, 42);
+        let m2 = projection_matrix(128, 16, 42);
+        assert_eq!(m1, m2);
+
+        let m3 = projection_matrix(128, 16, 43);
+        assert_ne!(m1, m3);
+
+        // Verify dimensions
+        assert_eq!(m1.len(), 16); // d_proj rows
+        assert_eq!(m1[0].len(), 128); // token_dim cols
     }
 
     #[test]
@@ -468,6 +566,7 @@ mod tests {
             MuveraConfig {
                 repetitions: 10,
                 partition_bits: 4,
+                d_proj: Some(16),
                 seed: 42,
             },
         );

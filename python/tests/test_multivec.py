@@ -35,8 +35,8 @@ class TestMultiVectorInsert:
 
     @pytest.fixture
     def db(self):
-        """Create a multi-vector store."""
-        return omendb.open(":memory:", dimensions=8, multi_vector=True)
+        """Create a multi-vector store with small dims (d_proj=None to skip projection)."""
+        return omendb.open(":memory:", dimensions=8, multi_vector={"d_proj": None})
 
     def test_insert_single_document(self, db):
         """Test inserting a single multi-vector document."""
@@ -76,7 +76,7 @@ class TestMultiVectorSearch:
     @pytest.fixture
     def populated_db(self):
         """Create and populate a multi-vector store."""
-        db = omendb.open(":memory:", dimensions=8, multi_vector=True)
+        db = omendb.open(":memory:", dimensions=8, multi_vector={"d_proj": None})
 
         # Create docs with distinct patterns
         docs = []
@@ -133,7 +133,7 @@ class TestMultiVectorReranking:
     @pytest.fixture
     def db_with_similar_docs(self):
         """Create DB with docs that benefit from reranking."""
-        db = omendb.open(":memory:", dimensions=16, multi_vector=True)
+        db = omendb.open(":memory:", dimensions=16, multi_vector={"d_proj": None})
 
         # Create docs with overlapping patterns
         docs = []
@@ -181,7 +181,7 @@ class TestMultiVectorErrors:
 
     def test_single_vector_query_to_multi_vector_store(self):
         """Test that single-vector query to multi-vector store gives sensible error."""
-        db = omendb.open(":memory:", dimensions=8, multi_vector=True)
+        db = omendb.open(":memory:", dimensions=8, multi_vector={"d_proj": None})
         db.set([{"id": "doc1", "vectors": [[0.1] * 8, [0.2] * 8], "metadata": {}}])
 
         # This should fail because we're passing a 1D vector to a multi-vector store
@@ -191,7 +191,7 @@ class TestMultiVectorErrors:
 
     def test_single_vector_query_dimension_mismatch(self):
         """Test that mismatched dimensions are handled."""
-        db = omendb.open(":memory:", dimensions=8, multi_vector=True)
+        db = omendb.open(":memory:", dimensions=8, multi_vector={"d_proj": None})
         db.set([{"id": "doc1", "vectors": [[0.1] * 8, [0.2] * 8], "metadata": {}}])
 
         # Wrong dimension should fail
@@ -201,7 +201,7 @@ class TestMultiVectorErrors:
     def test_multi_vector_with_quantization_fails(self):
         """Test that multi-vector with quantization is not yet supported."""
         with pytest.raises(ValueError, match="quantization"):
-            omendb.open(":memory:", dimensions=8, multi_vector=True, quantization=True)
+            omendb.open(":memory:", dimensions=32, multi_vector=True, quantization=True)
 
 
 class TestMultiVectorPersistence:
@@ -215,8 +215,8 @@ class TestMultiVectorPersistence:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "test_multivec.omen")
 
-            # Create and populate
-            db = omendb.open(path, dimensions=8, multi_vector=True)
+            # Create and populate (d_proj=None for small dim)
+            db = omendb.open(path, dimensions=8, multi_vector={"d_proj": None})
             db.set(
                 [
                     {
@@ -251,8 +251,8 @@ class TestMultiVectorPersistence:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "test_rerank.omen")
 
-            # Create store with docs
-            db = omendb.open(path, dimensions=4, multi_vector=True)
+            # Create store with docs (d_proj=None for small dim)
+            db = omendb.open(path, dimensions=4, multi_vector={"d_proj": None})
             db.set(
                 [
                     {
@@ -330,7 +330,7 @@ class TestMultiVectorScale:
 
     def test_variable_token_counts(self):
         """Test with variable number of tokens per document."""
-        db = omendb.open(":memory:", dimensions=16, multi_vector=True)
+        db = omendb.open(":memory:", dimensions=16, multi_vector={"d_proj": None})
 
         docs = []
         for i in range(100):

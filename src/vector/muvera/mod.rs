@@ -5,11 +5,14 @@
 //!
 //! # Algorithm
 //!
-//! FDE dimension = r_reps × 2^k_sim × token_dim
+//! FDE dimension = r_reps × 2^k_sim × d_proj
 //!
 //! - `k_sim`: Number of SimHash hyperplanes (creates 2^k_sim buckets)
 //! - `r_reps`: Independent repetitions concatenated
-//! - `token_dim`: Original token embedding dimension
+//! - `d_proj`: Projection dimension (default: 16, matching Weaviate/Qdrant)
+//!
+//! Tokens are projected from token_dim → d_proj before encoding, reducing FDE size
+//! by 8x (e.g., 16,384D → 2,048D for 128D tokens with d_proj=16).
 //!
 //! # Asymmetric Encoding
 //!
@@ -21,8 +24,8 @@
 //! ```ignore
 //! use omendb::vector::muvera::{MuveraConfig, MuveraEncoder};
 //!
-//! let config = MuveraConfig::default();  // k_sim=4, r_reps=8
-//! let encoder = MuveraEncoder::new(128, config);  // 128D tokens -> 16,384D FDE
+//! let config = MuveraConfig::default();  // k_sim=4, r_reps=8, d_proj=16
+//! let encoder = MuveraEncoder::new(128, config);  // 128D tokens -> 2,048D FDE
 //!
 //! let doc_fde = encoder.encode_document(&doc_tokens);
 //! let query_fde = encoder.encode_query(&query_tokens);
