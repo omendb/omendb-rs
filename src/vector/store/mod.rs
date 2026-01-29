@@ -397,12 +397,18 @@ impl VectorStore {
     ///
     /// This is the recommended method for bulk operations.
     /// Uses parallel HNSW construction for new indexes.
+    ///
+    /// # Ordering Guarantee
+    ///
+    /// This method processes updates before inserts to ensure slot ordering is predictable.
+    /// **WARNING:** `set_multi_batch` in `multivec_ops.rs` depends on this ordering to
+    /// correctly align tokens with FDEs. Do not change without updating that code.
     pub fn set_batch(&mut self, batch: Vec<(String, Vector, JsonValue)>) -> Result<Vec<usize>> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
 
-        // Separate batch into updates and inserts
+        // Separate batch into updates and inserts (updates processed first - see docstring)
         let mut updates: Vec<(u32, String, Vector, JsonValue)> = Vec::new();
         let mut inserts: Vec<(String, Vector, JsonValue)> = Vec::new();
 
