@@ -246,9 +246,14 @@ impl VectorStore {
         // Encode query tokens to FDE (query mode = SUM)
         let query_fde = encoder.encode_query(query_tokens);
 
-        // Search HNSW with FDE
+        // Auto-boost ef_search for high-dimensional FDE vectors
+        // Weaviate uses ef >= FDE_dim; we use fde_dim / 16 as a reasonable default
+        let fde_dim = encoder.fde_dimension();
+        let boosted_ef = (fde_dim / 16).max(self.hnsw_ef_search);
+
+        // Search HNSW with FDE using boosted ef
         let query_vec = Vector::new(query_fde);
-        let results = self.knn_search(&query_vec, k)?;
+        let results = self.knn_search_with_ef(&query_vec, k, Some(boosted_ef))?;
 
         // Convert to SearchResult (filter deleted nodes)
         let search_results = results
@@ -313,9 +318,13 @@ impl VectorStore {
         // Step 1: Get candidates using FDE search
         let num_candidates = k * rerank_factor;
 
+        // Auto-boost ef_search for high-dimensional FDE vectors
+        let fde_dim = encoder.fde_dimension();
+        let boosted_ef = (fde_dim / 16).max(self.hnsw_ef_search).max(num_candidates);
+
         let query_fde = encoder.encode_query(query_tokens);
         let query_vec = Vector::new(query_fde);
-        let candidates = self.knn_search(&query_vec, num_candidates)?;
+        let candidates = self.knn_search_with_ef(&query_vec, num_candidates, Some(boosted_ef))?;
 
         if candidates.is_empty() {
             return Ok(Vec::new());
