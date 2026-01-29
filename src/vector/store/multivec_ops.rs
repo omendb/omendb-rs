@@ -139,17 +139,18 @@ impl VectorStore {
             .map(|(_, tokens, _)| {
                 let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
-                // Apply pooling if configured
-                let pooled_tokens: Vec<Vec<f32>> = if let Some(pf) = pool_factor {
-                    crate::vector::muvera::pool_tokens(&token_refs, pf)
+                // Apply pooling if configured, otherwise use original tokens
+                let (pooled_tokens, fde) = if let Some(pf) = pool_factor {
+                    let pooled = crate::vector::muvera::pool_tokens(&token_refs, pf);
+                    let final_refs: Vec<&[f32]> =
+                        pooled.iter().map(std::vec::Vec::as_slice).collect();
+                    let fde = encoder.encode_document(&final_refs);
+                    (pooled, fde)
                 } else {
-                    tokens.clone()
+                    // No pooling - encode directly from original tokens, no clone needed
+                    let fde = encoder.encode_document(&token_refs);
+                    (tokens.clone(), fde) // Clone only for return value storage
                 };
-
-                // Create refs from pooled tokens for encoding
-                let final_refs: Vec<&[f32]> =
-                    pooled_tokens.iter().map(std::vec::Vec::as_slice).collect();
-                let fde = encoder.encode_document(&final_refs);
                 (pooled_tokens, fde)
             })
             .collect();

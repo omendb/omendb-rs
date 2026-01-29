@@ -407,8 +407,8 @@ impl ParallelBuilder {
                 a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            // Return a clone (buffer stays for next use)
-            buffers.results_with_dist.clone()
+            // Take ownership - buffer will be cleared on next use anyway
+            std::mem::take(&mut buffers.results_with_dist)
         })
     }
 
@@ -614,6 +614,12 @@ impl ParallelBuilder {
     /// Lock-free distance from query to node (uses cached vectors)
     #[inline]
     fn distance_cmp(&self, query: &[f32], id: u32) -> f32 {
+        debug_assert!(
+            (id as usize) < self.vectors.len(),
+            "id {} out of bounds (len={})",
+            id,
+            self.vectors.len()
+        );
         let vec = &self.vectors[id as usize];
         self.distance_fn.distance_for_comparison(query, vec)
     }
@@ -621,6 +627,18 @@ impl ParallelBuilder {
     /// Lock-free distance between two nodes (uses cached vectors)
     #[inline]
     fn distance_between_cmp(&self, id_a: u32, id_b: u32) -> f32 {
+        debug_assert!(
+            (id_a as usize) < self.vectors.len(),
+            "id_a {} out of bounds (len={})",
+            id_a,
+            self.vectors.len()
+        );
+        debug_assert!(
+            (id_b as usize) < self.vectors.len(),
+            "id_b {} out of bounds (len={})",
+            id_b,
+            self.vectors.len()
+        );
         let vec_a = &self.vectors[id_a as usize];
         let vec_b = &self.vectors[id_b as usize];
         self.distance_fn.distance_for_comparison(vec_a, vec_b)

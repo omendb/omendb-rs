@@ -709,6 +709,15 @@ impl NodeStorage {
             return &[];
         }
         // Clamp to max_neighbors to prevent buffer overread on corrupt data
+        #[cfg(debug_assertions)]
+        if count > self.max_neighbors {
+            tracing::warn!(
+                node_id = id,
+                stored_count = count,
+                max_neighbors = self.max_neighbors,
+                "Neighbor count exceeds max_neighbors, clamping"
+            );
+        }
         let count = count.min(self.max_neighbors);
         let ptr = self.node_ptr(id);
         unsafe {

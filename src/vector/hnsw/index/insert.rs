@@ -502,8 +502,6 @@ impl HNSWIndex {
         }
 
         // Insert at levels 0..=level (iterate from top to bottom)
-        // Track candidates with distances to pass to next level
-        let mut nearest_with_distances: Vec<(u32, f32)> = Vec::new();
         for lc in (0..=level).rev() {
             // Find ef_construction nearest neighbors at this level
             // Use distance-aware search to avoid recomputing in heuristic
@@ -526,10 +524,7 @@ impl HNSWIndex {
                 .iter()
                 .map(|(id, _)| *id)
                 .collect();
-            nearest_with_distances = candidates_with_distances;
         }
-        // Silence unused variable warning - nearest_with_distances used in loop
-        let _ = nearest_with_distances;
 
         Ok(())
     }
