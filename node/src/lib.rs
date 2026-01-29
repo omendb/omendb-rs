@@ -91,11 +91,20 @@ fn parse_multi_vector(value: &serde_json::Value) -> Result<Option<MultiVectorCon
                     })? as u8)
                 };
             }
+            if let Some(pool_factor) = obj.get("poolFactor") {
+                config.pool_factor = if pool_factor.is_null() {
+                    None
+                } else {
+                    Some(pool_factor.as_u64().ok_or_else(|| {
+                        Error::new(Status::InvalidArg, "poolFactor must be a number or null")
+                    })? as u8)
+                };
+            }
             Ok(Some(config))
         }
         _ => Err(Error::new(
             Status::InvalidArg,
-            "multiVector must be true, false, or { repetitions?, partitionBits?, seed?, dProj? }",
+            "multiVector must be true, false, or { repetitions?, partitionBits?, seed?, dProj?, poolFactor? }",
         )),
     }
 }

@@ -230,12 +230,15 @@ impl VectorStore {
 
         // Reconstruct multi-vector state if config is present
         let (muvera_encoder, multivec_storage, distance_metric) =
-            if let Some((reps, bits, seed, token_dim, d_proj)) = snapshot.multivec_config {
+            if let Some((reps, bits, seed, token_dim, d_proj, pool_factor)) =
+                snapshot.multivec_config
+            {
                 let config = MultiVectorConfig {
                     repetitions: reps,
                     partition_bits: bits,
                     d_proj,
                     seed,
+                    pool_factor,
                 };
                 let encoder = MuveraEncoder::new(token_dim, config);
 
@@ -480,6 +483,7 @@ impl VectorStore {
                             config.seed,
                             enc.token_dimension(),
                             config.d_proj,
+                            config.pool_factor,
                         )),
                     )
                 } else {

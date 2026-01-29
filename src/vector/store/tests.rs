@@ -2854,6 +2854,7 @@ mod multivec_persistence_tests {
             partition_bits: 4,
             d_proj: Some(16),
             seed: 12345,
+            pool_factor: None,
         };
 
         // Create with custom config
@@ -2904,6 +2905,106 @@ mod multivec_persistence_tests {
             let store = VectorStore::open(&path).unwrap();
             assert!(!store.is_multi_vector());
             assert_eq!(store.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_pooling_reduces_stored_tokens() {
+        use crate::vector::muvera::MultiVectorConfig;
+
+        let token_dim = 64;
+
+        // Config with pool_factor=2: 50% token reduction
+        let config_with_pooling = MultiVectorConfig {
+            pool_factor: Some(2),
+            ..Default::default()
+        };
+
+        // Config without pooling
+        let config_no_pooling = MultiVectorConfig {
+            pool_factor: None,
+            ..Default::default()
+        };
+
+        // Create 100 tokens
+        let tokens: Vec<Vec<f32>> = (0..100)
+            .map(|i| {
+                (0..token_dim)
+                    .map(|j| ((i * 64 + j) as f32).sin())
+                    .collect()
+            })
+            .collect();
+
+        // Store with pooling
+        let mut store_pooled = VectorStore::multi_vector_with(token_dim, config_with_pooling);
+        store_pooled
+            .store("doc1", tokens.clone(), serde_json::json!({}))
+            .unwrap();
+
+        // Store without pooling
+        let mut store_no_pool = VectorStore::multi_vector_with(token_dim, config_no_pooling);
+        store_no_pool
+            .store("doc1", tokens.clone(), serde_json::json!({}))
+            .unwrap();
+
+        // Get stored tokens
+        let (pooled_tokens, _) = store_pooled.get_tokens("doc1").unwrap();
+        let (no_pool_tokens, _) = store_no_pool.get_tokens("doc1").unwrap();
+
+        // Pooled should have ~50 tokens (100 / 2)
+        assert_eq!(pooled_tokens.len(), 50, "pool_factor=2 should halve tokens");
+        assert_eq!(
+            no_pool_tokens.len(),
+            100,
+            "no pooling should keep all tokens"
+        );
+
+        // Verify dimensions are preserved
+        assert_eq!(pooled_tokens[0].len(), token_dim);
+    }
+
+    #[test]
+    fn test_pooling_persists_and_reloads() {
+        use crate::vector::muvera::MultiVectorConfig;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_pooling.omen");
+        let token_dim = 32;
+
+        let config = MultiVectorConfig {
+            pool_factor: Some(2),
+            ..Default::default()
+        };
+
+        // Create and persist with pooling
+        {
+            let mut store = VectorStore::multi_vector_with(token_dim, config);
+            store = store.persist(&path).unwrap();
+
+            let tokens: Vec<Vec<f32>> = (0..20)
+                .map(|i| {
+                    (0..token_dim)
+                        .map(|j| ((i * 32 + j) as f32).cos())
+                        .collect()
+                })
+                .collect();
+
+            store.store("doc1", tokens, serde_json::json!({})).unwrap();
+            store.flush().unwrap();
+
+            // Verify pooling worked
+            let (stored_tokens, _) = store.get_tokens("doc1").unwrap();
+            assert_eq!(stored_tokens.len(), 10); // 20 / 2 = 10
+        }
+
+        // Reopen and verify
+        {
+            let store = VectorStore::open(&path).unwrap();
+            assert!(store.is_multi_vector());
+
+            let (stored_tokens, _) = store.get_tokens("doc1").unwrap();
+            assert_eq!(stored_tokens.len(), 10);
+            assert_eq!(stored_tokens[0].len(), token_dim);
         }
     }
 }

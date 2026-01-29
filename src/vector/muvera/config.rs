@@ -66,6 +66,13 @@ pub struct MultiVectorConfig {
 
     /// Random seed for reproducible encoding. Default: 42.
     pub seed: u64,
+
+    /// Token pooling factor. Reduces tokens by this factor before encoding.
+    /// - None: No pooling (default)
+    /// - Some(2): 50% reduction, 100.6% quality (recommended)
+    /// - Some(3): 66% reduction, 99% quality
+    /// - Some(4): 75% reduction, 97% quality
+    pub pool_factor: Option<u8>,
 }
 
 impl Default for MultiVectorConfig {
@@ -75,6 +82,7 @@ impl Default for MultiVectorConfig {
             partition_bits: 4,
             d_proj: Some(16),
             seed: 42,
+            pool_factor: None,
         }
     }
 }
@@ -91,6 +99,19 @@ impl MultiVectorConfig {
             partition_bits: 3,
             d_proj: Some(16),
             seed: 42,
+            pool_factor: None,
+        }
+    }
+
+    /// Compact configuration - 50% token storage reduction with 100.6% quality.
+    ///
+    /// Uses hierarchical clustering to pool similar tokens before encoding.
+    /// Recommended for production when storage matters.
+    #[must_use]
+    pub fn compact() -> Self {
+        Self {
+            pool_factor: Some(2),
+            ..Default::default()
         }
     }
 
@@ -105,6 +126,7 @@ impl MultiVectorConfig {
             partition_bits: 4,
             d_proj: Some(32),
             seed: 42,
+            pool_factor: None,
         }
     }
 
@@ -146,6 +168,7 @@ mod tests {
         assert_eq!(config.repetitions, 8);
         assert_eq!(config.partition_bits, 4);
         assert_eq!(config.d_proj, Some(16));
+        assert_eq!(config.pool_factor, None);
         assert_eq!(config.partitions(), 16);
     }
 
@@ -195,11 +218,13 @@ mod tests {
             partition_bits: 5,
             d_proj: Some(24),
             seed: 123,
+            pool_factor: Some(2),
         };
         assert_eq!(config.repetitions, 20);
         assert_eq!(config.partitions(), 32);
         assert_eq!(config.d_proj, Some(24));
         assert_eq!(config.seed, 123);
+        assert_eq!(config.pool_factor, Some(2));
     }
 
     #[test]
@@ -208,6 +233,7 @@ mod tests {
         assert_eq!(config.repetitions, 5);
         assert_eq!(config.partition_bits, 3);
         assert_eq!(config.d_proj, Some(16));
+        assert_eq!(config.pool_factor, None);
         assert_eq!(config.partitions(), 8);
         // 5 * 8 * 16 = 640
         assert_eq!(config.encoded_dimension(128), 640);
@@ -219,8 +245,20 @@ mod tests {
         assert_eq!(config.repetitions, 10);
         assert_eq!(config.partition_bits, 4);
         assert_eq!(config.d_proj, Some(32));
+        assert_eq!(config.pool_factor, None);
         assert_eq!(config.partitions(), 16);
         // 10 * 16 * 32 = 5,120
         assert_eq!(config.encoded_dimension(128), 5120);
+    }
+
+    #[test]
+    fn test_compact_preset() {
+        let config = MultiVectorConfig::compact();
+        assert_eq!(config.repetitions, 8);
+        assert_eq!(config.partition_bits, 4);
+        assert_eq!(config.d_proj, Some(16));
+        assert_eq!(config.pool_factor, Some(2));
+        // Same as default encoded dimension
+        assert_eq!(config.encoded_dimension(128), 2048);
     }
 }

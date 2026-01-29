@@ -98,12 +98,16 @@ fn parse_multi_vector(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<MultiVec
             let val: Option<u8> = d_proj.extract()?;
             config.d_proj = val;
         }
+        if let Some(pool_factor) = dict.get_item("pool_factor")? {
+            let val: Option<u8> = pool_factor.extract()?;
+            config.pool_factor = val;
+        }
 
         return Ok(Some(config));
     }
 
     Err(PyValueError::new_err(
-        "multi_vector must be True, False, or dict with {repetitions, partition_bits, d_proj}",
+        "multi_vector must be True, False, or dict with {repetitions, partition_bits, d_proj, pool_factor}",
     ))
 }
 

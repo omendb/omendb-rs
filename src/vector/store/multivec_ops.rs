@@ -130,12 +130,27 @@ impl VectorStore {
             }
         }
 
-        // Encode all documents to FDEs in parallel
-        let fdes: Vec<Vec<f32>> = batch
+        // Get pool_factor from config
+        let pool_factor = encoder.config().pool_factor;
+
+        // Encode all documents to FDEs in parallel, applying pooling if configured
+        let pooled_and_fdes: Vec<(Vec<Vec<f32>>, Vec<f32>)> = batch
             .par_iter()
             .map(|(_, tokens, _)| {
                 let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
-                encoder.encode_document(&token_refs)
+
+                // Apply pooling if configured
+                let pooled_tokens: Vec<Vec<f32>> = if let Some(pf) = pool_factor {
+                    crate::vector::muvera::pool_tokens(&token_refs, pf)
+                } else {
+                    tokens.clone()
+                };
+
+                // Create refs from pooled tokens for encoding
+                let final_refs: Vec<&[f32]> =
+                    pooled_tokens.iter().map(std::vec::Vec::as_slice).collect();
+                let fde = encoder.encode_document(&final_refs);
+                (pooled_tokens, fde)
             })
             .collect();
 
@@ -151,22 +166,26 @@ impl VectorStore {
             }
         }
 
-        // Store tokens in set_batch's processing order (updates first, then inserts)
+        // Store pooled tokens in set_batch's processing order (updates first, then inserts)
         let multivec_storage = self
             .multivec_storage
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
 
         for &i in update_indices.iter().chain(insert_indices.iter()) {
-            let token_refs: Vec<&[f32]> = batch[i].1.iter().map(std::vec::Vec::as_slice).collect();
+            let token_refs: Vec<&[f32]> = pooled_and_fdes[i]
+                .0
+                .iter()
+                .map(std::vec::Vec::as_slice)
+                .collect();
             multivec_storage.add(&token_refs);
         }
 
         // Prepare batch for set_batch (maintains original batch order - set_batch reorders internally)
         let fde_batch: Vec<(String, Vector, JsonValue)> = batch
             .into_iter()
-            .zip(fdes)
-            .map(|((id, _, metadata), fde)| (id.to_string(), Vector::new(fde), metadata))
+            .zip(pooled_and_fdes)
+            .map(|((id, _, metadata), (_, fde))| (id.to_string(), Vector::new(fde), metadata))
             .collect();
 
         // Use existing set_batch for efficient HNSW insertion
@@ -481,18 +500,28 @@ impl VectorStore {
             }
         }
 
+        // Apply pooling if configured
+        let pooled_tokens: Vec<Vec<f32>> = if let Some(pf) = encoder.config().pool_factor {
+            crate::vector::muvera::pool_tokens(tokens, pf)
+        } else {
+            tokens.iter().map(|t| t.to_vec()).collect()
+        };
+
+        // Create refs from the pooled/original tokens
+        let final_refs: Vec<&[f32]> = pooled_tokens.iter().map(std::vec::Vec::as_slice).collect();
+
         // Encode tokens to FDE (document mode = AVERAGE)
-        let fde = encoder.encode_document(tokens);
+        let fde = encoder.encode_document(&final_refs);
 
         // Store FDE first (can fail without corrupting multivec_storage)
         let slot = self.set(id.to_string(), Vector::new(fde), metadata)?;
 
-        // Then add tokens - slot already committed
+        // Then add tokens - slot already committed (store pooled tokens for reranking)
         let multivec_storage = self
             .multivec_storage
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
-        let token_slot = multivec_storage.add(tokens);
+        let token_slot = multivec_storage.add(&final_refs);
 
         if slot as u32 != token_slot {
             anyhow::bail!(

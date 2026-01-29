@@ -367,6 +367,7 @@ mod tests {
                 partition_bits: 2,
                 d_proj: None,
                 seed: 42,
+                pool_factor: None,
             },
         );
         let token = [1.0, 0.0, 0.0, 0.0];
@@ -385,6 +386,7 @@ mod tests {
                 partition_bits: 2,
                 d_proj: None,
                 seed: 42,
+                pool_factor: None,
             },
         );
         let tokens: Vec<&[f32]> = vec![&[1.0, 0.0, 0.0, 0.0], &[0.0, 1.0, 0.0, 0.0]];
@@ -568,6 +570,7 @@ mod tests {
                 partition_bits: 4,
                 d_proj: Some(16),
                 seed: 42,
+                pool_factor: None,
             },
         );
 

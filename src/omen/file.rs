@@ -491,6 +491,9 @@ impl OmenFile {
 // Pure I/O API
 // ============================================================================
 
+/// MUVERA config tuple: (repetitions, partition_bits, seed, token_dim, d_proj, pool_factor)
+pub type MuveraConfigTuple = (u8, u8, u64, usize, Option<u8>, Option<u8>);
+
 /// Snapshot data loaded from OmenFile
 #[derive(Debug, Default)]
 pub struct OmenSnapshot {
@@ -512,8 +515,8 @@ pub struct OmenSnapshot {
     pub multivec_bytes: Option<Vec<u8>>,
     /// Multi-vector offset table (if persisted)
     pub multivec_offsets: Option<Vec<u8>>,
-    /// MUVERA config: (repetitions, partition_bits, seed, token_dim, d_proj)
-    pub multivec_config: Option<(u8, u8, u64, usize, Option<u8>)>,
+    /// MUVERA config
+    pub multivec_config: Option<MuveraConfigTuple>,
 }
 
 /// Options for checkpoint_from_snapshot
@@ -527,8 +530,8 @@ pub struct CheckpointOptions<'a> {
     pub multivec_bytes: Option<&'a [u8]>,
     /// Multi-vector offset table (from MultiVecStorage::offsets_to_bytes)
     pub multivec_offsets: Option<&'a [u8]>,
-    /// MUVERA config: (repetitions, partition_bits, seed, token_dim, d_proj)
-    pub multivec_config: Option<(u8, u8, u64, usize, Option<u8>)>,
+    /// MUVERA config
+    pub multivec_config: Option<MuveraConfigTuple>,
 }
 
 impl OmenFile {
@@ -665,11 +668,22 @@ impl OmenFile {
         let seed = self.manifest.config.get("muvera_seed").copied();
         let token_dim = self.manifest.config.get("muvera_token_dim").copied();
         let d_proj = self.manifest.config.get("muvera_d_proj").map(|&v| v as u8);
+        let pool_factor = self
+            .manifest
+            .config
+            .get("muvera_pool_factor")
+            .map(|&v| v as u8);
 
         if let (Some(reps), Some(bits), Some(seed), Some(token_dim)) = (reps, bits, seed, token_dim)
         {
-            snapshot.multivec_config =
-                Some((reps as u8, bits as u8, seed, token_dim as usize, d_proj));
+            snapshot.multivec_config = Some((
+                reps as u8,
+                bits as u8,
+                seed,
+                token_dim as usize,
+                d_proj,
+                pool_factor,
+            ));
         }
 
         Ok(snapshot)
@@ -835,7 +849,7 @@ impl OmenFile {
             .insert("metric".to_string(), self.header.metric as u64);
 
         // Store MUVERA config in manifest.config
-        if let Some((reps, bits, seed, token_dim, d_proj)) = options.multivec_config {
+        if let Some((reps, bits, seed, token_dim, d_proj, pool_factor)) = options.multivec_config {
             manifest
                 .config
                 .insert("muvera_repetitions".to_string(), reps as u64);
@@ -850,6 +864,11 @@ impl OmenFile {
                 manifest
                     .config
                     .insert("muvera_d_proj".to_string(), d as u64);
+            }
+            if let Some(pf) = pool_factor {
+                manifest
+                    .config
+                    .insert("muvera_pool_factor".to_string(), pf as u64);
             }
         }
 
