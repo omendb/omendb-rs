@@ -31,11 +31,11 @@ db.set([
 ]);
 
 // Search
-const results = db.search(new Float32Array(384).fill(0.15), { k: 5 });
+const results = db.search(new Float32Array(384).fill(0.15), 5);
 // [{ id: 'doc1', distance: 0.05, metadata: { title: 'Hello' } }, ...]
 
 // Batch search (async, parallel)
-const batchResults = await db.searchBatch(queries, { k: 10 });
+const batchResults = await db.searchBatch(queries, 10);
 
 // Close when done (releases file locks)
 db.close();
@@ -139,13 +139,13 @@ const deleted = db.deleteByFilter({
 
 ### Search
 
-#### `db.search(query, options)`
+#### `db.search(query, k, options?)`
 
 Search for k nearest neighbors (sync).
 
 ```typescript
-const results = db.search(queryVector, {
-  k: 10, // Number of results
+const results = db.search(queryVector, 10); // Basic
+const results = db.search(queryVector, 10, {
   ef: 200, // Search quality (higher = better recall)
   filter: { category: "news" }, // Metadata filter
   maxDistance: 0.5, // Distance threshold
@@ -153,12 +153,12 @@ const results = db.search(queryVector, {
 // [{ id, distance, metadata }, ...]
 ```
 
-#### `db.searchBatch(queries, options)`
+#### `db.searchBatch(queries, k, ef?)`
 
 Batch search with parallel execution (async).
 
 ```typescript
-const results = await db.searchBatch(queries, { k: 10, ef: 100 });
+const results = await db.searchBatch(queries, 10, 100);
 // [[{ id, distance, metadata }, ...], ...]
 ```
 
@@ -224,7 +224,7 @@ Get or create a named collection.
 ```typescript
 const users = db.collection("users");
 users.set([...]);
-users.search(query, { k: 5 });
+users.search(query, 5);
 ```
 
 #### `db.collections()`
@@ -373,11 +373,11 @@ const merged = db.mergeFrom(otherDb);
 
 **10K vectors, 128D, M=16, ef=100. Measured 2026-01-20 (Apple M3 Max):**
 
-| Metric     | Value     |
-| ---------- | --------- |
-| Search QPS | 11,542    |
+| Metric     | Value        |
+| ---------- | ------------ |
+| Search QPS | 11,542       |
 | Build      | 30,826 vec/s |
-| Recall@10  | 89.7%     |
+| Recall@10  | 89.7%        |
 
 ## License
 
