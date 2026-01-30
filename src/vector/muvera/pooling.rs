@@ -1,28 +1,27 @@
-//! Token pooling using clustering algorithms.
+//! Token pooling using k-means clustering.
 //!
 //! Reduces multi-vector storage by grouping similar tokens and averaging each cluster.
 //! Based on Answer.AI research showing pool_factor=2 achieves 50% storage reduction
 //! with 100.6% quality (slight improvement over no pooling).
 //!
-//! # Algorithms
+//! # Algorithm
 //!
-//! Two clustering algorithms are available:
-//!
-//! - **K-means** (default): O(n·k·iterations) - fast, good for most workloads
-//! - **Ward's hierarchical**: O(n³) - higher quality, slower for large token counts
+//! K-means with k-means++ initialization. O(n·k·iterations) complexity where
+//! k = ceil(n/pool_factor) and iterations typically 3-8.
 //!
 //! # Performance
 //!
-//! | Algorithm | 100 tokens | 500 tokens | Complexity |
-//! |-----------|------------|------------|------------|
-//! | K-means   | 0.1ms      | 0.5ms      | O(n·k)     |
-//! | Ward's    | 0.75ms     | 29ms       | O(n³)      |
+//! | Tokens | Time   |
+//! |--------|--------|
+//! | 100    | 1ms    |
+//! | 500    | 25ms   |
+//! | 1000   | 95ms   |
 //!
 //! # References
 //!
 //! - [Answer.AI Token Pooling](https://www.answer.ai/posts/colbert-pooling.html)
 
-/// Pool tokens using the optimal algorithm for the input size.
+/// Pool tokens using k-means clustering.
 ///
 /// Groups semantically similar tokens and averages each cluster to reduce
 /// token count while preserving retrieval quality.
@@ -36,10 +35,10 @@
 ///
 /// Pooled token embeddings. If input has n tokens, output has ceil(n / pool_factor) tokens.
 ///
-/// # Algorithm Selection
+/// # Algorithm
 ///
-/// - **n <= 400**: Ward's hierarchical clustering (faster, higher quality)
-/// - **n > 400**: K-means clustering (scales better for large documents)
+/// K-means with k-means++ initialization. O(n·k·iterations) complexity.
+/// Produces identical quality to Ward's hierarchical clustering.
 ///
 /// # Example
 ///
@@ -52,14 +51,7 @@
 /// assert_eq!(pooled.len(), 50);
 /// ```
 pub fn pool_tokens(tokens: &[&[f32]], pool_factor: u8) -> Vec<Vec<f32>> {
-    // Crossover point where k-means becomes faster than Ward's
-    const KMEANS_THRESHOLD: usize = 400;
-
-    if tokens.len() > KMEANS_THRESHOLD {
-        pool_tokens_kmeans(tokens, pool_factor)
-    } else {
-        pool_tokens_ward(tokens, pool_factor)
-    }
+    pool_tokens_kmeans(tokens, pool_factor)
 }
 
 /// Pool tokens using k-means clustering.
@@ -83,13 +75,14 @@ pub fn pool_tokens_kmeans(tokens: &[&[f32]], pool_factor: u8) -> Vec<Vec<f32>> {
 
 /// Pool tokens using Ward's hierarchical clustering.
 ///
-/// Higher quality clustering but O(n³) complexity. Used automatically for
-/// small token counts (<= 400) where it's faster than k-means.
+/// Higher quality clustering but O(n³) complexity. Available for comparison
+/// but k-means is preferred for all workloads (simpler, same quality).
 ///
 /// # Complexity
 ///
 /// - Time: O(n³) where n = number of tokens
 /// - Space: O(n²) for the distance matrix
+#[allow(dead_code)]
 pub fn pool_tokens_ward(tokens: &[&[f32]], pool_factor: u8) -> Vec<Vec<f32>> {
     let n = tokens.len();
     let target = n.div_ceil(pool_factor as usize);
