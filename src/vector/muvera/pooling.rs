@@ -119,6 +119,14 @@ fn condensed_index(n: usize, i: usize, j: usize) -> usize {
 /// Builds a dendrogram by iteratively merging clusters to minimize
 /// the increase in total within-cluster variance (Ward's criterion).
 ///
+/// # Complexity
+///
+/// - Time: O(n³) where n = number of tokens (n-1 merges, each scans O(n²) distance pairs)
+/// - Space: O(n²) for the distance matrix
+///
+/// This is acceptable for typical token counts (100-500 tokens per document).
+/// For documents with 1000+ tokens, consider increasing `pool_factor` to reduce n first.
+///
 /// # Arguments
 ///
 /// * `distances` - Condensed pairwise distance matrix
@@ -169,6 +177,11 @@ fn ward_clustering(distances: &[f32], n: usize, target_clusters: usize) -> Vec<u
                     min_j = j;
                 }
             }
+        }
+
+        // No valid pair found (all distances infinite, e.g., zero vectors)
+        if min_dist == f32::INFINITY {
+            break;
         }
 
         // Merge j into i

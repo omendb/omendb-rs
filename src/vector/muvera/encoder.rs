@@ -138,19 +138,26 @@ impl MuveraEncoder {
             for token in tokens {
                 debug_assert_eq!(token.len(), self.token_dim, "Token dimension mismatch");
 
-                // Project token if d_proj is set
-                let projected: Vec<f32> = match &self.projection {
-                    Some(proj) => proj.iter().map(|row| dot(token, row)).collect(),
-                    None => token.to_vec(),
+                // When projection is enabled, we allocate for projected values
+                // When disabled, we use the token slice directly (no allocation)
+                let partition = if let Some(proj) = &self.projection {
+                    // Project token, compute sketch, and accumulate projected values
+                    let projected: Vec<f32> = proj.iter().map(|row| dot(token, row)).collect();
+                    let sketch = matmul_vec(&projected, hyperplanes);
+                    let p = simhash_gray_code(&sketch);
+                    for (sum, val) in partition_sums[p].iter_mut().zip(projected.iter()) {
+                        *sum += val;
+                    }
+                    p
+                } else {
+                    // No projection: use token directly for sketch and accumulation
+                    let sketch = matmul_vec(token, hyperplanes);
+                    let p = simhash_gray_code(&sketch);
+                    for (sum, &val) in partition_sums[p].iter_mut().zip(token.iter()) {
+                        *sum += val;
+                    }
+                    p
                 };
-
-                let sketch = matmul_vec(&projected, hyperplanes);
-                let partition = simhash_gray_code(&sketch);
-
-                // Add projected token to partition
-                for (sum, &val) in partition_sums[partition].iter_mut().zip(projected.iter()) {
-                    *sum += val;
-                }
                 partition_counts[partition] += 1;
             }
 

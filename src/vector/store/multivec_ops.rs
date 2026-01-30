@@ -377,6 +377,7 @@ impl VectorStore {
         }
 
         // Step 3: Compute MaxSim scores in batch
+        // Note: cloning Vec<&[f32]> is cheap (just copying slice pointers)
         let doc_tokens_list: Vec<Vec<&[f32]>> = candidate_data
             .iter()
             .map(|(_, _, _, tokens)| tokens.clone())
