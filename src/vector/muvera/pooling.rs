@@ -58,6 +58,11 @@ pub fn pool_tokens(tokens: &[&[f32]], pool_factor: u8) -> Vec<Vec<f32>> {
 ///
 /// Fast O(n·k) algorithm suitable for most workloads.
 pub fn pool_tokens_kmeans(tokens: &[&[f32]], pool_factor: u8) -> Vec<Vec<f32>> {
+    // Guard against division by zero
+    if pool_factor == 0 {
+        return tokens.iter().map(|t| t.to_vec()).collect();
+    }
+
     let n = tokens.len();
     let k = n.div_ceil(pool_factor as usize);
 
@@ -157,8 +162,8 @@ fn kmeans_clustering(tokens: &[&[f32]], k: usize) -> Vec<usize> {
     let n = tokens.len();
     let dim = tokens[0].len();
 
-    // K-means++ initialization with L2 distance
-    let mut centroids = kmeans_pp_init_l2(tokens, k);
+    // Farthest-first initialization
+    let mut centroids = kmeans_farthest_first_init(tokens, k);
     let mut assignments = vec![0usize; n];
 
     // Precompute token squared norms for faster distance computation
@@ -173,7 +178,7 @@ fn kmeans_clustering(tokens: &[&[f32]], k: usize) -> Vec<usize> {
         centroid_norms_sq[i] = c.iter().map(|x| x * x).sum();
     }
 
-    const MAX_ITERATIONS: usize = 10; // Reduced from 20 - typically converges in 3-5
+    const MAX_ITERATIONS: usize = 10; // typically converges in 3-5
     let mut prev_changed = n; // Track convergence rate
 
     for iter in 0..MAX_ITERATIONS {
@@ -260,8 +265,8 @@ fn kmeans_clustering(tokens: &[&[f32]], k: usize) -> Vec<usize> {
     assignments
 }
 
-/// K-means++ initialization with L2 distance: select initial centroids spread apart.
-fn kmeans_pp_init_l2(tokens: &[&[f32]], k: usize) -> Vec<Vec<f32>> {
+/// Farthest-first initialization: select initial centroids spread apart.
+fn kmeans_farthest_first_init(tokens: &[&[f32]], k: usize) -> Vec<Vec<f32>> {
     let n = tokens.len();
 
     let mut centroids = Vec::with_capacity(k);
@@ -275,7 +280,7 @@ fn kmeans_pp_init_l2(tokens: &[&[f32]], k: usize) -> Vec<Vec<f32>> {
             let norm_sq: f32 = t.iter().map(|x| x * x).sum();
             (i, norm_sq)
         })
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map_or(0, |(i, _)| i);
 
     centroids.push(tokens[first].to_vec());
@@ -298,7 +303,7 @@ fn kmeans_pp_init_l2(tokens: &[&[f32]], k: usize) -> Vec<Vec<f32>> {
         let next = min_distances
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .map_or(0, |(i, _)| i);
 
         centroids.push(tokens[next].to_vec());
@@ -633,7 +638,7 @@ mod tests {
             kmeans_error / ward_error
         );
 
-        // K-means should be within 20% of Ward's quality
+        // K-means should be within 50% of Ward's quality
         // (Ward is theoretically optimal for minimizing variance)
         assert!(
             kmeans_error < ward_error * 1.5,
