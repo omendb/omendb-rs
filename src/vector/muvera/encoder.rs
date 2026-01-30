@@ -270,7 +270,10 @@ pub fn maxsim(query_tokens: &[&[f32]], doc_tokens: &[&[f32]]) -> f32 {
 ///
 /// MaxSim score for each document in the same order as `doc_tokens_list`.
 #[must_use]
-pub fn maxsim_batch(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]) -> Vec<f32> {
+pub fn maxsim_batch<'a, T: AsRef<[&'a [f32]]>>(
+    query_tokens: &[&[f32]],
+    doc_tokens_list: &[T],
+) -> Vec<f32> {
     if query_tokens.is_empty() {
         return vec![0.0; doc_tokens_list.len()];
     }
@@ -278,17 +281,20 @@ pub fn maxsim_batch(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]) ->
     doc_tokens_list
         .iter()
         .map(|doc_tokens| {
+            let doc_tokens = doc_tokens.as_ref();
             if doc_tokens.is_empty() {
                 return 0.0;
             }
             // For each query token, find max similarity across all doc tokens
             // This is the matrix multiply pattern: Q @ D.T, then row-wise max
-            let mut total = 0.0;
+            let mut total = 0.0f32;
             for q in query_tokens {
                 let max_sim = doc_tokens
                     .iter()
-                    .map(|d| dot(q, d))
-                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|d: &&[f32]| dot(q, d))
+                    .max_by(|a: &f32, b: &f32| {
+                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .unwrap_or(0.0);
                 total += max_sim;
             }
@@ -302,7 +308,10 @@ pub fn maxsim_batch(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]) ->
 /// Same as `maxsim_batch` but uses rayon for parallel computation.
 /// Use when reranking many candidates (>100).
 #[must_use]
-pub fn maxsim_batch_par(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]) -> Vec<f32> {
+pub fn maxsim_batch_par<'a, T: AsRef<[&'a [f32]]> + Sync>(
+    query_tokens: &[&[f32]],
+    doc_tokens_list: &[T],
+) -> Vec<f32> {
     use rayon::prelude::*;
 
     if query_tokens.is_empty() {
@@ -312,15 +321,18 @@ pub fn maxsim_batch_par(query_tokens: &[&[f32]], doc_tokens_list: &[Vec<&[f32]>]
     doc_tokens_list
         .par_iter()
         .map(|doc_tokens| {
+            let doc_tokens = doc_tokens.as_ref();
             if doc_tokens.is_empty() {
                 return 0.0;
             }
-            let mut total = 0.0;
+            let mut total = 0.0f32;
             for q in query_tokens {
                 let max_sim = doc_tokens
                     .iter()
-                    .map(|d| dot(q, d))
-                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|d: &&[f32]| dot(q, d))
+                    .max_by(|a: &f32, b: &f32| {
+                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .unwrap_or(0.0);
                 total += max_sim;
             }
@@ -730,7 +742,8 @@ mod tests {
         assert_eq!(scores, vec![0.0]);
 
         // Empty doc list -> empty scores
-        let scores = super::maxsim_batch(&query, &[]);
+        let empty_docs: &[Vec<&[f32]>] = &[];
+        let scores = super::maxsim_batch(&query, empty_docs);
         assert!(scores.is_empty());
     }
 

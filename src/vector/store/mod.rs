@@ -1167,10 +1167,20 @@ impl VectorStore {
     ///
     /// Returns the number of nodes reordered, or 0 if index is empty/not initialized.
     ///
-    /// Note: Currently a no-op for segment-based storage. Cache optimization
-    /// is not yet implemented for SegmentManager.
+    /// For segment-based storage, this merges all frozen segments into one
+    /// for better search locality. Returns the number of vectors in the merged segment.
     pub fn optimize(&mut self) -> Result<usize> {
-        // TODO: Implement cache optimization for SegmentManager
+        if let Some(ref mut segments) = self.segments {
+            // Flush mutable segment first
+            segments.flush().map_err(|e| anyhow::anyhow!("{e}"))?;
+            // Merge all frozen segments
+            if let Some(stats) = segments
+                .merge_all_frozen()
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            {
+                return Ok(stats.vectors_merged);
+            }
+        }
         Ok(0)
     }
 

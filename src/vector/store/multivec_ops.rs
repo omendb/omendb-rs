@@ -376,14 +376,13 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // Step 3: Compute MaxSim scores in batch
-        // Note: cloning Vec<&[f32]> is cheap (just copying slice pointers)
-        let doc_tokens_list: Vec<Vec<&[f32]>> = candidate_data
+        // Step 3: Compute MaxSim scores in batch (borrow tokens directly, no clone)
+        let doc_tokens_refs: Vec<&Vec<&[f32]>> = candidate_data
             .iter()
-            .map(|(_, _, _, tokens)| tokens.clone())
+            .map(|(_, _, _, tokens)| tokens)
             .collect();
 
-        let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_list);
+        let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
 
         // Step 4: Sort by MaxSim score (higher = better) and take top-k
         let mut scored: Vec<(usize, &str, &JsonValue, f32)> = candidate_data
