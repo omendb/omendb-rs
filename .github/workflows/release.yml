@@ -685,18 +685,56 @@ jobs:
         run: |
           for dir in npm/*/; do
             echo "Publishing $dir"
-            npm publish "$dir" --provenance --access public ${{ steps.npm-tag.outputs.tag }}
+            set +e
+            output=$(npm publish "$dir" --provenance --access public ${{ steps.npm-tag.outputs.tag }} 2>&1)
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "$output"
+            elif echo "$output" | grep -q "cannot publish over the previously published"; then
+              echo "$output"
+              echo "Already published; continuing."
+            else
+              echo "$output"
+              exit $status
+            fi
           done
         working-directory: node
 
       - name: Publish @omendb/omendb
         if: steps.npm-skip.outputs.skip != 'true'
-        run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
+        run: |
+          set +e
+          output=$(npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }} 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "$output"
+          elif echo "$output" | grep -q "cannot publish over the previously published"; then
+            echo "$output"
+            echo "Already published; continuing."
+          else
+            echo "$output"
+            exit $status
+          fi
         working-directory: node
 
       - name: Publish omendb wrapper
         if: steps.npm-skip.outputs.skip != 'true'
-        run: npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }}
+        run: |
+          set +e
+          output=$(npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }} 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "$output"
+          elif echo "$output" | grep -q "cannot publish over the previously published"; then
+            echo "$output"
+            echo "Already published; continuing."
+          else
+            echo "$output"
+            exit $status
+          fi
         working-directory: node/wrapper
 
   # ============================================================================
