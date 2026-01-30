@@ -649,6 +649,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Flaky under parallel load - run with --ignored for perf comparison
     fn bench_kmeans_vs_ward() {
         // Performance comparison at different scales
         for n in [100, 200, 300, 500, 800, 1000] {
