@@ -65,7 +65,7 @@ def main():
 
         # Test search performance
         print("\n3. Testing search performance...")
-        db.set_ef_search(100)
+        db.ef_search = 100
 
         num_queries = 100
         start = time.time()

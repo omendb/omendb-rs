@@ -183,12 +183,12 @@ class TestRecallWithEfSearch:
             ground_truth = brute_force_knn(query, vectors, k=10)
 
             # Test with low ef_search (must be >= k)
-            db.set_ef_search(50)
+            db.ef_search = 50
             low_ef_results = db.search(query, k=10)
             low_recall = compute_recall(low_ef_results, ground_truth)
 
             # Test with high ef_search
-            db.set_ef_search(200)
+            db.ef_search = 200
             high_ef_results = db.search(query, k=10)
             high_recall = compute_recall(high_ef_results, ground_truth)
 
@@ -207,7 +207,7 @@ class TestRecallWithEfSearch:
             vectors = generate_random_vectors(1000, 128)
             db.set(vectors)
 
-            db.set_ef_search(200)
+            db.ef_search = 200
 
             num_queries = 10
             total_recall = 0.0
@@ -336,7 +336,7 @@ class TestRecallLarge:
             vectors = generate_random_vectors(10000, 128, seed=12345)
             db.set(vectors)
 
-            db.set_ef_search(200)  # Higher ef for reliable recall on random data
+            db.ef_search = 200  # Higher ef for reliable recall on random data
 
             num_queries = 5
             total_recall = 0.0

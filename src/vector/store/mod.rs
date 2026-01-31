@@ -20,7 +20,10 @@ mod thread_safe;
 
 pub use crate::omen::Metric;
 pub use filter::MetadataFilter;
-pub use input::{BatchItem, QueryData, QueryInput, Rerank, SearchOptions, VectorData, VectorInput};
+pub use input::{
+    BatchItem, HybridParams, QueryData, QueryInput, Rerank, SearchOptions, SearchParams,
+    VectorData, VectorInput,
+};
 pub use options::VectorStoreOptions;
 pub use record_store::{Record, RecordStore};
 pub use thread_safe::ThreadSafeVectorStore;
@@ -1108,6 +1111,30 @@ impl VectorStore {
         Ok(results)
     }
 
+    /// Search with SearchParams/SearchOptions struct
+    ///
+    /// Unified method using builder pattern for search options.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let params = SearchParams::new().filter(my_filter).ef(200);
+    /// let results = store.search_with_params(&query, k, &params)?;
+    /// ```
+    pub fn search_with_params(
+        &self,
+        query: &Vector,
+        k: usize,
+        params: &SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        self.search_with_options_readonly(
+            query,
+            k,
+            params.filter.as_ref(),
+            params.ef,
+            params.max_distance,
+        )
+    }
+
     /// Parallel batch search for multiple queries
     #[must_use]
     pub fn search_batch(
@@ -1287,6 +1314,12 @@ impl VectorStore {
     pub fn get_ef_search(&self) -> Option<usize> {
         // Return stored value even if no index yet
         Some(self.hnsw_ef_search)
+    }
+
+    /// Get HNSW `ef_search` parameter (Rust API guidelines naming)
+    #[must_use]
+    pub fn ef_search(&self) -> usize {
+        self.hnsw_ef_search
     }
 
     /// Get index-to-ID mapping (for FFI bindings)

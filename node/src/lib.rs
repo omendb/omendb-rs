@@ -236,6 +236,8 @@ fn parse_filter(filter: &JsonValue) -> Result<MetadataFilter> {
 pub struct SearchResult {
     pub id: String,
     pub distance: f64,
+    /// Normalized similarity score (0-1, higher = more similar)
+    pub score: f64,
     /// Metadata as JSON (using serde-json feature)
     #[napi(ts_type = "Record<string, unknown>")]
     pub metadata: JsonValue,
@@ -287,8 +289,8 @@ pub struct SetItem {
     /// Optional metadata
     #[napi(ts_type = "Record<string, unknown> | undefined")]
     pub metadata: Option<JsonValue>,
-    /// Optional document text (stored in metadata.document)
-    pub document: Option<String>,
+    /// Optional text for hybrid search (auto-enables text search, stored in metadata.text)
+    pub text: Option<String>,
 }
 
 // ============================================================================
@@ -388,10 +390,13 @@ impl VectorDatabase {
     /// - Single-vector: items have `vector` field
     /// - Multi-vector: items have `vectors` field (array of vectors)
     ///
-    /// @param items - Array of {id, vector, metadata?} or {id, vectors, metadata?}
-    /// @returns Array of internal indices
+    /// When any item includes a `text` field, text search is automatically enabled.
+    /// This allows immediate use of searchHybrid() without calling enableTextSearch().
+    ///
+    /// @param items - Array of {id, vector, metadata?, text?} or {id, vectors, metadata?}
+    /// @returns Number of vectors inserted/updated
     #[napi]
-    pub fn set(&self, items: Vec<SetItem>) -> Result<Vec<u32>> {
+    pub fn set(&self, items: Vec<SetItem>) -> Result<u32> {
         if self.is_multi_vector {
             // Multi-vector store: use "vectors" field
             let mut inner = self.inner.write();
@@ -424,12 +429,23 @@ impl VectorDatabase {
                     .map_err(convert_error)?;
             }
 
-            Ok((0..count as u32).collect())
+            Ok(count as u32)
         } else {
-            // Single-vector store: use "vector" field
-            let batch: Vec<(String, Vector, JsonValue)> = items
-                .into_iter()
-                .map(|item| {
+            // Check if any items have text - auto-enable text search
+            let has_text = items.iter().any(|item| item.text.is_some());
+
+            let mut inner = self.inner.write();
+
+            // Auto-enable text search if any item has text
+            if has_text && !inner.store.has_text_search() {
+                inner.store.enable_text_search().map_err(convert_error)?;
+            }
+
+            // Process items - use different paths for text vs non-text
+            if has_text {
+                // Mixed path: some items may have text, process individually
+                let mut count = 0u32;
+                for item in items {
                     let vector = item.vector.ok_or_else(|| {
                         Error::new(
                             Status::InvalidArg,
@@ -442,27 +458,47 @@ impl VectorDatabase {
 
                     let mut metadata = item.metadata.unwrap_or(serde_json::json!({}));
 
-                    // Handle document field - requires metadata to be an object
-                    if let Some(doc) = item.document {
-                        match metadata.as_object_mut() {
-                            Some(obj) => {
-                                obj.insert("document".to_string(), serde_json::json!(doc));
-                            }
-                            None => {
-                                return Err(Error::from_reason(
-                                    "metadata must be an object when document field is provided",
-                                ));
-                            }
+                    if let Some(ref text) = item.text {
+                        // Store text in metadata.text for retrieval
+                        if let Some(obj) = metadata.as_object_mut() {
+                            obj.insert("text".to_string(), serde_json::json!(text));
                         }
+                        inner
+                            .store
+                            .set_with_text(item.id, Vector::new(vector.to_vec()), text, metadata)
+                            .map_err(convert_error)?;
+                    } else {
+                        inner
+                            .store
+                            .set(item.id, Vector::new(vector.to_vec()), metadata)
+                            .map_err(convert_error)?;
                     }
+                    count += 1;
+                }
+                Ok(count)
+            } else {
+                // Fast path: no text, use batch insert
+                let batch: Vec<(String, Vector, JsonValue)> = items
+                    .into_iter()
+                    .map(|item| {
+                        let vector = item.vector.ok_or_else(|| {
+                            Error::new(
+                                Status::InvalidArg,
+                                format!(
+                                    "Single-vector store requires 'vector' field for item '{}'. Got 'vectors' field - use multiVector: true when opening the database.",
+                                    item.id
+                                ),
+                            )
+                        })?;
 
-                    Ok((item.id, Vector::new(vector.to_vec()), metadata))
-                })
-                .collect::<Result<Vec<_>>>()?;
+                        let metadata = item.metadata.unwrap_or(serde_json::json!({}));
+                        Ok((item.id, Vector::new(vector.to_vec()), metadata))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
-            let mut inner = self.inner.write();
-            let result = inner.store.set_batch(batch).map_err(convert_error)?;
-            Ok(result.into_iter().map(|x| x as u32).collect())
+                let result = inner.store.set_batch(batch).map_err(convert_error)?;
+                Ok(result.len() as u32)
+            }
         }
     }
 
@@ -470,22 +506,42 @@ impl VectorDatabase {
     ///
     /// @param query - Query vector (number[] or Float32Array)
     /// @param k - Number of results to return
-    /// @param ef - Optional search width override
-    /// @param filter - Optional metadata filter (e.g., {category: "foo"} or {price: {$gt: 10}})
-    /// @param maxDistance - Optional max distance threshold (filter out distant results)
-    /// @returns Array of {id, distance, metadata}
+    /// @param options - Optional search options: {filter?, ef?, maxDistance?}
+    /// @returns Array of {id, distance, score, metadata}
+    ///
+    /// @example
+    /// ```javascript
+    /// // Basic search
+    /// db.search([1, 0, 0, 0], 10);
+    ///
+    /// // With options
+    /// db.search([1, 0, 0, 0], 10, { filter: { category: "A" }, ef: 200 });
+    /// db.search([1, 0, 0, 0], 10, { maxDistance: 0.5 });
+    /// ```
     #[napi]
     pub fn search(
         &self,
         query: Either<Vec<f64>, Float32Array>,
         k: u32,
-        ef: Option<u32>,
-        #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
-        max_distance: Option<f64>,
+        #[napi(ts_arg_type = "{ filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined")]
+        options: Option<JsonValue>,
     ) -> Result<Vec<SearchResult>> {
         if k == 0 {
             return Err(Error::from_reason("k must be greater than 0"));
         }
+
+        // Parse options object
+        let (filter, ef, max_distance) = if let Some(ref opts) = options {
+            let filter = opts.get("filter").cloned();
+            let ef = opts
+                .get("ef")
+                .and_then(|v| v.as_u64().map(|n| n as u32));
+            let max_distance = opts.get("maxDistance").and_then(|v| v.as_f64());
+            (filter, ef, max_distance)
+        } else {
+            (None, None, None)
+        };
+
         if let Some(ef_val) = ef {
             if ef_val < k {
                 return Err(Error::from_reason(format!(
@@ -496,7 +552,7 @@ impl VectorDatabase {
         }
         if let Some(max_dist) = max_distance {
             if max_dist < 0.0 {
-                return Err(Error::from_reason("max_distance must be non-negative"));
+                return Err(Error::from_reason("maxDistance must be non-negative"));
             }
         }
 
@@ -529,10 +585,14 @@ impl VectorDatabase {
 
         Ok(results
             .into_iter()
-            .map(|r| SearchResult {
-                id: r.id,
-                distance: r.distance as f64,
-                metadata: r.metadata,
+            .map(|r| {
+                let distance = r.distance as f64;
+                SearchResult {
+                    id: r.id,
+                    distance,
+                    score: 1.0 / (1.0 + distance), // L2 normalization to 0-1
+                    metadata: r.metadata,
+                }
             })
             .collect())
     }
@@ -583,10 +643,14 @@ impl VectorDatabase {
 
         Ok(results
             .into_iter()
-            .map(|r| SearchResult {
-                id: r.id,
-                distance: r.distance as f64,
-                metadata: r.metadata,
+            .map(|r| {
+                let distance = r.distance as f64;
+                SearchResult {
+                    id: r.id,
+                    distance,
+                    score: 1.0 / (1.0 + distance),
+                    metadata: r.metadata,
+                }
             })
             .collect())
     }
@@ -646,10 +710,14 @@ impl VectorDatabase {
                 output.push(
                     results
                         .into_iter()
-                        .map(|r| SearchResult {
-                            id: r.id,
-                            distance: r.distance as f64,
-                            metadata: r.metadata,
+                        .map(|r| {
+                            let distance = r.distance as f64;
+                            SearchResult {
+                                id: r.id,
+                                distance,
+                                score: 1.0 / (1.0 + distance),
+                                metadata: r.metadata,
+                            }
                         })
                         .collect(),
                 );
@@ -677,11 +745,27 @@ impl VectorDatabase {
 
     /// Delete vectors by ID.
     ///
+    /// Accepts either a single ID string or an array of IDs.
+    ///
+    /// @param ids - Single ID string or array of IDs to delete
     /// @returns Number of vectors deleted
+    ///
+    /// @example
+    /// ```javascript
+    /// // Delete single
+    /// db.delete("doc1");
+    ///
+    /// // Delete multiple
+    /// db.delete(["doc1", "doc2", "doc3"]);
+    /// ```
     #[napi]
-    pub fn delete(&self, ids: Vec<String>) -> Result<u32> {
+    pub fn delete(&self, ids: Either<String, Vec<String>>) -> Result<u32> {
+        let id_vec = match ids {
+            Either::A(single) => vec![single],
+            Either::B(multiple) => multiple,
+        };
         let mut inner = self.inner.write();
-        let result = inner.store.delete_batch(&ids).map_err(convert_error)?;
+        let result = inner.store.delete_batch(&id_vec).map_err(convert_error)?;
         Ok(result as u32)
     }
 
@@ -754,20 +838,95 @@ impl VectorDatabase {
         }
     }
 
-    /// Update a vector's data and/or metadata.
+    /// Update a vector's data, metadata, and/or text.
+    ///
+    /// @param id - Vector ID to update
+    /// @param options - Update options: {vector?, metadata?, text?}
+    ///
+    /// @example
+    /// ```javascript
+    /// // Update vector only
+    /// db.update("doc1", { vector: [1, 0, 0, 0] });
+    ///
+    /// // Update metadata only
+    /// db.update("doc1", { metadata: { status: "active" } });
+    ///
+    /// // Update text (re-indexed for BM25 search)
+    /// db.update("doc1", { text: "Updated content for search" });
+    ///
+    /// // Update multiple fields
+    /// db.update("doc1", { vector: [...], metadata: {...}, text: "..." });
+    /// ```
     #[napi]
     pub fn update(
         &self,
         id: String,
-        vector: Either<Vec<f64>, Float32Array>,
-        #[napi(ts_arg_type = "Record<string, unknown> | undefined")] metadata: Option<JsonValue>,
+        #[napi(ts_arg_type = "{ vector?: number[] | Float32Array; metadata?: Record<string, unknown>; text?: string }")]
+        options: JsonValue,
     ) -> Result<()> {
-        let vec = Some(Vector::new(extract_query_vector(vector)));
+        let vector_val = options.get("vector");
+        let metadata_val = options.get("metadata").cloned();
+        let text_val = options.get("text").and_then(|v| v.as_str()).map(String::from);
+
+        if vector_val.is_none() && metadata_val.is_none() && text_val.is_none() {
+            return Err(Error::from_reason(
+                "update() requires at least one of vector, metadata, or text",
+            ));
+        }
+
+        // Parse vector if provided
+        let vector = if let Some(v) = vector_val {
+            if let Some(arr) = v.as_array() {
+                let floats: Vec<f32> = arr
+                    .iter()
+                    .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+                    .collect();
+                Some(Vector::new(floats))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut inner = self.inner.write();
-        inner
-            .store
-            .update(&id, vec, metadata)
-            .map_err(convert_error)?;
+
+        // Handle text update - requires get, modify, set
+        if let Some(ref new_text) = text_val {
+            // Get existing data
+            let (existing_vec, existing_meta) = inner.store.get(&id).ok_or_else(|| {
+                Error::from_reason(format!("Vector with ID '{}' not found", id))
+            })?;
+
+            // Determine final vector
+            let final_vec = vector.unwrap_or(existing_vec);
+
+            // Determine final metadata, incorporating new text
+            let mut final_meta = metadata_val.unwrap_or(existing_meta);
+            if let Some(obj) = final_meta.as_object_mut() {
+                obj.insert("text".to_string(), serde_json::json!(new_text));
+            }
+
+            // Re-index text and update vector/metadata
+            if inner.store.has_text_search() {
+                inner
+                    .store
+                    .set_with_text(id, final_vec, new_text, final_meta)
+                    .map_err(convert_error)?;
+            } else {
+                inner
+                    .store
+                    .set(id, final_vec, final_meta)
+                    .map_err(convert_error)?;
+            }
+        } else {
+            // No text update - use standard update path
+            inner
+                .store
+                .update(&id, vector, metadata_val)
+                .map_err(convert_error)?;
+        }
+
         Ok(())
     }
 
@@ -1003,56 +1162,13 @@ impl VectorDatabase {
     // Hybrid Search Methods
     // =========================================================================
 
-    /// Enable text search for hybrid (vector + text) search.
-    ///
-    /// Must be called before using setWithText() or hybridSearch().
-    #[napi]
-    pub fn enable_text_search(&self) -> Result<()> {
-        let mut inner = self.inner.write();
-        inner.store.enable_text_search().map_err(convert_error)
-    }
-
     /// Check if text search is enabled.
+    ///
+    /// Text search is automatically enabled when using set() with text field.
     #[napi(getter)]
     pub fn has_text_search(&self) -> bool {
         let inner = self.inner.read();
         inner.store.has_text_search()
-    }
-
-    /// Set vectors with associated text for hybrid search.
-    ///
-    /// @param items - Array of {id, vector, text, metadata?}
-    /// @returns Array of internal indices
-    #[napi]
-    pub fn set_with_text(&self, items: Vec<VectorItemWithText>) -> Result<Vec<u32>> {
-        let mut inner = self.inner.write();
-
-        if !inner.store.has_text_search() {
-            return Err(Error::new(
-                Status::GenericFailure,
-                "Text search not enabled. Call enableTextSearch() first.",
-            ));
-        }
-
-        let mut results = Vec::with_capacity(items.len());
-
-        for item in items {
-            let metadata = item.metadata.unwrap_or(serde_json::json!({}));
-
-            let index = inner
-                .store
-                .set_with_text(
-                    item.id,
-                    Vector::new(item.vector.to_vec()),
-                    &item.text,
-                    metadata,
-                )
-                .map_err(convert_error)?;
-
-            results.push(index as u32);
-        }
-
-        Ok(results)
     }
 
     /// Search using text only (BM25 scoring).
@@ -1060,8 +1176,8 @@ impl VectorDatabase {
     /// @param query - Text query
     /// @param k - Number of results
     /// @returns Array of {id, score, metadata}
-    #[napi]
-    pub fn text_search(&self, query: String, k: u32) -> Result<Vec<TextSearchResult>> {
+    #[napi(js_name = "searchText")]
+    pub fn search_text(&self, query: String, k: u32) -> Result<Vec<TextSearchResult>> {
         if k == 0 {
             return Err(Error::from_reason("k must be greater than 0"));
         }
@@ -1097,25 +1213,46 @@ impl VectorDatabase {
     /// @param queryVector - Query embedding
     /// @param queryText - Text query for BM25
     /// @param k - Number of results
-    /// @param filter - Optional metadata filter
-    /// @param alpha - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
-    /// @param rrfK - RRF constant (default=60, higher reduces rank influence)
-    /// @param subscores - Return separate keyword_score and semantic_score (default: false)
-    /// @returns Array of {id, score, metadata, keyword_score?, semantic_score?}
-    #[napi]
-    pub fn hybrid_search(
+    /// @param options - Optional: {filter?, alpha?, rrfK?, subscores?}
+    /// @returns Array of {id, score, metadata, keywordScore?, semanticScore?}
+    ///
+    /// @example
+    /// ```javascript
+    /// // Basic hybrid search
+    /// db.searchHybrid([1, 0, 0, 0], "machine learning", 10);
+    ///
+    /// // With options
+    /// db.searchHybrid([1, 0, 0, 0], "query", 10, {
+    ///   filter: { type: "ml" },
+    ///   alpha: 0.7,
+    ///   rrfK: 60,
+    ///   subscores: true
+    /// });
+    /// ```
+    #[napi(js_name = "searchHybrid")]
+    pub fn search_hybrid(
         &self,
         query_vector: Either<Vec<f64>, Float32Array>,
         query_text: String,
         k: u32,
-        #[napi(ts_arg_type = "Record<string, unknown> | undefined")] filter: Option<JsonValue>,
-        alpha: Option<f64>,
-        rrf_k: Option<u32>,
-        subscores: Option<bool>,
+        #[napi(ts_arg_type = "{ filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined")]
+        options: Option<JsonValue>,
     ) -> Result<Vec<HybridSearchResult>> {
         if k == 0 {
             return Err(Error::from_reason("k must be greater than 0"));
         }
+
+        // Parse options object
+        let (filter, alpha, rrf_k, subscores) = if let Some(ref opts) = options {
+            let filter = opts.get("filter").cloned();
+            let alpha = opts.get("alpha").and_then(|v| v.as_f64());
+            let rrf_k = opts.get("rrfK").and_then(|v| v.as_u64().map(|n| n as u32));
+            let subscores = opts.get("subscores").and_then(|v| v.as_bool());
+            (filter, alpha, rrf_k, subscores)
+        } else {
+            (None, None, None, None)
+        };
+
         if let Some(a) = alpha {
             if !(0.0..=1.0).contains(&a) {
                 return Err(Error::from_reason(format!(
@@ -1126,7 +1263,7 @@ impl VectorDatabase {
         }
         if let Some(rrf) = rrf_k {
             if rrf == 0 {
-                return Err(Error::from_reason("rrf_k must be greater than 0"));
+                return Err(Error::from_reason("rrfK must be greater than 0"));
             }
         }
 
@@ -1339,6 +1476,41 @@ impl VectorDatabase {
     pub fn exists(&self, id: String) -> bool {
         let inner = self.inner.read();
         inner.store.contains(&id)
+    }
+
+    /// Alias for exists() - check if an ID exists in the database.
+    ///
+    /// @param id - Vector ID to check
+    /// @returns true if ID exists and is not deleted
+    #[napi]
+    pub fn has(&self, id: String) -> bool {
+        self.exists(id)
+    }
+
+    /// Search for the single nearest neighbor.
+    ///
+    /// Convenience method that returns the top result or null if no matches.
+    ///
+    /// @param query - Query vector (number[] or Float32Array)
+    /// @param options - Optional search options: {filter?, ef?, maxDistance?}
+    /// @returns Single result or null
+    ///
+    /// @example
+    /// ```javascript
+    /// const nearest = db.searchOne([1, 0, 0, 0]);
+    /// if (nearest) {
+    ///   console.log(`Found: ${nearest.id} at distance ${nearest.distance}`);
+    /// }
+    /// ```
+    #[napi(js_name = "searchOne")]
+    pub fn search_one(
+        &self,
+        query: Either<Vec<f64>, Float32Array>,
+        #[napi(ts_arg_type = "{ filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined")]
+        options: Option<JsonValue>,
+    ) -> Result<Option<SearchResult>> {
+        let results = self.search(query, 1, options)?;
+        Ok(results.into_iter().next())
     }
 
     /// Get multiple vectors by ID.

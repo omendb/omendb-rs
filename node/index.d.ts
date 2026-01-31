@@ -8,21 +8,32 @@ export declare class VectorDatabase {
    * - Single-vector: items have `vector` field
    * - Multi-vector: items have `vectors` field (array of vectors)
    *
-   * @param items - Array of {id, vector, metadata?} or {id, vectors, metadata?}
-   * @returns Array of internal indices
+   * When any item includes a `text` field, text search is automatically enabled.
+   * This allows immediate use of searchHybrid() without calling enableTextSearch().
+   *
+   * @param items - Array of {id, vector, metadata?, text?} or {id, vectors, metadata?}
+   * @returns Number of vectors inserted/updated
    */
-  set(items: Array<SetItem>): Array<number>
+  set(items: Array<SetItem>): number
   /**
    * Search for k nearest neighbors.
    *
    * @param query - Query vector (number[] or Float32Array)
    * @param k - Number of results to return
-   * @param ef - Optional search width override
-   * @param filter - Optional metadata filter (e.g., {category: "foo"} or {price: {$gt: 10}})
-   * @param maxDistance - Optional max distance threshold (filter out distant results)
-   * @returns Array of {id, distance, metadata}
+   * @param options - Optional search options: {filter?, ef?, maxDistance?}
+   * @returns Array of {id, distance, score, metadata}
+   *
+   * @example
+   * ```javascript
+   * // Basic search
+   * db.search([1, 0, 0, 0], 10);
+   *
+   * // With options
+   * db.search([1, 0, 0, 0], 10, { filter: { category: "A" }, ef: 200 });
+   * db.search([1, 0, 0, 0], 10, { maxDistance: 0.5 });
+   * ```
    */
-  search(query: Array<number> | Float32Array, k: number, ef?: number | undefined | null, filter?: Record<string, unknown> | undefined, maxDistance?: number | undefined | null): Array<SearchResult>
+  search(query: Array<number> | Float32Array, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): Array<SearchResult>
   /**
    * Search multi-vector store with query tokens.
    *
@@ -47,9 +58,21 @@ export declare class VectorDatabase {
   /**
    * Delete vectors by ID.
    *
+   * Accepts either a single ID string or an array of IDs.
+   *
+   * @param ids - Single ID string or array of IDs to delete
    * @returns Number of vectors deleted
+   *
+   * @example
+   * ```javascript
+   * // Delete single
+   * db.delete("doc1");
+   *
+   * // Delete multiple
+   * db.delete(["doc1", "doc2", "doc3"]);
+   * ```
    */
-  delete(ids: Array<string>): number
+  delete(ids: string | Array<string>): number
   /**
    * Delete vectors matching a metadata filter.
    *
@@ -94,8 +117,28 @@ export declare class VectorDatabase {
    * ```
    */
   count(filter?: Record<string, unknown> | undefined): number
-  /** Update a vector's data and/or metadata. */
-  update(id: string, vector: Array<number> | Float32Array, metadata?: Record<string, unknown> | undefined): void
+  /**
+   * Update a vector's data, metadata, and/or text.
+   *
+   * @param id - Vector ID to update
+   * @param options - Update options: {vector?, metadata?, text?}
+   *
+   * @example
+   * ```javascript
+   * // Update vector only
+   * db.update("doc1", { vector: [1, 0, 0, 0] });
+   *
+   * // Update metadata only
+   * db.update("doc1", { metadata: { status: "active" } });
+   *
+   * // Update text (re-indexed for BM25 search)
+   * db.update("doc1", { text: "Updated content for search" });
+   *
+   * // Update multiple fields
+   * db.update("doc1", { vector: [...], metadata: {...}, text: "..." });
+   * ```
+   */
+  update(id: string, options: { vector?: number[] | Float32Array; metadata?: Record<string, unknown>; text?: string }): void
   /** Get number of vectors in database. */
   get length(): number
   /** Get vector dimensions of this database. */
@@ -122,20 +165,11 @@ export declare class VectorDatabase {
   /** Delete a collection. */
   deleteCollection(name: string): void
   /**
-   * Enable text search for hybrid (vector + text) search.
+   * Check if text search is enabled.
    *
-   * Must be called before using setWithText() or hybridSearch().
+   * Text search is automatically enabled when using set() with text field.
    */
-  enableTextSearch(): void
-  /** Check if text search is enabled. */
   get hasTextSearch(): boolean
-  /**
-   * Set vectors with associated text for hybrid search.
-   *
-   * @param items - Array of {id, vector, text, metadata?}
-   * @returns Array of internal indices
-   */
-  setWithText(items: Array<VectorItemWithText>): Array<number>
   /**
    * Search using text only (BM25 scoring).
    *
@@ -143,7 +177,7 @@ export declare class VectorDatabase {
    * @param k - Number of results
    * @returns Array of {id, score, metadata}
    */
-  textSearch(query: string, k: number): Array<TextSearchResult>
+  searchText(query: string, k: number): Array<TextSearchResult>
   /**
    * Hybrid search combining vector similarity and text relevance.
    *
@@ -152,13 +186,24 @@ export declare class VectorDatabase {
    * @param queryVector - Query embedding
    * @param queryText - Text query for BM25
    * @param k - Number of results
-   * @param filter - Optional metadata filter
-   * @param alpha - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
-   * @param rrfK - RRF constant (default=60, higher reduces rank influence)
-   * @param subscores - Return separate keyword_score and semantic_score (default: false)
-   * @returns Array of {id, score, metadata, keyword_score?, semantic_score?}
+   * @param options - Optional: {filter?, alpha?, rrfK?, subscores?}
+   * @returns Array of {id, score, metadata, keywordScore?, semanticScore?}
+   *
+   * @example
+   * ```javascript
+   * // Basic hybrid search
+   * db.searchHybrid([1, 0, 0, 0], "machine learning", 10);
+   *
+   * // With options
+   * db.searchHybrid([1, 0, 0, 0], "query", 10, {
+   *   filter: { type: "ml" },
+   *   alpha: 0.7,
+   *   rrfK: 60,
+   *   subscores: true
+   * });
+   * ```
    */
-  hybridSearch(queryVector: Array<number> | Float32Array, queryText: string, k: number, filter?: Record<string, unknown> | undefined, alpha?: number | undefined | null, rrfK?: number | undefined | null, subscores?: boolean | undefined | null): Array<HybridSearchResult>
+  searchHybrid(queryVector: Array<number> | Float32Array, queryText: string, k: number, options?: { filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined): Array<HybridSearchResult>
   /**
    * Flush pending changes to disk.
    *
@@ -226,6 +271,31 @@ export declare class VectorDatabase {
    * @returns true if ID exists and is not deleted
    */
   exists(id: string): boolean
+  /**
+   * Alias for exists() - check if an ID exists in the database.
+   *
+   * @param id - Vector ID to check
+   * @returns true if ID exists and is not deleted
+   */
+  has(id: string): boolean
+  /**
+   * Search for the single nearest neighbor.
+   *
+   * Convenience method that returns the top result or null if no matches.
+   *
+   * @param query - Query vector (number[] or Float32Array)
+   * @param options - Optional search options: {filter?, ef?, maxDistance?}
+   * @returns Single result or null
+   *
+   * @example
+   * ```javascript
+   * const nearest = db.searchOne([1, 0, 0, 0]);
+   * if (nearest) {
+   *   console.log(`Found: ${nearest.id} at distance ${nearest.distance}`);
+   * }
+   * ```
+   */
+  searchOne(query: Array<number> | Float32Array, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): SearchResult | null
   /**
    * Get multiple vectors by ID.
    *
@@ -351,6 +421,8 @@ export interface OpenOptions {
 export interface SearchResult {
   id: string
   distance: number
+  /** Normalized similarity score (0-1, higher = more similar) */
+  score: number
   /** Metadata as JSON (using serde-json feature) */
   metadata: Record<string, unknown>
 }
@@ -363,8 +435,8 @@ export interface SetItem {
   vectors?: Float32Array[] | undefined
   /** Optional metadata */
   metadata?: Record<string, unknown> | undefined
-  /** Optional document text (stored in metadata.document) */
-  document?: string
+  /** Optional text for hybrid search (auto-enables text search, stored in metadata.text) */
+  text?: string
 }
 
 export interface StatsResult {

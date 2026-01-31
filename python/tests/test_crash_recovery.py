@@ -189,7 +189,7 @@ class TestCrashRecoveryWithExistingData:
         assert len(db2) >= 50, f"Lost initial data! Only {len(db2)} vectors"
 
         # Search for initial vectors - HNSW recall may not be 100% with mixed distributions
-        db2.set_ef_search(200)  # Increase ef_search for better recall
+        db2.ef_search = 200  # Increase ef_search for better recall
         results = db2.search([0.1] * dims, k=100)
         initial_ids = {r["id"] for r in results if r["id"].startswith("initial_")}
         # At least 90% of initial vectors should be found
@@ -300,7 +300,7 @@ class TestCrashRecoveryEdgeCases:
 
         # Database should be openable and functional (not corrupt)
         # With large mixed data, HNSW recall for specific subset may be lower
-        db2.set_ef_search(200)  # Increase ef_search
+        db2.ef_search = 200  # Increase ef_search
         results = db2.search([0.1] * dims, k=100)
         safe_ids = {r["id"] for r in results if r["id"].startswith("safe_")}
         # HNSW recall with identical vectors (degenerate case) is limited

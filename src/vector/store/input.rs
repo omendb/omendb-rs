@@ -33,7 +33,16 @@ pub struct SearchOptions {
     pub rerank: Rerank,
 }
 
+/// Alias for `SearchOptions` - parameters for vector search.
+pub type SearchParams = SearchOptions;
+
 impl SearchOptions {
+    /// Create a new SearchOptions with defaults.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Create options with filter only.
     #[must_use]
     pub fn with_filter(filter: MetadataFilter) -> Self {
@@ -84,6 +93,76 @@ impl SearchOptions {
     #[must_use]
     pub fn no_rerank(mut self) -> Self {
         self.rerank = Rerank::Off;
+        self
+    }
+}
+
+/// Parameters for hybrid search (vector + text).
+#[derive(Debug, Clone)]
+pub struct HybridParams {
+    /// Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5).
+    pub alpha: f32,
+    /// RRF constant (default=60, higher reduces rank influence).
+    pub rrf_k: usize,
+    /// Optional metadata filter.
+    pub filter: Option<MetadataFilter>,
+    /// Return separate keyword_score and semantic_score.
+    pub subscores: bool,
+    /// HNSW ef parameter override.
+    pub ef: Option<usize>,
+}
+
+impl Default for HybridParams {
+    fn default() -> Self {
+        Self {
+            alpha: 0.5,
+            rrf_k: 60,
+            filter: None,
+            subscores: false,
+            ef: None,
+        }
+    }
+}
+
+impl HybridParams {
+    /// Create with defaults.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builder: set alpha.
+    #[must_use]
+    pub fn alpha(mut self, a: f32) -> Self {
+        self.alpha = a;
+        self
+    }
+
+    /// Builder: set rrf_k.
+    #[must_use]
+    pub fn rrf_k(mut self, k: usize) -> Self {
+        self.rrf_k = k;
+        self
+    }
+
+    /// Builder: set filter.
+    #[must_use]
+    pub fn filter(mut self, f: MetadataFilter) -> Self {
+        self.filter = Some(f);
+        self
+    }
+
+    /// Builder: enable subscores.
+    #[must_use]
+    pub fn subscores(mut self) -> Self {
+        self.subscores = true;
+        self
+    }
+
+    /// Builder: set ef.
+    #[must_use]
+    pub fn ef(mut self, ef: usize) -> Self {
+        self.ef = Some(ef);
         self
     }
 }

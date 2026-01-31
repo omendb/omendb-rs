@@ -865,15 +865,30 @@ impl VectorDatabase {
 
     /// Delete vectors by ID.
     ///
+    /// Accepts either a single ID string or a list of IDs.
+    ///
     /// Examples:
-    ///     >>> db.delete(["doc1", "doc2"])
+    ///     >>> db.delete("doc1")  # Single ID
+    ///     1
+    ///
+    ///     >>> db.delete(["doc1", "doc2"])  # Multiple IDs
     ///     2
     ///
     ///     >>> db.delete(["nonexistent"])  # Silently skips missing IDs
     ///     0
-    fn delete(&self, ids: Vec<String>) -> PyResult<usize> {
+    fn delete(&self, ids: &Bound<'_, PyAny>) -> PyResult<usize> {
+        // Try single string first
+        if let Ok(single_id) = ids.extract::<String>() {
+            let mut inner = self.inner.write();
+            return inner
+                .store
+                .delete_batch(&[single_id])
+                .map_err(convert_error);
+        }
+        // Fall back to list of strings
+        let id_vec: Vec<String> = ids.extract()?;
         let mut inner = self.inner.write();
-        inner.store.delete_batch(&ids).map_err(convert_error)
+        inner.store.delete_batch(&id_vec).map_err(convert_error)
     }
 
     /// Delete vectors matching a metadata filter.
@@ -1170,36 +1185,24 @@ impl VectorDatabase {
         Ok(false) // Don't suppress exceptions
     }
 
-    /// Get current ef_search value.
+    /// ef_search property - controls the search quality/speed tradeoff.
     ///
-    /// ef_search controls the search quality/speed tradeoff. Higher values
-    /// give better recall but slower search.
-    ///
-    /// Returns:
-    ///     int: Current ef_search value (default: 100)
+    /// Higher values give better recall but slower search.
     ///
     /// Examples:
-    ///     >>> db.get_ef_search()
-    ///     100
-    fn get_ef_search(&self) -> usize {
+    ///     >>> db.ef_search = 200  # High quality
+    ///     >>> print(db.ef_search)
+    ///     200
+    #[getter]
+    fn ef_search(&self) -> usize {
         let inner = self.inner.read();
-        inner.store.get_ef_search().unwrap_or(100)
+        inner.store.ef_search()
     }
 
-    /// Set ef_search value for search quality/speed tradeoff.
-    ///
-    /// Higher ef_search = better recall, slower search.
-    /// Lower ef_search = faster search, may miss some neighbors.
-    ///
-    /// Args:
-    ///     ef_search (int): New ef_search value (must be >= k in searches)
-    ///
-    /// Examples:
-    ///     >>> db.set_ef_search(200)  # High quality
-    ///     >>> db.set_ef_search(50)   # Faster search
-    fn set_ef_search(&mut self, ef_search: usize) {
+    #[setter]
+    fn set_ef_search(&mut self, value: usize) {
         let mut inner = self.inner.write();
-        inner.store.set_ef_search(ef_search);
+        inner.store.set_ef_search(value);
     }
 
     /// Optimize index for cache-efficient search.
@@ -1233,6 +1236,16 @@ impl VectorDatabase {
     fn __len__(&self) -> usize {
         let inner = self.inner.read();
         inner.store.len()
+    }
+
+    /// Boolean truth value - True if database is non-empty.
+    ///
+    /// Examples:
+    ///     >>> if db:
+    ///     ...     print("has data")
+    fn __bool__(&self) -> bool {
+        let inner = self.inner.read();
+        inner.store.len() > 0
     }
 
     /// Get database dimensions.

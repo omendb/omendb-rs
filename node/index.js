@@ -161,15 +161,17 @@ class VectorDatabase {
 	 * - Single-vector: items have `vector` field
 	 * - Multi-vector: items have `vectors` field (array of vectors)
 	 *
-	 * @param {Array<{id: string, vector?: Float32Array|number[], vectors?: Float32Array[]|number[][], metadata?: object}>} items
-	 * @returns {number[]} Array of internal indices
+	 * When any item includes a `text` field, text search is automatically enabled.
+	 *
+	 * @param {Array<{id: string, vector?: Float32Array|number[], vectors?: Float32Array[]|number[][], metadata?: object, text?: string}>} items
+	 * @returns {number} Number of vectors inserted/updated
 	 */
 	set(items) {
 		if (!Array.isArray(items)) {
 			throw new Error("set() requires an array of items");
 		}
 		if (items.length === 0) {
-			return [];
+			return 0;
 		}
 		// Unified set() handles both single and multi-vector via native set()
 		return this._native.set(items.map(this._native.isMultiVector ? convertMultiVectorItem : convertVectorItem));
@@ -184,13 +186,8 @@ class VectorDatabase {
 	 *
 	 * @param {number[]|Float32Array|number[][]|Float32Array[]} query - Query vector(s)
 	 * @param {number} k - Number of results to return
-	 * @param {object} [options] - Search options
-	 * @param {number} [options.ef] - Search width override (single-vector only)
-	 * @param {object} [options.filter] - Metadata filter (single-vector only)
-	 * @param {number} [options.maxDistance] - Max distance threshold (single-vector only)
-	 * @param {boolean} [options.rerank] - Enable MaxSim reranking (multi-vector, default: true)
-	 * @param {number} [options.rerankFactor] - Rerank candidate multiplier (multi-vector, default: 4)
-	 * @returns {Array<{id: string, distance: number, metadata: object}>}
+	 * @param {object} [options] - Search options: {filter?, ef?, maxDistance?}
+	 * @returns {Array<{id: string, distance: number, score: number, metadata: object}>}
 	 */
 	search(query, k, options) {
 		if (this._native.isMultiVector) {
@@ -199,24 +196,20 @@ class VectorDatabase {
 			const rerankFactor = options?.rerankFactor;
 			return this._native.searchMulti(query, k, rerank, rerankFactor);
 		} else {
-			// Single-vector store - support both old positional args and new options object
-			if (typeof options === "object" && options !== null && !Array.isArray(options)) {
-				// New options object style
-				return this._native.search(
-					query,
-					k,
-					options.ef,
-					options.filter,
-					options.maxDistance,
-				);
-			} else {
-				// Legacy positional args: search(query, k, ef, filter, maxDistance)
-				const ef = options; // 3rd arg was ef in old API
-				const filter = arguments[3];
-				const maxDistance = arguments[4];
-				return this._native.search(query, k, ef, filter, maxDistance);
-			}
+			// Single-vector store - pass options object directly to native
+			return this._native.search(query, k, options);
 		}
+	}
+
+	/**
+	 * Search for the single nearest neighbor.
+	 *
+	 * @param {number[]|Float32Array} query - Query vector
+	 * @param {object} [options] - Search options: {filter?, ef?, maxDistance?}
+	 * @returns {{id: string, distance: number, score: number, metadata: object}|null}
+	 */
+	searchOne(query, options) {
+		return this._native.searchOne(query, options);
 	}
 
 	searchBatch(queries, k, ef) {
@@ -239,8 +232,14 @@ class VectorDatabase {
 		return this._native.count(filter);
 	}
 
-	update(id, vector, metadata) {
-		return this._native.update(id, vector, metadata);
+	/**
+	 * Update a vector's data, metadata, and/or text.
+	 *
+	 * @param {string} id - Vector ID to update
+	 * @param {object} options - Update options: {vector?, metadata?, text?}
+	 */
+	update(id, options) {
+		return this._native.update(id, options);
 	}
 
 	get length() {
@@ -283,32 +282,32 @@ class VectorDatabase {
 		return this._native.deleteCollection(name);
 	}
 
-	enableTextSearch() {
-		return this._native.enableTextSearch();
-	}
-
 	get hasTextSearch() {
 		return this._native.hasTextSearch;
 	}
 
-	setWithText(items) {
-		return this._native.setWithText(items.map(convertVectorItem));
+	/**
+	 * Search using text only (BM25 scoring).
+	 *
+	 * @param {string} query - Text query
+	 * @param {number} k - Number of results
+	 * @returns {Array<{id: string, score: number, metadata: object}>}
+	 */
+	searchText(query, k) {
+		return this._native.searchText(query, k);
 	}
 
-	textSearch(query, k) {
-		return this._native.textSearch(query, k);
-	}
-
-	hybridSearch(queryVector, queryText, k, filter, alpha, rrfK, subscores) {
-		return this._native.hybridSearch(
-			queryVector,
-			queryText,
-			k,
-			filter,
-			alpha,
-			rrfK,
-			subscores,
-		);
+	/**
+	 * Hybrid search combining vector similarity and text relevance.
+	 *
+	 * @param {number[]|Float32Array} queryVector - Query embedding
+	 * @param {string} queryText - Text query for BM25
+	 * @param {number} k - Number of results
+	 * @param {object} [options] - Options: {filter?, alpha?, rrfK?, subscores?}
+	 * @returns {Array<{id: string, score: number, metadata: object, keywordScore?: number, semanticScore?: number}>}
+	 */
+	searchHybrid(queryVector, queryText, k, options) {
+		return this._native.searchHybrid(queryVector, queryText, k, options);
 	}
 
 	flush() {
@@ -339,8 +338,22 @@ class VectorDatabase {
 		return this._native.exists(id);
 	}
 
+	/**
+	 * Alias for exists() - check if an ID exists in the database.
+	 *
+	 * @param {string} id - Vector ID to check
+	 * @returns {boolean}
+	 */
+	has(id) {
+		return this._native.has(id);
+	}
+
 	getBatch(ids) {
 		return this._native.getBatch(ids);
+	}
+
+	compact() {
+		return this._native.compact();
 	}
 }
 

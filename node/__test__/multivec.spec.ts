@@ -41,8 +41,8 @@ describe("Multi-Vector (MUVERA)", () => {
 				new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
 				new Float32Array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]),
 			];
-			const indices = db.set([{ id: "doc1", vectors, metadata: { title: "Test" } }]);
-			expect(indices).toHaveLength(1);
+			const count = db.set([{ id: "doc1", vectors, metadata: { title: "Test" } }]);
+			expect(count).toBe(1);
 			expect(db.count()).toBe(1);
 		});
 
@@ -54,8 +54,8 @@ describe("Multi-Vector (MUVERA)", () => {
 				),
 				metadata: { index: i },
 			}));
-			const indices = db.set(items);
-			expect(indices).toHaveLength(10);
+			const count = db.set(items);
+			expect(count).toBe(10);
 			expect(db.count()).toBe(10);
 		});
 

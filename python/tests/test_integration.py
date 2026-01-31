@@ -153,7 +153,7 @@ class TestRecallAccuracy:
             # Test different ef_search values
             recalls = {}
             for ef in [50, 100, 200]:
-                db.set_ef_search(ef)
+                db.ef_search = ef
                 results = db.search(query, k=k)
                 result_ids = {int(r["id"].split("_")[1]) for r in results}
                 recalls[ef] = len(ground_truth & result_ids) / k

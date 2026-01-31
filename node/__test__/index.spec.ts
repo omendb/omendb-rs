@@ -14,8 +14,8 @@ describe("VectorDatabase", () => {
 
 		describe("set", () => {
 			it("should insert single vector", () => {
-				const indices = db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
-				expect(indices).toHaveLength(1);
+				const count = db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
+				expect(count).toBe(1);
 				expect(db.count()).toBe(1);
 			});
 
@@ -25,8 +25,8 @@ describe("VectorDatabase", () => {
 					vector: Array(128).fill(i / 100),
 					metadata: { index: i },
 				}));
-				const indices = db.set(items);
-				expect(indices).toHaveLength(100);
+				const count = db.set(items);
+				expect(count).toBe(100);
 				expect(db.count()).toBe(100);
 			});
 
@@ -46,16 +46,16 @@ describe("VectorDatabase", () => {
 				});
 			});
 
-			it("should handle document field", () => {
+			it("should handle text field and auto-store in metadata", () => {
 				db.set([
 					{
 						id: "doc1",
 						vector: Array(128).fill(0.1),
-						document: "Hello world",
+						text: "Hello world",
 					},
 				]);
 				const doc = db.get("doc1");
-				expect(doc?.metadata).toEqual({ document: "Hello world" });
+				expect(doc?.metadata).toEqual({ text: "Hello world" });
 			});
 
 			it("should replace existing vector with same id", () => {
@@ -88,7 +88,7 @@ describe("VectorDatabase", () => {
 				expect(results[0].id).toBe("b"); // Closest to 0.5
 			});
 
-			it("should return results with distance and metadata", () => {
+			it("should return results with distance, score, and metadata", () => {
 				db.set([
 					{
 						id: "d",
@@ -99,8 +99,12 @@ describe("VectorDatabase", () => {
 				const results = db.search(Array(128).fill(0.5), 1);
 				expect(results[0]).toHaveProperty("id");
 				expect(results[0]).toHaveProperty("distance");
+				expect(results[0]).toHaveProperty("score");
 				expect(results[0]).toHaveProperty("metadata");
 				expect(typeof results[0].distance).toBe("number");
+				expect(typeof results[0].score).toBe("number");
+				expect(results[0].score).toBeGreaterThan(0);
+				expect(results[0].score).toBeLessThanOrEqual(1);
 			});
 
 			it("should accept Float32Array", () => {
@@ -109,8 +113,8 @@ describe("VectorDatabase", () => {
 				expect(results).toHaveLength(2);
 			});
 
-			it("should respect ef parameter", () => {
-				const results = db.search(Array(128).fill(0.5), 2, 200);
+			it("should respect ef option", () => {
+				const results = db.search(Array(128).fill(0.5), 2, { ef: 200 });
 				expect(results).toHaveLength(2);
 			});
 
@@ -130,8 +134,8 @@ describe("VectorDatabase", () => {
 				]);
 
 				// Search with filter - should only return category A
-				const filtered = db.search(Array(128).fill(0.5), 10, undefined, {
-					category: "A",
+				const filtered = db.search(Array(128).fill(0.5), 10, {
+					filter: { category: "A" },
 				});
 				expect(filtered.every((r) => r.metadata?.category === "A")).toBe(true);
 			});
@@ -144,13 +148,56 @@ describe("VectorDatabase", () => {
 				]);
 
 				// Filter for score > 40 (should match n2=50 and n3=90)
-				const filtered = db.search(Array(128).fill(0.5), 10, undefined, {
-					score: { $gt: 40 },
+				const filtered = db.search(Array(128).fill(0.5), 10, {
+					filter: { score: { $gt: 40 } },
 				});
 				expect(filtered).toHaveLength(2);
 				expect(filtered.every((r) => (r.metadata?.score as number) > 40)).toBe(
 					true,
 				);
+			});
+
+			it("should respect maxDistance option", () => {
+				const results = db.search(Array(128).fill(0.5), 10, {
+					maxDistance: 0.1,
+				});
+				// Should filter out distant results
+				expect(results.every((r) => r.distance <= 0.1)).toBe(true);
+			});
+		});
+
+		describe("searchOne", () => {
+			beforeEach(() => {
+				db.set([
+					{ id: "a", vector: Array(128).fill(0.1) },
+					{ id: "b", vector: Array(128).fill(0.5) },
+				]);
+			});
+
+			it("should return single nearest neighbor", () => {
+				const result = db.searchOne(Array(128).fill(0.5));
+				expect(result).not.toBeNull();
+				expect(result?.id).toBe("b");
+			});
+
+			it("should return null for empty database", () => {
+				const emptyDb = open(":memory:", { dimensions: 128 });
+				const result = emptyDb.searchOne(Array(128).fill(0.5));
+				expect(result).toBeNull();
+			});
+
+			it("should accept options", () => {
+				db.set([
+					{
+						id: "c",
+						vector: Array(128).fill(0.5),
+						metadata: { type: "special" },
+					},
+				]);
+				const result = db.searchOne(Array(128).fill(0.5), {
+					filter: { type: "special" },
+				});
+				expect(result?.id).toBe("c");
 			});
 		});
 
@@ -224,21 +271,21 @@ describe("VectorDatabase", () => {
 				]);
 			});
 
-			it("should delete single vector", () => {
-				const deleted = db.delete(["doc1"]);
+			it("should delete single vector with string", () => {
+				const deleted = db.delete("doc1");
 				expect(deleted).toBe(1);
 				expect(db.count()).toBe(2);
 				expect(db.get("doc1")).toBeNull();
 			});
 
-			it("should delete multiple vectors", () => {
+			it("should delete multiple vectors with array", () => {
 				const deleted = db.delete(["doc1", "doc3"]);
 				expect(deleted).toBe(2);
 				expect(db.count()).toBe(1);
 			});
 
 			it("should return 0 for non-existent ids", () => {
-				const deleted = db.delete(["nonexistent"]);
+				const deleted = db.delete("nonexistent");
 				expect(deleted).toBe(0);
 				expect(db.count()).toBe(3);
 			});
@@ -256,15 +303,25 @@ describe("VectorDatabase", () => {
 			});
 
 			it("should update vector", () => {
-				db.update("doc1", Array(128).fill(0.9));
+				db.update("doc1", { vector: Array(128).fill(0.9) });
 				const doc = db.get("doc1");
 				expect(doc?.vector[0]).toBeCloseTo(0.9, 1);
 			});
 
 			it("should update metadata", () => {
-				db.update("doc1", Array(128).fill(0.1), { new: true, count: 42 });
+				db.update("doc1", { metadata: { new: true, count: 42 } });
 				const doc = db.get("doc1");
 				expect(doc?.metadata).toEqual({ new: true, count: 42 });
+			});
+
+			it("should update both vector and metadata", () => {
+				db.update("doc1", {
+					vector: Array(128).fill(0.5),
+					metadata: { updated: true },
+				});
+				const doc = db.get("doc1");
+				expect(doc?.vector[0]).toBeCloseTo(0.5, 1);
+				expect(doc?.metadata).toEqual({ updated: true });
 			});
 		});
 
@@ -313,7 +370,7 @@ describe("VectorDatabase", () => {
 					{ id: "a", vector: Array(128).fill(0.1) },
 					{ id: "b", vector: Array(128).fill(0.2) },
 				]);
-				db.delete(["a"]);
+				db.delete("a");
 
 				const ids = db.ids();
 				expect(ids).toEqual(["b"]);
@@ -344,7 +401,7 @@ describe("VectorDatabase", () => {
 					{ id: "a", vector: Array(128).fill(0.1) },
 					{ id: "b", vector: Array(128).fill(0.2) },
 				]);
-				db.delete(["a"]);
+				db.delete("a");
 
 				const items = db.items();
 				expect(items).toHaveLength(1);
@@ -352,20 +409,23 @@ describe("VectorDatabase", () => {
 			});
 		});
 
-		describe("exists", () => {
+		describe("exists and has", () => {
 			it("should return true for existing ID", () => {
 				db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
 				expect(db.exists("a")).toBe(true);
+				expect(db.has("a")).toBe(true);
 			});
 
 			it("should return false for non-existent ID", () => {
 				expect(db.exists("nonexistent")).toBe(false);
+				expect(db.has("nonexistent")).toBe(false);
 			});
 
 			it("should return false for deleted ID", () => {
 				db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
-				db.delete(["a"]);
+				db.delete("a");
 				expect(db.exists("a")).toBe(false);
+				expect(db.has("a")).toBe(false);
 			});
 		});
 

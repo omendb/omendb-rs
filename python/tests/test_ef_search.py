@@ -32,7 +32,7 @@ class TestEfSearchBasic:
             db = omendb.open(db_path, dimensions=64)
 
             # Empty db returns the default value (100)
-            ef = db.get_ef_search()
+            ef = db.ef_search
             assert ef == 100
 
     def test_get_ef_search_after_insert(self):
@@ -45,7 +45,7 @@ class TestEfSearchBasic:
             db.set(vectors)
 
             # Should return default ef_search value
-            ef = db.get_ef_search()
+            ef = db.ef_search
             assert ef is not None
             assert ef > 0
 
@@ -59,14 +59,14 @@ class TestEfSearchBasic:
             db.set(vectors)
 
             # Set and verify
-            db.set_ef_search(100)
-            assert db.get_ef_search() == 100
+            db.ef_search = 100
+            assert db.ef_search == 100
 
-            db.set_ef_search(50)
-            assert db.get_ef_search() == 50
+            db.ef_search = 50
+            assert db.ef_search == 50
 
-            db.set_ef_search(200)
-            assert db.get_ef_search() == 200
+            db.ef_search = 200
+            assert db.ef_search == 200
 
     def test_set_ef_search_before_insert(self):
         """Test setting ef_search before inserting vectors"""
@@ -75,19 +75,19 @@ class TestEfSearchBasic:
             db = omendb.open(db_path, dimensions=64)
 
             # Setting ef_search on empty db now works
-            db.set_ef_search(150)
-            assert db.get_ef_search() == 150  # Value is stored
+            db.ef_search = 150
+            assert db.ef_search == 150  # Value is stored
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
 
             # After insert, ef_search is still 150
-            ef = db.get_ef_search()
+            ef = db.ef_search
             assert ef == 150
 
             # Changing ef_search still works
-            db.set_ef_search(200)
-            assert db.get_ef_search() == 200
+            db.ef_search = 200
+            assert db.ef_search == 200
 
 
 class TestEfSearchConstraints:
@@ -103,8 +103,8 @@ class TestEfSearchConstraints:
             db.set(vectors)
 
             # Small ef_search values are accepted
-            db.set_ef_search(1)
-            assert db.get_ef_search() == 1
+            db.ef_search = 1
+            assert db.ef_search == 1
 
             # Can still search with k <= ef
             results = db.search(vectors[0]["vector"], k=1)
@@ -120,7 +120,7 @@ class TestEfSearchConstraints:
             db.set(vectors)
 
             # Set low ef_search
-            db.set_ef_search(5)
+            db.ef_search = 5
 
             # Search with k > ef_search should work (ef auto-clamped to k)
             query = vectors[0]["vector"]
@@ -136,7 +136,7 @@ class TestEfSearchConstraints:
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
 
-            db.set_ef_search(10)
+            db.ef_search = 10
             results = db.search(vectors[0]["vector"], k=10)
             assert len(results) == 10
 
@@ -154,16 +154,16 @@ class TestEfSearchPersistence:
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
 
-            original_ef = db.get_ef_search()
-            db.set_ef_search(50)
-            assert db.get_ef_search() == 50
+            original_ef = db.ef_search
+            db.ef_search = 50
+            assert db.ef_search == 50
 
             db.flush()
             del db
 
             # Reopen - ef_search should be back to default
             db2 = omendb.open(db_path, dimensions=64)
-            ef_after_reopen = db2.get_ef_search()
+            ef_after_reopen = db2.ef_search
 
             # Should return to default, not the custom value
             assert ef_after_reopen == original_ef
@@ -197,11 +197,11 @@ class TestEfSearchWithFilters:
             query = vectors[0]["vector"]
 
             # Set high ef_search
-            db.set_ef_search(100)
+            db.ef_search = 100
             high_ef_results = db.search(query, k=10, filter={"group": 0})
 
             # Set lower ef_search (but still >= k)
-            db.set_ef_search(20)
+            db.ef_search = 20
             low_ef_results = db.search(query, k=10, filter={"group": 0})
 
             # Both should return results
