@@ -15,7 +15,7 @@ mod graph_storage;
 mod index;
 mod merge;
 mod node_storage;
-mod prefetch;
+pub(crate) mod prefetch;
 mod query_buffers;
 mod segment;
 mod segment_manager;
