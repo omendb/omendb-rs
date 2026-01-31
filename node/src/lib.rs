@@ -459,6 +459,15 @@ impl VectorDatabase {
                     let mut metadata = item.metadata.unwrap_or(serde_json::json!({}));
 
                     if let Some(ref text) = item.text {
+                        // Check for conflict: text field + metadata.text
+                        if let Some(obj) = metadata.as_object() {
+                            if obj.contains_key("text") {
+                                return Err(Error::from_reason(format!(
+                                    "Item '{}': cannot have both 'text' field and 'metadata.text' - use one or the other",
+                                    item.id
+                                )));
+                            }
+                        }
                         // Store text in metadata.text for retrieval
                         if let Some(obj) = metadata.as_object_mut() {
                             obj.insert("text".to_string(), serde_json::json!(text));
@@ -879,11 +888,23 @@ impl VectorDatabase {
             if let Some(arr) = v.as_array() {
                 let floats: Vec<f32> = arr
                     .iter()
-                    .map(|x| x.as_f64().unwrap_or(0.0) as f32)
-                    .collect();
+                    .enumerate()
+                    .map(|(i, x)| {
+                        x.as_f64()
+                            .ok_or_else(|| {
+                                Error::from_reason(format!(
+                                    "vector[{}] must be a number, got {:?}",
+                                    i, x
+                                ))
+                            })
+                            .map(|n| n as f32)
+                    })
+                    .collect::<Result<Vec<f32>>>()?;
                 Some(Vector::new(floats))
             } else {
-                None
+                return Err(Error::from_reason(
+                    "vector must be an array of numbers",
+                ));
             }
         } else {
             None
@@ -905,6 +926,9 @@ impl VectorDatabase {
             let mut final_meta = metadata_val.unwrap_or(existing_meta);
             if let Some(obj) = final_meta.as_object_mut() {
                 obj.insert("text".to_string(), serde_json::json!(new_text));
+            } else {
+                // metadata was not an object - create new object with text
+                final_meta = serde_json::json!({"text": new_text});
             }
 
             // Re-index text and update vector/metadata
