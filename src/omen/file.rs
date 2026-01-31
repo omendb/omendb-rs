@@ -8,6 +8,9 @@ use crate::omen::{
     wal::{Wal, WalEntry},
     ManifestHeader, NodeLocation, OmenFooter, OmenManifest, SegmentType,
 };
+
+// Re-export WAL parsing functions for external use
+pub use crate::omen::wal::{parse_wal_delete, parse_wal_insert, WalDeleteData, WalInsertData};
 use anyhow::Result;
 use fs2::FileExt;
 use memmap2::MmapMut;
@@ -928,27 +931,7 @@ impl OmenFile {
     }
 }
 
-/// Maximum string ID length (64KB) - prevents DoS via malicious length field
-const MAX_STRING_ID_LEN: usize = 65536;
-/// Maximum vector dimensions (1M) - prevents DoS via malicious length field
-const MAX_VECTOR_DIM: usize = 1 << 20;
-/// Maximum metadata length (16MB) - prevents DoS via malicious length field
-const MAX_METADATA_LEN: usize = 16 << 20;
-
-fn read_string_id(cursor: &mut std::io::Cursor<&[u8]>) -> io::Result<String> {
-    let mut len_buf = [0u8; 4];
-    cursor.read_exact(&mut len_buf)?;
-    let id_len = u32::from_le_bytes(len_buf) as usize;
-    if id_len > MAX_STRING_ID_LEN {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("String ID length {id_len} exceeds maximum {MAX_STRING_ID_LEN}"),
-        ));
-    }
-    let mut id_buf = vec![0u8; id_len];
-    cursor.read_exact(&mut id_buf)?;
-    String::from_utf8(id_buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-}
+// WAL entry parsing moved to wal.rs - re-exported above
 
 fn read_vector_from_bytes(bytes: &[u8], dimensions: usize) -> Vec<f32> {
     bytes
@@ -956,85 +939,6 @@ fn read_vector_from_bytes(bytes: &[u8], dimensions: usize) -> Vec<f32> {
         .take(dimensions)
         .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap_or([0; 4])))
         .collect()
-}
-
-// ============================================================================
-// WAL Entry Parsing (Phase 5 API)
-// ============================================================================
-
-/// Parsed insert data from a WAL entry
-#[derive(Debug, Clone)]
-pub struct WalInsertData {
-    pub id: String,
-    pub vector: Vec<f32>,
-    pub metadata: Option<Vec<u8>>,
-}
-
-/// Parsed delete data from a WAL entry
-#[derive(Debug, Clone)]
-pub struct WalDeleteData {
-    pub id: String,
-}
-
-/// Parse WAL insert entry data
-///
-/// Returns parsed ID, vector, and optional metadata bytes.
-pub fn parse_wal_insert(data: &[u8]) -> io::Result<WalInsertData> {
-    let mut cursor = std::io::Cursor::new(data);
-    let string_id = read_string_id(&mut cursor)?;
-
-    let mut buf = [0u8; 4];
-
-    // Skip level byte (HNSW graph managed by HNSWIndex)
-    cursor.read_exact(&mut buf[..1])?;
-
-    // Read vector
-    cursor.read_exact(&mut buf)?;
-    let vec_len = u32::from_le_bytes(buf) as usize;
-    if vec_len > MAX_VECTOR_DIM {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Vector dimension {vec_len} exceeds maximum {MAX_VECTOR_DIM}"),
-        ));
-    }
-    let byte_len = vec_len
-        .checked_mul(4)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Vector byte size overflow"))?;
-    let mut vec_bytes = vec![0u8; byte_len];
-    cursor.read_exact(&mut vec_bytes)?;
-    let vector = read_vector_from_bytes(&vec_bytes, vec_len);
-
-    // Read metadata
-    cursor.read_exact(&mut buf)?;
-    let meta_len = u32::from_le_bytes(buf) as usize;
-    let metadata = if meta_len > 0 {
-        if meta_len > MAX_METADATA_LEN {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Metadata length {meta_len} exceeds maximum {MAX_METADATA_LEN}"),
-            ));
-        }
-        let mut meta_bytes = vec![0u8; meta_len];
-        cursor.read_exact(&mut meta_bytes)?;
-        Some(meta_bytes)
-    } else {
-        None
-    };
-
-    Ok(WalInsertData {
-        id: string_id,
-        vector,
-        metadata,
-    })
-}
-
-/// Parse WAL delete entry data
-///
-/// Returns parsed ID.
-pub fn parse_wal_delete(data: &[u8]) -> io::Result<WalDeleteData> {
-    let mut cursor = std::io::Cursor::new(data);
-    let id = read_string_id(&mut cursor)?;
-    Ok(WalDeleteData { id })
 }
 
 #[cfg(test)]
