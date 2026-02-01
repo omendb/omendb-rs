@@ -336,6 +336,7 @@ impl HNSWIndex {
                     if PREFETCH_ENABLED {
                         for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
                             self.storage.prefetch(id);
+                            visited.prefetch(id);
                         }
                     }
 
@@ -343,6 +344,7 @@ impl HNSWIndex {
                         if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < num_neighbors {
                             let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
                             self.storage.prefetch(prefetch_id);
+                            visited.prefetch(prefetch_id);
                         }
 
                         // Guard against duplicates in neighbor list
@@ -905,6 +907,7 @@ impl HNSWIndex {
                     if PREFETCH_ENABLED {
                         for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
                             self.storage.prefetch(id);
+                            visited.prefetch(id);
                         }
                     }
 
@@ -912,6 +915,7 @@ impl HNSWIndex {
                         if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < num_neighbors {
                             let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
                             self.storage.prefetch(prefetch_id);
+                            visited.prefetch(prefetch_id);
                         }
 
                         if visited.contains(neighbor_id) {

@@ -77,7 +77,6 @@ impl VisitedList {
     /// Call this 1-2 iterations ahead to ensure data is in L1 cache.
     /// Like hnswlib, we prefetch the visited array alongside vector data.
     #[inline]
-    #[allow(dead_code)] // Future optimization
     pub fn prefetch(&self, id: u32) {
         let idx = id as usize;
         if idx < self.visited.len() {
