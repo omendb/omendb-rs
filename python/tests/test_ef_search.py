@@ -144,8 +144,8 @@ class TestEfSearchConstraints:
 class TestEfSearchPersistence:
     """Test ef_search persistence across sessions"""
 
-    def test_ef_search_not_persisted(self):
-        """Test that ef_search setting is NOT persisted (runtime only)"""
+    def test_ef_search_persisted(self):
+        """Test that ef_search survives flush+reopen"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")  # Persistent db
 
@@ -154,19 +154,15 @@ class TestEfSearchPersistence:
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
 
-            original_ef = db.ef_search
             db.ef_search = 50
             assert db.ef_search == 50
 
             db.flush()
             del db
 
-            # Reopen - ef_search should be back to default
+            # Reopen - ef_search should be preserved
             db2 = omendb.open(db_path, dimensions=64)
-            ef_after_reopen = db2.ef_search
-
-            # Should return to default, not the custom value
-            assert ef_after_reopen == original_ef
+            assert db2.ef_search == 50
 
 
 class TestEfSearchWithFilters:

@@ -143,6 +143,7 @@ pub fn knn_search_core(
 ///
 /// Uses bitmap-based filtering when possible, falls back to JSON matching.
 /// Uses segments (ACORN-1) when available, falls back to brute-force.
+#[allow(clippy::too_many_arguments)]
 pub fn knn_search_filtered_core(
     records: &RecordStore,
     metadata_index: &MetadataIndex,

@@ -196,8 +196,7 @@ impl HNSWIndex {
         const MAX_STORAGE_BYTES: usize = 64 * 1024 * 1024 * 1024; // 64 GB
         if storage_len > MAX_STORAGE_BYTES {
             return Err(HNSWError::Storage(format!(
-                "Storage blob too large: {} bytes (max {})",
-                storage_len, MAX_STORAGE_BYTES
+                "Storage blob too large: {storage_len} bytes (max {MAX_STORAGE_BYTES})"
             )));
         }
         let mut storage_bytes = vec![0u8; storage_len];
