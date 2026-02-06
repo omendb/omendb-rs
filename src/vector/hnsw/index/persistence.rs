@@ -162,6 +162,11 @@ impl HNSWIndex {
         let mut len_bytes = [0u8; 4];
         reader.read_exact(&mut len_bytes)?;
         let df_len = u32::from_le_bytes(len_bytes) as usize;
+        if df_len > 1024 * 1024 {
+            return Err(HNSWError::Storage(format!(
+                "Distance function blob too large: {df_len} bytes (max 1MB)"
+            )));
+        }
         let mut df_bytes = vec![0u8; df_len];
         reader.read_exact(&mut df_bytes)?;
         let distance_fn: DistanceFunction = postcard::from_bytes(&df_bytes)?;
@@ -169,6 +174,11 @@ impl HNSWIndex {
         // Read params (length-prefixed postcard)
         reader.read_exact(&mut len_bytes)?;
         let params_len = u32::from_le_bytes(len_bytes) as usize;
+        if params_len > 1024 * 1024 {
+            return Err(HNSWError::Storage(format!(
+                "Params blob too large: {params_len} bytes (max 1MB)"
+            )));
+        }
         let mut params_bytes = vec![0u8; params_len];
         reader.read_exact(&mut params_bytes)?;
         let params: HNSWParams = postcard::from_bytes(&params_bytes)?;
@@ -182,6 +192,14 @@ impl HNSWIndex {
         let mut storage_len_bytes = [0u8; 8];
         reader.read_exact(&mut storage_len_bytes)?;
         let storage_len = u64::from_le_bytes(storage_len_bytes) as usize;
+        // Safety cap: prevent corrupt files from allocating unbounded memory
+        const MAX_STORAGE_BYTES: usize = 64 * 1024 * 1024 * 1024; // 64 GB
+        if storage_len > MAX_STORAGE_BYTES {
+            return Err(HNSWError::Storage(format!(
+                "Storage blob too large: {} bytes (max {})",
+                storage_len, MAX_STORAGE_BYTES
+            )));
+        }
         let mut storage_bytes = vec![0u8; storage_len];
         reader.read_exact(&mut storage_bytes)?;
 

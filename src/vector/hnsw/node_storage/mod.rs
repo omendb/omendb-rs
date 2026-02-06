@@ -389,7 +389,7 @@ impl NodeStorage {
     /// Get pointer to node data
     #[inline]
     pub(crate) fn node_ptr(&self, id: u32) -> *const u8 {
-        debug_assert!(
+        assert!(
             (id as usize) < self.len,
             "Node ID {} out of bounds (len={})",
             id,
@@ -406,7 +406,7 @@ impl NodeStorage {
     /// Get mutable pointer to node data
     #[inline]
     pub(crate) fn node_ptr_mut(&mut self, id: u32) -> *mut u8 {
-        debug_assert!(
+        assert!(
             (id as usize) < self.len,
             "Node ID {} out of bounds (len={})",
             id,

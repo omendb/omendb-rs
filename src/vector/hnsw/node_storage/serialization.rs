@@ -300,6 +300,23 @@ impl NodeStorage {
         let dimensions = read_u64(data, &mut pos)? as usize;
         let max_neighbors = read_u64(data, &mut pos)? as usize;
 
+        // Safety caps to prevent corrupt files from exhausting memory
+        const MAX_NODES: usize = 100_000_000; // 100M vectors
+        if len > MAX_NODES {
+            return Err(format!("Node count {len} exceeds safety cap ({MAX_NODES})"));
+        }
+        if node_size > 0 {
+            let total = len
+                .checked_mul(node_size)
+                .ok_or_else(|| format!("Node data size overflow: {len} * {node_size}"))?;
+            if total > data.len() {
+                return Err(format!(
+                    "Node data size {total} exceeds file size {}",
+                    data.len()
+                ));
+            }
+        }
+
         // Mode and trained flag
         let mode_byte = read_u8(data, &mut pos)?;
         let mode = match mode_byte {
@@ -311,6 +328,12 @@ impl NodeStorage {
 
         // Raw node data
         let raw_len = read_u64(data, &mut pos)? as usize;
+        if raw_len > data.len() {
+            return Err(format!(
+                "Raw data length {raw_len} exceeds file size {}",
+                data.len()
+            ));
+        }
         let raw_data = read_bytes(data, &mut pos, raw_len)?.to_vec();
 
         // SQ8 params
