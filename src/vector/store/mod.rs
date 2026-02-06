@@ -563,52 +563,13 @@ impl VectorStore {
     // Update Methods
     // ============================================================================
 
-    /// Update existing vector by index (internal method)
-    fn update_by_index(
-        &mut self,
-        index: usize,
-        vector: Option<Vector>,
-        metadata: Option<JsonValue>,
-    ) -> Result<()> {
-        let slot = index as u32;
-
-        // Check bounds and deleted status
-        if !self.records.is_live(slot) {
-            anyhow::bail!("Vector index {index} does not exist or has been deleted");
-        }
-
-        if let Some(new_vector) = vector {
-            if new_vector.dim() != self.dimensions() {
-                anyhow::bail!(
-                    "Vector dimension mismatch: expected {}, got {}",
-                    self.dimensions(),
-                    new_vector.dim()
-                );
-            }
-
-            // Update in RecordStore
-            self.records.update_vector(slot, new_vector.data.clone())?;
-
-            if let Some(ref mut storage) = self.storage {
-                storage.put_vector(index, &new_vector.data)?;
-            }
-        }
-
-        if let Some(ref new_metadata) = metadata {
-            // Re-index metadata: remove old values, add new ones
-            self.metadata_index.remove(slot);
-            self.metadata_index.index_json(slot, new_metadata);
-            self.records.update_metadata(slot, new_metadata.clone())?;
-
-            if let Some(ref mut storage) = self.storage {
-                storage.put_metadata(index, new_metadata)?;
-            }
-        }
-
-        Ok(())
-    }
-
     /// Update existing vector by string ID
+    ///
+    /// When a new vector is provided, this delegates to `set()` which performs a
+    /// full upsert: allocates a new slot, inserts into HNSW, and marks the old
+    /// slot as deleted. This ensures the HNSW index reflects the new position.
+    ///
+    /// Metadata-only updates are done in-place (no re-indexing needed).
     pub fn update(
         &mut self,
         id: &str,
@@ -620,7 +581,33 @@ impl VectorStore {
             .get_slot(id)
             .ok_or_else(|| anyhow::anyhow!("Vector with ID '{id}' not found"))?;
 
-        self.update_by_index(slot as usize, vector, metadata)
+        if !self.records.is_live(slot) {
+            anyhow::bail!("Vector with ID '{id}' has been deleted");
+        }
+
+        if let Some(new_vector) = vector {
+            // Delegate to set() which handles HNSW re-indexing via upsert
+            let merged_metadata = match metadata {
+                Some(m) => m,
+                None => self
+                    .records
+                    .get_by_slot(slot)
+                    .and_then(|r| r.metadata.clone())
+                    .unwrap_or_else(|| serde_json::json!({})),
+            };
+            self.set(id.to_string(), new_vector, merged_metadata)?;
+        } else if let Some(ref new_metadata) = metadata {
+            // Metadata-only update: no HNSW re-indexing needed
+            self.metadata_index.remove(slot);
+            self.metadata_index.index_json(slot, new_metadata);
+            self.records.update_metadata(slot, new_metadata.clone())?;
+
+            if let Some(ref mut storage) = self.storage {
+                storage.put_metadata(slot as usize, new_metadata)?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Delete vector by string ID (lazy delete)

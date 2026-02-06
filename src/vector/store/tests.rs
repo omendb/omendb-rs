@@ -398,6 +398,44 @@ fn test_update() {
 }
 
 #[test]
+fn test_update_vector_reindexes_hnsw() {
+    let mut store = VectorStore::new(4);
+
+    // Insert 50 vectors so HNSW is used
+    for i in 0..50 {
+        let v = Vector::new(vec![i as f32, 0.0, 0.0, 0.0]);
+        store
+            .insert_with_metadata(format!("v{i}"), v, serde_json::json!({}))
+            .unwrap();
+    }
+
+    // Insert a target vector far from the query point
+    let far_vec = Vector::new(vec![100.0, 100.0, 100.0, 100.0]);
+    store
+        .insert_with_metadata("target".to_string(), far_vec, serde_json::json!({}))
+        .unwrap();
+
+    // Search near origin -- "target" should NOT be in top 5
+    let query = Vector::new(vec![0.0, 0.0, 0.0, 0.0]);
+    let results = store.search(&query, 5, None).unwrap();
+    assert!(
+        !results.iter().any(|r| r.id == "target"),
+        "target should be far from origin"
+    );
+
+    // Now update "target" vector to be near the origin
+    let near_vec = Vector::new(vec![0.0, 0.0, 0.0, 0.0]);
+    store.update("target", Some(near_vec), None).unwrap();
+
+    // Search again -- "target" should now be in top 5
+    let results = store.search(&query, 5, None).unwrap();
+    assert!(
+        results.iter().any(|r| r.id == "target"),
+        "target should be near origin after update"
+    );
+}
+
+#[test]
 fn test_metadata_filter_eq() {
     let filter = MetadataFilter::Eq("author".to_string(), serde_json::json!("Alice"));
 
