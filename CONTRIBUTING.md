@@ -31,9 +31,7 @@ uv run pytest tests/
 
 # Node tests
 cd node
-npm install
-npm run build
-npm test
+bun install && bun run build && bun test
 ```
 
 ## Code Style

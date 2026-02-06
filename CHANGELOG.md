@@ -1,6 +1,89 @@
 # Changelog
 
-## v0.0.23 (Unreleased)
+## v0.0.27 (Unreleased)
+
+### Bug Fixes
+
+- **Metric handling**: Thread distance metric through brute-force search paths (cosine/IP now correct on small collections)
+- **Metric persistence**: Metric survives flush+reopen via `set_metric()` on OmenFile
+- **HNSW params on reopen**: m=8 no longer clamped to m=16 on reopen (fix `.max(DEFAULT)` logic)
+- **update() re-indexing**: Vector updates now re-index in HNSW (delegates to `set()`)
+- **FFI validation**: Non-numeric vector elements return explicit error instead of silent drop
+- **Deserialization safety**: Cap allocation sizes to prevent corrupt files from exhausting memory
+- **Runtime bounds checks**: Promote `debug_assert` to `assert` in node_ptr/node_ptr_mut
+- **Path traversal**: `delete_collection()` validates names (alphanumeric + underscore)
+- **Dimensions drift**: Reads actual dimensions from store on reopen, not user arg
+- **Node.js scores**: Metric-aware score normalization (L2, cosine, inner product)
+
+### Documentation
+
+- Fix Node.js README: correct install command (`@omendb/omendb`), fix API docs
+- Remove stale RaBitQ references from CLAUDE.md
+- Remove internal docs from public repo
+
+### Cleanup
+
+- Remove dead code: `SearchConfig`, duplicate `get_by_internal_index`, `_bench_*` functions
+- Remove competitor packages from dependencies (chromadb, hnswlib, lancedb, qdrant-client)
+
+## v0.0.26
+
+### Performance
+
+- Enable visited list prefetching in search
+
+### Refactoring
+
+- Move WAL entry parsing to wal.rs
+- Split storage.rs into modular storage/ directory
+
+### Bug Fixes
+
+- Address code review findings in update() and set()
+
+## v0.0.25
+
+### Features
+
+- Unified API for single and multi-vector stores
+- Multi-vector (MUVERA/ColBERT) support: Python and Node.js bindings
+- Token pooling for multi-vector storage reduction (k-means clustering)
+- ACORN-1 filtered search in SegmentManager
+- Background segment merging with IGTM algorithm
+- Segment persistence with save/load for SegmentManager
+
+### Performance
+
+- Parallel HNSW construction (6.4x speedup)
+- Thread-local VisitedList for parallel build
+- Deferred pruning for 2.1x build throughput
+- Replace naive distance with SIMD implementations
+- MUVERA: auto-boost ef_search for FDE queries, d_proj dimension projection
+
+### Refactoring
+
+- Extract search.rs, helpers.rs, text_search.rs, multivec_ops.rs, persistence.rs from VectorStore
+- Split segment_manager.rs and node_storage.rs into submodules
+- Remove dual storage paths
+
+## v0.0.24
+
+### Features
+
+- Node.js quickstart example and verify script
+- Python/Node tests added to release workflow
+
+### Bug Fixes
+
+- Release workflow hardening (rerunnable publishes, skip already-published)
+- Relax CI latency thresholds
+
+### Documentation
+
+- Add performance measurement dates
+- Fix quickstart output
+
+## v0.0.23
 
 ### BREAKING CHANGES
 
@@ -14,8 +97,6 @@
 ### Bug Fixes
 
 - **ACORN-1 filtered search**: Fix sparse filter searches (<10% selectivity)
-  - Entry points that don't match filter now have neighbors explored
-  - Correctly implements 2-hop expansion per ACORN-1 paper
 - **Binary quantization**: Use hamming distance for graph traversal
 - **FFI**: Fix omendb_save mutability, filter parsing, config parsing
 - **WAL**: Add 100MB size validation, skip corrupted entries on recovery

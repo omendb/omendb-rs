@@ -53,30 +53,29 @@ db = omendb.open("./db", dimensions=768, quantization=True, rescore=False)  # Sk
 
 ```
 src/
-├── vector/store/       # VectorStore API
-├── vector/hnsw/        # HNSW index
+├── vector/store/       # VectorStore API (CRUD, search, persistence)
+├── vector/hnsw/        # HNSW index (graph, segments, node storage)
 ├── vector/hnsw_index.rs # High-level HNSW wrapper
-├── text/               # BM25 hybrid search
-└── storage/            # SeerDB persistence
-
-omendb-core/            # Extracted algorithms (published separately)
-├── src/hnsw/           # Core HNSW implementation
-├── src/compression/    # RaBitQ quantization
-├── src/distance/       # SIMD distance functions
-└── src/sampling/       # Sampling utilities
+├── vector/muvera/      # Multi-vector (ColBERT-style) encoder
+├── compression/        # SQ8 quantization
+├── distance/           # SIMD distance functions
+├── text/               # BM25 hybrid search (tantivy)
+└── omen/               # File format, WAL, persistence
 
 python/                 # PyO3 bindings
 node/                   # NAPI-RS bindings
+omendb-ffi/             # C FFI bindings
 ```
 
 ## Key Modules
 
-| Module                        | Purpose             | Hot Path |
-| ----------------------------- | ------------------- | -------- |
-| `vector/store/mod.rs`         | Main API, batch ops | Yes      |
-| `vector/hnsw_index.rs`        | HNSW search wrapper | Yes      |
-| `omendb-core/src/distance/`   | SIMD distance       | Yes      |
-| `omendb-core/src/hnsw/index/` | Graph traversal     | Yes      |
+| Module                   | Purpose             | Hot Path |
+| ------------------------ | ------------------- | -------- |
+| `vector/store/mod.rs`    | Main API, batch ops | Yes      |
+| `vector/store/search.rs` | Search algorithms   | Yes      |
+| `vector/hnsw_index.rs`   | HNSW search wrapper | Yes      |
+| `vector/hnsw/index/`     | Graph traversal     | Yes      |
+| `distance/ops.rs`        | SIMD distance       | Yes      |
 
 ## Performance Notes
 
@@ -95,14 +94,15 @@ cd python && uv run python ../benchmarks/run.py           # Full (~60s)
 
 Expected (10K vectors, M3 Max):
 
-- 128D: ~7,700 QPS single, ~50,000 QPS batch
-- 768D: ~2,500 QPS single, ~12,600 QPS batch
+- 128D: ~11,500 QPS single, ~67,000 QPS batch
+- 768D: ~2,400 QPS single, ~15,000 QPS batch
 
 ## Testing
 
 ```bash
-cargo test --lib                              # 248 Rust tests
-cd python && uv run pytest tests/ -x          # 214 Python tests
+cargo test --lib                              # 441 Rust tests
+cd python && uv run pytest tests/ -x          # 285 Python tests
+cd node && bun test                           # 88 Node tests
 cd python && uv run pytest tests/test_recall.py  # Recall verification
 ```
 
@@ -115,14 +115,14 @@ Before ANY release, complete ALL of these checks:
 ### 1. Run ALL Test Suites
 
 ```bash
-# Rust (must pass 279+ tests)
+# Rust (must pass 441+ tests)
 cargo test --lib
 cargo clippy --lib -- -D warnings
 
-# Python (must pass 253+ tests)
+# Python (must pass 285+ tests)
 cd python && uv run pytest tests/ -x
 
-# Node (must pass 60+ tests)
+# Node (must pass 88+ tests)
 cd node && bun test
 ```
 
@@ -158,7 +158,7 @@ Ensure benchmark.py and README examples use correct method names:
 ./scripts/sync-version.sh --check
 ```
 
-All 8 locations must match and be higher than published PyPI version.
+All version locations must match and be higher than published PyPI version.
 
 ## Release Process
 
@@ -179,7 +179,6 @@ gh workflow run release.yml
 ## Dependencies
 
 - **seerdb**: Storage layer (separate crate)
-- **omendb-core**: Algorithms (workspace member, published first)
 - **tantivy**: BM25 text search
 
 ## Common Tasks

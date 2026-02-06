@@ -22,6 +22,7 @@ docs/plans/
 *.node
 .venv/
 node_modules/
+package-lock.json
 .pytest_cache/
 .ruff_cache/
 
