@@ -5,7 +5,7 @@ Fast embedded vector database with HNSW indexing for Node.js and Bun.
 ## Installation
 
 ```bash
-npm install omendb
+npm install @omendb/omendb
 ```
 
 ## Quick Start
@@ -191,28 +191,31 @@ db.setWithText([
 ]);
 ```
 
-#### `db.textSearch(query, k)`
+#### `db.searchText(query, k)`
 
 BM25 text-only search.
 
 ```typescript
-const results = db.textSearch("machine learning", 10);
+const results = db.searchText("machine learning", 10);
 // [{ id, score, metadata }, ...]
 ```
 
-#### `db.hybridSearch(options)`
+#### `db.searchHybrid(queryVector, queryText, k, options?)`
 
-Combined vector + text search.
+Combined vector + text search using Reciprocal Rank Fusion.
 
 ```typescript
-const results = db.hybridSearch({
-  vector: queryVector,
-  text: "machine learning",
-  k: 10,
+// Basic
+const results = db.searchHybrid(queryVector, "machine learning", 10);
+
+// With options
+const results = db.searchHybrid(queryVector, "machine learning", 10, {
   alpha: 0.7, // 0=text only, 1=vector only (default: 0.5)
+  rrfK: 60, // RRF constant (default: 60)
+  filter: { category: "ml" },
   subscores: true, // Include separate scores
 });
-// [{ id, score, metadata, keyword_score?, semantic_score? }, ...]
+// [{ id, score, metadata, keywordScore?, semanticScore? }, ...]
 ```
 
 ### Collections

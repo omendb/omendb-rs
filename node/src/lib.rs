@@ -8,6 +8,7 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use omendb_lib::omen::Metric;
 use omendb_lib::vector::{
     muvera::MultiVectorConfig, MetadataFilter, QuantizationMode, Vector, VectorStore,
     VectorStoreOptions,
@@ -21,6 +22,15 @@ use std::sync::Arc;
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Convert raw distance to a normalized similarity score (0-1, higher = more similar).
+fn distance_to_score(distance: f64, metric: Metric) -> f64 {
+    match metric {
+        Metric::L2 => 1.0 / (1.0 + distance),
+        Metric::Cosine => 1.0 - distance,
+        Metric::InnerProduct => -distance, // IP distance is -dot, so score is dot product
+    }
+}
 
 /// Extract query vector from JS - accepts number[] or Float32Array
 fn extract_query_vector(query: Either<Vec<f64>, Float32Array>) -> Vec<f32> {
@@ -581,6 +591,7 @@ impl VectorDatabase {
         }
 
         let inner = self.inner.read();
+        let metric = inner.store.metric();
         let results = inner
             .store
             .search_with_options_readonly(
@@ -599,7 +610,7 @@ impl VectorDatabase {
                 SearchResult {
                     id: r.id,
                     distance,
-                    score: 1.0 / (1.0 + distance), // L2 normalization to 0-1
+                    score: distance_to_score(distance, metric),
                     metadata: r.metadata,
                 }
             })
@@ -645,6 +656,7 @@ impl VectorDatabase {
         let options = SearchOptions::default().rerank(rerank_opt);
 
         let inner = self.inner.read();
+        let metric = inner.store.metric();
         let results = inner
             .store
             .query_with_options(&query_tokens, k as usize, &options)
@@ -657,7 +669,7 @@ impl VectorDatabase {
                 SearchResult {
                     id: r.id,
                     distance,
-                    score: 1.0 / (1.0 + distance),
+                    score: distance_to_score(distance, metric),
                     metadata: r.metadata,
                 }
             })
@@ -704,6 +716,12 @@ impl VectorDatabase {
         let k_usize = k as usize;
         let ef_usize = ef.map(|e| e as usize);
 
+        // Capture metric before moving into closure
+        let metric = {
+            let inner = self.inner.read();
+            inner.store.metric()
+        };
+
         // Run CPU-intensive search on blocking thread pool
         let output = tokio::task::spawn_blocking(move || {
             let inner = inner_arc.read();
@@ -724,7 +742,7 @@ impl VectorDatabase {
                             SearchResult {
                                 id: r.id,
                                 distance,
-                                score: 1.0 / (1.0 + distance),
+                                score: distance_to_score(distance, metric),
                                 metadata: r.metadata,
                             }
                         })

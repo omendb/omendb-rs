@@ -242,6 +242,12 @@ impl VectorStore {
         self.records.dimensions() as usize
     }
 
+    /// Get the distance metric used by this store.
+    #[must_use]
+    pub fn metric(&self) -> Metric {
+        self.distance_metric
+    }
+
     /// Create new vector store with quantization
     ///
     /// Quantization is trained on the first batch of vectors inserted.
