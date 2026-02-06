@@ -1818,6 +1818,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     if omen_path.exists() {
         let store = VectorStore::open(&path).map_err(convert_error)?;
         let is_mv = store.is_multi_vector();
+        let actual_dims = store.dimensions();
 
         // Conflict check: opening existing single-vector store with multiVector: true
         if is_multi_vector && !is_mv {
@@ -1827,10 +1828,16 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
             ));
         }
 
+        let resolved_dims = if actual_dims > 0 {
+            actual_dims as u32
+        } else {
+            dimensions as u32
+        };
+
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
-            dimensions: dimensions as u32,
+            dimensions: resolved_dims,
             is_persistent: true,
             is_multi_vector: is_mv,
             collections_cache: RwLock::new(HashMap::new()),

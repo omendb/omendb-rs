@@ -236,8 +236,9 @@ impl VectorStore {
         store
     }
 
-    // Compatibility accessors for fields moved to RecordStore
-    fn dimensions(&self) -> usize {
+    /// Get the dimensionality of vectors stored in this database.
+    #[must_use]
+    pub fn dimensions(&self) -> usize {
         self.records.dimensions() as usize
     }
 
