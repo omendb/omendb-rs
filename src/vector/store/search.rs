@@ -6,10 +6,20 @@
 use super::helpers;
 use super::record_store::RecordStore;
 use super::{MetadataFilter, SearchResult};
-use crate::distance::l2_distance;
-use crate::omen::MetadataIndex;
+use crate::distance::{cosine_distance, dot_product, l2_distance};
+use crate::omen::{MetadataIndex, Metric};
 use crate::vector::hnsw::SegmentManager;
 use anyhow::Result;
+
+/// Compute distance between two vectors using the given metric.
+#[inline]
+fn compute_distance(metric: Metric, a: &[f32], b: &[f32]) -> f32 {
+    match metric {
+        Metric::L2 => l2_distance(a, b),
+        Metric::Cosine => cosine_distance(a, b),
+        Metric::InnerProduct => -dot_product(a, b),
+    }
+}
 
 // ============================================================================
 // Brute Force Search
@@ -19,7 +29,12 @@ use anyhow::Result;
 ///
 /// Scans all live records and returns k nearest neighbors.
 /// Used as fallback when HNSW index is empty or returns no results.
-pub fn brute_force_search(records: &RecordStore, query: &[f32], k: usize) -> Vec<(usize, f32)> {
+pub fn brute_force_search(
+    records: &RecordStore,
+    query: &[f32],
+    k: usize,
+    metric: Metric,
+) -> Vec<(usize, f32)> {
     if records.is_empty() {
         return Vec::new();
     }
@@ -27,7 +42,7 @@ pub fn brute_force_search(records: &RecordStore, query: &[f32], k: usize) -> Vec
     let mut distances: Vec<(usize, f32)> = records
         .iter_live()
         .map(|(slot, record)| {
-            let dist = l2_distance(query, &record.vector);
+            let dist = compute_distance(metric, query, &record.vector);
             (slot as usize, dist)
         })
         .collect();
@@ -64,12 +79,13 @@ pub fn slots_to_results_with_fallback(
     results: Vec<(usize, f32)>,
     query: &[f32],
     k: usize,
+    metric: Metric,
 ) -> Vec<SearchResult> {
     let filtered = slots_to_search_results(records, results);
 
     // Fall back to brute force if HNSW results were all deleted
     if filtered.is_empty() && !records.is_empty() {
-        let brute_results = brute_force_search(records, query, k);
+        let brute_results = brute_force_search(records, query, k, metric);
         slots_to_search_results(records, brute_results)
     } else {
         filtered
@@ -80,38 +96,16 @@ pub fn slots_to_results_with_fallback(
 // Core Search Implementation
 // ============================================================================
 
-/// Configuration for search operations.
-///
-/// Fields reserved for future quantization-based rescoring.
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub struct SearchConfig {
-    /// Whether to rescore quantized results
-    pub rescore_enabled: bool,
-    /// Oversample factor for rescore (fetch more candidates than k)
-    pub oversample_factor: f32,
-}
-
-impl Default for SearchConfig {
-    fn default() -> Self {
-        Self {
-            rescore_enabled: true,
-            oversample_factor: 3.0,
-        }
-    }
-}
-
 /// Core K-NN search using segments.
 ///
 /// Uses segments if available, falls back to brute force.
-#[allow(dead_code)] // config parameter reserved for future quantization rescore
 pub fn knn_search_core(
     records: &RecordStore,
     segments: Option<&SegmentManager>,
     query: &[f32],
     k: usize,
     ef: usize,
-    _config: &SearchConfig,
+    metric: Metric,
 ) -> Result<Vec<(usize, f32)>> {
     let has_data = !records.is_empty() || segments.as_ref().is_some_and(|s| !s.is_empty());
 
@@ -132,13 +126,13 @@ pub fn knn_search_core(
 
         // Fall back to brute force if segments return nothing but we have data
         if results.is_empty() && !records.is_empty() {
-            return Ok(brute_force_search(records, query, k));
+            return Ok(brute_force_search(records, query, k, metric));
         }
         return Ok(results);
     }
 
     // No segments - use brute force
-    Ok(brute_force_search(records, query, k))
+    Ok(brute_force_search(records, query, k, metric))
 }
 
 // ============================================================================
@@ -157,6 +151,7 @@ pub fn knn_search_filtered_core(
     k: usize,
     ef: usize,
     filter: &MetadataFilter,
+    metric: Metric,
 ) -> Result<Vec<SearchResult>> {
     // Try bitmap-based filtering (O(1) per candidate)
     let filter_bitmap = filter.evaluate_bitmap(metadata_index);
@@ -212,6 +207,7 @@ pub fn knn_search_filtered_core(
         k,
         filter,
         filter_bitmap.as_ref(),
+        metric,
     ))
 }
 
@@ -222,6 +218,7 @@ fn brute_force_filtered(
     k: usize,
     filter: &MetadataFilter,
     filter_bitmap: Option<&roaring::RoaringBitmap>,
+    metric: Metric,
 ) -> Vec<SearchResult> {
     let mut all_results: Vec<SearchResult> = records
         .iter_live()
@@ -245,7 +242,7 @@ fn brute_force_filtered(
                 .metadata
                 .clone()
                 .unwrap_or_else(helpers::default_metadata);
-            let distance = l2_distance(query, &record.vector);
+            let distance = compute_distance(metric, query, &record.vector);
             Some(SearchResult::new(record.id.clone(), distance, metadata))
         })
         .collect();
@@ -264,7 +261,7 @@ mod tests {
     fn test_brute_force_empty() {
         let records = RecordStore::new(3);
         let query = vec![1.0, 2.0, 3.0];
-        let results = brute_force_search(&records, &query, 10);
+        let results = brute_force_search(&records, &query, 10, Metric::L2);
         assert!(results.is_empty());
     }
 
@@ -277,9 +274,37 @@ mod tests {
     }
 
     #[test]
-    fn test_search_config_default() {
-        let config = SearchConfig::default();
-        assert!(config.rescore_enabled);
-        assert!((config.oversample_factor - 3.0).abs() < f32::EPSILON);
+    fn test_brute_force_cosine() {
+        let mut records = RecordStore::new(3);
+        records
+            .upsert("a".to_string(), vec![1.0, 0.0, 0.0], None)
+            .unwrap();
+        records
+            .upsert("b".to_string(), vec![0.0, 1.0, 0.0], None)
+            .unwrap();
+        let query = vec![1.0, 0.0, 0.0];
+        let results = brute_force_search(&records, &query, 2, Metric::Cosine);
+        assert_eq!(results.len(), 2);
+        // First result should be "a" (cosine distance ~0)
+        assert!(results[0].1 < 0.01);
+        // Second result should be "b" (cosine distance ~1)
+        assert!(results[1].1 > 0.99);
+    }
+
+    #[test]
+    fn test_brute_force_inner_product() {
+        let mut records = RecordStore::new(3);
+        records
+            .upsert("a".to_string(), vec![1.0, 0.0, 0.0], None)
+            .unwrap();
+        records
+            .upsert("b".to_string(), vec![0.5, 0.0, 0.0], None)
+            .unwrap();
+        let query = vec![1.0, 0.0, 0.0];
+        let results = brute_force_search(&records, &query, 2, Metric::InnerProduct);
+        assert_eq!(results.len(), 2);
+        // InnerProduct uses -dot_product, so higher dot = lower (more negative) distance
+        // "a" has dot=1.0 -> distance=-1.0, "b" has dot=0.5 -> distance=-0.5
+        assert!(results[0].1 < results[1].1); // "a" first (lower distance)
     }
 }

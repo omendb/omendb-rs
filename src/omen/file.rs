@@ -4,7 +4,7 @@
 
 use crate::omen::{
     align_to_page,
-    header::{OmenHeader, HEADER_SIZE},
+    header::{Metric, OmenHeader, HEADER_SIZE},
     wal::{Wal, WalEntry},
     ManifestHeader, NodeLocation, OmenFooter, OmenManifest, SegmentType,
 };
@@ -458,6 +458,13 @@ impl OmenFile {
         self.header.hnsw_m = m as u32;
         self.header.hnsw_ef_construction = ef_construction as u32;
         self.header.hnsw_ef_search = ef_search as u32;
+    }
+
+    /// Update distance metric in the header
+    ///
+    /// Persisted to disk on the next checkpoint/flush.
+    pub fn set_metric(&mut self, metric: Metric) {
+        self.header.metric = metric;
     }
 
     /// Set dimensions in header

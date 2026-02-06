@@ -276,9 +276,17 @@ impl VectorStore {
             text_index,
             text_search_config: None,
             pending_quantization: quantization_mode,
-            hnsw_m: hnsw_m.max(DEFAULT_HNSW_M),
-            hnsw_ef_construction: hnsw_ef_construction.max(DEFAULT_HNSW_EF_CONSTRUCTION),
-            hnsw_ef_search: hnsw_ef_search.max(DEFAULT_HNSW_EF_SEARCH),
+            hnsw_m: if hnsw_m > 0 { hnsw_m } else { DEFAULT_HNSW_M },
+            hnsw_ef_construction: if hnsw_ef_construction > 0 {
+                hnsw_ef_construction
+            } else {
+                DEFAULT_HNSW_EF_CONSTRUCTION
+            },
+            hnsw_ef_search: if hnsw_ef_search > 0 {
+                hnsw_ef_search
+            } else {
+                DEFAULT_HNSW_EF_SEARCH
+            },
             distance_metric,
             muvera_encoder,
             multivec_storage,
@@ -452,12 +460,13 @@ impl VectorStore {
                 storage.set_dimensions(dims);
             }
 
-            // Persist HNSW parameters to header
+            // Persist HNSW parameters and metric to header
             storage.set_hnsw_params(
                 self.hnsw_m as u16,
                 self.hnsw_ef_construction as u16,
                 self.hnsw_ef_search as u16,
             );
+            storage.set_metric(self.distance_metric);
 
             // Export data from RecordStore (single source of truth)
             let vectors = self.records.export_vectors();
@@ -548,12 +557,18 @@ impl VectorStore {
 
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
-        let storage = if omen_path.exists() {
+        let mut storage = if omen_path.exists() {
             OmenFile::open(path)?
         } else {
             OmenFile::create(path, self.dimensions() as u32)?
         };
 
+        storage.set_metric(self.distance_metric);
+        storage.set_hnsw_params(
+            self.hnsw_m as u16,
+            self.hnsw_ef_construction as u16,
+            self.hnsw_ef_search as u16,
+        );
         self.storage = Some(storage);
         self.storage_path = Some(path.to_path_buf());
         Ok(self)

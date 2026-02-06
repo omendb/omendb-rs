@@ -54,10 +54,6 @@ const DEFAULT_HNSW_EF_SEARCH: usize = 100;
 /// Default oversample factor for rescore
 const DEFAULT_OVERSAMPLE_FACTOR: f32 = 3.0;
 
-// ============================================================================
-// Helper Functions (moved to helpers.rs)
-// ============================================================================
-
 #[cfg(test)]
 mod stress_tests;
 #[cfg(test)]
@@ -97,7 +93,8 @@ pub struct VectorStore {
     /// Whether to rescore candidates with original vectors (default: true when quantization enabled)
     rescore_enabled: bool,
 
-    /// Oversampling factor for rescore (default: 3.0)
+    /// Oversampling factor for rescore (default: 3.0, used by quantization rescoring)
+    #[allow(dead_code)]
     oversample_factor: f32,
 
     /// Roaring bitmap index for fast filtered search
@@ -974,18 +971,13 @@ impl VectorStore {
             );
         }
 
-        let config = search::SearchConfig {
-            rescore_enabled: self.rescore_enabled,
-            oversample_factor: self.oversample_factor,
-        };
-
         search::knn_search_core(
             &self.records,
             self.segments.as_ref(),
             &query.data,
             k,
             ef,
-            &config,
+            self.distance_metric,
         )
     }
 
@@ -1035,6 +1027,7 @@ impl VectorStore {
             k,
             effective_ef,
             filter,
+            self.distance_metric,
         )
     }
 
@@ -1101,7 +1094,13 @@ impl VectorStore {
             self.knn_search_with_filter_ef_readonly(query, k, f, ef)?
         } else {
             let slot_results = self.knn_search_readonly(query, k, ef)?;
-            search::slots_to_results_with_fallback(&self.records, slot_results, &query.data, k)
+            search::slots_to_results_with_fallback(
+                &self.records,
+                slot_results,
+                &query.data,
+                k,
+                self.distance_metric,
+            )
         };
 
         if let Some(max_dist) = max_distance {
@@ -1176,7 +1175,12 @@ impl VectorStore {
             );
         }
 
-        Ok(search::brute_force_search(&self.records, &query.data, k))
+        Ok(search::brute_force_search(
+            &self.records,
+            &query.data,
+            k,
+            self.distance_metric,
+        ))
     }
 
     // ============================================================================
@@ -1214,24 +1218,6 @@ impl VectorStore {
     // ============================================================================
     // Accessors
     // ============================================================================
-
-    /// Get vector by internal index (used by FFI bindings)
-    #[must_use]
-    #[allow(dead_code)] // Used by FFI feature
-    pub(crate) fn get_by_internal_index(&self, idx: usize) -> Option<Vector> {
-        self.records
-            .get_vector(idx as u32)
-            .map(|v| Vector::new(v.to_vec()))
-    }
-
-    /// Get vector by internal index, owned (used by FFI bindings)
-    #[must_use]
-    #[allow(dead_code)] // Used by FFI feature
-    pub(crate) fn get_by_internal_index_owned(&self, idx: usize) -> Option<Vector> {
-        self.records
-            .get_vector(idx as u32)
-            .map(|v| Vector::new(v.to_vec()))
-    }
 
     /// Number of vectors stored (excluding deleted vectors)
     #[must_use]
