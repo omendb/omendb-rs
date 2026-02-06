@@ -34,7 +34,7 @@ bun install && bun run build && bun test
 | m               | 16                    | HNSW neighbors per node (industry standard) |
 | ef_construction | 100                   | Build quality                               |
 | ef_search       | 100                   | Search quality                              |
-| quantization    | off                   | `True`/`"sq8"` or `"rabitq"`                |
+| quantization    | off                   | `True` or `"sq8"`                           |
 | rescore         | true (when quantized) | Rerank with exact L2                        |
 | oversample      | 3.0                   | Fetch k×oversample candidates               |
 
@@ -44,22 +44,10 @@ bun install && bun run build && bun test
 # Enable quantization (SQ8 is default, fastest, best recall)
 db = omendb.open("./db", dimensions=768, quantization=True)       # SQ8: 4x, ~99% recall
 db = omendb.open("./db", dimensions=768, quantization="sq8")      # Same as True
-db = omendb.open("./db", dimensions=768, quantization="rabitq")   # RaBitQ: 8x, ~98% recall
 
 # Tuning
 db = omendb.open("./db", dimensions=768, quantization=True, rescore=False)  # Skip rescore
 ```
-
-| Mode       | Compression | Recall | Speed  | Use Case                    |
-| ---------- | ----------- | ------ | ------ | --------------------------- |
-| `True`     | 4x          | ~99%   | Fast   | Default, most users         |
-| `"sq8"`    | 4x          | ~99%   | Fast   | Explicit scalar             |
-| `"rabitq"` | 8x          | ~98%   | Slower | Large datasets needing more |
-
-**Why only two modes?**
-
-- `rabitq-8` (8-bit): Same 4x as SQ8 but slower → use SQ8 instead
-- `rabitq-2` (2-bit): 93% recall too low → edge case not worth complexity
 
 ## Architecture
 
