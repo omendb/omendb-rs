@@ -144,12 +144,7 @@ pub unsafe extern "C" fn omendb_open(
     };
 
     match result {
-        Ok(store) => {
-            Box::into_raw(Box::new(OmenDB {
-                store,
-                dimensions,
-            }))
-        }
+        Ok(store) => Box::into_raw(Box::new(OmenDB { store, dimensions })),
         Err(e) => {
             set_last_error(format!("Failed to open database: {e}"));
             ptr::null_mut()
@@ -222,9 +217,20 @@ pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) 
 
         let vector_data: Vec<f32> = if let Some(arr) = item.get("vector").and_then(|v| v.as_array())
         {
-            arr.iter()
-                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                .collect()
+            let mut data = Vec::with_capacity(arr.len());
+            for (j, v) in arr.iter().enumerate() {
+                match v.as_f64() {
+                    Some(f) => data.push(f as f32),
+                    None => {
+                        set_last_error(format!(
+                            "Vector element at index {} is not a number: {}",
+                            j, v
+                        ));
+                        return -1;
+                    }
+                }
+            }
+            data
         } else {
             set_last_error("Item missing 'vector' field".to_string());
             return -1;
@@ -366,9 +372,7 @@ pub unsafe extern "C" fn omendb_delete(db: *mut OmenDB, ids_json: *const c_char)
     };
 
     match db.store.delete_batch(&ids) {
-        Ok(count) => {
-            i64::try_from(count).unwrap_or(i64::MAX)
-        }
+        Ok(count) => i64::try_from(count).unwrap_or(i64::MAX),
         Err(e) => {
             set_last_error(format!("Delete failed: {e}"));
             -1
@@ -675,9 +679,20 @@ pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *cons
 
         let vector_data: Vec<f32> = if let Some(arr) = item.get("vector").and_then(|v| v.as_array())
         {
-            arr.iter()
-                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                .collect()
+            let mut data = Vec::with_capacity(arr.len());
+            for (j, v) in arr.iter().enumerate() {
+                match v.as_f64() {
+                    Some(f) => data.push(f as f32),
+                    None => {
+                        set_last_error(format!(
+                            "Vector element at index {} is not a number: {}",
+                            j, v
+                        ));
+                        return -1;
+                    }
+                }
+            }
+            data
         } else {
             set_last_error("Item missing 'vector' field".to_string());
             return -1;
