@@ -1143,6 +1143,19 @@ impl VectorDatabase {
     /// Delete a collection.
     #[napi]
     pub fn delete_collection(&self, name: String) -> Result<()> {
+        if name.is_empty() {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Collection name cannot be empty",
+            ));
+        }
+        if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Collection name must contain only alphanumeric characters and underscores",
+            ));
+        }
+
         if !self.is_persistent {
             return Err(Error::new(
                 Status::InvalidArg,

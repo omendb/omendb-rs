@@ -1891,6 +1891,15 @@ impl VectorDatabase {
             ));
         }
 
+        if name.is_empty() {
+            return Err(PyValueError::new_err("Collection name cannot be empty"));
+        }
+        if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(PyValueError::new_err(
+                "Collection name must contain only alphanumeric characters and underscores",
+            ));
+        }
+
         let base_path = std::path::Path::new(&self.path);
         let collections_dir = base_path.join("collections");
         let omen_path = collections_dir.join(format!("{}.omen", name));
