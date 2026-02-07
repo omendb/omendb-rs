@@ -38,7 +38,6 @@ mod insert;
 mod parallel;
 mod persistence;
 mod search;
-mod sequential;
 mod stats;
 
 #[cfg(test)]
