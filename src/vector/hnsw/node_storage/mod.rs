@@ -400,7 +400,10 @@ impl NodeStorage {
             #[cfg(feature = "mmap")]
             StorageBacking::Mmap(mmap) => mmap.as_ptr(),
         };
-        unsafe { base.add(id as usize * self.node_size) }
+        let offset = (id as usize)
+            .checked_mul(self.node_size)
+            .expect("Node offset overflow");
+        unsafe { base.add(offset) }
     }
 
     /// Get mutable pointer to node data
@@ -417,7 +420,10 @@ impl NodeStorage {
             #[cfg(feature = "mmap")]
             StorageBacking::Mmap(_) => panic!("Cannot mutate mmap-backed storage"),
         };
-        unsafe { data.as_ptr().add(id as usize * self.node_size) }
+        let offset = (id as usize)
+            .checked_mul(self.node_size)
+            .expect("Node offset overflow");
+        unsafe { data.as_ptr().add(offset) }
     }
 
     /// Zero-copy access to vector (full precision mode only)
@@ -559,7 +565,6 @@ impl NodeStorage {
             return &[];
         }
         // Clamp to max_neighbors to prevent buffer overread on corrupt data
-        #[cfg(debug_assertions)]
         if count > self.max_neighbors {
             tracing::warn!(
                 node_id = id,
