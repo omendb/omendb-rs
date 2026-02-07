@@ -226,14 +226,33 @@ impl HNSWIndex {
         Ok(Self::build(storage, params, distance_fn))
     }
 
+    /// Create new HNSW index with RaBitQ (1-bit Quantization)
+    ///
+    /// RaBitQ compresses f32 vectors into 1 bit per dimension using random rotation.
+    /// Provides 32x compression with fast binary distance computation.
+    ///
+    /// # Arguments
+    /// * `dimensions` - Vector dimensionality
+    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
+    /// * `distance_fn` - Distance function (only L2 supported for RaBitQ)
+    pub fn new_with_rabitq(
+        dimensions: usize,
+        params: HNSWParams,
+        distance_fn: DistanceFunction,
+    ) -> Result<Self> {
+        Self::validate_l2_required(&params, distance_fn, "RaBitQ quantization")?;
+        let storage = NodeStorage::new_rabitq(dimensions, params.m, params.max_level as usize);
+        Ok(Self::build(storage, params, distance_fn))
+    }
+
     // =========================================================================
     // Getters
     // =========================================================================
 
-    /// Check if this index uses asymmetric search (SQ8 or PQ)
+    /// Check if this index uses asymmetric search (SQ8, PQ, or RaBitQ)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
-        self.storage.is_sq8() || self.storage.is_pq()
+        self.storage.is_sq8() || self.storage.is_pq() || self.storage.is_rabitq()
     }
 
     /// Check if this index uses SQ8 quantization
@@ -246,6 +265,12 @@ impl HNSWIndex {
     #[must_use]
     pub fn is_pq(&self) -> bool {
         self.storage.is_pq()
+    }
+
+    /// Check if this index uses RaBitQ quantization
+    #[must_use]
+    pub fn is_rabitq(&self) -> bool {
+        self.storage.is_rabitq()
     }
 
     /// Train the quantizer from sample vectors
@@ -282,7 +307,11 @@ impl HNSWIndex {
     /// For quantized modes, use `get_vector_dequantized()` instead.
     #[must_use]
     pub fn get_vector(&self, id: u32) -> Option<&[f32]> {
-        if self.storage.is_sq8() || self.storage.is_pq() || (id as usize) >= self.storage.len() {
+        if self.storage.is_sq8()
+            || self.storage.is_pq()
+            || self.storage.is_rabitq()
+            || (id as usize) >= self.storage.len()
+        {
             return None;
         }
         Some(self.storage.vector(id))
@@ -515,8 +544,8 @@ impl HNSWIndex {
                 .get_dequantized(id_b)
                 .ok_or(HNSWError::VectorNotFound(id_b))?;
             Ok(self.distance_fn.distance_for_comparison(&vec_a, &vec_b))
-        } else if self.storage.is_pq() {
-            // PQ: dequantize both vectors
+        } else if self.storage.is_pq() || self.storage.is_rabitq() {
+            // PQ/RaBitQ: dequantize both vectors (or use training buffer pre-training)
             let vec_a = self
                 .storage
                 .get_dequantized(id_a)
@@ -555,8 +584,16 @@ impl HNSWIndex {
                 }
             }
         }
+        if self.storage.is_rabitq() {
+            // RaBitQ fast path
+            if let Some(prep) = self.storage.prepare_query_rabitq(query) {
+                if let Some(dist) = self.storage.distance_rabitq(&prep, id) {
+                    return Ok(dist);
+                }
+            }
+        }
         // Full precision path (also handles fallback)
-        if self.storage.is_sq8() || self.storage.is_pq() {
+        if self.storage.is_sq8() || self.storage.is_pq() || self.storage.is_rabitq() {
             let vec = self
                 .storage
                 .get_dequantized(id)
@@ -587,8 +624,16 @@ impl HNSWIndex {
                 }
             }
         }
+        if self.storage.is_rabitq() {
+            // RaBitQ: use binary distance (returns approximate squared L2)
+            if let Some(prep) = self.storage.prepare_query_rabitq(query) {
+                if let Some(dist) = self.storage.distance_rabitq(&prep, id) {
+                    return Ok(dist.max(0.0).sqrt());
+                }
+            }
+        }
         // Full precision path (also handles fallback)
-        if self.storage.is_sq8() || self.storage.is_pq() {
+        if self.storage.is_sq8() || self.storage.is_pq() || self.storage.is_rabitq() {
             let vec = self
                 .storage
                 .get_dequantized(id)

@@ -28,6 +28,10 @@ pub enum QuantizationMode {
     /// - ~95% recall with rescore
     /// - `subspaces`: number of subspaces (0 = auto-calculate from dimensions)
     PQ { subspaces: usize },
+    /// RaBitQ 1-bit quantization with random rotation
+    /// - 32x compression (1 bit per dimension)
+    /// - Fast distance via binary operations
+    RaBitQ,
 }
 
 impl QuantizationMode {
@@ -43,6 +47,12 @@ impl QuantizationMode {
         Self::PQ { subspaces: 0 }
     }
 
+    /// RaBitQ 1-bit quantization (32x compression)
+    #[must_use]
+    pub fn rabitq() -> Self {
+        Self::RaBitQ
+    }
+
     /// Check if SQ8 mode
     #[must_use]
     pub fn is_sq8(&self) -> bool {
@@ -53,6 +63,12 @@ impl QuantizationMode {
     #[must_use]
     pub fn is_pq(&self) -> bool {
         matches!(self, Self::PQ { .. })
+    }
+
+    /// Check if RaBitQ mode
+    #[must_use]
+    pub fn is_rabitq(&self) -> bool {
+        matches!(self, Self::RaBitQ)
     }
 
     /// Resolve PQ subspaces from dimensions (auto-calculate if subspaces == 0).

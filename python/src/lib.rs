@@ -48,15 +48,16 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
         return match mode.to_lowercase().as_str() {
             "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
             "pq" | "product" => Ok(Some(QuantizationMode::pq())),
+            "rabitq" | "binary" => Ok(Some(QuantizationMode::rabitq())),
             _ => Err(PyValueError::new_err(format!(
-                "Unknown quantization mode: '{}'. Valid: True, 'sq8', 'pq'",
+                "Unknown quantization mode: '{}'. Valid: True, 'sq8', 'pq', 'rabitq'",
                 mode
             ))),
         };
     }
 
     Err(PyValueError::new_err(
-        "quantization must be True, False, 'sq8', or 'pq'",
+        "quantization must be True, False, 'sq8', 'pq', or 'rabitq'",
     ))
 }
 

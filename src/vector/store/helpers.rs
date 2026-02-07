@@ -22,16 +22,17 @@ pub fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f
     match mode {
         None => 1.0,
         Some(QuantizationMode::SQ8) => 2.0,
-        Some(QuantizationMode::PQ { .. }) => 3.0,
+        Some(QuantizationMode::PQ { .. } | QuantizationMode::RaBitQ) => 3.0,
     }
 }
 
 /// Convert stored quantization mode ID to QuantizationMode.
 ///
-/// Mode IDs: 0=none, 1=sq8, 100+=PQ with (id-100) subspaces
+/// Mode IDs: 0=none, 1=sq8, 100+=PQ with (id-100) subspaces, 200=rabitq
 pub fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
     match mode_id {
         1 => Some(QuantizationMode::SQ8),
+        200 => Some(QuantizationMode::RaBitQ),
         id if id >= 100 => Some(QuantizationMode::PQ {
             subspaces: (id - 100) as usize,
         }),
@@ -44,6 +45,7 @@ pub fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
     match mode {
         QuantizationMode::SQ8 => 1,
         QuantizationMode::PQ { subspaces } => 100 + *subspaces as u64,
+        QuantizationMode::RaBitQ => 200,
     }
 }
 

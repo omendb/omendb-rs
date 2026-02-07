@@ -263,6 +263,11 @@ impl SegmentManager {
                 self.config.distance_fn,
                 true,
             )?,
+            Some(crate::vector::QuantizationMode::RaBitQ) => HNSWIndex::new_with_rabitq(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+            )?,
             None => HNSWIndex::new(
                 self.config.dimensions,
                 self.config.params,
@@ -377,6 +382,11 @@ impl SegmentManager {
                 self.config.params,
                 self.config.distance_fn,
                 true,
+            )?,
+            Some(crate::vector::QuantizationMode::RaBitQ) => HNSWIndex::new_with_rabitq(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
             )?,
             None => HNSWIndex::new(
                 self.config.dimensions,

@@ -108,12 +108,24 @@ impl MutableSegment {
         dimensions: usize,
         params: HNSWParams,
         distance_fn: DistanceFunction,
-        _num_subspaces: usize,
+        num_subspaces: usize,
     ) -> crate::vector::hnsw::error::Result<Self> {
-        // HNSWIndex::new_with_pq is being added by another agent.
-        // Placeholder: build full-precision index; PQ training happens lazily via NodeStorage.
         Ok(Self {
-            index: HNSWIndex::new(dimensions, params, distance_fn, false)?,
+            index: HNSWIndex::new_with_pq(dimensions, params, distance_fn, num_subspaces)?,
+            id: 0,
+            capacity: 100_000,
+            slots: Vec::new(),
+        })
+    }
+
+    /// Create with RaBitQ quantization (1-bit, 32x compression)
+    pub fn new_rabitq(
+        dimensions: usize,
+        params: HNSWParams,
+        distance_fn: DistanceFunction,
+    ) -> crate::vector::hnsw::error::Result<Self> {
+        Ok(Self {
+            index: HNSWIndex::new_with_rabitq(dimensions, params, distance_fn)?,
             id: 0,
             capacity: 100_000,
             slots: Vec::new(),

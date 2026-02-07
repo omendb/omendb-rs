@@ -117,6 +117,10 @@ impl NodeStorage {
             pq_params: None,
             pq_codes: Vec::new(),
             pq_trained: false,
+            rabitq_params: None,
+            rabitq_codes: Vec::new(),
+            rabitq_metadata: Vec::new(),
+            rabitq_trained: false,
         }
     }
 
@@ -156,6 +160,10 @@ impl NodeStorage {
             pq_params: None,
             pq_codes: Vec::new(),
             pq_trained: false,
+            rabitq_params: None,
+            rabitq_codes: Vec::new(),
+            rabitq_metadata: Vec::new(),
+            rabitq_trained: false,
         }
     }
 
@@ -186,6 +194,7 @@ impl NodeStorage {
             StorageMode::FullPrecision => 0,
             StorageMode::SQ8 => 1,
             StorageMode::PQ(_) => 2,
+            StorageMode::RaBitQ => 3,
         };
         out.push(mode_byte);
         out.push(u8::from(self.sq8_trained));
@@ -229,6 +238,27 @@ impl NodeStorage {
         // PQ codes
         out.extend_from_slice(&(self.pq_codes.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.pq_codes);
+
+        // RaBitQ state
+        out.push(u8::from(self.rabitq_trained));
+        if let Some(ref params) = self.rabitq_params {
+            out.push(1); // has RaBitQ params
+            let param_bytes = params.serialize_params();
+            out.extend_from_slice(&(param_bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(&param_bytes);
+        } else {
+            out.push(0);
+        }
+        // RaBitQ codes (stored as u64 words, serialized as little-endian bytes)
+        out.extend_from_slice(&(self.rabitq_codes.len() as u64).to_le_bytes());
+        for &word in &self.rabitq_codes {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        // RaBitQ metadata
+        out.extend_from_slice(&(self.rabitq_metadata.len() as u64).to_le_bytes());
+        for &m in &self.rabitq_metadata {
+            out.extend_from_slice(&m.to_le_bytes());
+        }
 
         // Upper neighbors (HashMap - only stores nodes with upper levels)
         out.extend_from_slice(&(self.upper_neighbors.len() as u64).to_le_bytes());
@@ -344,6 +374,7 @@ impl NodeStorage {
             0 => StorageMode::FullPrecision,
             1 => StorageMode::SQ8,
             2 => StorageMode::PQ(0), // subspaces determined from PQ params below
+            3 => StorageMode::RaBitQ,
             _ => return Err(format!("Invalid storage mode: {mode_byte}")),
         };
         let sq8_trained = read_u8(data, &mut pos)? != 0;
@@ -403,6 +434,60 @@ impl NodeStorage {
         let pq_codes_len = read_u64(data, &mut pos)? as usize;
         let pq_codes = read_bytes(data, &mut pos, pq_codes_len)?.to_vec();
 
+        // RaBitQ state (only present if data remains before upper neighbors)
+        let (rabitq_trained, rabitq_params, rabitq_codes, rabitq_metadata) =
+            if pos + 2 <= data.len() && mode == StorageMode::RaBitQ {
+                let trained = read_u8(data, &mut pos)? != 0;
+                let has_params = read_u8(data, &mut pos)? != 0;
+                let params = if has_params {
+                    let param_len = read_u64(data, &mut pos)? as usize;
+                    let param_bytes = read_bytes(data, &mut pos, param_len)?;
+                    Some(
+                        crate::compression::rabitq::RaBitQParams::deserialize_params(param_bytes)
+                            .map_err(|e| format!("Failed to deserialize RaBitQ params: {e}"))?,
+                    )
+                } else {
+                    None
+                };
+                // Codes are stored as u64 words (len = number of u64 words)
+                let codes_len = read_u64(data, &mut pos)? as usize;
+                let mut codes = Vec::with_capacity(codes_len);
+                for _ in 0..codes_len {
+                    codes.push(read_u64(data, &mut pos)?);
+                }
+                let meta_len = read_u64(data, &mut pos)? as usize;
+                let mut metadata = Vec::with_capacity(meta_len);
+                for _ in 0..meta_len {
+                    metadata.push(read_f32(data, &mut pos)?);
+                }
+                (trained, params, codes, metadata)
+            } else if pos + 2 <= data.len() && mode != StorageMode::RaBitQ {
+                // Non-RaBitQ mode: still read past the rabitq fields for forward compat
+                let _trained = read_u8(data, &mut pos)? != 0;
+                let has_params = read_u8(data, &mut pos)? != 0;
+                let _params = if has_params {
+                    let param_len = read_u64(data, &mut pos)? as usize;
+                    let _param_bytes = read_bytes(data, &mut pos, param_len)?;
+                    true
+                } else {
+                    false
+                };
+                // Skip codes (u64 words)
+                let codes_len = read_u64(data, &mut pos)? as usize;
+                for _ in 0..codes_len {
+                    let _ = read_u64(data, &mut pos)?;
+                }
+                // Skip metadata
+                let meta_len = read_u64(data, &mut pos)? as usize;
+                for _ in 0..meta_len {
+                    let _ = read_f32(data, &mut pos)?;
+                }
+                (false, None, Vec::new(), Vec::new())
+            } else {
+                // Old format without RaBitQ fields
+                (false, None, Vec::new(), Vec::new())
+            };
+
         // Upper neighbors (HashMap - only nodes with upper levels)
         let upper_count = read_u64(data, &mut pos)? as usize;
         let mut upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>> =
@@ -455,6 +540,12 @@ impl NodeStorage {
                 storage.mode = StorageMode::PQ(params.num_subspaces);
             }
         }
+
+        // Restore RaBitQ state
+        storage.rabitq_params = rabitq_params;
+        storage.rabitq_codes = rabitq_codes;
+        storage.rabitq_metadata = rabitq_metadata;
+        storage.rabitq_trained = rabitq_trained;
 
         Ok(storage)
     }

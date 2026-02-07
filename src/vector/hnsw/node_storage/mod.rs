@@ -38,6 +38,7 @@ mod reorder;
 mod serialization;
 
 use crate::compression::product::PQParams;
+use crate::compression::rabitq::RaBitQParams;
 use crate::compression::scalar::ScalarParams;
 use rustc_hash::FxHashMap;
 use std::alloc::{alloc_zeroed, dealloc, Layout};
@@ -46,6 +47,7 @@ use std::ptr::NonNull;
 
 // Re-export query prep types for use by callers
 pub use crate::compression::product::PQQueryPrep as PQPrep;
+pub use crate::compression::rabitq::RaBitQQueryPrep as RaBitQPrep;
 pub use crate::compression::scalar::QueryPrep;
 
 /// Storage mode for vectors
@@ -59,6 +61,8 @@ pub enum StorageMode {
     /// PQ quantized vectors (M bytes per vector, 16-64x compression)
     /// The parameter is the number of subspaces.
     PQ(usize),
+    /// RaBitQ 1-bit quantized vectors (ceil(D/64)*8 bytes per vector, 32x compression)
+    RaBitQ,
 }
 
 /// Cache-line alignment for optimal prefetch
@@ -157,6 +161,16 @@ pub struct NodeStorage {
     pub(crate) pq_codes: Vec<u8>,
     /// Whether PQ quantization has been trained
     pub(crate) pq_trained: bool,
+
+    // RaBitQ quantization support
+    /// RaBitQ parameters (random rotation matrix)
+    pub(crate) rabitq_params: Option<RaBitQParams>,
+    /// RaBitQ binary codes stored contiguously as u64 words: [n_vectors * code_words]
+    pub(crate) rabitq_codes: Vec<u64>,
+    /// RaBitQ per-vector metadata: [n_vectors * 4] (dis_u_2, factor_ip, factor_ppc, factor_err)
+    pub(crate) rabitq_metadata: Vec<f32>,
+    /// Whether RaBitQ quantization has been trained
+    pub(crate) rabitq_trained: bool,
 }
 
 impl fmt::Debug for NodeStorage {
@@ -202,6 +216,12 @@ impl NodeStorage {
         Self::with_mode(dimensions, m, max_levels, StorageMode::PQ(num_subspaces))
     }
 
+    /// Create new RaBitQ quantized storage (1-bit, 32x compression)
+    #[must_use]
+    pub fn new_rabitq(dimensions: usize, m: usize, max_levels: usize) -> Self {
+        Self::with_mode(dimensions, m, max_levels, StorageMode::RaBitQ)
+    }
+
     /// Create storage with specified mode
     #[must_use]
     fn with_mode(dimensions: usize, m: usize, max_levels: usize, mode: StorageMode) -> Self {
@@ -216,6 +236,7 @@ impl NodeStorage {
             StorageMode::FullPrecision => dimensions * 4,    // f32
             StorageMode::SQ8 => dimensions,                  // u8
             StorageMode::PQ(num_subspaces) => num_subspaces, // M bytes
+            StorageMode::RaBitQ => dimensions.div_ceil(64) * 8, // 1 bit per dim, packed into u64 words
         };
         let metadata_offset = vector_offset + vector_size;
         let raw_size = metadata_offset + 4 + 1; // slot (4) + level (1)
@@ -244,6 +265,10 @@ impl NodeStorage {
             pq_params: None,
             pq_codes: Vec::new(),
             pq_trained: false,
+            rabitq_params: None,
+            rabitq_codes: Vec::new(),
+            rabitq_metadata: Vec::new(),
+            rabitq_trained: false,
         }
     }
 
@@ -303,6 +328,13 @@ impl NodeStorage {
         matches!(self.mode, StorageMode::PQ(_))
     }
 
+    /// Check if this storage uses RaBitQ quantization
+    #[inline]
+    #[must_use]
+    pub fn is_rabitq(&self) -> bool {
+        self.mode == StorageMode::RaBitQ
+    }
+
     /// Check if this storage uses any quantization
     #[inline]
     #[must_use]
@@ -318,6 +350,7 @@ impl NodeStorage {
             StorageMode::FullPrecision => true,
             StorageMode::SQ8 => self.sq8_trained,
             StorageMode::PQ(_) => self.pq_trained,
+            StorageMode::RaBitQ => self.rabitq_trained,
         }
     }
 
@@ -547,6 +580,22 @@ impl NodeStorage {
                     }
                 }
             }
+            StorageMode::RaBitQ => {
+                // RaBitQ is 1-bit; no meaningful reconstruction after training.
+                // Before training, return from training buffer.
+                if self.rabitq_trained {
+                    None
+                } else {
+                    let dim = self.dimensions;
+                    let start = id as usize * dim;
+                    let end = start + dim;
+                    if end <= self.training_buffer.len() {
+                        Some(self.training_buffer[start..end].to_vec())
+                    } else {
+                        None
+                    }
+                }
+            }
         }
     }
 
@@ -588,6 +637,9 @@ impl NodeStorage {
             }
             StorageMode::PQ(_) => {
                 self.set_vector_pq(id, vector);
+            }
+            StorageMode::RaBitQ => {
+                self.set_vector_rabitq(id, vector);
             }
         }
     }

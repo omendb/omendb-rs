@@ -121,6 +121,9 @@ impl SegmentManager {
                 config.distance_fn,
                 *subspaces,
             )?,
+            Some(QuantizationMode::RaBitQ) => {
+                MutableSegment::new_rabitq(config.dimensions, config.params, config.distance_fn)?
+            }
             None => MutableSegment::with_capacity(
                 config.dimensions,
                 config.params,
@@ -282,6 +285,11 @@ impl SegmentManager {
                 self.config.params,
                 self.config.distance_fn,
                 *subspaces,
+            )?,
+            Some(QuantizationMode::RaBitQ) => MutableSegment::new_rabitq(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
             )?,
             None => MutableSegment::with_capacity(
                 self.config.dimensions,

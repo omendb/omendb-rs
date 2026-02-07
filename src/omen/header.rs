@@ -45,6 +45,7 @@ impl From<&crate::vector::QuantizationMode> for QuantizationCode {
         match mode {
             crate::vector::QuantizationMode::SQ8 => Self::Sq8,
             crate::vector::QuantizationMode::PQ { .. } => Self::Pq,
+            crate::vector::QuantizationMode::RaBitQ => Self::RaBitQ,
         }
     }
 }
@@ -65,8 +66,9 @@ impl QuantizationCode {
             Self::Sq8 => Some(crate::vector::QuantizationMode::SQ8),
             // PQ subspace count is stored separately (in the index), default to 0 here
             Self::Pq => Some(crate::vector::QuantizationMode::PQ { subspaces: 0 }),
-            // F32 = no quantization, RaBitQ codes = legacy (no longer supported at runtime)
-            Self::F32 | Self::RaBitQ | Self::RaBitQ4 => None,
+            Self::RaBitQ => Some(crate::vector::QuantizationMode::RaBitQ),
+            // F32 = no quantization, RaBitQ4 = extended (not yet implemented at runtime)
+            Self::F32 | Self::RaBitQ4 => None,
         }
     }
 }

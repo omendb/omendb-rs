@@ -4,7 +4,7 @@
 
 use super::HNSWIndex;
 use crate::vector::hnsw::error::{HNSWError, Result};
-use crate::vector::hnsw::node_storage::{NodeStorage, PQPrep, QueryPrep};
+use crate::vector::hnsw::node_storage::{NodeStorage, PQPrep, QueryPrep, RaBitQPrep};
 use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
 use ordered_float::OrderedFloat;
 use tracing::{debug, error, instrument};
@@ -17,6 +17,7 @@ struct DistanceContext<'a> {
     query: &'a [f32],
     sq8_prep: Option<QueryPrep>,
     pq_prep: Option<PQPrep>,
+    rabitq_prep: Option<RaBitQPrep>,
     force_full_precision: bool,
     storage: &'a NodeStorage,
 }
@@ -24,12 +25,13 @@ struct DistanceContext<'a> {
 impl<'a> DistanceContext<'a> {
     /// Create a new distance context for the current search
     fn new(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
-        let (sq8_prep, pq_prep) = if force_full_precision {
-            (None, None)
+        let (sq8_prep, pq_prep, rabitq_prep) = if force_full_precision {
+            (None, None, None)
         } else {
             (
                 index.storage.prepare_query(query),
                 index.storage.prepare_query_pq(query),
+                index.storage.prepare_query_rabitq(query),
             )
         };
 
@@ -37,6 +39,7 @@ impl<'a> DistanceContext<'a> {
             query,
             sq8_prep,
             pq_prep,
+            rabitq_prep,
             force_full_precision,
             storage: &index.storage,
         }
@@ -58,10 +61,16 @@ impl<'a> DistanceContext<'a> {
                     return Ok(dist);
                 }
             }
+            // RaBitQ fast path
+            if let Some(ref prep) = self.rabitq_prep {
+                if let Some(dist) = self.storage.distance_rabitq(prep, node_id) {
+                    return Ok(dist);
+                }
+            }
         }
 
         // Full precision fallback
-        if self.storage.is_sq8() || self.storage.is_pq() {
+        if self.storage.is_sq8() || self.storage.is_pq() || self.storage.is_rabitq() {
             let vec = self
                 .storage
                 .get_dequantized(node_id)
@@ -74,13 +83,14 @@ impl<'a> DistanceContext<'a> {
         }
     }
 
-    /// Check if batch distance computation is available (SQ8 or PQ mode)
+    /// Check if batch distance computation is available (SQ8, PQ, or RaBitQ mode)
     #[inline(always)]
     fn has_batch(&self) -> bool {
-        !self.force_full_precision && (self.sq8_prep.is_some() || self.pq_prep.is_some())
+        !self.force_full_precision
+            && (self.sq8_prep.is_some() || self.pq_prep.is_some() || self.rabitq_prep.is_some())
     }
 
-    /// Batch compute distances to multiple nodes (SQ8/PQ fast path)
+    /// Batch compute distances to multiple nodes (SQ8/PQ/RaBitQ fast path)
     ///
     /// Returns the number of distances computed. Caller must provide output buffer
     /// large enough to hold distances for all IDs.
@@ -91,6 +101,9 @@ impl<'a> DistanceContext<'a> {
         }
         if let Some(ref prep) = self.pq_prep {
             return self.storage.distance_pq_batch(prep, ids, distances);
+        }
+        if let Some(ref prep) = self.rabitq_prep {
+            return self.storage.distance_rabitq_batch(prep, ids, distances);
         }
         0
     }

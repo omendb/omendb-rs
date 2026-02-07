@@ -130,10 +130,11 @@ fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMo
             match lower.as_str() {
                 "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
                 "pq" | "product" => Ok(Some(QuantizationMode::pq())),
+                "rabitq" | "binary" => Ok(Some(QuantizationMode::rabitq())),
                 _ => Err(Error::new(
                     Status::InvalidArg,
                     format!(
-                        "Unknown quantization mode: '{}'. Valid: true, 'sq8', 'pq'",
+                        "Unknown quantization mode: '{}'. Valid: true, 'sq8', 'pq', 'rabitq'",
                         s
                     ),
                 )),
@@ -141,7 +142,7 @@ fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMo
         }
         _ => Err(Error::new(
             Status::InvalidArg,
-            "quantization must be true, false, 'sq8', or 'pq'",
+            "quantization must be true, false, 'sq8', 'pq', or 'rabitq'",
         )),
     }
 }

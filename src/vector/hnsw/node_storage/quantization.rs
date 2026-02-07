@@ -1,11 +1,13 @@
-//! Quantization support for NodeStorage (SQ8 and PQ)
+//! Quantization support for NodeStorage (SQ8, PQ, and RaBitQ)
 //!
-//! Implements scalar and product quantization with lazy training.
+//! Implements scalar, product, and binary quantization with lazy training.
 //! - SQ8: L2 decomposition for fast integer SIMD distance
 //! - PQ: ADC lookup tables for M-byte compressed distance
+//! - RaBitQ: 1-bit random rotation with binary distance
 
 use super::{NodeStorage, StorageMode};
 use crate::compression::product::{PQParams, PQQueryPrep};
+use crate::compression::rabitq::{RaBitQParams, RaBitQQueryPrep};
 use crate::compression::scalar::{QueryPrep, ScalarParams};
 
 impl NodeStorage {
@@ -337,6 +339,196 @@ impl NodeStorage {
         } else {
             None
         }
+    }
+
+    // ========================================================================
+    // RaBitQ (1-bit Quantization) support
+    // ========================================================================
+
+    /// Set vector in RaBitQ mode with lazy training
+    pub(super) fn set_vector_rabitq(&mut self, id: u32, vector: &[f32]) {
+        let id_usize = id as usize;
+
+        if self.rabitq_trained {
+            let params = self
+                .rabitq_params
+                .as_ref()
+                .expect("RaBitQ params should exist");
+            let (codes, dis_u_2, factor_ip, factor_ppc, factor_err) = params.quantize(vector);
+            let code_words = params.code_words();
+            let code_bytes = params.code_bytes();
+
+            // Store binary codes in colocated node storage (as raw bytes)
+            let ptr = self.node_ptr_mut(id);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::copy_nonoverlapping(codes.as_ptr().cast::<u8>(), vec_ptr, code_bytes);
+            }
+
+            // Also store in contiguous rabitq_codes (as u64 words) for batch access
+            let start = id_usize * code_words;
+            let end = start + code_words;
+            if end > self.rabitq_codes.len() {
+                self.rabitq_codes.resize(end, 0);
+            }
+            self.rabitq_codes[start..end].copy_from_slice(&codes);
+
+            // Store per-vector metadata (4 f32s: dis_u_2, factor_ip, factor_ppc, factor_err)
+            let meta_start = id_usize * 4;
+            let meta_end = meta_start + 4;
+            if meta_end > self.rabitq_metadata.len() {
+                self.rabitq_metadata.resize(meta_end, 0.0);
+            }
+            self.rabitq_metadata[meta_start] = dis_u_2;
+            self.rabitq_metadata[meta_start + 1] = factor_ip;
+            self.rabitq_metadata[meta_start + 2] = factor_ppc;
+            self.rabitq_metadata[meta_start + 3] = factor_err;
+
+            // Store norm for rescore
+            let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
+            if id_usize >= self.norms.len() {
+                self.norms.resize(id_usize + 1, 0.0);
+            }
+            self.norms[id_usize] = norm_sq;
+        } else {
+            // Buffer for training
+            self.training_buffer.extend_from_slice(vector);
+
+            // Store zeros in colocated storage
+            let code_bytes = self.dimensions.div_ceil(64) * 8;
+            let ptr = self.node_ptr_mut(id);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::write_bytes(vec_ptr, 0, code_bytes);
+            }
+
+            // Train after 256 vectors
+            let num_vectors = self.training_buffer.len() / self.dimensions;
+            if num_vectors >= 256 {
+                self.train_rabitq_quantization();
+            }
+        }
+    }
+
+    /// Train RaBitQ quantization from buffered vectors
+    pub(super) fn train_rabitq_quantization(&mut self) {
+        let dim = self.dimensions;
+        let num_vectors = self.training_buffer.len() / dim;
+
+        // Build training sample
+        let training_refs: Vec<&[f32]> = (0..num_vectors)
+            .map(|i| &self.training_buffer[i * dim..(i + 1) * dim])
+            .collect();
+
+        // Train RaBitQ parameters (random rotation matrix)
+        let params = RaBitQParams::train(&training_refs).expect("Failed to train RaBitQ params");
+        let code_words = params.code_words();
+        let code_bytes = params.code_bytes();
+        self.rabitq_params = Some(params.clone());
+        self.rabitq_trained = true;
+
+        // Quantize all buffered vectors
+        self.rabitq_codes.reserve(num_vectors * code_words);
+        self.rabitq_metadata.reserve(num_vectors * 4);
+        self.norms.reserve(num_vectors);
+
+        for i in 0..num_vectors {
+            let vec_slice = &self.training_buffer[i * dim..(i + 1) * dim];
+            let (codes, dis_u_2, factor_ip, factor_ppc, factor_err) = params.quantize(vec_slice);
+            let norm_sq: f32 = vec_slice.iter().map(|&x| x * x).sum();
+
+            // Store in colocated storage (as raw bytes)
+            let ptr = self.node_ptr_mut(i as u32);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::copy_nonoverlapping(codes.as_ptr().cast::<u8>(), vec_ptr, code_bytes);
+            }
+
+            // Store in contiguous codes array (as u64 words)
+            let start = i * code_words;
+            if start + code_words > self.rabitq_codes.len() {
+                self.rabitq_codes.resize(start + code_words, 0);
+            }
+            self.rabitq_codes[start..start + code_words].copy_from_slice(&codes);
+
+            // Store metadata (4 f32s per vector)
+            let meta_start = i * 4;
+            if meta_start + 4 > self.rabitq_metadata.len() {
+                self.rabitq_metadata.resize(meta_start + 4, 0.0);
+            }
+            self.rabitq_metadata[meta_start] = dis_u_2;
+            self.rabitq_metadata[meta_start + 1] = factor_ip;
+            self.rabitq_metadata[meta_start + 2] = factor_ppc;
+            self.rabitq_metadata[meta_start + 3] = factor_err;
+
+            // Store norm
+            if i >= self.norms.len() {
+                self.norms.push(norm_sq);
+            } else {
+                self.norms[i] = norm_sq;
+            }
+        }
+
+        self.training_buffer.clear();
+        self.training_buffer.shrink_to_fit();
+    }
+
+    /// Prepare query for RaBitQ distance calculation
+    #[must_use]
+    pub fn prepare_query_rabitq(&self, query: &[f32]) -> Option<RaBitQQueryPrep> {
+        self.rabitq_params
+            .as_ref()
+            .map(|params| params.prepare_query(query))
+    }
+
+    /// Compute RaBitQ approximate L2 distance
+    #[inline]
+    #[must_use]
+    pub fn distance_rabitq(&self, prep: &RaBitQQueryPrep, id: u32) -> Option<f32> {
+        let params = self.rabitq_params.as_ref()?;
+        if !self.rabitq_trained {
+            return None;
+        }
+
+        let idx = id as usize;
+        let code_words = params.code_words();
+        let start = idx * code_words;
+        let end = start + code_words;
+        if end > self.rabitq_codes.len() {
+            return None;
+        }
+
+        let meta_start = idx * 4;
+        if meta_start + 4 > self.rabitq_metadata.len() {
+            return None;
+        }
+
+        let signs = &self.rabitq_codes[start..end];
+        let dis_u_2 = self.rabitq_metadata[meta_start];
+        let factor_ip = self.rabitq_metadata[meta_start + 1];
+        let factor_ppc = self.rabitq_metadata[meta_start + 2];
+
+        Some(RaBitQParams::distance(
+            prep, signs, dis_u_2, factor_ip, factor_ppc,
+        ))
+    }
+
+    /// Batch compute RaBitQ distances
+    #[inline]
+    pub fn distance_rabitq_batch(
+        &self,
+        prep: &RaBitQQueryPrep,
+        ids: &[u32],
+        distances: &mut [f32],
+    ) -> usize {
+        let mut count = 0;
+        for (&id, dist) in ids.iter().zip(distances.iter_mut()) {
+            if let Some(d) = self.distance_rabitq(prep, id) {
+                *dist = d;
+                count += 1;
+            }
+        }
+        count
     }
 }
 

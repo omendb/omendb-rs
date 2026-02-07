@@ -150,6 +150,14 @@ impl VectorStoreOptions {
         self.quantization(QuantizationMode::pq())
     }
 
+    /// Enable RaBitQ quantization (32x compression, fast binary distance)
+    ///
+    /// Uses 1-bit quantization with random rotation for extreme compression.
+    #[must_use]
+    pub fn quantization_rabitq(self) -> Self {
+        self.quantization(QuantizationMode::RaBitQ)
+    }
+
     /// Enable/disable rescoring with original vectors (default: true when quantization enabled).
     ///
     /// When rescoring is enabled, search uses quantized vectors for fast candidate selection,
