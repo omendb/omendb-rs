@@ -44,7 +44,6 @@ use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::fmt;
 use std::ptr::NonNull;
 
-// Re-export query prep types for use by callers
 pub use crate::compression::rabitq::RaBitQQueryPrep as RaBitQPrep;
 pub use crate::compression::scalar::QueryPrep;
 

@@ -75,7 +75,6 @@ impl RaBitQParams {
             return Err("All vectors must have same dimensions");
         }
 
-        // Compute centroid
         let n = vectors.len() as f32;
         let mut centroid = vec![0.0f32; dimensions];
         for v in vectors {
@@ -87,7 +86,6 @@ impl RaBitQParams {
             *c /= n;
         }
 
-        // Generate rotation bits deterministically from dimensions
         let seed = dimensions as u64 ^ 0x5A5A_5A5A_5A5A_5A5A;
         let padded_dim = dimensions.next_power_of_two();
         let num_words = padded_dim.div_ceil(64);
@@ -111,7 +109,7 @@ impl RaBitQParams {
         self.dimensions.div_ceil(64)
     }
 
-    /// Bytes per vector for binary codes only (stored in colocated nodes)
+    /// Bytes per vector for binary codes
     #[inline]
     #[must_use]
     pub fn code_bytes(&self) -> usize {
@@ -125,7 +123,6 @@ impl RaBitQParams {
     pub fn quantize(&self, vector: &[f32]) -> (Vec<u64>, f32, f32, f32, f32) {
         debug_assert_eq!(vector.len(), self.dimensions);
 
-        // Compute residual: v - centroid
         let mut residual: Vec<f32> = vector
             .iter()
             .zip(self.centroid.iter())
@@ -135,21 +132,16 @@ impl RaBitQParams {
         let dis_u_2: f32 = residual.iter().map(|x| x * x).sum();
         let dis_u = dis_u_2.sqrt();
 
-        // Handle zero-norm vectors
         if dis_u < 1e-10 {
             let codes = vec![0u64; self.code_words()];
             return (codes, 0.0, 0.0, 0.0, 0.0);
         }
 
-        // Normalize residual
         for x in &mut residual {
             *x /= dis_u;
         }
-
-        // Rotate
         self.rotate(&mut residual);
 
-        // Extract signs and compute factors
         let num_words = self.code_words();
         let mut codes = vec![0u64; num_words];
         let mut sum_abs: f32 = 0.0;
@@ -172,10 +164,9 @@ impl RaBitQParams {
         // factor_ip: since ||o|| = 1 after normalization, factor_ip = 1/sum_abs
         let factor_ip = 1.0 / sum_abs;
 
-        // factor_ppc: cnt_pos - cnt_neg (used in distance formula)
         let factor_ppc = cnt_pos - cnt_neg;
 
-        // factor_err: error bound
+        // Error bound for distance estimation
         let factor_err = if self.dimensions > 1 && x_0 > 1e-10 {
             1.9 * ((1.0 / (x_0 * x_0) - 1.0) / (self.dimensions as f32 - 1.0)).sqrt()
         } else {
@@ -193,7 +184,6 @@ impl RaBitQParams {
     pub fn prepare_query(&self, query: &[f32]) -> RaBitQQueryPrep {
         debug_assert_eq!(query.len(), self.dimensions);
 
-        // Compute residual: q - centroid
         let mut residual: Vec<f32> = query
             .iter()
             .zip(self.centroid.iter())
@@ -203,7 +193,6 @@ impl RaBitQParams {
         let dis_v_2: f32 = residual.iter().map(|x| x * x).sum();
         let dis_v = dis_v_2.sqrt();
 
-        // Handle zero query
         if dis_v < 1e-10 {
             let num_words = self.code_words();
             return RaBitQQueryPrep {
@@ -216,15 +205,11 @@ impl RaBitQParams {
             };
         }
 
-        // Normalize
         for x in &mut residual {
             *x /= dis_v;
         }
-
-        // Rotate
         self.rotate(&mut residual);
 
-        // Scalar quantize to 6 bits (0-63)
         let (min_val, max_val) = residual
             .iter()
             .fold((f32::INFINITY, f32::NEG_INFINITY), |(mn, mx), &x| {
@@ -242,7 +227,6 @@ impl RaBitQParams {
 
         let qvec_sum: f32 = quantized.iter().map(|&x| x as f32).sum();
 
-        // Binarize: split into 6 bit planes
         let num_words = self.code_words();
         let binary_lut: [Vec<u64>; 6] = std::array::from_fn(|bit| {
             let mut packed = vec![0u64; num_words];
@@ -276,18 +260,13 @@ impl RaBitQParams {
         factor_ip: f32,
         factor_ppc: f32,
     ) -> f32 {
-        // Binary inner product across 6 bit planes
         let sum = binary_inner_product(signs, &prep.binary_lut);
 
-        // Reconstruct inner product estimate
-        // e = k * (2 * sum - qvec_sum) + b * factor_ppc
+        // e = k * (2*sum - qvec_sum) + b * factor_ppc
         let e = prep.k * (2.0 * sum as f32 - prep.qvec_sum) + prep.b * factor_ppc;
-
-        // Apply corrective factor
         let ip_estimate = e * factor_ip;
 
-        // L2 distance: ||u||^2 + ||v||^2 - 2 * ||u|| * ||v|| * ip_estimate
-        // where ip_estimate approximates <normalized_u_rotated, normalized_v_rotated>
+        // ||u||^2 + ||v||^2 - 2*||u||*||v||*<u_hat, v_hat>
         let rough = dis_u_2 + prep.dis_v_2 - 2.0 * dis_u_2.sqrt() * prep.dis_v * ip_estimate;
 
         rough.max(0.0)
@@ -359,10 +338,6 @@ impl RaBitQParams {
         })
     }
 
-    // =========================================================================
-    // FFHT rotation internals
-    // =========================================================================
-
     /// Apply 4-round FFHT rotation in-place
     ///
     /// For non-power-of-2 dimensions: pad, rotate, Kac's walk, truncate.
@@ -371,7 +346,6 @@ impl RaBitQParams {
         let padded_dim = dim.next_power_of_two();
 
         if dim == padded_dim {
-            // Power-of-2: in-place
             let scale = 1.0 / (padded_dim as f32).sqrt();
             for round in 0..NUM_ROUNDS {
                 flip_signs(&self.rotation_bits[round], vector);
@@ -381,7 +355,6 @@ impl RaBitQParams {
                 }
             }
         } else {
-            // Non-power-of-2: pad with zeros, rotate, Kac's walk, truncate
             let mut padded = vec![0.0f32; padded_dim];
             padded[..dim].copy_from_slice(vector);
 
@@ -540,7 +513,6 @@ mod tests {
 
         let self_dist = RaBitQParams::distance(&prep, &codes, dis_u_2, factor_ip, factor_ppc);
 
-        // Self-distance should be near zero (some error from quantization)
         assert!(
             self_dist < 5.0,
             "Self-distance should be near zero, got {self_dist}"
@@ -556,7 +528,6 @@ mod tests {
         let query = &vectors[0];
         let prep = params.prepare_query(query);
 
-        // Compute RaBitQ distances and exact distances
         let mut rabitq_dists: Vec<(usize, f32)> = (0..512)
             .map(|i| {
                 let (codes, dis_u_2, factor_ip, factor_ppc, _) = params.quantize(&vectors[i]);
@@ -579,7 +550,6 @@ mod tests {
         rabitq_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         exact_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        // recall@10
         let exact_top10: std::collections::HashSet<usize> =
             exact_dists.iter().take(10).map(|(i, _)| *i).collect();
         let rabitq_top10: std::collections::HashSet<usize> =
@@ -628,15 +598,13 @@ mod tests {
 
         let params = RaBitQParams::train(&refs).unwrap();
 
-        // 768 dims = 12 u64 words = 96 bytes for binary codes
-        assert_eq!(params.code_words(), 12);
+        assert_eq!(params.code_words(), 12); // 768/64
         assert_eq!(params.code_bytes(), 96);
 
         let (codes, _, _, _, _) = params.quantize(&vectors[0]);
         assert_eq!(codes.len(), 12);
 
-        // 96 bytes codes + 16 bytes metadata = 112 bytes vs 3072 bytes f32
-        // 27.4x compression
+        // 96 bytes codes + 16 bytes metadata = 112 bytes vs 3072 bytes f32 = 27.4x
         let ratio = (768 * 4) as f32 / (96 + 16) as f32;
         assert!(ratio > 25.0 && ratio < 30.0, "Compression ratio: {ratio}");
     }

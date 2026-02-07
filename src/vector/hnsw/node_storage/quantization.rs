@@ -14,18 +14,15 @@ impl NodeStorage {
         let id_usize = id as usize;
 
         if self.sq8_trained {
-            // Already trained - quantize directly
             let params = self.sq8_params.as_ref().expect("SQ8 params should exist");
             let quant = params.quantize(vector);
 
-            // Store quantized vector
             let ptr = self.node_ptr_mut(id);
             unsafe {
                 let vec_ptr = ptr.add(self.vector_offset);
                 std::ptr::copy_nonoverlapping(quant.data.as_ptr(), vec_ptr, self.dimensions);
             }
 
-            // Store norm and sum
             if id_usize >= self.norms.len() {
                 self.norms.resize(id_usize + 1, 0.0);
             }
@@ -35,17 +32,14 @@ impl NodeStorage {
             self.norms[id_usize] = quant.norm_sq;
             self.sq8_sums[id_usize] = quant.sum;
         } else {
-            // Still in training phase - buffer the vector
             self.training_buffer.extend_from_slice(vector);
 
-            // Store zeros in the colocated storage for now (will be filled after training)
             let ptr = self.node_ptr_mut(id);
             unsafe {
                 let vec_ptr = ptr.add(self.vector_offset);
                 std::ptr::write_bytes(vec_ptr, 0, self.dimensions);
             }
 
-            // Check if we have enough vectors to train (256 threshold)
             let num_vectors = self.training_buffer.len() / self.dimensions;
             if num_vectors >= 256 {
                 self.train_quantization();
@@ -58,17 +52,14 @@ impl NodeStorage {
         let dim = self.dimensions;
         let num_vectors = self.training_buffer.len() / dim;
 
-        // Build training sample (refs to slices)
         let training_refs: Vec<&[f32]> = (0..num_vectors)
             .map(|i| &self.training_buffer[i * dim..(i + 1) * dim])
             .collect();
 
-        // Train quantization parameters
         let params = ScalarParams::train(&training_refs).expect("Failed to train SQ8 params");
         self.sq8_params = Some(params);
         self.sq8_trained = true;
 
-        // Quantize all buffered vectors and store them
         self.norms.reserve(num_vectors);
         self.sq8_sums.reserve(num_vectors);
 
@@ -76,14 +67,12 @@ impl NodeStorage {
             let vec_slice = &self.training_buffer[i * dim..(i + 1) * dim];
             let quant = params.quantize(vec_slice);
 
-            // Store quantized vector in colocated storage
             let ptr = self.node_ptr_mut(i as u32);
             unsafe {
                 let vec_ptr = ptr.add(self.vector_offset);
                 std::ptr::copy_nonoverlapping(quant.data.as_ptr(), vec_ptr, dim);
             }
 
-            // Store norm and sum
             if i >= self.norms.len() {
                 self.norms.push(quant.norm_sq);
             } else {
@@ -96,7 +85,6 @@ impl NodeStorage {
             }
         }
 
-        // Clear training buffer
         self.training_buffer.clear();
         self.training_buffer.shrink_to_fit();
     }
@@ -163,10 +151,6 @@ impl NodeStorage {
         count
     }
 
-    // ========================================================================
-    // RaBitQ (1-bit Quantization) support
-    // ========================================================================
-
     /// Set vector in RaBitQ mode with lazy training
     pub(super) fn set_vector_rabitq(&mut self, id: u32, vector: &[f32]) {
         let id_usize = id as usize;
@@ -180,7 +164,6 @@ impl NodeStorage {
             let (codes, dis_u_2, factor_ip, factor_ppc, _factor_err) = params.quantize(vector);
             let code_words = params.code_words();
 
-            // Store in contiguous rabitq_codes (as u64 words) for distance computation
             let start = id_usize * code_words;
             let end = start + code_words;
             if end > self.rabitq_codes.len() {
@@ -188,7 +171,6 @@ impl NodeStorage {
             }
             self.rabitq_codes[start..end].copy_from_slice(&codes);
 
-            // Store per-vector metadata (4 f32s: dis_u_2, factor_ip, factor_ppc, factor_err)
             let meta_start = id_usize * 4;
             let meta_end = meta_start + 4;
             if meta_end > self.rabitq_metadata.len() {
@@ -198,7 +180,6 @@ impl NodeStorage {
             self.rabitq_metadata[meta_start + 1] = factor_ip;
             self.rabitq_metadata[meta_start + 2] = factor_ppc;
 
-            // Store original vector (needed for graph construction + rescore)
             let orig_start = id_usize * dim;
             let orig_end = orig_start + dim;
             if orig_end > self.rabitq_originals.len() {
@@ -206,17 +187,14 @@ impl NodeStorage {
             }
             self.rabitq_originals[orig_start..orig_end].copy_from_slice(vector);
 
-            // Store norm for rescore
             let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
             if id_usize >= self.norms.len() {
                 self.norms.resize(id_usize + 1, 0.0);
             }
             self.norms[id_usize] = norm_sq;
         } else {
-            // Buffer for training (also serves as original vector storage pre-training)
             self.training_buffer.extend_from_slice(vector);
 
-            // Train after 256 vectors
             let num_vectors = self.training_buffer.len() / dim;
             if num_vectors >= 256 {
                 self.train_rabitq_quantization();
@@ -229,21 +207,17 @@ impl NodeStorage {
         let dim = self.dimensions;
         let num_vectors = self.training_buffer.len() / dim;
 
-        // Move training buffer to permanent originals storage
         self.rabitq_originals = std::mem::take(&mut self.training_buffer);
 
-        // Build training sample from originals
         let training_refs: Vec<&[f32]> = (0..num_vectors)
             .map(|i| &self.rabitq_originals[i * dim..(i + 1) * dim])
             .collect();
 
-        // Train RaBitQ parameters (random rotation matrix)
         let params = RaBitQParams::train(&training_refs).expect("Failed to train RaBitQ params");
         let code_words = params.code_words();
         self.rabitq_params = Some(params.clone());
         self.rabitq_trained = true;
 
-        // Quantize all buffered vectors
         self.rabitq_codes.reserve(num_vectors * code_words);
         self.rabitq_metadata.reserve(num_vectors * 4);
         self.norms.reserve(num_vectors);
@@ -253,14 +227,12 @@ impl NodeStorage {
             let (codes, dis_u_2, factor_ip, factor_ppc, _factor_err) = params.quantize(vec_slice);
             let norm_sq: f32 = vec_slice.iter().map(|&x| x * x).sum();
 
-            // Store in contiguous codes array (as u64 words)
             let start = i * code_words;
             if start + code_words > self.rabitq_codes.len() {
                 self.rabitq_codes.resize(start + code_words, 0);
             }
             self.rabitq_codes[start..start + code_words].copy_from_slice(&codes);
 
-            // Store metadata (4 f32s per vector)
             let meta_start = i * 4;
             if meta_start + 4 > self.rabitq_metadata.len() {
                 self.rabitq_metadata.resize(meta_start + 4, 0.0);
@@ -269,7 +241,6 @@ impl NodeStorage {
             self.rabitq_metadata[meta_start + 1] = factor_ip;
             self.rabitq_metadata[meta_start + 2] = factor_ppc;
 
-            // Store norm
             if i >= self.norms.len() {
                 self.norms.push(norm_sq);
             } else {
@@ -346,7 +317,6 @@ mod tests {
         let mut storage = NodeStorage::new_sq8(4, 2, 8);
         assert!(!storage.is_trained());
 
-        // Insert 255 vectors (not enough to train)
         for i in 0..255 {
             storage.allocate_node();
             let vector: Vec<f32> = (0..4).map(|j| (i * 4 + j) as f32).collect();
@@ -354,13 +324,11 @@ mod tests {
         }
         assert!(!storage.is_trained());
 
-        // Insert 256th vector - should trigger training
         storage.allocate_node();
         let vector: Vec<f32> = (0..4).map(|j| (255 * 4 + j) as f32).collect();
         storage.set_vector(255, &vector);
         assert!(storage.is_trained());
 
-        // New vectors should be quantized directly
         storage.allocate_node();
         let vector: Vec<f32> = (0..4).map(|j| (256 * 4 + j) as f32).collect();
         storage.set_vector(256, &vector);
@@ -371,7 +339,6 @@ mod tests {
     fn test_sq8_dequantization() {
         let mut storage = NodeStorage::new_sq8(4, 2, 8);
 
-        // Insert enough vectors to trigger training
         for i in 0..256 {
             storage.allocate_node();
             let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32 / 255.0).collect();
@@ -379,11 +346,9 @@ mod tests {
         }
         assert!(storage.is_trained());
 
-        // Dequantized should be approximately equal to original
         let original: Vec<f32> = (0..4).map(|j| (100 + j) as f32 / 255.0).collect();
         let dequantized = storage.get_dequantized(100).unwrap();
 
-        // Check approximate equality (quantization introduces small errors)
         for (o, d) in original.iter().zip(dequantized.iter()) {
             assert!((o - d).abs() < 0.02, "Dequantization error too large");
         }
@@ -393,10 +358,8 @@ mod tests {
     fn test_sq8_distance_calculation() {
         let mut storage = NodeStorage::new_sq8(128, 2, 8);
 
-        // Insert vectors with known values (realistic high-dimensional data)
         for i in 0..256 {
             storage.allocate_node();
-            // Random-ish distribution with meaningful variance
             let vector: Vec<f32> = (0..128)
                 .map(|j| ((i * 128 + j) % 255) as f32 / 255.0)
                 .collect();
@@ -404,11 +367,9 @@ mod tests {
         }
         assert!(storage.is_trained());
 
-        // Query vector (middle of range)
         let query: Vec<f32> = (0..128).map(|j| (j % 255) as f32 / 255.0).collect();
         let prep = storage.prepare_query(&query).expect("Should have params");
 
-        // Calculate distance to vectors
         for id in [0, 50, 100, 150, 200, 250] {
             let dist = storage.distance_sq8(&prep, id);
             assert!(
@@ -425,7 +386,6 @@ mod tests {
             );
         }
 
-        // Distance to self should be near zero
         storage.allocate_node();
         storage.set_vector(256, &query);
         let self_dist = storage.distance_sq8(&prep, 256).unwrap();
@@ -440,14 +400,12 @@ mod tests {
     fn test_sq8_norms_stored() {
         let mut storage = NodeStorage::new_sq8(4, 2, 8);
 
-        // Insert enough vectors to trigger training
         for i in 0..256 {
             storage.allocate_node();
             let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32).collect();
             storage.set_vector(i as u32, &vector);
         }
 
-        // After training, norms should be stored
         for i in 0..256 {
             let norm = storage.get_norm(i as u32);
             assert!(norm.is_some(), "Norm should be stored for vector {i}");
