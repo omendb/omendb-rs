@@ -245,6 +245,7 @@ impl SegmentManager {
         // Collect vectors and slots from all segments
         let all_vectors = Self::collect_vectors_and_slots(&segments_to_merge);
         if all_vectors.is_empty() {
+            self.frozen = segments_to_merge;
             return Ok(None);
         }
 

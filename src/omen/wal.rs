@@ -55,8 +55,6 @@ impl WalEntryType {
 
 impl From<u8> for WalEntryType {
     fn from(v: u8) -> Self {
-        // For backwards compatibility, unknown entries are treated as checkpoint
-        // But prefer using from_byte() which returns Option
         Self::from_byte(v).unwrap_or(Self::Checkpoint)
     }
 }
@@ -373,6 +371,12 @@ impl Wal {
 
                     // Skip entries that fail checksum verification
                     if !entry.verify() {
+                        tracing::warn!(
+                            timestamp = entry.header.timestamp,
+                            entry_type = entry.header.entry_type as u8,
+                            data_len = entry.header.data_len,
+                            "Skipping WAL entry with invalid checksum during recovery"
+                        );
                         continue;
                     }
 

@@ -703,7 +703,9 @@ impl OmenFile {
 
     /// Checkpoint from external snapshot
     ///
-    /// Writes vectors, metadata, and mappings from the provided data. Does not read from internal state.
+    /// Writes a complete .omen file to a temp path, then atomically renames it
+    /// over the original. This ensures a crash at any point leaves either the
+    /// old file or the new file intact -- never a half-written file.
     pub fn checkpoint_from_snapshot(
         &mut self,
         vectors: &[Option<Vec<f32>>],
@@ -712,63 +714,10 @@ impl OmenFile {
         metadata: &HashMap<u32, serde_json::Value>,
         options: CheckpointOptions<'_>,
     ) -> io::Result<()> {
-        // Drop mmap before writing
+        // Drop mmap before writing (releases the mapping on the old file)
         self.mmap = None;
 
-        let file = self
-            .file
-            .as_mut()
-            .ok_or_else(|| io::Error::other("File not open"))?;
-
-        // Find append point
-        let file_len = file.metadata()?.len();
-        #[allow(clippy::cast_possible_wrap)] // Footer size is 64 bytes, safe to negate
-        let append_offset = if file_len > (HEADER_SIZE + OmenFooter::SIZE) as u64 {
-            file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
-            let mut footer_buf = [0u8; OmenFooter::SIZE];
-            file.read_exact(&mut footer_buf)?;
-            let old_footer = OmenFooter::from_bytes(&footer_buf);
-            if old_footer.verify() {
-                self.manifest
-                    .nodes
-                    .iter()
-                    .filter(|n| {
-                        n.segment_type == SegmentType::Vectors
-                            || n.segment_type == SegmentType::IndexMetadata
-                            || n.segment_type == SegmentType::MultiVectors
-                    })
-                    .map(|n| n.offset + n.length as u64)
-                    .max()
-                    .unwrap_or(HEADER_SIZE as u64)
-            } else {
-                HEADER_SIZE as u64
-            }
-        } else {
-            HEADER_SIZE as u64
-        };
-
-        let mut writer = SegmentWriter::new(file, append_offset);
-
-        // Count of vectors already persisted
-        let persisted_count = self
-            .manifest
-            .nodes
-            .iter()
-            .filter(|n| n.segment_type == SegmentType::Vectors)
-            .count();
-
-        // Clone existing vector locations
-        let mut new_nodes: Vec<NodeLocation> = self
-            .manifest
-            .nodes
-            .iter()
-            .filter(|n| n.segment_type == SegmentType::Vectors)
-            .copied()
-            .collect();
-
-        // Append only NEW vectors
         let dim = self.header.dimensions as usize;
-        // SAFETY: MAX_VECTOR_DIM (1M) * 4 = 4MB, fits in u32
         let vec_size = dim
             .checked_mul(4)
             .and_then(|v| u32::try_from(v).ok())
@@ -780,7 +729,28 @@ impl OmenFile {
             })?;
         let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
 
-        for (idx, vec_opt) in vectors.iter().enumerate().skip(persisted_count) {
+        // Write complete checkpoint to temp file
+        let temp_path = {
+            let mut p = self.path.as_os_str().to_os_string();
+            p.push(".tmp");
+            PathBuf::from(p)
+        };
+
+        let mut temp_file = {
+            let mut opts = OpenOptions::new();
+            opts.read(true).write(true).create(true).truncate(true);
+            configure_open_options(&mut opts);
+            opts.open(&temp_path)?
+        };
+
+        // Write header
+        temp_file.write_all(&self.header.to_bytes())?;
+
+        // Write ALL vectors to temp file
+        let mut writer = SegmentWriter::new(&mut temp_file, HEADER_SIZE as u64);
+        let mut new_nodes: Vec<NodeLocation> = Vec::new();
+
+        for (idx, vec_opt) in vectors.iter().enumerate() {
             let to_write = if deleted_set.contains(&(idx as u32)) {
                 vec![0.0f32; dim]
             } else {
@@ -908,25 +878,36 @@ impl OmenFile {
         let footer = OmenFooter::new(manifest_offset, total_len);
         writer.file.write_all(&footer.to_bytes())?;
 
-        // Truncate and sync
+        // Truncate to exact size and sync
         let final_len = writer.file.stream_position()?;
         writer.file.set_len(final_len)?;
         writer.file.sync_all()?;
+        drop(temp_file);
 
-        // Update in-memory manifest
+        // Close old file handle (releases advisory lock)
+        self.file = None;
+
+        // Atomic rename: temp -> original
+        // On Unix: atomic on same filesystem. On Windows (NTFS): atomic for same-dir rename.
+        std::fs::rename(&temp_path, &self.path)?;
+
+        // Re-open with lock + mmap
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true);
+        configure_open_options(&mut opts);
+        let file = opts.open(&self.path)?;
+        lock_exclusive(&file)?;
+        self.mmap = Some(unsafe { MmapMut::map_mut(&file)? });
+        self.file = Some(file);
+
+        // Update in-memory state
         self.manifest = manifest;
+        self.header.count = live_count as u64;
 
-        // Truncate WAL
+        // Truncate WAL (safe: if crash here, WAL replay is idempotent)
         self.wal.truncate()?;
         self.wal.append(WalEntry::checkpoint(0))?;
         self.wal.sync()?;
-
-        // Re-establish mmap
-        let file = self.file.as_ref().expect("OmenFile must have backing file");
-        self.mmap = Some(unsafe { MmapMut::map_mut(file)? });
-
-        // Update header count
-        self.header.count = live_count as u64;
 
         Ok(())
     }
