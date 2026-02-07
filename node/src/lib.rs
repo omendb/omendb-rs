@@ -129,21 +129,11 @@ fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMo
             let lower = s.to_lowercase();
             match lower.as_str() {
                 "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
-                "pq" => Ok(Some(QuantizationMode::PQ { subspaces: 96 })),
-                s if s.starts_with("pq:") => {
-                    let n: usize = s[3..].parse().map_err(|_| {
-                        Error::new(
-                            Status::InvalidArg,
-                            format!("Invalid PQ subspaces: '{}'", &s[3..]),
-                        )
-                    })?;
-                    Ok(Some(QuantizationMode::PQ { subspaces: n }))
-                }
+                "pq" | "product" => Ok(Some(QuantizationMode::pq())),
                 _ => Err(Error::new(
                     Status::InvalidArg,
                     format!(
-                        "Unknown quantization mode: '{}'\n\
-                         Valid modes: true, 'sq8', 'scalar', 'pq', or 'pq:N'",
+                        "Unknown quantization mode: '{}'. Valid: true, 'sq8', 'pq'",
                         s
                     ),
                 )),
@@ -151,7 +141,7 @@ fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMo
         }
         _ => Err(Error::new(
             Status::InvalidArg,
-            "quantization must be true, false, 'sq8'/'scalar', 'pq', or 'pq:N'",
+            "quantization must be true, false, 'sq8', or 'pq'",
         )),
     }
 }

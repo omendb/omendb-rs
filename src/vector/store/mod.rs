@@ -353,7 +353,11 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(self.distance_metric.into())
-                .with_quantization(self.pending_quantization.clone());
+                .with_quantization(
+                    self.pending_quantization
+                        .as_ref()
+                        .map(|q| q.resolve_subspaces(dimensions)),
+                );
 
             self.segments = Some(
                 SegmentManager::new(config)
@@ -489,7 +493,11 @@ impl VectorStore {
                         ..Default::default()
                     })
                     .with_distance(self.distance_metric.into())
-                    .with_quantization(self.pending_quantization.clone());
+                    .with_quantization(
+                        self.pending_quantization
+                            .as_ref()
+                            .map(|q| q.resolve_subspaces(dimensions)),
+                    );
 
                 // Use parallel build with slot mapping
                 self.segments = Some(
@@ -811,7 +819,11 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(self.distance_metric.into())
-                .with_quantization(self.pending_quantization.clone());
+                .with_quantization(
+                    self.pending_quantization
+                        .as_ref()
+                        .map(|q| q.resolve_subspaces(dimensions)),
+                );
 
             self.segments = Some(
                 SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
@@ -844,14 +856,19 @@ impl VectorStore {
         }
 
         // Build segment config
-        let config = SegmentConfig::new(self.dimensions())
+        let dims = self.dimensions();
+        let config = SegmentConfig::new(dims)
             .with_params(HNSWParams {
                 m: self.hnsw_m,
                 ef_construction: self.hnsw_ef_construction,
                 ..Default::default()
             })
             .with_distance(self.distance_metric.into())
-            .with_quantization(self.pending_quantization.clone());
+            .with_quantization(
+                self.pending_quantization
+                    .as_ref()
+                    .map(|q| q.resolve_subspaces(dims)),
+            );
 
         // Rebuild with parallel construction
         self.segments = Some(

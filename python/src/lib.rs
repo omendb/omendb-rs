@@ -47,23 +47,16 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     if let Ok(mode) = value.extract::<String>() {
         return match mode.to_lowercase().as_str() {
             "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
-            "pq" => Ok(Some(QuantizationMode::PQ { subspaces: 96 })),
-            s if s.starts_with("pq:") => {
-                let n: usize = s[3..].parse().map_err(|_| {
-                    PyValueError::new_err(format!("Invalid PQ subspaces: '{}'", &s[3..]))
-                })?;
-                Ok(Some(QuantizationMode::PQ { subspaces: n }))
-            }
+            "pq" | "product" => Ok(Some(QuantizationMode::pq())),
             _ => Err(PyValueError::new_err(format!(
-                "Unknown quantization mode: '{}'\n\
-                  Valid modes: True, 'sq8', 'scalar', 'pq', or 'pq:N' (N = subspaces)",
+                "Unknown quantization mode: '{}'. Valid: True, 'sq8', 'pq'",
                 mode
             ))),
         };
     }
 
     Err(PyValueError::new_err(
-        "quantization must be True, False, 'sq8'/'scalar', 'pq', or 'pq:N'",
+        "quantization must be True, False, 'sq8', or 'pq'",
     ))
 }
 
@@ -755,32 +748,6 @@ impl VectorDatabase {
 
         // Convert to Python (needs GIL)
         results_to_py(py, &results, metric)
-    }
-
-    /// Find the single nearest neighbor. Convenience for k=1 search.
-    ///
-    /// Args:
-    ///     query: Query vector (list[float] or 1D numpy array)
-    ///     filter (dict, optional): Metadata filter
-    ///     max_distance (float, optional): Maximum distance threshold
-    ///
-    /// Returns:
-    ///     dict or None: The nearest result, or None if no matches
-    ///
-    /// Example:
-    ///     >>> result = db.search_one([0.1, 0.2, 0.3])
-    ///     >>> if result:
-    ///     ...     print(result["id"], result["score"])
-    #[pyo3(name = "search_one", signature = (query, filter=None, max_distance=None))]
-    fn search_one(
-        &self,
-        py: Python<'_>,
-        query: &Bound<'_, PyAny>,
-        filter: Option<&Bound<'_, PyDict>>,
-        max_distance: Option<f32>,
-    ) -> PyResult<Option<Py<PyDict>>> {
-        let results = self.search(py, query, 1, None, filter, max_distance, None, None)?;
-        Ok(results.into_iter().next())
     }
 
     /// Debug timing search - returns timing breakdown in microseconds

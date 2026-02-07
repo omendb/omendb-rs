@@ -426,35 +426,6 @@ def test_search_sparse_filter_acorn1(temp_db_path):
     gc.collect()
 
 
-def test_search_one_basic(db_with_vectors):
-    """Test search_one returns single nearest result"""
-    result = db_with_vectors.search_one([0.1] * 128)
-    assert result is not None
-    assert "id" in result
-    assert "distance" in result
-    assert "score" in result
-    assert "metadata" in result
-
-
-def test_search_one_empty_database(db):
-    """Test search_one on empty database returns None"""
-    result = db.search_one([0.1] * 128)
-    assert result is None
-
-
-def test_search_one_with_filter(db_with_vectors):
-    """Test search_one with metadata filter"""
-    result = db_with_vectors.search_one([0.1] * 128, filter={"label": "A"})
-    assert result is not None
-    assert result["metadata"]["label"] == "A"
-
-
-def test_search_one_filter_no_match(db_with_vectors):
-    """Test search_one when filter matches nothing"""
-    result = db_with_vectors.search_one([0.1] * 128, filter={"label": "NONEXISTENT"})
-    assert result is None
-
-
 def test_filter_not_basic(db_with_vectors):
     """Test $not filter negates condition"""
     # All except label="A"
