@@ -246,8 +246,17 @@ impl NodeStorage {
             out.extend_from_slice(&m.to_le_bytes());
         }
         // RaBitQ original vectors (needed for graph construction + rescore)
-        out.extend_from_slice(&(self.rabitq_originals.len() as u64).to_le_bytes());
-        for &v in &self.rabitq_originals {
+        // When untrained, training_buffer holds the vectors (originals is empty)
+        let originals_to_write = if self.mode == StorageMode::RaBitQ
+            && !self.rabitq_trained
+            && !self.training_buffer.is_empty()
+        {
+            &self.training_buffer
+        } else {
+            &self.rabitq_originals
+        };
+        out.extend_from_slice(&(originals_to_write.len() as u64).to_le_bytes());
+        for &v in originals_to_write {
             out.extend_from_slice(&v.to_le_bytes());
         }
 
@@ -394,8 +403,14 @@ impl NodeStorage {
             None
         };
 
+        // Safety caps for auxiliary arrays
+        const MAX_AUX_ELEMENTS: usize = 1_000_000_000; // 1B elements
+
         // Norms
         let norms_len = read_u64(data, &mut pos)? as usize;
+        if norms_len > MAX_AUX_ELEMENTS {
+            return Err(format!("Norms length {norms_len} exceeds safety cap"));
+        }
         let mut norms = Vec::with_capacity(norms_len);
         for _ in 0..norms_len {
             norms.push(read_f32(data, &mut pos)?);
@@ -403,6 +418,9 @@ impl NodeStorage {
 
         // SQ8 sums
         let sums_len = read_u64(data, &mut pos)? as usize;
+        if sums_len > MAX_AUX_ELEMENTS {
+            return Err(format!("SQ8 sums length {sums_len} exceeds safety cap"));
+        }
         let mut sq8_sums = Vec::with_capacity(sums_len);
         for _ in 0..sums_len {
             sq8_sums.push(read_i32(data, &mut pos)?);
@@ -418,9 +436,6 @@ impl NodeStorage {
         // Skip PQ codes
         let pq_codes_len = read_u64(data, &mut pos)? as usize;
         let _pq_codes = read_bytes(data, &mut pos, pq_codes_len)?;
-
-        // Safety caps for auxiliary arrays
-        const MAX_AUX_ELEMENTS: usize = 1_000_000_000; // 1B elements
 
         // RaBitQ state (only present if data remains before upper neighbors)
         let (rabitq_trained, rabitq_params, rabitq_codes, rabitq_metadata, rabitq_originals) =
@@ -509,10 +524,13 @@ impl NodeStorage {
                 // Skip originals if present
                 if pos + 8 <= data.len() {
                     let orig_len = read_u64(data, &mut pos)? as usize;
-                    if orig_len <= MAX_AUX_ELEMENTS {
-                        for _ in 0..orig_len {
-                            let _ = read_f32(data, &mut pos)?;
-                        }
+                    if orig_len > MAX_AUX_ELEMENTS {
+                        return Err(format!(
+                            "RaBitQ originals length {orig_len} exceeds safety cap"
+                        ));
+                    }
+                    for _ in 0..orig_len {
+                        let _ = read_f32(data, &mut pos)?;
                     }
                 }
                 (false, None, Vec::new(), Vec::new(), Vec::new())
@@ -566,8 +584,13 @@ impl NodeStorage {
         storage.rabitq_params = rabitq_params;
         storage.rabitq_codes = rabitq_codes;
         storage.rabitq_metadata = rabitq_metadata;
-        storage.rabitq_originals = rabitq_originals;
         storage.rabitq_trained = rabitq_trained;
+        // When untrained, originals hold pre-training vectors → restore to training_buffer
+        if mode == StorageMode::RaBitQ && !rabitq_trained && !rabitq_originals.is_empty() {
+            storage.training_buffer = rabitq_originals;
+        } else {
+            storage.rabitq_originals = rabitq_originals;
+        }
 
         Ok(storage)
     }

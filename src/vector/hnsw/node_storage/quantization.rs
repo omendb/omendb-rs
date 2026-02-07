@@ -397,6 +397,61 @@ mod tests {
     }
 
     #[test]
+    fn test_rabitq_pretrain_persistence_roundtrip() {
+        // Regression test: RaBitQ with < 256 vectors must survive save/load
+        let dim = 32;
+        let num_vectors = 50; // Well below 256 training threshold
+        let mut storage = NodeStorage::new_rabitq(dim, 4, 8);
+
+        let mut vectors = Vec::new();
+        for i in 0..num_vectors {
+            storage.allocate_node();
+            let vector: Vec<f32> = (0..dim)
+                .map(|j| ((i * dim + j) % 100) as f32 / 100.0)
+                .collect();
+            storage.set_vector(i as u32, &vector);
+            vectors.push(vector);
+        }
+        assert!(
+            !storage.is_trained(),
+            "Should not be trained with only {num_vectors} vectors"
+        );
+
+        // Verify vectors are accessible before save
+        for i in 0..num_vectors {
+            let deq = storage.get_dequantized(i as u32);
+            assert!(
+                deq.is_some(),
+                "Vector {i} should be retrievable before save"
+            );
+        }
+
+        // Serialize and deserialize
+        let bytes = storage.serialize_full();
+        let restored =
+            NodeStorage::deserialize_full(&bytes).expect("Deserialization should succeed");
+
+        assert_eq!(restored.len(), num_vectors);
+        assert!(
+            !restored.is_trained(),
+            "Should still be untrained after load"
+        );
+
+        // All vectors must survive the roundtrip
+        for i in 0..num_vectors {
+            let deq = restored.get_dequantized(i as u32);
+            assert!(deq.is_some(), "Vector {i} lost after save/load roundtrip");
+            let deq = deq.unwrap();
+            for (j, (&orig, &loaded)) in vectors[i].iter().zip(deq.iter()).enumerate() {
+                assert_eq!(
+                    orig, loaded,
+                    "Vector {i} dimension {j} differs after roundtrip"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_sq8_norms_stored() {
         let mut storage = NodeStorage::new_sq8(4, 2, 8);
 

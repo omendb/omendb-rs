@@ -272,31 +272,6 @@ export declare class VectorDatabase {
    */
   exists(id: string): boolean
   /**
-   * Alias for exists() - check if an ID exists in the database.
-   *
-   * @param id - Vector ID to check
-   * @returns true if ID exists and is not deleted
-   */
-  has(id: string): boolean
-  /**
-   * Search for the single nearest neighbor.
-   *
-   * Convenience method that returns the top result or null if no matches.
-   *
-   * @param query - Query vector (number[] or Float32Array)
-   * @param options - Optional search options: {filter?, ef?, maxDistance?}
-   * @returns Single result or null
-   *
-   * @example
-   * ```javascript
-   * const nearest = db.searchOne([1, 0, 0, 0]);
-   * if (nearest) {
-   *   console.log(`Found: ${nearest.id} at distance ${nearest.distance}`);
-   * }
-   * ```
-   */
-  searchOne(query: Array<number> | Float32Array, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): SearchResult | null
-  /**
    * Get multiple vectors by ID.
    *
    * Batch version of get(). More efficient than calling get() in a loop.
@@ -321,14 +296,6 @@ export interface HybridSearchResult {
   keywordScore?: number
   /** Vector similarity score (null if document only matched text search) */
   semanticScore?: number
-}
-
-export interface MultiVectorItem {
-  id: string
-  /** Multi-vector data as array of Float32Arrays */
-  vectors: Float32Array[]
-  /** Optional metadata */
-  metadata?: Record<string, unknown> | undefined
 }
 
 /**
@@ -430,21 +397,4 @@ export interface TextSearchResult {
   id: string
   score: number
   metadata: Record<string, unknown>
-}
-
-export interface VectorItem {
-  id: string
-  /** Vector data as Float32Array */
-  vector: Float32Array
-  /** Optional metadata */
-  metadata?: Record<string, unknown> | undefined
-  /** Optional document text (stored in metadata.document) */
-  document?: string
-}
-
-export interface VectorItemWithText {
-  id: string
-  vector: Float32Array
-  text: string
-  metadata?: Record<string, unknown> | undefined
 }

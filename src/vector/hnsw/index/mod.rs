@@ -540,8 +540,7 @@ impl HNSWIndex {
                     return Ok(dist);
                 }
             }
-        }
-        if self.storage.is_rabitq() {
+        } else if self.storage.is_rabitq() {
             // RaBitQ fast path
             if let Some(prep) = self.storage.prepare_query_rabitq(query) {
                 if let Some(dist) = self.storage.distance_rabitq(&prep, id) {
@@ -572,8 +571,7 @@ impl HNSWIndex {
                     return Ok(dist.sqrt());
                 }
             }
-        }
-        if self.storage.is_rabitq() {
+        } else if self.storage.is_rabitq() {
             // RaBitQ: use binary distance (returns approximate squared L2)
             if let Some(prep) = self.storage.prepare_query_rabitq(query) {
                 if let Some(dist) = self.storage.distance_rabitq(&prep, id) {

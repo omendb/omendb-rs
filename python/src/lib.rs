@@ -2057,12 +2057,12 @@ fn open(
         ));
     }
 
-    // SQ8 quantization only supports L2 distance
+    // Quantization only supports L2 distance
     if quant_mode.is_some() {
         let m = metric.as_deref().unwrap_or("l2");
         if m != "l2" && m != "euclidean" {
             return Err(PyValueError::new_err(format!(
-                "SQ8 quantization only supports L2 distance, got metric='{m}'"
+                "Quantization only supports L2 distance, got metric='{m}'"
             )));
         }
     }

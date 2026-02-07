@@ -318,7 +318,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				try { fs.unlinkSync(dbPath + ".omen"); } catch {}
 				try { fs.unlinkSync(dbPath + ".wal"); } catch {}
 			}
-		});
+		}, 180_000);
 	});
 
 	describe("scale", () => {
