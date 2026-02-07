@@ -124,6 +124,17 @@ pub unsafe extern "C" fn omendb_open(
         }
     };
 
+    // Reject multi-vector config (not supported in FFI)
+    if let Some(ref cfg) = config {
+        if cfg.get("multi_vector").is_some() {
+            set_last_error(
+                "Multi-vector stores are not supported in the C FFI. Use the Python or Node.js bindings."
+                    .to_string(),
+            );
+            return ptr::null_mut();
+        }
+    }
+
     // Build store with optional config
     let result = if let Some(cfg) = config {
         let mut options = VectorStoreOptions::new().dimensions(dimensions);
@@ -144,7 +155,16 @@ pub unsafe extern "C" fn omendb_open(
     };
 
     match result {
-        Ok(store) => Box::into_raw(Box::new(OmenDB { store, dimensions })),
+        Ok(store) => {
+            if store.is_multi_vector() {
+                set_last_error(
+                    "Cannot open multi-vector store via C FFI. Use the Python or Node.js bindings."
+                        .to_string(),
+                );
+                return ptr::null_mut();
+            }
+            Box::into_raw(Box::new(OmenDB { store, dimensions }))
+        }
         Err(e) => {
             set_last_error(format!("Failed to open database: {e}"));
             ptr::null_mut()
@@ -768,7 +788,14 @@ pub unsafe extern "C" fn omendb_text_search(
 
     let json_results: Vec<JsonValue> = search_results
         .into_iter()
-        .map(|(id, score)| json!({"id": id, "score": score}))
+        .map(|(id, score)| {
+            let metadata = db
+                .store
+                .get(&id)
+                .map(|(_, meta)| meta)
+                .unwrap_or(serde_json::json!({}));
+            json!({"id": id, "score": score, "metadata": metadata})
+        })
         .collect();
 
     let json_str = match serde_json::to_string(&json_results) {

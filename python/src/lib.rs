@@ -3,6 +3,7 @@
 #![allow(clippy::type_complexity)]
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use omendb_lib::omen::Metric;
 use omendb_lib::text::TextSearchConfig;
 use omendb_lib::vector::{
     muvera::MultiVectorConfig, MetadataFilter, QuantizationMode, SearchResult, Vector, VectorStore,
@@ -364,8 +365,22 @@ impl VectorDatabaseIterator {
     }
 }
 
+/// Convert raw distance to a normalized similarity score (0-1, higher = more similar).
+fn distance_to_score(distance: f32, metric: Metric) -> f64 {
+    let d = distance as f64;
+    match metric {
+        Metric::L2 => 1.0 / (1.0 + d),
+        Metric::Cosine => 1.0 - d,
+        Metric::InnerProduct => -d,
+    }
+}
+
 /// Convert search results to Python list of dicts
-fn results_to_py(py: Python<'_>, results: &[SearchResult]) -> PyResult<Vec<Py<PyDict>>> {
+fn results_to_py(
+    py: Python<'_>,
+    results: &[SearchResult],
+    metric: Metric,
+) -> PyResult<Vec<Py<PyDict>>> {
     let mut py_results = Vec::with_capacity(results.len());
 
     for result in results {
@@ -374,6 +389,10 @@ fn results_to_py(py: Python<'_>, results: &[SearchResult]) -> PyResult<Vec<Py<Py
         // Use interned strings for dict keys (hot path optimization)
         dict.set_item(pyo3::intern!(py, "id"), &result.id)?;
         dict.set_item(pyo3::intern!(py, "distance"), result.distance)?;
+        dict.set_item(
+            pyo3::intern!(py, "score"),
+            distance_to_score(result.distance, metric),
+        )?;
 
         // Convert metadata to Python dict
         let metadata_dict = json_to_pyobject(py, &result.metadata)?;
@@ -674,6 +693,7 @@ impl VectorDatabase {
             }
 
             let inner_arc = Arc::clone(&self.inner);
+            let metric = self.inner.read().store.metric();
             let results = py.detach(move || {
                 let inner = inner_arc.read();
                 inner
@@ -682,7 +702,7 @@ impl VectorDatabase {
                     .map_err(convert_error)
             })?;
 
-            return results_to_py(py, &results);
+            return results_to_py(py, &results, metric);
         }
 
         // Single-vector store: original logic
@@ -700,6 +720,7 @@ impl VectorDatabase {
 
         // Clone Arc for use inside detach
         let inner_arc = Arc::clone(&self.inner);
+        let metric = self.inner.read().store.metric();
 
         // Release GIL during compute-intensive search
         let results = py.detach(|| {
@@ -716,7 +737,7 @@ impl VectorDatabase {
         let results = results.map_err(convert_error)?;
 
         // Convert to Python (needs GIL)
-        results_to_py(py, &results)
+        results_to_py(py, &results, metric)
     }
 
     /// Debug timing search - returns timing breakdown in microseconds
@@ -848,6 +869,7 @@ impl VectorDatabase {
         }
 
         // Release GIL and search in parallel
+        let metric = self.inner.read().store.metric();
         let all_results: Vec<Result<Vec<SearchResult>, _>> = py.detach(|| {
             let inner = self.inner.read();
             inner.store.search_batch_with_metadata(&query_vecs, k, ef)
@@ -857,7 +879,7 @@ impl VectorDatabase {
         let mut py_all_results = Vec::with_capacity(all_results.len());
         for result in all_results {
             let results = result.map_err(convert_error)?;
-            py_all_results.push(results_to_py(py, &results)?);
+            py_all_results.push(results_to_py(py, &results, metric)?);
         }
 
         Ok(py_all_results)
