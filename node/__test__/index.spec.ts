@@ -198,41 +198,6 @@ describe("VectorDatabase", () => {
 			});
 		});
 
-		describe("searchOne", () => {
-			beforeEach(() => {
-				db.set([
-					{ id: "a", vector: Array(128).fill(0.1) },
-					{ id: "b", vector: Array(128).fill(0.5) },
-				]);
-			});
-
-			it("should return single nearest neighbor", () => {
-				const result = db.searchOne(Array(128).fill(0.5));
-				expect(result).not.toBeNull();
-				expect(result?.id).toBe("b");
-			});
-
-			it("should return null for empty database", () => {
-				const emptyDb = open(":memory:", { dimensions: 128 });
-				const result = emptyDb.searchOne(Array(128).fill(0.5));
-				expect(result).toBeNull();
-			});
-
-			it("should accept options", () => {
-				db.set([
-					{
-						id: "c",
-						vector: Array(128).fill(0.5),
-						metadata: { type: "special" },
-					},
-				]);
-				const result = db.searchOne(Array(128).fill(0.5), {
-					filter: { type: "special" },
-				});
-				expect(result?.id).toBe("c");
-			});
-		});
-
 		describe("searchBatch", () => {
 			beforeEach(() => {
 				const items = Array.from({ length: 100 }, (_, i) => ({

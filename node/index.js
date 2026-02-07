@@ -201,17 +201,6 @@ class VectorDatabase {
 		}
 	}
 
-	/**
-	 * Search for the single nearest neighbor.
-	 *
-	 * @param {number[]|Float32Array} query - Query vector
-	 * @param {object} [options] - Search options: {filter?, ef?, maxDistance?}
-	 * @returns {{id: string, distance: number, score: number, metadata: object}|null}
-	 */
-	searchOne(query, options) {
-		return this._native.searchOne(query, options);
-	}
-
 	searchBatch(queries, k, ef) {
 		return this._native.searchBatch(queries, k, ef);
 	}

@@ -1562,32 +1562,6 @@ impl VectorDatabase {
         self.exists(id)
     }
 
-    /// Search for the single nearest neighbor.
-    ///
-    /// Convenience method that returns the top result or null if no matches.
-    ///
-    /// @param query - Query vector (number[] or Float32Array)
-    /// @param options - Optional search options: {filter?, ef?, maxDistance?}
-    /// @returns Single result or null
-    ///
-    /// @example
-    /// ```javascript
-    /// const nearest = db.searchOne([1, 0, 0, 0]);
-    /// if (nearest) {
-    ///   console.log(`Found: ${nearest.id} at distance ${nearest.distance}`);
-    /// }
-    /// ```
-    #[napi(js_name = "searchOne")]
-    pub fn search_one(
-        &self,
-        query: Either<Vec<f64>, Float32Array>,
-        #[napi(ts_arg_type = "{ filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined")]
-        options: Option<JsonValue>,
-    ) -> Result<Option<SearchResult>> {
-        let results = self.search(query, 1, options)?;
-        Ok(results.into_iter().next())
-    }
-
     /// Get multiple vectors by ID.
     ///
     /// Batch version of get(). More efficient than calling get() in a loop.
