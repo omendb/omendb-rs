@@ -215,8 +215,6 @@ fn build_store_options(
     ef_construction: Option<usize>,
     ef_search: Option<usize>,
     quant_mode: Option<QuantizationMode>,
-    rescore: Option<bool>,
-    oversample: Option<f32>,
     metric: Option<&str>,
 ) -> PyResult<VectorStoreOptions> {
     let mut options = VectorStoreOptions::default().dimensions(dimensions);
@@ -232,12 +230,6 @@ fn build_store_options(
     }
     if let Some(mode) = quant_mode {
         options = options.quantization(mode);
-    }
-    if let Some(rescore_val) = rescore {
-        options = options.rescore(rescore_val);
-    }
-    if let Some(oversample_val) = oversample {
-        options = options.oversample(oversample_val);
     }
     if let Some(metric_str) = metric {
         options = options.metric(metric_str).map_err(PyValueError::new_err)?;
@@ -1973,9 +1965,8 @@ impl VectorDatabase {
 ///     ef_search (int): Search quality (default: 100, higher = better recall)
 ///     quantization (bool|str): Enable quantization (default: None = full precision)
 ///         - True or "sq8" or "scalar": SQ8 ~4x smaller, ~99% recall (RECOMMENDED)
+///         - "rabitq": RaBitQ 32x compression, binary distance
 ///         - False/None: Full precision (no quantization)
-///     rescore (bool): Rerank with full precision (default: True when quantized)
-///     oversample (float): Candidate multiplier for rescoring (default: 3.0)
 ///     metric (str): Distance metric for similarity search (default: "l2")
 ///         - "l2" or "euclidean": Euclidean distance (default)
 ///         - "cosine": Cosine distance (1 - cosine similarity)
@@ -2004,21 +1995,15 @@ impl VectorDatabase {
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True)
 ///     >>> db = omendb.open("./vectors", dimensions=768, quantization="sq8")
 ///
-///     # Disable rescore for max speed (~1-3% recall loss)
-///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, rescore=False)
-///
 ///     # Multi-vector mode for ColBERT-style retrieval
 ///     >>> db = omendb.open("./vectors", dimensions=128, multi_vector=True)
 ///     >>> db.set([{"id": "doc1", "vectors": [[0.1]*128, [0.2]*128], "metadata": {}}])
 ///     >>> results = db.search([[0.1]*128], k=10)
 ///
-///     # Custom oversample factor (default 3.0)
-///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True, oversample=5.0)
-///
 ///     # With cosine distance metric
 ///     >>> db = omendb.open("./vectors", dimensions=768, metric="cosine")
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, rescore=None, oversample=None, metric=None, multi_vector=None, config=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, config=None))]
 fn open(
     path: String,
     dimensions: usize,
@@ -2026,8 +2011,6 @@ fn open(
     ef_construction: Option<usize>,
     ef_search: Option<usize>,
     quantization: Option<&Bound<'_, PyAny>>,
-    rescore: Option<bool>,
-    oversample: Option<f32>,
     metric: Option<String>,
     multi_vector: Option<&Bound<'_, PyAny>>,
     config: Option<&Bound<'_, PyDict>>,
@@ -2052,16 +2035,6 @@ fn open(
             return Err(PyValueError::new_err(format!(
                 "ef_construction ({}) must be >= m ({})",
                 ef_val, m_val
-            )));
-        }
-    }
-
-    // Validate oversample
-    if let Some(factor) = oversample {
-        if factor < 1.0 {
-            return Err(PyValueError::new_err(format!(
-                "oversample must be >= 1.0, got {}",
-                factor
             )));
         }
     }
@@ -2126,8 +2099,6 @@ fn open(
             ef_construction,
             ef_search,
             quant_mode.clone(),
-            rescore,
-            oversample,
             metric.as_deref(),
         )?;
 
@@ -2208,8 +2179,6 @@ fn open(
             ef_construction,
             ef_search,
             quant_mode.clone(),
-            rescore,
-            oversample,
             metric.as_deref(),
         )?;
 
@@ -2268,8 +2237,6 @@ fn open(
         ef_construction,
         ef_search,
         quant_mode,
-        rescore,
-        oversample,
         metric.as_deref(),
     )?;
 

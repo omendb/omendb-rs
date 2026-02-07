@@ -54,15 +54,6 @@ pub struct VectorStoreOptions {
     /// Quantization mode (SQ8 for asymmetric HNSW search)
     pub(super) quantization: Option<QuantizationMode>,
 
-    /// Rescore candidates with original vectors (default: true when quantization enabled)
-    /// When true, search fetches `k * oversample` candidates using quantized distance,
-    /// then reranks with full precision distance for final k results.
-    pub(super) rescore: Option<bool>,
-
-    /// Oversampling factor for rescore (default: 3.0)
-    /// Fetches `k * oversample` candidates during quantized search.
-    pub(super) oversample: Option<f32>,
-
     /// Distance metric for similarity search (default: L2)
     pub(super) metric: Option<Metric>,
 
@@ -148,34 +139,6 @@ impl VectorStoreOptions {
     #[must_use]
     pub fn quantization_rabitq(self) -> Self {
         self.quantization(QuantizationMode::RaBitQ)
-    }
-
-    /// Enable/disable rescoring with original vectors (default: true when quantization enabled).
-    ///
-    /// When rescoring is enabled, search uses quantized vectors for fast candidate selection,
-    /// then reranks candidates using full-precision vectors for accuracy.
-    ///
-    /// # Arguments
-    /// * `enable` - Whether to rescore candidates
-    #[must_use]
-    pub fn rescore(mut self, enable: bool) -> Self {
-        self.rescore = Some(enable);
-        self
-    }
-
-    /// Set oversampling factor for rescoring (default: 3.0).
-    ///
-    /// When rescoring, fetches `k * oversample` candidates during quantized search,
-    /// then returns top k after reranking with full precision.
-    ///
-    /// Higher values improve recall but increase latency.
-    ///
-    /// # Arguments
-    /// * `factor` - Oversampling multiplier (must be >= 1.0)
-    #[must_use]
-    pub fn oversample(mut self, factor: f32) -> Self {
-        self.oversample = Some(factor.max(1.0));
-        self
     }
 
     /// Set distance metric for similarity search.

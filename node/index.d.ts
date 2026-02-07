@@ -357,13 +357,6 @@ export interface MultiVectorItem {
  *   quantization: true  // or "sq8"
  * });
  *
- * // Quantization with custom rescore settings
- * const db = omendb.open("./mydb", {
- *   dimensions: 128,
- *   quantization: true,
- *   rescore: false,    // Disable rescore for max speed
- *   oversample: 5.0    // Or increase oversample for better recall
- * });
  * ```
  */
 export declare function open(path: string, options?: OpenOptions | undefined | null): VectorDatabase
@@ -376,9 +369,7 @@ export declare function open(path: string, options?: OpenOptions | undefined | n
  * - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
  * - efConstruction: 100 (build quality, higher = better graph, slower build)
  * - efSearch: 100 (search quality, higher = better recall, slower search)
- * - quantization: null (true/"sq8" for 4x compression, ~99% recall)
- * - rescore: true when quantization enabled (rerank candidates with exact distance)
- * - oversample: 3.0 (fetch k*oversample candidates when rescoring)
+ * - quantization: null (true/"sq8" for 4x compression, "rabitq" for 32x compression)
  * - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
  */
 export interface OpenOptions {
@@ -396,16 +387,6 @@ export interface OpenOptions {
    * - false/null: Full precision (no quantization)
    */
   quantization?: boolean | string | number | null | undefined
-  /**
-   * Rescore candidates with exact distance (default: true when quantization enabled)
-   * Set to false for maximum speed at the cost of ~20% recall
-   */
-  rescore?: boolean
-  /**
-   * Oversampling factor for rescoring (default: 3.0)
-   * Fetches k*oversample candidates then reranks to return top k
-   */
-  oversample?: number
   /** Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip" */
   metric?: string
   /**

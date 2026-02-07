@@ -479,7 +479,7 @@ impl NodeStorage {
     pub fn vector(&self, id: u32) -> &[f32] {
         debug_assert!(
             self.mode == StorageMode::FullPrecision,
-            "vector() not available in SQ8 mode, use get_dequantized()"
+            "vector() only available in FullPrecision mode, use get_dequantized()"
         );
         let ptr = self.node_ptr(id);
         unsafe {

@@ -51,8 +51,6 @@ const DEFAULT_HNSW_M: usize = 16;
 const DEFAULT_HNSW_EF_CONSTRUCTION: usize = 100;
 /// Default HNSW ef_search parameter (search quality)
 const DEFAULT_HNSW_EF_SEARCH: usize = 100;
-/// Default oversample factor for rescore
-const DEFAULT_OVERSAMPLE_FACTOR: f32 = 3.0;
 
 #[cfg(test)]
 mod stress_tests;
@@ -89,13 +87,6 @@ pub struct VectorStore {
 
     /// Segment manager for HNSW index (mutable + frozen segments)
     pub segments: Option<SegmentManager>,
-
-    /// Whether to rescore candidates with original vectors (default: true when quantization enabled)
-    rescore_enabled: bool,
-
-    /// Oversampling factor for rescore (default: 3.0, used by quantization rescoring)
-    #[allow(dead_code)]
-    oversample_factor: f32,
 
     /// Roaring bitmap index for fast filtered search
     metadata_index: MetadataIndex,
@@ -153,8 +144,6 @@ impl VectorStore {
         Self {
             records: RecordStore::new(dimensions as u32),
             segments: None,
-            rescore_enabled: false,
-            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,
@@ -254,7 +243,6 @@ impl VectorStore {
     #[must_use]
     pub fn new_with_quantization(dimensions: usize, mode: QuantizationMode) -> Self {
         let mut store = Self::with_defaults(dimensions, Metric::L2);
-        store.rescore_enabled = true;
         store.pending_quantization = Some(mode);
         store
     }

@@ -8,7 +8,6 @@ use super::record_store::{Record, RecordStore};
 use super::VectorStore;
 use super::{
     DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M, DEFAULT_MAX_TOKENS,
-    DEFAULT_OVERSAMPLE_FACTOR,
 };
 use crate::omen::{
     parse_wal_delete, parse_wal_insert, CheckpointOptions, MetadataIndex, OmenFile, WalEntryType,
@@ -225,9 +224,6 @@ impl VectorStore {
             index
         };
 
-        // Enable rescore if quantized
-        let rescore_enabled = quantization_mode.is_some();
-
         // Reconstruct multi-vector state if config is present
         let (muvera_encoder, multivec_storage, distance_metric) =
             if let Some((reps, bits, seed, token_dim, d_proj, pool_factor)) =
@@ -268,8 +264,6 @@ impl VectorStore {
         Ok(Self {
             records,
             segments,
-            rescore_enabled,
-            oversample_factor: DEFAULT_OVERSAMPLE_FACTOR,
             metadata_index,
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
@@ -368,17 +362,9 @@ impl VectorStore {
             None
         };
 
-        // Determine rescore settings
-        let rescore_enabled = options.rescore.unwrap_or(options.quantization.is_some());
-        let oversample_factor = options.oversample.unwrap_or_else(|| {
-            helpers::default_oversample_for_quantization(options.quantization.as_ref())
-        });
-
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
             segments: None,
-            rescore_enabled,
-            oversample_factor,
             metadata_index: MetadataIndex::new(),
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
@@ -399,35 +385,23 @@ impl VectorStore {
     pub fn build_with_options(options: &VectorStoreOptions) -> Result<Self> {
         let dimensions = options.dimensions;
 
-        // Determine HNSW parameters
         let m = options.m.unwrap_or(16);
         let ef_construction = options.ef_construction.unwrap_or(100);
         let ef_search = options.ef_search.unwrap_or(100);
 
-        // Get distance metric from options (default: L2)
         let distance_metric = options.metric.unwrap_or(Metric::L2);
 
-        // Quantization is deferred until first insert
         let pending_quantization = options.quantization.clone();
 
-        // Initialize in-memory text index if enabled
         let text_index = if let Some(ref config) = options.text_search_config {
             Some(TextIndex::open_in_memory_with_config(config)?)
         } else {
             None
         };
 
-        // Determine rescore settings
-        let rescore_enabled = options.rescore.unwrap_or(options.quantization.is_some());
-        let oversample_factor = options.oversample.unwrap_or_else(|| {
-            helpers::default_oversample_for_quantization(options.quantization.as_ref())
-        });
-
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
             segments: None,
-            rescore_enabled,
-            oversample_factor,
             metadata_index: MetadataIndex::new(),
             storage: None,
             storage_path: None,

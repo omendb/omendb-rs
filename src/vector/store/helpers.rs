@@ -13,20 +13,6 @@ pub fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> us
     ef.unwrap_or(stored_ef).max(k)
 }
 
-/// Compute optimal oversample factor based on quantization mode.
-///
-/// Different quantization modes have different baseline recall:
-/// - SQ8: ~99% accurate, needs minimal oversampling (2.0x)
-/// - RaBitQ: ~95% accurate, needs more oversampling (3.0x)
-/// - No quantization: 1.0 (rescore disabled)
-pub fn default_oversample_for_quantization(mode: Option<&QuantizationMode>) -> f32 {
-    match mode {
-        None => 1.0,
-        Some(QuantizationMode::SQ8) => 2.0,
-        Some(QuantizationMode::RaBitQ) => 3.0,
-    }
-}
-
 /// Convert stored quantization mode ID to QuantizationMode.
 ///
 /// Mode IDs: 0=none, 1=sq8, 200=rabitq

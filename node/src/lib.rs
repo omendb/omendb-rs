@@ -1609,9 +1609,7 @@ impl VectorDatabase {
 /// - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
 /// - efConstruction: 100 (build quality, higher = better graph, slower build)
 /// - efSearch: 100 (search quality, higher = better recall, slower search)
-/// - quantization: null (true/"sq8" for 4x compression, ~99% recall)
-/// - rescore: true when quantization enabled (rerank candidates with exact distance)
-/// - oversample: 3.0 (fetch k*oversample candidates when rescoring)
+/// - quantization: null (true/"sq8" for 4x compression, "rabitq" for 32x compression)
 /// - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
 #[napi(object)]
 pub struct OpenOptions {
@@ -1628,12 +1626,6 @@ pub struct OpenOptions {
     /// - false/null: Full precision (no quantization)
     #[napi(ts_type = "boolean | string | number | null | undefined")]
     pub quantization: Option<serde_json::Value>,
-    /// Rescore candidates with exact distance (default: true when quantization enabled)
-    /// Set to false for maximum speed at the cost of ~20% recall
-    pub rescore: Option<bool>,
-    /// Oversampling factor for rescoring (default: 3.0)
-    /// Fetches k*oversample candidates then reranks to return top k
-    pub oversample: Option<f64>,
     /// Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip"
     pub metric: Option<String>,
     /// Enable multi-vector mode for ColBERT-style retrieval
@@ -1674,13 +1666,6 @@ pub struct OpenOptions {
 ///   quantization: true  // or "sq8"
 /// });
 ///
-/// // Quantization with custom rescore settings
-/// const db = omendb.open("./mydb", {
-///   dimensions: 128,
-///   quantization: true,
-///   rescore: false,    // Disable rescore for max speed
-///   oversample: 5.0    // Or increase oversample for better recall
-/// });
 /// ```
 #[napi]
 pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase> {
@@ -1690,8 +1675,6 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         ef_construction: None,
         ef_search: None,
         quantization: None,
-        rescore: None,
-        oversample: None,
         metric: None,
         multi_vector: None,
     });
@@ -1700,8 +1683,6 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     let m = opts.m.map(|v| v as usize);
     let ef_construction = opts.ef_construction.map(|v| v as usize);
     let ef_search = opts.ef_search.map(|v| v as usize);
-    let rescore = opts.rescore;
-    let oversample = opts.oversample;
 
     // Parse quantization (handles true or "sq8")
     let quant_mode = opts
@@ -1767,15 +1748,6 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         }
     }
 
-    if let Some(factor) = oversample {
-        if factor < 1.0 {
-            return Err(Error::new(
-                Status::InvalidArg,
-                format!("oversample must be >= 1.0, got {}", factor),
-            ));
-        }
-    }
-
     // Validate metric
     if let Some(ref m) = opts.metric {
         match m.to_lowercase().as_str() {
@@ -1806,12 +1778,6 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
     }
     if let Some(ref mode) = quant_mode {
         store_options = store_options.quantization(mode.clone());
-    }
-    if let Some(rescore_val) = rescore {
-        store_options = store_options.rescore(rescore_val);
-    }
-    if let Some(oversample_val) = oversample {
-        store_options = store_options.oversample(oversample_val as f32);
     }
     if let Some(ref metric_str) = opts.metric {
         store_options = store_options

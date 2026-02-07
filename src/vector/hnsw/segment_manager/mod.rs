@@ -155,14 +155,29 @@ impl SegmentManager {
     /// Uses HNSWIndex::build_parallel for fast initial construction.
     /// Slots are sequential starting from 0.
     pub fn build_parallel(config: SegmentConfig, vectors: Vec<Vec<f32>>) -> Result<Self> {
+        // RaBitQ uses lazy training and doesn't support parallel build; fall back to sequential
+        let use_sq8 = config
+            .quantization
+            .as_ref()
+            .is_some_and(QuantizationMode::is_sq8);
+        let is_rabitq = config
+            .quantization
+            .as_ref()
+            .is_some_and(QuantizationMode::is_rabitq);
+
+        if is_rabitq {
+            let mut mgr = Self::new(config)?;
+            for (i, v) in vectors.into_iter().enumerate() {
+                mgr.insert_with_slot(&v, i as u32)?;
+            }
+            return Ok(mgr);
+        }
+
         let index = HNSWIndex::build_parallel(
             config.dimensions,
             config.params,
             config.distance_fn,
-            config
-                .quantization
-                .as_ref()
-                .is_some_and(QuantizationMode::is_sq8),
+            use_sq8,
             vectors,
         )?;
         let mutable = MutableSegment::from_index_sequential(index);
@@ -185,14 +200,28 @@ impl SegmentManager {
         vectors: Vec<Vec<f32>>,
         slots: &[u32],
     ) -> Result<Self> {
+        let use_sq8 = config
+            .quantization
+            .as_ref()
+            .is_some_and(QuantizationMode::is_sq8);
+        let is_rabitq = config
+            .quantization
+            .as_ref()
+            .is_some_and(QuantizationMode::is_rabitq);
+
+        if is_rabitq {
+            let mut mgr = Self::new(config)?;
+            for (v, &slot) in vectors.into_iter().zip(slots.iter()) {
+                mgr.insert_with_slot(&v, slot)?;
+            }
+            return Ok(mgr);
+        }
+
         let index = HNSWIndex::build_parallel(
             config.dimensions,
             config.params,
             config.distance_fn,
-            config
-                .quantization
-                .as_ref()
-                .is_some_and(QuantizationMode::is_sq8),
+            use_sq8,
             vectors,
         )?;
         let mutable = MutableSegment::from_index(index, slots);
