@@ -30,6 +30,8 @@ pub enum MetadataFilter {
     And(Vec<MetadataFilter>),
     /// Logical OR: at least one filter must match
     Or(Vec<MetadataFilter>),
+    /// Logical NOT: negate a sub-filter
+    Not(Box<MetadataFilter>),
 }
 
 impl MetadataFilter {
@@ -73,6 +75,9 @@ impl MetadataFilter {
                 let sub_filters: Result<Vec<_>, _> =
                     arr.iter().map(MetadataFilter::from_json).collect();
                 MetadataFilter::Or(sub_filters?)
+            } else if key == "$not" {
+                let inner = MetadataFilter::from_json(val)?;
+                MetadataFilter::Not(Box::new(inner))
             } else if let Some(op_obj) = val.as_object() {
                 // Field with operator(s)
                 Self::parse_field_operators(key, op_obj)?
@@ -192,6 +197,7 @@ impl MetadataFilter {
                 .is_some_and(|s| s.contains(substring)),
             MetadataFilter::And(filters) => filters.iter().all(|f| f.matches(metadata)),
             MetadataFilter::Or(filters) => filters.iter().any(|f| f.matches(metadata)),
+            MetadataFilter::Not(inner) => !inner.matches(metadata),
         }
     }
 
@@ -240,10 +246,35 @@ impl MetadataFilter {
                     _ => None,
                 })
             }
-            MetadataFilter::Gt(..) | MetadataFilter::Lt(..) => {
-                // Strict inequalities have floating-point boundary issues with epsilon
-                // Fall back to JSON-based filtering for correctness
-                None
+            MetadataFilter::Gt(field, threshold) => {
+                index.get(field).and_then(|field_idx| match field_idx {
+                    FieldIndex::Numeric(num_idx) => {
+                        let mut result = RoaringBitmap::new();
+                        use ordered_float::OrderedFloat;
+                        use std::ops::Bound;
+                        for (_, bitmap) in num_idx.entries_range((
+                            Bound::Excluded(OrderedFloat(*threshold)),
+                            Bound::Unbounded,
+                        )) {
+                            result |= bitmap;
+                        }
+                        Some(result)
+                    }
+                    _ => None,
+                })
+            }
+            MetadataFilter::Lt(field, threshold) => {
+                index.get(field).and_then(|field_idx| match field_idx {
+                    FieldIndex::Numeric(num_idx) => {
+                        let mut result = RoaringBitmap::new();
+                        use ordered_float::OrderedFloat;
+                        for (_, bitmap) in num_idx.entries_range(..OrderedFloat(*threshold)) {
+                            result |= bitmap;
+                        }
+                        Some(result)
+                    }
+                    _ => None,
+                })
             }
             MetadataFilter::Lte(field, threshold) => {
                 index.get(field).and_then(|field_idx| match field_idx {
@@ -292,8 +323,8 @@ impl MetadataFilter {
                 }
                 Some(result)
             }
-            // These can't be efficiently evaluated via bitmap
-            MetadataFilter::Ne(..) | MetadataFilter::Contains(..) => None,
+            // These can't be efficiently evaluated via bitmap (negation needs universe)
+            MetadataFilter::Ne(..) | MetadataFilter::Contains(..) | MetadataFilter::Not(..) => None,
         }
     }
 }
@@ -391,6 +422,41 @@ mod tests {
         assert!(filter.matches(&json!({"category": "books", "price": 15.0})));
         assert!(!filter.matches(&json!({"category": "books", "price": 5.0})));
         assert!(!filter.matches(&json!({"category": "movies", "price": 15.0})));
+    }
+
+    #[test]
+    fn test_from_json_not_operator() {
+        // Simple negation
+        let filter = MetadataFilter::from_json(&json!({"$not": {"category": "books"}})).unwrap();
+        assert!(!filter.matches(&json!({"category": "books"})));
+        assert!(filter.matches(&json!({"category": "movies"})));
+    }
+
+    #[test]
+    fn test_from_json_not_compound() {
+        // Negate a compound condition
+        let filter = MetadataFilter::from_json(
+            &json!({"$not": {"$and": [{"category": "books"}, {"price": {"$lt": 20.0}}]}}),
+        )
+        .unwrap();
+        // books under 20 should NOT match
+        assert!(!filter.matches(&json!({"category": "books", "price": 15.0})));
+        // books over 20 SHOULD match (negated)
+        assert!(filter.matches(&json!({"category": "books", "price": 25.0})));
+        // movies under 20 SHOULD match (negated)
+        assert!(filter.matches(&json!({"category": "movies", "price": 15.0})));
+    }
+
+    #[test]
+    fn test_from_json_not_with_or() {
+        // $not with $or: "neither books nor movies"
+        let filter = MetadataFilter::from_json(
+            &json!({"$not": {"$or": [{"category": "books"}, {"category": "movies"}]}}),
+        )
+        .unwrap();
+        assert!(!filter.matches(&json!({"category": "books"})));
+        assert!(!filter.matches(&json!({"category": "movies"})));
+        assert!(filter.matches(&json!({"category": "music"})));
     }
 
     #[test]

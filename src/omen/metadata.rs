@@ -3,8 +3,9 @@
 //! Qdrant-style payload indexes: each indexed field has an inverted index
 //! mapping values to document IDs via Roaring bitmaps.
 
+use ordered_float::OrderedFloat;
 use roaring::RoaringBitmap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
 
 // Deserialization limits to prevent DoS from malformed files
@@ -250,13 +251,13 @@ impl BooleanIndex {
     }
 }
 
-/// Numeric index for integer/float range queries
+/// Numeric index for integer/float range queries using BTreeMap
+///
+/// Each distinct value maps to a RoaringBitmap of document IDs.
+/// BTreeMap provides O(log n) equality lookups and O(log n + m) range queries.
 #[derive(Debug, Clone, Default)]
 pub struct NumericIndex {
-    /// Sorted (value, `doc_id`) pairs for range queries
-    entries: Vec<(f64, u32)>,
-    /// Optional: bitmap for common values (equality fast path)
-    common_values: HashMap<i64, RoaringBitmap>,
+    entries: BTreeMap<OrderedFloat<f64>, RoaringBitmap>,
 }
 
 impl NumericIndex {
@@ -265,118 +266,90 @@ impl NumericIndex {
     }
 
     pub fn insert(&mut self, doc_id: u32, value: f64) {
-        // Skip NaN values (can't be compared or indexed meaningfully)
         if value.is_nan() {
             return;
         }
-
-        // Add to sorted entries (total_cmp handles -0.0 vs 0.0, NaN already filtered)
-        let pos = self
-            .entries
-            .binary_search_by(|(v, _)| v.total_cmp(&value))
-            .unwrap_or_else(|p| p);
-        self.entries.insert(pos, (value, doc_id));
-
-        // Track common integer values for fast equality
-        if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
-            let int_val = value as i64;
-            self.common_values
-                .entry(int_val)
-                .or_default()
-                .insert(doc_id);
-        }
+        self.entries
+            .entry(OrderedFloat(value))
+            .or_default()
+            .insert(doc_id);
     }
 
     pub fn remove(&mut self, doc_id: u32) {
-        self.entries.retain(|(_, id)| *id != doc_id);
-        for bitmap in self.common_values.values_mut() {
+        self.entries.retain(|_, bitmap| {
             bitmap.remove(doc_id);
-        }
-        // Clean up empty bitmaps to prevent memory leak
-        self.common_values.retain(|_, bitmap| !bitmap.is_empty());
+            !bitmap.is_empty()
+        });
     }
 
-    /// Get documents where value == target (fast path for integers)
+    /// Get documents where value == target
     pub fn get_eq(&self, value: f64) -> Option<&RoaringBitmap> {
-        if value.fract() == 0.0 {
-            self.common_values.get(&(value as i64))
-        } else {
-            None
-        }
+        self.entries.get(&OrderedFloat(value))
     }
 
     /// Get documents where value is in range [min, max]
     pub fn get_range(&self, min: f64, max: f64) -> RoaringBitmap {
-        // Use partition_point to find FIRST position where value >= min
-        // This handles duplicates correctly (binary_search may find any duplicate)
-        let start = self.entries.partition_point(|(v, _)| *v < min);
-
         let mut result = RoaringBitmap::new();
-        for (val, doc_id) in &self.entries[start..] {
-            if *val > max {
-                break;
-            }
-            result.insert(*doc_id);
+        for (_, bitmap) in self.entries.range(OrderedFloat(min)..=OrderedFloat(max)) {
+            result |= bitmap;
         }
         result
+    }
+
+    /// Iterate over entries in the given range (for bitmap evaluation)
+    pub fn entries_range<R>(
+        &self,
+        range: R,
+    ) -> impl Iterator<Item = (&OrderedFloat<f64>, &RoaringBitmap)>
+    where
+        R: std::ops::RangeBounds<OrderedFloat<f64>>,
+    {
+        self.entries.range(range)
     }
 
     /// Check if document matches value
     #[inline]
     pub fn matches_eq(&self, doc_id: u32, value: f64) -> bool {
-        if let Some(bitmap) = self.get_eq(value) {
-            bitmap.contains(doc_id)
-        } else {
-            // Slow path: linear scan
-            self.entries
-                .iter()
-                .any(|(v, id)| *id == doc_id && v.total_cmp(&value).is_eq())
-        }
+        self.entries
+            .get(&OrderedFloat(value))
+            .is_some_and(|bitmap| bitmap.contains(doc_id))
     }
 
     /// Check if document is in range [min, max] (inclusive)
     #[inline]
     pub fn matches_range(&self, doc_id: u32, min: f64, max: f64) -> bool {
         self.entries
-            .iter()
-            .any(|(v, id)| *id == doc_id && *v >= min && *v <= max)
+            .range(OrderedFloat(min)..=OrderedFloat(max))
+            .any(|(_, bitmap)| bitmap.contains(doc_id))
     }
 
     /// Check if document value > threshold (strict greater than)
     #[inline]
     pub fn matches_gt(&self, doc_id: u32, threshold: f64) -> bool {
+        use std::ops::Bound;
         self.entries
-            .iter()
-            .any(|(v, id)| *id == doc_id && *v > threshold)
+            .range((Bound::Excluded(OrderedFloat(threshold)), Bound::Unbounded))
+            .any(|(_, bitmap)| bitmap.contains(doc_id))
     }
 
     /// Check if document value < threshold (strict less than)
     #[inline]
     pub fn matches_lt(&self, doc_id: u32, threshold: f64) -> bool {
         self.entries
-            .iter()
-            .any(|(v, id)| *id == doc_id && *v < threshold)
+            .range(..OrderedFloat(threshold))
+            .any(|(_, bitmap)| bitmap.contains(doc_id))
     }
 
     /// Serialize to bytes
     pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        // Write entries count and data
         writer.write_all(&to_u32(self.entries.len(), "entries count")?.to_le_bytes())?;
-        for (value, doc_id) in &self.entries {
-            writer.write_all(&value.to_le_bytes())?;
-            writer.write_all(&doc_id.to_le_bytes())?;
-        }
-
-        // Write common_values count and data
-        writer.write_all(&to_u32(self.common_values.len(), "common values")?.to_le_bytes())?;
-        for (int_val, bitmap) in &self.common_values {
-            writer.write_all(&int_val.to_le_bytes())?;
+        for (value, bitmap) in &self.entries {
+            writer.write_all(&value.into_inner().to_le_bytes())?;
             let mut bitmap_bytes = Vec::new();
             bitmap.serialize_into(&mut bitmap_bytes)?;
             writer.write_all(&to_u32(bitmap_bytes.len(), "bitmap length")?.to_le_bytes())?;
             writer.write_all(&bitmap_bytes)?;
         }
-
         Ok(())
     }
 
@@ -385,27 +358,13 @@ impl NumericIndex {
         let mut buf4 = [0u8; 4];
         let mut buf8 = [0u8; 8];
 
-        // Read entries
         reader.read_exact(&mut buf4)?;
         let entries_len = u32::from_le_bytes(buf4) as usize;
         check_len(entries_len, MAX_ENTRIES, "entries count")?;
-        let mut entries = Vec::with_capacity(entries_len.min(1024));
+        let mut entries = BTreeMap::new();
         for _ in 0..entries_len {
             reader.read_exact(&mut buf8)?;
             let value = f64::from_le_bytes(buf8);
-            reader.read_exact(&mut buf4)?;
-            let doc_id = u32::from_le_bytes(buf4);
-            entries.push((value, doc_id));
-        }
-
-        // Read common_values
-        reader.read_exact(&mut buf4)?;
-        let common_len = u32::from_le_bytes(buf4) as usize;
-        check_len(common_len, MAX_ENTRIES, "common values count")?;
-        let mut common_values = HashMap::with_capacity(common_len.min(1024));
-        for _ in 0..common_len {
-            reader.read_exact(&mut buf8)?;
-            let int_val = i64::from_le_bytes(buf8);
             reader.read_exact(&mut buf4)?;
             let bitmap_len = u32::from_le_bytes(buf4) as usize;
             check_len(bitmap_len, MAX_BITMAP_LEN, "bitmap length")?;
@@ -413,13 +372,10 @@ impl NumericIndex {
             reader.read_exact(&mut bitmap_buf)?;
             let bitmap = RoaringBitmap::deserialize_from(&bitmap_buf[..])
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            common_values.insert(int_val, bitmap);
+            entries.insert(OrderedFloat(value), bitmap);
         }
 
-        Ok(Self {
-            entries,
-            common_values,
-        })
+        Ok(Self { entries })
     }
 }
 
@@ -809,6 +765,90 @@ mod tests {
         assert!(idx.matches(1, &filter));
         assert!(!idx.matches(2, &filter));
         assert!(!idx.matches(3, &filter));
+    }
+
+    #[test]
+    fn test_numeric_index_range_scale() {
+        let mut idx = NumericIndex::new();
+        for i in 0..10_000u32 {
+            idx.insert(i, i as f64);
+        }
+
+        // Equality
+        assert!(idx.matches_eq(5000, 5000.0));
+        assert!(!idx.matches_eq(5000, 5001.0));
+
+        // Range query [100, 200] should contain exactly 101 docs
+        let range = idx.get_range(100.0, 200.0);
+        assert_eq!(range.len(), 101);
+        assert!(range.contains(100));
+        assert!(range.contains(200));
+        assert!(!range.contains(99));
+        assert!(!range.contains(201));
+
+        // Strict gt/lt
+        assert!(idx.matches_gt(5000, 4999.0));
+        assert!(!idx.matches_gt(5000, 5000.0));
+        assert!(idx.matches_lt(5000, 5001.0));
+        assert!(!idx.matches_lt(5000, 5000.0));
+
+        // Remove and verify
+        idx.remove(150);
+        let range2 = idx.get_range(100.0, 200.0);
+        assert_eq!(range2.len(), 100);
+        assert!(!range2.contains(150));
+    }
+
+    #[test]
+    fn test_numeric_index_float_values() {
+        let mut idx = NumericIndex::new();
+        idx.insert(1, 1.5);
+        idx.insert(2, 2.7);
+        idx.insert(3, 2.7); // duplicate value
+        idx.insert(4, 3.14);
+
+        assert!(idx.matches_eq(1, 1.5));
+        assert!(idx.matches_eq(2, 2.7));
+        assert!(idx.matches_eq(3, 2.7));
+        assert!(!idx.matches_eq(1, 2.7));
+
+        let range = idx.get_range(2.0, 3.0);
+        assert_eq!(range.len(), 2); // doc 2 and 3
+        assert!(range.contains(2));
+        assert!(range.contains(3));
+        assert!(!range.contains(1));
+        assert!(!range.contains(4));
+    }
+
+    #[test]
+    fn test_numeric_serialize_roundtrip() {
+        let mut idx = NumericIndex::new();
+        idx.insert(1, 10.0);
+        idx.insert(2, 20.5);
+        idx.insert(3, 30.0);
+
+        let mut buf = Vec::new();
+        idx.serialize(&mut buf).unwrap();
+
+        let mut cursor = std::io::Cursor::new(&buf);
+        let idx2 = NumericIndex::deserialize(&mut cursor).unwrap();
+
+        assert!(idx2.matches_eq(1, 10.0));
+        assert!(idx2.matches_eq(2, 20.5));
+        assert!(idx2.matches_eq(3, 30.0));
+        let range = idx2.get_range(15.0, 25.0);
+        assert!(range.contains(2));
+        assert!(!range.contains(1));
+    }
+
+    #[test]
+    fn test_numeric_nan_ignored() {
+        let mut idx = NumericIndex::new();
+        idx.insert(1, f64::NAN);
+        idx.insert(2, 10.0);
+
+        assert!(!idx.matches_eq(1, f64::NAN));
+        assert!(idx.matches_eq(2, 10.0));
     }
 
     #[test]

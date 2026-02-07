@@ -164,6 +164,38 @@ describe("VectorDatabase", () => {
 				// Should filter out distant results
 				expect(results.every((r) => r.distance <= 0.1)).toBe(true);
 			});
+
+			it("should filter with $not operator", () => {
+				db.set([
+					{ id: "a1", vector: Array(128).fill(0.3), metadata: { type: "A" } },
+					{ id: "b1", vector: Array(128).fill(0.5), metadata: { type: "B" } },
+					{ id: "c1", vector: Array(128).fill(0.7), metadata: { type: "C" } },
+				]);
+
+				// $not: exclude type A
+				const filtered = db.search(Array(128).fill(0.5), 10, {
+					filter: { $not: { type: "A" } },
+				});
+				expect(filtered.every((r) => r.metadata?.type !== "A")).toBe(true);
+				expect(filtered.some((r) => r.metadata?.type === "B")).toBe(true);
+			});
+
+			it("should filter with $not and compound conditions", () => {
+				db.set([
+					{ id: "x1", vector: Array(128).fill(0.3), metadata: { cat: "A", val: 10 } },
+					{ id: "x2", vector: Array(128).fill(0.5), metadata: { cat: "A", val: 50 } },
+					{ id: "x3", vector: Array(128).fill(0.7), metadata: { cat: "B", val: 30 } },
+				]);
+
+				// NOT (cat=A AND val>=50) => excludes x2
+				const filtered = db.search(Array(128).fill(0.5), 10, {
+					filter: { $not: { $and: [{ cat: "A" }, { val: { $gte: 50 } }] } },
+				});
+				const ids = filtered.map((r) => r.id);
+				expect(ids).not.toContain("x2");
+				expect(ids).toContain("x1");
+				expect(ids).toContain("x3");
+			});
 		});
 
 		describe("searchOne", () => {

@@ -424,3 +424,67 @@ def test_search_sparse_filter_acorn1(temp_db_path):
 
     del db
     gc.collect()
+
+
+def test_search_one_basic(db_with_vectors):
+    """Test search_one returns single nearest result"""
+    result = db_with_vectors.search_one([0.1] * 128)
+    assert result is not None
+    assert "id" in result
+    assert "distance" in result
+    assert "score" in result
+    assert "metadata" in result
+
+
+def test_search_one_empty_database(db):
+    """Test search_one on empty database returns None"""
+    result = db.search_one([0.1] * 128)
+    assert result is None
+
+
+def test_search_one_with_filter(db_with_vectors):
+    """Test search_one with metadata filter"""
+    result = db_with_vectors.search_one([0.1] * 128, filter={"label": "A"})
+    assert result is not None
+    assert result["metadata"]["label"] == "A"
+
+
+def test_search_one_filter_no_match(db_with_vectors):
+    """Test search_one when filter matches nothing"""
+    result = db_with_vectors.search_one([0.1] * 128, filter={"label": "NONEXISTENT"})
+    assert result is None
+
+
+def test_filter_not_basic(db_with_vectors):
+    """Test $not filter negates condition"""
+    # All except label="A"
+    results = db_with_vectors.search([0.1] * 128, k=10, filter={"$not": {"label": "A"}})
+    assert len(results) == 3  # vec2(B), vec3(C), vec5(B)
+    assert all(r["metadata"]["label"] != "A" for r in results)
+
+
+def test_filter_not_compound(db_with_vectors):
+    """Test $not with compound sub-filter"""
+    # NOT (label=A AND value>=4)
+    results = db_with_vectors.search(
+        [0.1] * 128,
+        k=10,
+        filter={"$not": {"$and": [{"label": "A"}, {"value": {"$gte": 4}}]}},
+    )
+    # vec4 has label=A and value=4, so it should be excluded
+    ids = {r["id"] for r in results}
+    assert "vec4" not in ids
+    # vec1 has label=A but value=1, so it should be included (negation passes)
+    assert "vec1" in ids
+
+
+def test_filter_not_with_or(db_with_vectors):
+    """Test $not with $or sub-filter"""
+    # NOT (label=A OR label=B) => only label=C
+    results = db_with_vectors.search(
+        [0.1] * 128,
+        k=10,
+        filter={"$not": {"$or": [{"label": "A"}, {"label": "B"}]}},
+    )
+    assert len(results) == 1  # Only vec3(C)
+    assert results[0]["metadata"]["label"] == "C"

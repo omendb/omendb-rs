@@ -708,6 +708,16 @@ impl VectorDatabase {
         // Single-vector store: original logic
         let query_vec = Vector::new(extract_query_vector(query)?);
 
+        // Validate query dimensions match the database
+        let expected_dims = self.dimensions;
+        if expected_dims > 0 && query_vec.dim() != expected_dims {
+            return Err(PyValueError::new_err(format!(
+                "Query vector dimension ({}) does not match database dimension ({})",
+                query_vec.dim(),
+                expected_dims
+            )));
+        }
+
         // Ensure index is ready before releasing GIL
         {
             let inner = self.inner.read();
@@ -738,6 +748,32 @@ impl VectorDatabase {
 
         // Convert to Python (needs GIL)
         results_to_py(py, &results, metric)
+    }
+
+    /// Find the single nearest neighbor. Convenience for k=1 search.
+    ///
+    /// Args:
+    ///     query: Query vector (list[float] or 1D numpy array)
+    ///     filter (dict, optional): Metadata filter
+    ///     max_distance (float, optional): Maximum distance threshold
+    ///
+    /// Returns:
+    ///     dict or None: The nearest result, or None if no matches
+    ///
+    /// Example:
+    ///     >>> result = db.search_one([0.1, 0.2, 0.3])
+    ///     >>> if result:
+    ///     ...     print(result["id"], result["score"])
+    #[pyo3(name = "search_one", signature = (query, filter=None, max_distance=None))]
+    fn search_one(
+        &self,
+        py: Python<'_>,
+        query: &Bound<'_, PyAny>,
+        filter: Option<&Bound<'_, PyDict>>,
+        max_distance: Option<f32>,
+    ) -> PyResult<Option<Py<PyDict>>> {
+        let results = self.search(py, query, 1, None, filter, max_distance, None, None)?;
+        Ok(results.into_iter().next())
     }
 
     /// Debug timing search - returns timing breakdown in microseconds
@@ -2312,6 +2348,14 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
         }
 
         return Ok(MetadataFilter::Or(sub_filters));
+    }
+
+    if let Some(not_value) = filter.get_item("$not")? {
+        let not_dict = not_value
+            .cast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("$not must be a filter dict"))?;
+        let inner = parse_filter(not_dict)?;
+        return Ok(MetadataFilter::Not(Box::new(inner)));
     }
 
     // Parse regular field filters

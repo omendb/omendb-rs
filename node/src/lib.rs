@@ -192,6 +192,12 @@ fn parse_filter(filter: &JsonValue) -> Result<MetadataFilter> {
         return Ok(MetadataFilter::Or(sub_filters?));
     }
 
+    // Handle $not
+    if let Some(not_value) = obj.get("$not") {
+        let inner = parse_filter(not_value)?;
+        return Ok(MetadataFilter::Not(Box::new(inner)));
+    }
+
     // Parse field filters
     let mut filters = Vec::new();
 
