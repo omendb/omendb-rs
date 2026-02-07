@@ -797,9 +797,6 @@ impl VectorDatabase {
         });
         let t_hnsw_tight_total = t0.elapsed().as_micros() as f64;
 
-        // Check storage properties
-        let is_sq8 = false; // Quantization info not accessible from segments
-
         let mut result = HashMap::new();
         result.insert(
             "search_per_call_us".to_string(),
@@ -822,7 +819,6 @@ impl VectorDatabase {
             (t_hnsw_total - t_hnsw_tight_total) / n_iterations as f64,
         );
         result.insert("n_iterations".to_string(), n_iterations as f64);
-        result.insert("is_sq8".to_string(), if is_sq8 { 1.0 } else { 0.0 });
 
         Ok(result)
     }
@@ -1508,7 +1504,7 @@ impl VectorDatabase {
         })?;
 
         // Open the collection as a separate VectorStore
-        let store = if self.dimensions == 0 || self.dimensions == 128 {
+        let store = if self.dimensions == 0 {
             VectorStore::open(&collection_path).map_err(convert_error)?
         } else {
             VectorStore::open_with_dimensions(&collection_path, self.dimensions)
@@ -1934,18 +1930,15 @@ impl VectorDatabase {
             )));
         }
 
-        // Remove from cache first
+        // Remove files first, then cache (if files fail, cache stays consistent)
+        std::fs::remove_file(&omen_path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete collection: {}", e)))?;
+        let _ = std::fs::remove_file(&wal_path);
+
         {
             let mut cache = self.collections_cache.write();
             cache.remove(&name);
         }
-
-        // Remove .omen file
-        std::fs::remove_file(&omen_path)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete collection: {}", e)))?;
-
-        // Remove .wal file if it exists
-        let _ = std::fs::remove_file(&wal_path);
 
         Ok(())
     }

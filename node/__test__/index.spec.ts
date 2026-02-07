@@ -406,23 +406,20 @@ describe("VectorDatabase", () => {
 			});
 		});
 
-		describe("exists and has", () => {
+		describe("exists", () => {
 			it("should return true for existing ID", () => {
 				db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
 				expect(db.exists("a")).toBe(true);
-				expect(db.has("a")).toBe(true);
 			});
 
 			it("should return false for non-existent ID", () => {
 				expect(db.exists("nonexistent")).toBe(false);
-				expect(db.has("nonexistent")).toBe(false);
 			});
 
 			it("should return false for deleted ID", () => {
 				db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
 				db.delete("a");
 				expect(db.exists("a")).toBe(false);
-				expect(db.has("a")).toBe(false);
 			});
 		});
 

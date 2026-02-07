@@ -141,11 +141,6 @@ function convertMultiVectorItem(item) {
 	};
 }
 
-// Check if items contain multi-vector data (vectors field must be an array)
-function isMultiVectorItem(item) {
-	return Array.isArray(item.vectors);
-}
-
 // Wrap VectorDatabase to handle array conversion
 const NativeVectorDatabase = nativeBinding.VectorDatabase;
 
@@ -325,16 +320,6 @@ class VectorDatabase {
 
 	exists(id) {
 		return this._native.exists(id);
-	}
-
-	/**
-	 * Alias for exists() - check if an ID exists in the database.
-	 *
-	 * @param {string} id - Vector ID to check
-	 * @returns {boolean}
-	 */
-	has(id) {
-		return this._native.has(id);
 	}
 
 	getBatch(ids) {

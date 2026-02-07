@@ -263,37 +263,6 @@ pub struct SearchResult {
 }
 
 // ============================================================================
-// Vector Item - input for set operations (single-vector stores)
-// ============================================================================
-
-#[napi(object)]
-pub struct VectorItem {
-    pub id: String,
-    /// Vector data as Float32Array
-    pub vector: Float32Array,
-    /// Optional metadata
-    #[napi(ts_type = "Record<string, unknown> | undefined")]
-    pub metadata: Option<JsonValue>,
-    /// Optional document text (stored in metadata.document)
-    pub document: Option<String>,
-}
-
-// ============================================================================
-// Multi-Vector Item - input for set operations (multi-vector stores)
-// ============================================================================
-
-#[napi(object)]
-pub struct MultiVectorItem {
-    pub id: String,
-    /// Multi-vector data as array of Float32Arrays
-    #[napi(ts_type = "Float32Array[]")]
-    pub vectors: Vec<Float32Array>,
-    /// Optional metadata
-    #[napi(ts_type = "Record<string, unknown> | undefined")]
-    pub metadata: Option<JsonValue>,
-}
-
-// ============================================================================
 // Unified Item - input for set() on any store type
 // ============================================================================
 
@@ -322,19 +291,6 @@ pub struct GetResult {
     pub vector: Float32Array,
     #[napi(ts_type = "Record<string, unknown>")]
     pub metadata: JsonValue,
-}
-
-// ============================================================================
-// Vector Item With Text - input for hybrid search set operations
-// ============================================================================
-
-#[napi(object)]
-pub struct VectorItemWithText {
-    pub id: String,
-    pub vector: Float32Array,
-    pub text: String,
-    #[napi(ts_type = "Record<string, unknown> | undefined")]
-    pub metadata: Option<JsonValue>,
 }
 
 // ============================================================================
@@ -1113,7 +1069,7 @@ impl VectorDatabase {
             )
         })?;
 
-        let store = if self.dimensions == 0 || self.dimensions == 128 {
+        let store = if self.dimensions == 0 {
             VectorStore::open(&collection_path).map_err(convert_error)?
         } else {
             VectorStore::open_with_dimensions(&collection_path, self.dimensions as usize)
@@ -1257,6 +1213,14 @@ impl VectorDatabase {
             return Err(Error::from_reason("k must be greater than 0"));
         }
 
+        // Auto-flush text index to ensure search sees latest inserts
+        {
+            let mut inner = self.inner.write();
+            if inner.store.has_text_search() {
+                inner.store.flush().map_err(convert_error)?;
+            }
+        }
+
         let inner = self.inner.read();
 
         let results = inner
@@ -1346,6 +1310,14 @@ impl VectorDatabase {
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
         let alpha_f32 = alpha.map(|a| a as f32);
         let rrf_k_usize = rrf_k.map(|k| k as usize);
+
+        // Auto-flush text index to ensure search sees latest inserts
+        {
+            let mut inner = self.inner.write();
+            if inner.store.has_text_search() {
+                inner.store.flush().map_err(convert_error)?;
+            }
+        }
 
         let inner = self.inner.read();
 
@@ -1551,15 +1523,6 @@ impl VectorDatabase {
     pub fn exists(&self, id: String) -> bool {
         let inner = self.inner.read();
         inner.store.contains(&id)
-    }
-
-    /// Alias for exists() - check if an ID exists in the database.
-    ///
-    /// @param id - Vector ID to check
-    /// @returns true if ID exists and is not deleted
-    #[napi]
-    pub fn has(&self, id: String) -> bool {
-        self.exists(id)
     }
 
     /// Get multiple vectors by ID.
