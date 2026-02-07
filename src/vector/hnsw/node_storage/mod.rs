@@ -156,6 +156,8 @@ pub struct NodeStorage {
     pub(crate) rabitq_codes: Vec<u64>,
     /// RaBitQ per-vector metadata: [n_vectors * 4] (dis_u_2, factor_ip, factor_ppc, factor_err)
     pub(crate) rabitq_metadata: Vec<f32>,
+    /// Original full-precision vectors for RaBitQ (needed for graph construction + rescore)
+    pub(crate) rabitq_originals: Vec<f32>,
     /// Whether RaBitQ quantization has been trained
     pub(crate) rabitq_trained: bool,
 }
@@ -245,6 +247,7 @@ impl NodeStorage {
             rabitq_params: None,
             rabitq_codes: Vec::new(),
             rabitq_metadata: Vec::new(),
+            rabitq_originals: Vec::new(),
             rabitq_trained: false,
         }
     }
@@ -528,14 +531,18 @@ impl NodeStorage {
                 }
             }
             StorageMode::RaBitQ => {
-                // RaBitQ is 1-bit; no meaningful reconstruction after training.
-                // Before training, return from training buffer.
+                let dim = self.dimensions;
+                let start = id as usize * dim;
+                let end = start + dim;
                 if self.rabitq_trained {
-                    None
+                    // After training: return from stored originals
+                    if end <= self.rabitq_originals.len() {
+                        Some(self.rabitq_originals[start..end].to_vec())
+                    } else {
+                        None
+                    }
                 } else {
-                    let dim = self.dimensions;
-                    let start = id as usize * dim;
-                    let end = start + dim;
+                    // Before training: return from training buffer
                     if end <= self.training_buffer.len() {
                         Some(self.training_buffer[start..end].to_vec())
                     } else {
@@ -885,12 +892,15 @@ impl NodeStorage {
             })
             .sum();
 
-        // SQ8 auxiliary storage
-        let sq8_usage = self.norms.len() * 4  // f32 norms
+        // Auxiliary storage (SQ8 + RaBitQ)
+        let aux_usage = self.norms.len() * 4  // f32 norms
             + self.sq8_sums.len() * 4  // i32 sums
-            + self.training_buffer.len() * 4; // f32 training buffer
+            + self.training_buffer.len() * 4  // f32 training buffer
+            + self.rabitq_codes.len() * 8  // u64 binary codes
+            + self.rabitq_metadata.len() * 4  // f32 metadata
+            + self.rabitq_originals.len() * 4; // f32 original vectors
 
-        level0_usage + upper_usage + sq8_usage
+        level0_usage + upper_usage + aux_usage
     }
 
     // =========================================================================

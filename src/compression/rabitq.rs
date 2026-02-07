@@ -293,29 +293,6 @@ impl RaBitQParams {
         rough.max(0.0)
     }
 
-    /// Batch compute distances
-    #[inline]
-    pub fn distance_batch(
-        prep: &RaBitQQueryPrep,
-        signs_batch: &[u64],
-        metadata_batch: &[f32],
-        code_words: usize,
-        distances: &mut [f32],
-    ) {
-        for (i, dist) in distances.iter_mut().enumerate() {
-            let code_start = i * code_words;
-            let code_end = code_start + code_words;
-            let meta_start = i * 4;
-
-            let signs = &signs_batch[code_start..code_end];
-            let dis_u_2 = metadata_batch[meta_start];
-            let factor_ip = metadata_batch[meta_start + 1];
-            let factor_ppc = metadata_batch[meta_start + 2];
-
-            *dist = Self::distance(prep, signs, dis_u_2, factor_ip, factor_ppc);
-        }
-    }
-
     /// Serialize params to bytes
     pub fn serialize_params(&self) -> Vec<u8> {
         // Format: [dimensions:u32][seed:u64][centroid:f32*D][rotation_bits:4*num_words*u64]
@@ -345,6 +322,9 @@ impl RaBitQParams {
         }
 
         let dimensions = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+        if dimensions == 0 {
+            return Err("RaBitQ dimensions must be > 0");
+        }
         let seed = u64::from_le_bytes(data[4..12].try_into().unwrap());
 
         let padded_dim = dimensions.next_power_of_two();

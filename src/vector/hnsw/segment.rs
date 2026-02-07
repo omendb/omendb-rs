@@ -358,9 +358,11 @@ impl FrozenSegment {
         for id in 0..mutable.index.len() as u32 {
             storage.allocate_node();
 
-            // Copy vector
+            // Copy vector (handles both full-precision and quantized modes)
             if let Some(vector) = mutable.index.get_vector(id) {
                 storage.set_vector(id, vector);
+            } else if let Some(vector) = mutable.index.get_vector_dequantized(id) {
+                storage.set_vector(id, &vector);
             }
 
             // Copy level 0 neighbors (main graph layer)

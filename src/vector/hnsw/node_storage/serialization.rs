@@ -117,6 +117,7 @@ impl NodeStorage {
             rabitq_params: None,
             rabitq_codes: Vec::new(),
             rabitq_metadata: Vec::new(),
+            rabitq_originals: Vec::new(),
             rabitq_trained: false,
         }
     }
@@ -157,6 +158,7 @@ impl NodeStorage {
             rabitq_params: None,
             rabitq_codes: Vec::new(),
             rabitq_metadata: Vec::new(),
+            rabitq_originals: Vec::new(),
             rabitq_trained: false,
         }
     }
@@ -242,6 +244,11 @@ impl NodeStorage {
         out.extend_from_slice(&(self.rabitq_metadata.len() as u64).to_le_bytes());
         for &m in &self.rabitq_metadata {
             out.extend_from_slice(&m.to_le_bytes());
+        }
+        // RaBitQ original vectors (needed for graph construction + rescore)
+        out.extend_from_slice(&(self.rabitq_originals.len() as u64).to_le_bytes());
+        for &v in &self.rabitq_originals {
+            out.extend_from_slice(&v.to_le_bytes());
         }
 
         // Upper neighbors (HashMap - only stores nodes with upper levels)
@@ -412,8 +419,11 @@ impl NodeStorage {
         let pq_codes_len = read_u64(data, &mut pos)? as usize;
         let _pq_codes = read_bytes(data, &mut pos, pq_codes_len)?;
 
+        // Safety caps for auxiliary arrays
+        const MAX_AUX_ELEMENTS: usize = 1_000_000_000; // 1B elements
+
         // RaBitQ state (only present if data remains before upper neighbors)
-        let (rabitq_trained, rabitq_params, rabitq_codes, rabitq_metadata) =
+        let (rabitq_trained, rabitq_params, rabitq_codes, rabitq_metadata, rabitq_originals) =
             if pos + 2 <= data.len() && mode == StorageMode::RaBitQ {
                 let trained = read_u8(data, &mut pos)? != 0;
                 let has_params = read_u8(data, &mut pos)? != 0;
@@ -429,16 +439,42 @@ impl NodeStorage {
                 };
                 // Codes are stored as u64 words (len = number of u64 words)
                 let codes_len = read_u64(data, &mut pos)? as usize;
+                if codes_len > MAX_AUX_ELEMENTS {
+                    return Err(format!(
+                        "RaBitQ codes length {codes_len} exceeds safety cap"
+                    ));
+                }
                 let mut codes = Vec::with_capacity(codes_len);
                 for _ in 0..codes_len {
                     codes.push(read_u64(data, &mut pos)?);
                 }
                 let meta_len = read_u64(data, &mut pos)? as usize;
+                if meta_len > MAX_AUX_ELEMENTS {
+                    return Err(format!(
+                        "RaBitQ metadata length {meta_len} exceeds safety cap"
+                    ));
+                }
                 let mut metadata = Vec::with_capacity(meta_len);
                 for _ in 0..meta_len {
                     metadata.push(read_f32(data, &mut pos)?);
                 }
-                (trained, params, codes, metadata)
+                // Original vectors (may not be present in older files)
+                let originals = if pos + 8 <= data.len() {
+                    let orig_len = read_u64(data, &mut pos)? as usize;
+                    if orig_len > MAX_AUX_ELEMENTS {
+                        return Err(format!(
+                            "RaBitQ originals length {orig_len} exceeds safety cap"
+                        ));
+                    }
+                    let mut orig = Vec::with_capacity(orig_len);
+                    for _ in 0..orig_len {
+                        orig.push(read_f32(data, &mut pos)?);
+                    }
+                    orig
+                } else {
+                    Vec::new()
+                };
+                (trained, params, codes, metadata, originals)
             } else if pos + 2 <= data.len() && mode != StorageMode::RaBitQ {
                 // Non-RaBitQ mode: still read past the rabitq fields for forward compat
                 let _trained = read_u8(data, &mut pos)? != 0;
@@ -452,18 +488,37 @@ impl NodeStorage {
                 };
                 // Skip codes (u64 words)
                 let codes_len = read_u64(data, &mut pos)? as usize;
+                if codes_len > MAX_AUX_ELEMENTS {
+                    return Err(format!(
+                        "RaBitQ codes length {codes_len} exceeds safety cap"
+                    ));
+                }
                 for _ in 0..codes_len {
                     let _ = read_u64(data, &mut pos)?;
                 }
                 // Skip metadata
                 let meta_len = read_u64(data, &mut pos)? as usize;
+                if meta_len > MAX_AUX_ELEMENTS {
+                    return Err(format!(
+                        "RaBitQ metadata length {meta_len} exceeds safety cap"
+                    ));
+                }
                 for _ in 0..meta_len {
                     let _ = read_f32(data, &mut pos)?;
                 }
-                (false, None, Vec::new(), Vec::new())
+                // Skip originals if present
+                if pos + 8 <= data.len() {
+                    let orig_len = read_u64(data, &mut pos)? as usize;
+                    if orig_len <= MAX_AUX_ELEMENTS {
+                        for _ in 0..orig_len {
+                            let _ = read_f32(data, &mut pos)?;
+                        }
+                    }
+                }
+                (false, None, Vec::new(), Vec::new(), Vec::new())
             } else {
                 // Old format without RaBitQ fields
-                (false, None, Vec::new(), Vec::new())
+                (false, None, Vec::new(), Vec::new(), Vec::new())
             };
 
         // Upper neighbors (HashMap - only nodes with upper levels)
@@ -511,6 +566,7 @@ impl NodeStorage {
         storage.rabitq_params = rabitq_params;
         storage.rabitq_codes = rabitq_codes;
         storage.rabitq_metadata = rabitq_metadata;
+        storage.rabitq_originals = rabitq_originals;
         storage.rabitq_trained = rabitq_trained;
 
         Ok(storage)
