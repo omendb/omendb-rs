@@ -200,20 +200,52 @@ impl HNSWIndex {
         Ok(Self::build(storage, params, distance_fn))
     }
 
+    /// Create new HNSW index with PQ (Product Quantization)
+    ///
+    /// PQ compresses f32 vectors into M bytes (one codeword index per subspace).
+    /// Uses Asymmetric Distance Computation (ADC) with pre-computed lookup tables.
+    ///
+    /// # Arguments
+    /// * `dimensions` - Vector dimensionality (must be divisible by `num_subspaces`)
+    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
+    /// * `distance_fn` - Distance function (only L2 supported for PQ)
+    /// * `num_subspaces` - Number of PQ subspaces (controls compression ratio)
+    pub fn new_with_pq(
+        dimensions: usize,
+        params: HNSWParams,
+        distance_fn: DistanceFunction,
+        num_subspaces: usize,
+    ) -> Result<Self> {
+        Self::validate_l2_required(&params, distance_fn, "PQ quantization")?;
+        let storage = NodeStorage::new_pq(
+            dimensions,
+            params.m,
+            params.max_level as usize,
+            num_subspaces,
+        );
+        Ok(Self::build(storage, params, distance_fn))
+    }
+
     // =========================================================================
     // Getters
     // =========================================================================
 
-    /// Check if this index uses asymmetric search (SQ8)
+    /// Check if this index uses asymmetric search (SQ8 or PQ)
     #[must_use]
     pub fn is_asymmetric(&self) -> bool {
-        self.storage.is_sq8()
+        self.storage.is_sq8() || self.storage.is_pq()
     }
 
     /// Check if this index uses SQ8 quantization
     #[must_use]
     pub fn is_sq8(&self) -> bool {
         self.storage.is_sq8()
+    }
+
+    /// Check if this index uses PQ quantization
+    #[must_use]
+    pub fn is_pq(&self) -> bool {
+        self.storage.is_pq()
     }
 
     /// Train the quantizer from sample vectors
@@ -246,11 +278,11 @@ impl HNSWIndex {
 
     /// Get a vector by ID (full precision)
     ///
-    /// Returns None if the ID is invalid, out of bounds, or in SQ8 mode.
-    /// For SQ8 mode, use `get_vector_dequantized()` instead.
+    /// Returns None if the ID is invalid, out of bounds, or in quantized mode.
+    /// For quantized modes, use `get_vector_dequantized()` instead.
     #[must_use]
     pub fn get_vector(&self, id: u32) -> Option<&[f32]> {
-        if self.storage.is_sq8() || (id as usize) >= self.storage.len() {
+        if self.storage.is_sq8() || self.storage.is_pq() || (id as usize) >= self.storage.len() {
             return None;
         }
         Some(self.storage.vector(id))
@@ -461,7 +493,7 @@ impl HNSWIndex {
 
     /// Distance between nodes for ordering comparisons
     ///
-    /// Uses dequantized vectors if storage is quantized (SQ8).
+    /// Uses dequantized vectors if storage is quantized (SQ8 or PQ).
     #[inline]
     pub(super) fn distance_between_cmp(&self, id_a: u32, id_b: u32) -> Result<f32> {
         if self.storage.is_sq8() {
@@ -483,6 +515,17 @@ impl HNSWIndex {
                 .get_dequantized(id_b)
                 .ok_or(HNSWError::VectorNotFound(id_b))?;
             Ok(self.distance_fn.distance_for_comparison(&vec_a, &vec_b))
+        } else if self.storage.is_pq() {
+            // PQ: dequantize both vectors
+            let vec_a = self
+                .storage
+                .get_dequantized(id_a)
+                .ok_or(HNSWError::VectorNotFound(id_a))?;
+            let vec_b = self
+                .storage
+                .get_dequantized(id_b)
+                .ok_or(HNSWError::VectorNotFound(id_b))?;
+            Ok(self.distance_fn.distance_for_comparison(&vec_a, &vec_b))
         } else {
             // Full precision: use zero-copy references (no allocation)
             let vec_a = self.storage.vector(id_a);
@@ -493,7 +536,7 @@ impl HNSWIndex {
 
     /// Distance from query to node for ordering comparisons
     ///
-    /// Tries SQ8 fast path first, falls back to full precision.
+    /// Tries SQ8/PQ fast path first, falls back to full precision.
     #[inline(always)]
     pub(super) fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
         if self.storage.is_sq8() {
@@ -504,8 +547,16 @@ impl HNSWIndex {
                 }
             }
         }
-        // Full precision path
-        if self.storage.is_sq8() {
+        if self.storage.is_pq() {
+            // PQ fast path
+            if let Some(prep) = self.storage.prepare_query_pq(query) {
+                if let Some(dist) = self.storage.distance_pq(&prep, id) {
+                    return Ok(dist);
+                }
+            }
+        }
+        // Full precision path (also handles fallback)
+        if self.storage.is_sq8() || self.storage.is_pq() {
             let vec = self
                 .storage
                 .get_dequantized(id)
@@ -528,8 +579,16 @@ impl HNSWIndex {
                 }
             }
         }
-        // Full precision path
-        if self.storage.is_sq8() {
+        if self.storage.is_pq() {
+            // PQ: use ADC table (returns squared L2)
+            if let Some(prep) = self.storage.prepare_query_pq(query) {
+                if let Some(dist) = self.storage.distance_pq(&prep, id) {
+                    return Ok(dist.sqrt());
+                }
+            }
+        }
+        // Full precision path (also handles fallback)
+        if self.storage.is_sq8() || self.storage.is_pq() {
             let vec = self
                 .storage
                 .get_dequantized(id)

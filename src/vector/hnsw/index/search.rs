@@ -4,7 +4,7 @@
 
 use super::HNSWIndex;
 use crate::vector::hnsw::error::{HNSWError, Result};
-use crate::vector::hnsw::node_storage::{NodeStorage, QueryPrep};
+use crate::vector::hnsw::node_storage::{NodeStorage, PQPrep, QueryPrep};
 use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
 use ordered_float::OrderedFloat;
 use tracing::{debug, error, instrument};
@@ -16,6 +16,7 @@ use tracing::{debug, error, instrument};
 struct DistanceContext<'a> {
     query: &'a [f32],
     sq8_prep: Option<QueryPrep>,
+    pq_prep: Option<PQPrep>,
     force_full_precision: bool,
     storage: &'a NodeStorage,
 }
@@ -23,15 +24,19 @@ struct DistanceContext<'a> {
 impl<'a> DistanceContext<'a> {
     /// Create a new distance context for the current search
     fn new(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
-        let sq8_prep = if force_full_precision {
-            None
+        let (sq8_prep, pq_prep) = if force_full_precision {
+            (None, None)
         } else {
-            index.storage.prepare_query(query)
+            (
+                index.storage.prepare_query(query),
+                index.storage.prepare_query_pq(query),
+            )
         };
 
         Self {
             query,
             sq8_prep,
+            pq_prep,
             force_full_precision,
             storage: &index.storage,
         }
@@ -47,11 +52,16 @@ impl<'a> DistanceContext<'a> {
                     return Ok(dist);
                 }
             }
+            // PQ fast path
+            if let Some(ref prep) = self.pq_prep {
+                if let Some(dist) = self.storage.distance_pq(prep, node_id) {
+                    return Ok(dist);
+                }
+            }
         }
 
         // Full precision fallback
-        if self.storage.is_sq8() {
-            // Dequantize for SQ8 mode
+        if self.storage.is_sq8() || self.storage.is_pq() {
             let vec = self
                 .storage
                 .get_dequantized(node_id)
@@ -64,23 +74,25 @@ impl<'a> DistanceContext<'a> {
         }
     }
 
-    /// Check if batch distance computation is available (SQ8 mode)
+    /// Check if batch distance computation is available (SQ8 or PQ mode)
     #[inline(always)]
     fn has_batch(&self) -> bool {
-        !self.force_full_precision && self.sq8_prep.is_some()
+        !self.force_full_precision && (self.sq8_prep.is_some() || self.pq_prep.is_some())
     }
 
-    /// Batch compute distances to multiple nodes (SQ8 fast path)
+    /// Batch compute distances to multiple nodes (SQ8/PQ fast path)
     ///
     /// Returns the number of distances computed. Caller must provide output buffer
     /// large enough to hold distances for all IDs.
     #[inline]
     fn compute_batch(&self, ids: &[u32], distances: &mut [f32]) -> usize {
         if let Some(ref prep) = self.sq8_prep {
-            self.storage.distance_sq8_batch(prep, ids, distances)
-        } else {
-            0
+            return self.storage.distance_sq8_batch(prep, ids, distances);
         }
+        if let Some(ref prep) = self.pq_prep {
+            return self.storage.distance_pq_batch(prep, ids, distances);
+        }
+        0
     }
 }
 

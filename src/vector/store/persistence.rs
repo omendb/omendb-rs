@@ -177,7 +177,7 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(distance_metric.into())
-                .with_quantization(quantization_mode.is_some());
+                .with_quantization(quantization_mode.clone());
 
             // Build segments with parallel construction
             Some(

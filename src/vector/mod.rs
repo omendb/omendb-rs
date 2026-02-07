@@ -23,6 +23,11 @@ pub enum QuantizationMode {
     /// - ~2x faster than f32
     /// - ~99% recall
     SQ8,
+    /// Product Quantization (PQ): f32 -> M bytes (one per subspace)
+    /// - 16-64x compression for 768D+ vectors
+    /// - ~95% recall with rescore
+    /// - `subspaces`: number of subspaces (must divide dimensions evenly)
+    PQ { subspaces: usize },
 }
 
 impl QuantizationMode {
@@ -32,9 +37,21 @@ impl QuantizationMode {
         Self::SQ8
     }
 
+    /// PQ quantization with specified number of subspaces
+    #[must_use]
+    pub fn pq(subspaces: usize) -> Self {
+        Self::PQ { subspaces }
+    }
+
     /// Check if SQ8 mode
     #[must_use]
     pub fn is_sq8(&self) -> bool {
         matches!(self, Self::SQ8)
+    }
+
+    /// Check if PQ mode
+    #[must_use]
+    pub fn is_pq(&self) -> bool {
+        matches!(self, Self::PQ { .. })
     }
 }

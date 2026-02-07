@@ -142,6 +142,19 @@ impl VectorStoreOptions {
         self.quantization(QuantizationMode::SQ8)
     }
 
+    /// Enable PQ quantization (16-64x compression for 768D+ vectors)
+    ///
+    /// `num_subspaces` must divide dimensions evenly. Common choices:
+    /// - 768D: 96 subspaces (8D each, 96 bytes = 32x compression)
+    /// - 384D: 48 subspaces (8D each, 48 bytes = 32x compression)
+    /// - 128D: 16 subspaces (8D each, 16 bytes = 32x compression)
+    #[must_use]
+    pub fn quantization_pq(self, num_subspaces: usize) -> Self {
+        self.quantization(QuantizationMode::PQ {
+            subspaces: num_subspaces,
+        })
+    }
+
     /// Enable/disable rescoring with original vectors (default: true when quantization enabled).
     ///
     /// When rescoring is enabled, search uses quantized vectors for fast candidate selection,

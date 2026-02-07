@@ -37,13 +37,15 @@ mod quantization;
 mod reorder;
 mod serialization;
 
+use crate::compression::product::PQParams;
 use crate::compression::scalar::ScalarParams;
 use rustc_hash::FxHashMap;
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::fmt;
 use std::ptr::NonNull;
 
-// Re-export QueryPrep for use by callers
+// Re-export query prep types for use by callers
+pub use crate::compression::product::PQQueryPrep as PQPrep;
 pub use crate::compression::scalar::QueryPrep;
 
 /// Storage mode for vectors
@@ -54,6 +56,9 @@ pub enum StorageMode {
     FullPrecision,
     /// SQ8 quantized vectors (D bytes per vector, 4x compression)
     SQ8,
+    /// PQ quantized vectors (M bytes per vector, 16-64x compression)
+    /// The parameter is the number of subspaces.
+    PQ(usize),
 }
 
 /// Cache-line alignment for optimal prefetch
@@ -131,8 +136,8 @@ pub struct NodeStorage {
     /// Using Vec<Vec<u32>> instead of Box<[Vec<u32>]> allows in-place mutation.
     pub(crate) upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>>,
 
-    // SQ8 quantization support
-    /// Storage mode (full precision or SQ8)
+    // Quantization support
+    /// Storage mode (full precision, SQ8, or PQ)
     pub(crate) mode: StorageMode,
     /// Scalar quantization parameters (only for SQ8 mode)
     pub(crate) sq8_params: Option<ScalarParams>,
@@ -140,10 +145,18 @@ pub struct NodeStorage {
     pub(crate) norms: Vec<f32>,
     /// Sum of quantized codes (only for SQ8 mode, used in L2 decomposition)
     pub(crate) sq8_sums: Vec<i32>,
-    /// Training buffer for lazy SQ8 training (first 256 vectors)
+    /// Training buffer for lazy quantization training (first 256 vectors)
     pub(crate) training_buffer: Vec<f32>,
-    /// Whether SQ8 quantization has been trained
+    /// Whether quantization has been trained
     pub(crate) sq8_trained: bool,
+
+    // PQ quantization support
+    /// Product quantization parameters (codebooks)
+    pub(crate) pq_params: Option<PQParams>,
+    /// PQ codes stored contiguously: [n_vectors * num_subspaces]
+    pub(crate) pq_codes: Vec<u8>,
+    /// Whether PQ quantization has been trained
+    pub(crate) pq_trained: bool,
 }
 
 impl fmt::Debug for NodeStorage {
@@ -183,6 +196,12 @@ impl NodeStorage {
         Self::with_mode(dimensions, m, max_levels, StorageMode::SQ8)
     }
 
+    /// Create new PQ quantized storage
+    #[must_use]
+    pub fn new_pq(dimensions: usize, m: usize, max_levels: usize, num_subspaces: usize) -> Self {
+        Self::with_mode(dimensions, m, max_levels, StorageMode::PQ(num_subspaces))
+    }
+
     /// Create storage with specified mode
     #[must_use]
     fn with_mode(dimensions: usize, m: usize, max_levels: usize, mode: StorageMode) -> Self {
@@ -190,12 +209,13 @@ impl NodeStorage {
         let max_neighbors_upper = m; // Upper levels get M
 
         // Layout: [count:2][pad:2][neighbors:M*2*4][vector][slot:4][level:1]
-        // Vector size depends on mode: f32 (4 bytes) vs u8 (1 byte)
+        // Vector size depends on mode: f32 (4 bytes) vs u8 (1 byte) vs PQ (M bytes)
         let neighbors_offset = 4; // 2 (count) + 2 (padding) = 4
         let vector_offset = neighbors_offset + max_neighbors * 4;
         let vector_size = match mode {
-            StorageMode::FullPrecision => dimensions * 4, // f32
-            StorageMode::SQ8 => dimensions,               // u8
+            StorageMode::FullPrecision => dimensions * 4,    // f32
+            StorageMode::SQ8 => dimensions,                  // u8
+            StorageMode::PQ(num_subspaces) => num_subspaces, // M bytes
         };
         let metadata_offset = vector_offset + vector_size;
         let raw_size = metadata_offset + 4 + 1; // slot (4) + level (1)
@@ -221,6 +241,9 @@ impl NodeStorage {
             sq8_sums: Vec::new(),
             training_buffer: Vec::new(),
             sq8_trained: false,
+            pq_params: None,
+            pq_codes: Vec::new(),
+            pq_trained: false,
         }
     }
 
@@ -273,11 +296,29 @@ impl NodeStorage {
         self.mode == StorageMode::SQ8
     }
 
-    /// Check if SQ8 quantization is trained (only relevant for SQ8 mode)
+    /// Check if this storage uses PQ quantization
+    #[inline]
+    #[must_use]
+    pub fn is_pq(&self) -> bool {
+        matches!(self.mode, StorageMode::PQ(_))
+    }
+
+    /// Check if this storage uses any quantization
+    #[inline]
+    #[must_use]
+    pub fn is_quantized(&self) -> bool {
+        self.mode != StorageMode::FullPrecision
+    }
+
+    /// Check if quantization is trained (only relevant for quantized modes)
     #[inline]
     #[must_use]
     pub fn is_trained(&self) -> bool {
-        self.mode == StorageMode::FullPrecision || self.sq8_trained
+        match self.mode {
+            StorageMode::FullPrecision => true,
+            StorageMode::SQ8 => self.sq8_trained,
+            StorageMode::PQ(_) => self.pq_trained,
+        }
     }
 
     /// Number of nodes
@@ -458,34 +499,54 @@ impl NodeStorage {
         }
     }
 
-    /// Get dequantized vector (handles both trained and untrained SQ8 mode)
+    /// Get dequantized vector (handles all quantization modes)
     ///
     /// In full precision mode, returns the vector directly.
-    /// In SQ8 mode before training, returns the vector from the training buffer.
-    /// In SQ8 mode after training, returns the dequantized vector.
+    /// In quantized modes before training, returns the vector from the training buffer.
+    /// In quantized modes after training, returns the dequantized/reconstructed vector.
     #[must_use]
     pub fn get_dequantized(&self, id: u32) -> Option<Vec<f32>> {
-        if self.mode != StorageMode::SQ8 {
-            return Some(self.vector(id).to_vec());
-        }
-
-        let id_usize = id as usize;
-
-        // If SQ8 trained, dequantize from storage
-        if self.sq8_trained {
-            let params = self.sq8_params.as_ref()?;
-            let quantized = self.quantized_vector(id);
-            return Some(params.dequantize(quantized));
-        }
-
-        // Not trained yet - get from training buffer
-        let dim = self.dimensions;
-        let start = id_usize * dim;
-        let end = start + dim;
-        if end <= self.training_buffer.len() {
-            Some(self.training_buffer[start..end].to_vec())
-        } else {
-            None
+        match self.mode {
+            StorageMode::FullPrecision => Some(self.vector(id).to_vec()),
+            StorageMode::SQ8 => {
+                let id_usize = id as usize;
+                if self.sq8_trained {
+                    let params = self.sq8_params.as_ref()?;
+                    let quantized = self.quantized_vector(id);
+                    Some(params.dequantize(quantized))
+                } else {
+                    let dim = self.dimensions;
+                    let start = id_usize * dim;
+                    let end = start + dim;
+                    if end <= self.training_buffer.len() {
+                        Some(self.training_buffer[start..end].to_vec())
+                    } else {
+                        None
+                    }
+                }
+            }
+            StorageMode::PQ(num_subspaces) => {
+                let id_usize = id as usize;
+                if self.pq_trained {
+                    let params = self.pq_params.as_ref()?;
+                    let start = id_usize * num_subspaces;
+                    let end = start + num_subspaces;
+                    if end <= self.pq_codes.len() {
+                        Some(params.reconstruct(&self.pq_codes[start..end]))
+                    } else {
+                        None
+                    }
+                } else {
+                    let dim = self.dimensions;
+                    let start = id_usize * dim;
+                    let end = start + dim;
+                    if end <= self.training_buffer.len() {
+                        Some(self.training_buffer[start..end].to_vec())
+                    } else {
+                        None
+                    }
+                }
+            }
         }
     }
 
@@ -524,6 +585,9 @@ impl NodeStorage {
             }
             StorageMode::SQ8 => {
                 self.set_vector_sq8(id, vector);
+            }
+            StorageMode::PQ(_) => {
+                self.set_vector_pq(id, vector);
             }
         }
     }

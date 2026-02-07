@@ -250,12 +250,26 @@ impl SegmentManager {
         }
 
         // Build merged index
-        let mut merged_index = HNSWIndex::new(
-            self.config.dimensions,
-            self.config.params,
-            self.config.distance_fn,
-            self.config.use_quantization,
-        )?;
+        let mut merged_index = match &self.config.quantization {
+            Some(crate::vector::QuantizationMode::PQ { subspaces }) => HNSWIndex::new_with_pq(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+                *subspaces,
+            )?,
+            Some(crate::vector::QuantizationMode::SQ8) => HNSWIndex::new(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+                true,
+            )?,
+            None => HNSWIndex::new(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+                false,
+            )?,
+        };
 
         // Insert all vectors with slot tracking
         let (collected_slots, insert_duration) =
@@ -351,12 +365,26 @@ impl SegmentManager {
         }
 
         // Build merged index
-        let mut merged_index = HNSWIndex::new(
-            self.config.dimensions,
-            self.config.params,
-            self.config.distance_fn,
-            self.config.use_quantization,
-        )?;
+        let mut merged_index = match &self.config.quantization {
+            Some(crate::vector::QuantizationMode::PQ { subspaces }) => HNSWIndex::new_with_pq(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+                *subspaces,
+            )?,
+            Some(crate::vector::QuantizationMode::SQ8) => HNSWIndex::new(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+                true,
+            )?,
+            None => HNSWIndex::new(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+                false,
+            )?,
+        };
 
         // Insert all vectors with slot tracking
         let (collected_slots, insert_duration) =

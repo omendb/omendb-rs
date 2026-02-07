@@ -125,20 +125,33 @@ fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMo
         serde_json::Value::Null => Ok(None),
         serde_json::Value::Bool(true) => Ok(Some(QuantizationMode::SQ8)),
         serde_json::Value::Bool(false) => Ok(None),
-        serde_json::Value::String(s) => match s.to_lowercase().as_str() {
-            "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
-            _ => Err(Error::new(
-                Status::InvalidArg,
-                format!(
-                    "Unknown quantization mode: '{}'\n\
-                     Valid modes: true, 'sq8', or 'scalar' (4x smaller, ~99% recall)",
-                    s
-                ),
-            )),
-        },
+        serde_json::Value::String(s) => {
+            let lower = s.to_lowercase();
+            match lower.as_str() {
+                "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
+                "pq" => Ok(Some(QuantizationMode::PQ { subspaces: 96 })),
+                s if s.starts_with("pq:") => {
+                    let n: usize = s[3..].parse().map_err(|_| {
+                        Error::new(
+                            Status::InvalidArg,
+                            format!("Invalid PQ subspaces: '{}'", &s[3..]),
+                        )
+                    })?;
+                    Ok(Some(QuantizationMode::PQ { subspaces: n }))
+                }
+                _ => Err(Error::new(
+                    Status::InvalidArg,
+                    format!(
+                        "Unknown quantization mode: '{}'\n\
+                         Valid modes: true, 'sq8', 'scalar', 'pq', or 'pq:N'",
+                        s
+                    ),
+                )),
+            }
+        }
         _ => Err(Error::new(
             Status::InvalidArg,
-            "quantization must be true, false, or 'sq8'/'scalar'",
+            "quantization must be true, false, 'sq8'/'scalar', 'pq', or 'pq:N'",
         )),
     }
 }

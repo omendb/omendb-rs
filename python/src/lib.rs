@@ -47,16 +47,23 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     if let Ok(mode) = value.extract::<String>() {
         return match mode.to_lowercase().as_str() {
             "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
+            "pq" => Ok(Some(QuantizationMode::PQ { subspaces: 96 })),
+            s if s.starts_with("pq:") => {
+                let n: usize = s[3..].parse().map_err(|_| {
+                    PyValueError::new_err(format!("Invalid PQ subspaces: '{}'", &s[3..]))
+                })?;
+                Ok(Some(QuantizationMode::PQ { subspaces: n }))
+            }
             _ => Err(PyValueError::new_err(format!(
                 "Unknown quantization mode: '{}'\n\
-                  Valid modes: True, 'sq8', or 'scalar' (4x smaller, ~99% recall)",
+                  Valid modes: True, 'sq8', 'scalar', 'pq', or 'pq:N' (N = subspaces)",
                 mode
             ))),
         };
     }
 
     Err(PyValueError::new_err(
-        "quantization must be True, False, or 'sq8'/'scalar' (4x smaller, ~99% recall)",
+        "quantization must be True, False, 'sq8'/'scalar', 'pq', or 'pq:N'",
     ))
 }
 

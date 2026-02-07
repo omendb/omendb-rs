@@ -353,7 +353,7 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(self.distance_metric.into())
-                .with_quantization(self.pending_quantization.is_some());
+                .with_quantization(self.pending_quantization.clone());
 
             self.segments = Some(
                 SegmentManager::new(config)
@@ -489,7 +489,7 @@ impl VectorStore {
                         ..Default::default()
                     })
                     .with_distance(self.distance_metric.into())
-                    .with_quantization(self.pending_quantization.is_some());
+                    .with_quantization(self.pending_quantization.clone());
 
                 // Use parallel build with slot mapping
                 self.segments = Some(
@@ -811,7 +811,7 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(self.distance_metric.into())
-                .with_quantization(self.pending_quantization.is_some());
+                .with_quantization(self.pending_quantization.clone());
 
             self.segments = Some(
                 SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
@@ -851,7 +851,7 @@ impl VectorStore {
                 ..Default::default()
             })
             .with_distance(self.distance_metric.into())
-            .with_quantization(self.pending_quantization.is_some());
+            .with_quantization(self.pending_quantization.clone());
 
         // Rebuild with parallel construction
         self.segments = Some(

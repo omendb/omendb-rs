@@ -89,7 +89,7 @@ impl MutableSegment {
         })
     }
 
-    /// Create with quantization
+    /// Create with SQ8 quantization
     pub fn new_quantized(
         dimensions: usize,
         params: HNSWParams,
@@ -97,6 +97,23 @@ impl MutableSegment {
     ) -> crate::vector::hnsw::error::Result<Self> {
         Ok(Self {
             index: HNSWIndex::new(dimensions, params, distance_fn, true)?,
+            id: 0,
+            capacity: 100_000,
+            slots: Vec::new(),
+        })
+    }
+
+    /// Create with PQ quantization
+    pub fn new_pq(
+        dimensions: usize,
+        params: HNSWParams,
+        distance_fn: DistanceFunction,
+        _num_subspaces: usize,
+    ) -> crate::vector::hnsw::error::Result<Self> {
+        // HNSWIndex::new_with_pq is being added by another agent.
+        // Placeholder: build full-precision index; PQ training happens lazily via NodeStorage.
+        Ok(Self {
+            index: HNSWIndex::new(dimensions, params, distance_fn, false)?,
             id: 0,
             capacity: 100_000,
             slots: Vec::new(),

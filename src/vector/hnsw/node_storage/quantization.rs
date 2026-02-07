@@ -1,9 +1,11 @@
-//! SQ8 quantization support for NodeStorage
+//! Quantization support for NodeStorage (SQ8 and PQ)
 //!
-//! Implements scalar quantization with lazy training and L2 decomposition
-//! for fast distance calculation.
+//! Implements scalar and product quantization with lazy training.
+//! - SQ8: L2 decomposition for fast integer SIMD distance
+//! - PQ: ADC lookup tables for M-byte compressed distance
 
-use super::NodeStorage;
+use super::{NodeStorage, StorageMode};
+use crate::compression::product::{PQParams, PQQueryPrep};
 use crate::compression::scalar::{QueryPrep, ScalarParams};
 
 impl NodeStorage {
@@ -159,6 +161,182 @@ impl NodeStorage {
             }
         }
         count
+    }
+
+    // ========================================================================
+    // PQ (Product Quantization) support
+    // ========================================================================
+
+    /// Set vector in PQ mode with lazy training
+    pub(super) fn set_vector_pq(&mut self, id: u32, vector: &[f32]) {
+        let id_usize = id as usize;
+
+        if self.pq_trained {
+            let params = self.pq_params.as_ref().expect("PQ params should exist");
+            let codes = params.quantize(vector);
+            let num_subspaces = params.num_subspaces;
+
+            // Store PQ codes in the colocated node storage
+            let ptr = self.node_ptr_mut(id);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::copy_nonoverlapping(codes.as_ptr(), vec_ptr, num_subspaces);
+            }
+
+            // Also store in contiguous pq_codes for batch access
+            let start = id_usize * num_subspaces;
+            let end = start + num_subspaces;
+            if end > self.pq_codes.len() {
+                self.pq_codes.resize(end, 0);
+            }
+            self.pq_codes[start..end].copy_from_slice(&codes);
+
+            // Store norm for rescore
+            let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
+            if id_usize >= self.norms.len() {
+                self.norms.resize(id_usize + 1, 0.0);
+            }
+            self.norms[id_usize] = norm_sq;
+        } else {
+            // Buffer for training
+            self.training_buffer.extend_from_slice(vector);
+
+            // Store zeros in colocated storage
+            let num_subspaces = match self.mode {
+                StorageMode::PQ(n) => n,
+                _ => unreachable!(),
+            };
+            let ptr = self.node_ptr_mut(id);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::write_bytes(vec_ptr, 0, num_subspaces);
+            }
+
+            // Train after 256 vectors
+            let num_vectors = self.training_buffer.len() / self.dimensions;
+            if num_vectors >= 256 {
+                self.train_pq_quantization();
+            }
+        }
+    }
+
+    /// Train PQ quantization from buffered vectors
+    pub(super) fn train_pq_quantization(&mut self) {
+        let dim = self.dimensions;
+        let num_vectors = self.training_buffer.len() / dim;
+        let num_subspaces = match self.mode {
+            StorageMode::PQ(n) => n,
+            _ => unreachable!(),
+        };
+
+        // Build training sample
+        let training_refs: Vec<&[f32]> = (0..num_vectors)
+            .map(|i| &self.training_buffer[i * dim..(i + 1) * dim])
+            .collect();
+
+        // Train PQ codebooks
+        let params =
+            PQParams::train(&training_refs, num_subspaces).expect("Failed to train PQ params");
+        self.pq_params = Some(params.clone());
+        self.pq_trained = true;
+
+        // Quantize all buffered vectors
+        self.pq_codes.reserve(num_vectors * num_subspaces);
+        self.norms.reserve(num_vectors);
+
+        for i in 0..num_vectors {
+            let vec_slice = &self.training_buffer[i * dim..(i + 1) * dim];
+            let codes = params.quantize(vec_slice);
+            let norm_sq: f32 = vec_slice.iter().map(|&x| x * x).sum();
+
+            // Store in colocated storage
+            let ptr = self.node_ptr_mut(i as u32);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset);
+                std::ptr::copy_nonoverlapping(codes.as_ptr(), vec_ptr, num_subspaces);
+            }
+
+            // Store in contiguous codes array
+            let start = i * num_subspaces;
+            if start + num_subspaces > self.pq_codes.len() {
+                self.pq_codes.resize(start + num_subspaces, 0);
+            }
+            self.pq_codes[start..start + num_subspaces].copy_from_slice(&codes);
+
+            // Store norm
+            if i >= self.norms.len() {
+                self.norms.push(norm_sq);
+            } else {
+                self.norms[i] = norm_sq;
+            }
+        }
+
+        self.training_buffer.clear();
+        self.training_buffer.shrink_to_fit();
+    }
+
+    /// Prepare query for PQ distance calculation
+    #[must_use]
+    pub fn prepare_query_pq(&self, query: &[f32]) -> Option<PQQueryPrep> {
+        self.pq_params
+            .as_ref()
+            .map(|params| params.build_adc_table(query))
+    }
+
+    /// Compute PQ approximate L2 distance
+    #[inline]
+    #[must_use]
+    pub fn distance_pq(&self, prep: &PQQueryPrep, id: u32) -> Option<f32> {
+        if !self.pq_trained {
+            return None;
+        }
+        let num_subspaces = match self.mode {
+            StorageMode::PQ(n) => n,
+            _ => return None,
+        };
+        let idx = id as usize;
+        let start = idx * num_subspaces;
+        let end = start + num_subspaces;
+        if end > self.pq_codes.len() {
+            return None;
+        }
+        Some(PQParams::distance_adc(prep, &self.pq_codes[start..end]))
+    }
+
+    /// Batch compute PQ distances
+    #[inline]
+    pub fn distance_pq_batch(
+        &self,
+        prep: &PQQueryPrep,
+        ids: &[u32],
+        distances: &mut [f32],
+    ) -> usize {
+        let mut count = 0;
+        for (&id, dist) in ids.iter().zip(distances.iter_mut()) {
+            if let Some(d) = self.distance_pq(prep, id) {
+                *dist = d;
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Get PQ codes for a vector (from contiguous storage)
+    #[inline]
+    #[must_use]
+    pub fn pq_codes(&self, id: u32) -> Option<&[u8]> {
+        let num_subspaces = match self.mode {
+            StorageMode::PQ(n) => n,
+            _ => return None,
+        };
+        let idx = id as usize;
+        let start = idx * num_subspaces;
+        let end = start + num_subspaces;
+        if end <= self.pq_codes.len() {
+            Some(&self.pq_codes[start..end])
+        } else {
+            None
+        }
     }
 }
 
