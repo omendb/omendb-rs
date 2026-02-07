@@ -38,7 +38,7 @@ pub struct SegmentConfig {
     pub distance_fn: DistanceFunction,
     /// Max vectors per segment before freezing
     pub segment_capacity: usize,
-    /// Quantization mode (None = full precision, Some(SQ8), Some(PQ{..}))
+    /// Quantization mode (None = full precision, Some(SQ8), Some(RaBitQ))
     pub quantization: Option<QuantizationMode>,
 }
 
@@ -115,12 +115,6 @@ impl SegmentManager {
             Some(QuantizationMode::SQ8) => {
                 MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
             }
-            Some(QuantizationMode::PQ { subspaces }) => MutableSegment::new_pq(
-                config.dimensions,
-                config.params,
-                config.distance_fn,
-                *subspaces,
-            )?,
             Some(QuantizationMode::RaBitQ) => {
                 MutableSegment::new_rabitq(config.dimensions, config.params, config.distance_fn)?
             }
@@ -280,12 +274,6 @@ impl SegmentManager {
                 self.config.params,
                 self.config.distance_fn,
             )?,
-            Some(QuantizationMode::PQ { subspaces }) => MutableSegment::new_pq(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                *subspaces,
-            )?,
             Some(QuantizationMode::RaBitQ) => MutableSegment::new_rabitq(
                 self.config.dimensions,
                 self.config.params,
@@ -419,7 +407,7 @@ impl SegmentManager {
         &self.config.params
     }
 
-    /// Check if using quantization (SQ8 or PQ)
+    /// Check if using quantization (SQ8 or RaBitQ)
     #[inline]
     pub fn is_quantized(&self) -> bool {
         self.config.quantization.is_some()

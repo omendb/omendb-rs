@@ -142,14 +142,6 @@ impl VectorStoreOptions {
         self.quantization(QuantizationMode::SQ8)
     }
 
-    /// Enable PQ quantization (16-64x compression for 768D+ vectors)
-    ///
-    /// Subspaces are auto-calculated from dimensions (targets 8D per subspace).
-    #[must_use]
-    pub fn quantization_pq(self) -> Self {
-        self.quantization(QuantizationMode::pq())
-    }
-
     /// Enable RaBitQ quantization (32x compression, fast binary distance)
     ///
     /// Uses 1-bit quantization with random rotation for extreme compression.

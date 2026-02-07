@@ -114,9 +114,6 @@ impl NodeStorage {
             sq8_sums: Vec::new(),
             training_buffer: Vec::new(),
             sq8_trained: false,
-            pq_params: None,
-            pq_codes: Vec::new(),
-            pq_trained: false,
             rabitq_params: None,
             rabitq_codes: Vec::new(),
             rabitq_metadata: Vec::new(),
@@ -157,9 +154,6 @@ impl NodeStorage {
             sq8_sums: Vec::new(),
             training_buffer: Vec::new(),
             sq8_trained: false,
-            pq_params: None,
-            pq_codes: Vec::new(),
-            pq_trained: false,
             rabitq_params: None,
             rabitq_codes: Vec::new(),
             rabitq_metadata: Vec::new(),
@@ -193,7 +187,6 @@ impl NodeStorage {
         let mode_byte: u8 = match self.mode {
             StorageMode::FullPrecision => 0,
             StorageMode::SQ8 => 1,
-            StorageMode::PQ(_) => 2,
             StorageMode::RaBitQ => 3,
         };
         out.push(mode_byte);
@@ -225,19 +218,10 @@ impl NodeStorage {
             out.extend_from_slice(&sum.to_le_bytes());
         }
 
-        // PQ params if present
-        out.push(u8::from(self.pq_trained));
-        if let Some(ref params) = self.pq_params {
-            out.push(1); // has PQ params
-            let codebook_bytes = params.serialize_codebooks();
-            out.extend_from_slice(&(codebook_bytes.len() as u64).to_le_bytes());
-            out.extend_from_slice(&codebook_bytes);
-        } else {
-            out.push(0);
-        }
-        // PQ codes
-        out.extend_from_slice(&(self.pq_codes.len() as u64).to_le_bytes());
-        out.extend_from_slice(&self.pq_codes);
+        // Legacy PQ fields (write zeros for backward compatibility)
+        out.push(0); // pq_trained = false
+        out.push(0); // no PQ params
+        out.extend_from_slice(&0u64.to_le_bytes()); // pq_codes length = 0
 
         // RaBitQ state
         out.push(u8::from(self.rabitq_trained));
@@ -373,7 +357,7 @@ impl NodeStorage {
         let mode = match mode_byte {
             0 => StorageMode::FullPrecision,
             1 => StorageMode::SQ8,
-            2 => StorageMode::PQ(0), // subspaces determined from PQ params below
+            2 => return Err("PQ storage mode is no longer supported".to_string()),
             3 => StorageMode::RaBitQ,
             _ => return Err(format!("Invalid storage mode: {mode_byte}")),
         };
@@ -417,22 +401,16 @@ impl NodeStorage {
             sq8_sums.push(read_i32(data, &mut pos)?);
         }
 
-        // PQ state
-        let pq_trained = read_u8(data, &mut pos)? != 0;
+        // Legacy PQ state (skip but consume bytes for backward compatibility)
+        let _pq_trained = read_u8(data, &mut pos)? != 0;
         let has_pq_params = read_u8(data, &mut pos)? != 0;
-        let pq_params = if has_pq_params {
+        if has_pq_params {
             let codebook_len = read_u64(data, &mut pos)? as usize;
-            let codebook_bytes = read_bytes(data, &mut pos, codebook_len)?;
-            Some(
-                crate::compression::product::PQParams::deserialize_codebooks(codebook_bytes)
-                    .map_err(|e| format!("Failed to deserialize PQ codebooks: {e}"))?,
-            )
-        } else {
-            None
-        };
-        // PQ codes
+            let _codebook_bytes = read_bytes(data, &mut pos, codebook_len)?;
+        }
+        // Skip PQ codes
         let pq_codes_len = read_u64(data, &mut pos)? as usize;
-        let pq_codes = read_bytes(data, &mut pos, pq_codes_len)?.to_vec();
+        let _pq_codes = read_bytes(data, &mut pos, pq_codes_len)?;
 
         // RaBitQ state (only present if data remains before upper neighbors)
         let (rabitq_trained, rabitq_params, rabitq_codes, rabitq_metadata) =
@@ -528,18 +506,6 @@ impl NodeStorage {
         storage.sq8_sums = sq8_sums;
         storage.sq8_trained = sq8_trained;
         storage.upper_neighbors = upper_neighbors;
-
-        // Restore PQ state
-        storage.pq_params = pq_params;
-        storage.pq_codes = pq_codes;
-        storage.pq_trained = pq_trained;
-
-        // Update PQ mode with actual subspace count from params
-        if let StorageMode::PQ(_) = storage.mode {
-            if let Some(ref params) = storage.pq_params {
-                storage.mode = StorageMode::PQ(params.num_subspaces);
-            }
-        }
 
         // Restore RaBitQ state
         storage.rabitq_params = rabitq_params;

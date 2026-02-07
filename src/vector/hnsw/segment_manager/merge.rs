@@ -251,12 +251,6 @@ impl SegmentManager {
 
         // Build merged index
         let mut merged_index = match &self.config.quantization {
-            Some(crate::vector::QuantizationMode::PQ { subspaces }) => HNSWIndex::new_with_pq(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                *subspaces,
-            )?,
             Some(crate::vector::QuantizationMode::SQ8) => HNSWIndex::new(
                 self.config.dimensions,
                 self.config.params,
@@ -371,12 +365,6 @@ impl SegmentManager {
 
         // Build merged index
         let mut merged_index = match &self.config.quantization {
-            Some(crate::vector::QuantizationMode::PQ { subspaces }) => HNSWIndex::new_with_pq(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                *subspaces,
-            )?,
             Some(crate::vector::QuantizationMode::SQ8) => HNSWIndex::new(
                 self.config.dimensions,
                 self.config.params,

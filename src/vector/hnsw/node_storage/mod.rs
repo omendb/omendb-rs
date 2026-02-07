@@ -37,7 +37,6 @@ mod quantization;
 mod reorder;
 mod serialization;
 
-use crate::compression::product::PQParams;
 use crate::compression::rabitq::RaBitQParams;
 use crate::compression::scalar::ScalarParams;
 use rustc_hash::FxHashMap;
@@ -46,7 +45,6 @@ use std::fmt;
 use std::ptr::NonNull;
 
 // Re-export query prep types for use by callers
-pub use crate::compression::product::PQQueryPrep as PQPrep;
 pub use crate::compression::rabitq::RaBitQQueryPrep as RaBitQPrep;
 pub use crate::compression::scalar::QueryPrep;
 
@@ -58,9 +56,6 @@ pub enum StorageMode {
     FullPrecision,
     /// SQ8 quantized vectors (D bytes per vector, 4x compression)
     SQ8,
-    /// PQ quantized vectors (M bytes per vector, 16-64x compression)
-    /// The parameter is the number of subspaces.
-    PQ(usize),
     /// RaBitQ 1-bit quantized vectors (ceil(D/64)*8 bytes per vector, 32x compression)
     RaBitQ,
 }
@@ -141,7 +136,7 @@ pub struct NodeStorage {
     pub(crate) upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>>,
 
     // Quantization support
-    /// Storage mode (full precision, SQ8, or PQ)
+    /// Storage mode (full precision, SQ8, or RaBitQ)
     pub(crate) mode: StorageMode,
     /// Scalar quantization parameters (only for SQ8 mode)
     pub(crate) sq8_params: Option<ScalarParams>,
@@ -153,14 +148,6 @@ pub struct NodeStorage {
     pub(crate) training_buffer: Vec<f32>,
     /// Whether quantization has been trained
     pub(crate) sq8_trained: bool,
-
-    // PQ quantization support
-    /// Product quantization parameters (codebooks)
-    pub(crate) pq_params: Option<PQParams>,
-    /// PQ codes stored contiguously: [n_vectors * num_subspaces]
-    pub(crate) pq_codes: Vec<u8>,
-    /// Whether PQ quantization has been trained
-    pub(crate) pq_trained: bool,
 
     // RaBitQ quantization support
     /// RaBitQ parameters (random rotation matrix)
@@ -210,12 +197,6 @@ impl NodeStorage {
         Self::with_mode(dimensions, m, max_levels, StorageMode::SQ8)
     }
 
-    /// Create new PQ quantized storage
-    #[must_use]
-    pub fn new_pq(dimensions: usize, m: usize, max_levels: usize, num_subspaces: usize) -> Self {
-        Self::with_mode(dimensions, m, max_levels, StorageMode::PQ(num_subspaces))
-    }
-
     /// Create new RaBitQ quantized storage (1-bit, 32x compression)
     #[must_use]
     pub fn new_rabitq(dimensions: usize, m: usize, max_levels: usize) -> Self {
@@ -229,13 +210,12 @@ impl NodeStorage {
         let max_neighbors_upper = m; // Upper levels get M
 
         // Layout: [count:2][pad:2][neighbors:M*2*4][vector][slot:4][level:1]
-        // Vector size depends on mode: f32 (4 bytes) vs u8 (1 byte) vs PQ (M bytes)
+        // Vector size depends on mode: f32 (4 bytes) vs u8 (1 byte)
         let neighbors_offset = 4; // 2 (count) + 2 (padding) = 4
         let vector_offset = neighbors_offset + max_neighbors * 4;
         let vector_size = match mode {
-            StorageMode::FullPrecision => dimensions * 4,    // f32
-            StorageMode::SQ8 => dimensions,                  // u8
-            StorageMode::PQ(num_subspaces) => num_subspaces, // M bytes
+            StorageMode::FullPrecision => dimensions * 4, // f32
+            StorageMode::SQ8 => dimensions,               // u8
             StorageMode::RaBitQ => dimensions.div_ceil(64) * 8, // 1 bit per dim, packed into u64 words
         };
         let metadata_offset = vector_offset + vector_size;
@@ -262,9 +242,6 @@ impl NodeStorage {
             sq8_sums: Vec::new(),
             training_buffer: Vec::new(),
             sq8_trained: false,
-            pq_params: None,
-            pq_codes: Vec::new(),
-            pq_trained: false,
             rabitq_params: None,
             rabitq_codes: Vec::new(),
             rabitq_metadata: Vec::new(),
@@ -321,13 +298,6 @@ impl NodeStorage {
         self.mode == StorageMode::SQ8
     }
 
-    /// Check if this storage uses PQ quantization
-    #[inline]
-    #[must_use]
-    pub fn is_pq(&self) -> bool {
-        matches!(self.mode, StorageMode::PQ(_))
-    }
-
     /// Check if this storage uses RaBitQ quantization
     #[inline]
     #[must_use]
@@ -349,7 +319,6 @@ impl NodeStorage {
         match self.mode {
             StorageMode::FullPrecision => true,
             StorageMode::SQ8 => self.sq8_trained,
-            StorageMode::PQ(_) => self.pq_trained,
             StorageMode::RaBitQ => self.rabitq_trained,
         }
     }
@@ -558,28 +527,6 @@ impl NodeStorage {
                     }
                 }
             }
-            StorageMode::PQ(num_subspaces) => {
-                let id_usize = id as usize;
-                if self.pq_trained {
-                    let params = self.pq_params.as_ref()?;
-                    let start = id_usize * num_subspaces;
-                    let end = start + num_subspaces;
-                    if end <= self.pq_codes.len() {
-                        Some(params.reconstruct(&self.pq_codes[start..end]))
-                    } else {
-                        None
-                    }
-                } else {
-                    let dim = self.dimensions;
-                    let start = id_usize * dim;
-                    let end = start + dim;
-                    if end <= self.training_buffer.len() {
-                        Some(self.training_buffer[start..end].to_vec())
-                    } else {
-                        None
-                    }
-                }
-            }
             StorageMode::RaBitQ => {
                 // RaBitQ is 1-bit; no meaningful reconstruction after training.
                 // Before training, return from training buffer.
@@ -634,9 +581,6 @@ impl NodeStorage {
             }
             StorageMode::SQ8 => {
                 self.set_vector_sq8(id, vector);
-            }
-            StorageMode::PQ(_) => {
-                self.set_vector_pq(id, vector);
             }
             StorageMode::RaBitQ => {
                 self.set_vector_rabitq(id, vector);

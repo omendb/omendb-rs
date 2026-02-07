@@ -353,11 +353,7 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(self.distance_metric.into())
-                .with_quantization(
-                    self.pending_quantization
-                        .as_ref()
-                        .map(|q| q.resolve_subspaces(dimensions)),
-                );
+                .with_quantization(self.pending_quantization.clone());
 
             self.segments = Some(
                 SegmentManager::new(config)
@@ -493,11 +489,7 @@ impl VectorStore {
                         ..Default::default()
                     })
                     .with_distance(self.distance_metric.into())
-                    .with_quantization(
-                        self.pending_quantization
-                            .as_ref()
-                            .map(|q| q.resolve_subspaces(dimensions)),
-                    );
+                    .with_quantization(self.pending_quantization.clone());
 
                 // Use parallel build with slot mapping
                 self.segments = Some(
@@ -819,11 +811,7 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(self.distance_metric.into())
-                .with_quantization(
-                    self.pending_quantization
-                        .as_ref()
-                        .map(|q| q.resolve_subspaces(dimensions)),
-                );
+                .with_quantization(self.pending_quantization.clone());
 
             self.segments = Some(
                 SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
@@ -864,11 +852,7 @@ impl VectorStore {
                 ..Default::default()
             })
             .with_distance(self.distance_metric.into())
-            .with_quantization(
-                self.pending_quantization
-                    .as_ref()
-                    .map(|q| q.resolve_subspaces(dims)),
-            );
+            .with_quantization(self.pending_quantization.clone());
 
         // Rebuild with parallel construction
         self.segments = Some(

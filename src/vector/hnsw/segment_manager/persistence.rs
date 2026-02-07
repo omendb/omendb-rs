@@ -27,12 +27,7 @@ impl SegmentManager {
             "quantization_mode": match &self.config.quantization {
                 None => "none",
                 Some(QuantizationMode::SQ8) => "sq8",
-                Some(QuantizationMode::PQ { .. }) => "pq",
                 Some(QuantizationMode::RaBitQ) => "rabitq",
-            },
-            "pq_subspaces": match &self.config.quantization {
-                Some(QuantizationMode::PQ { subspaces }) => *subspaces as u64,
-                _ => 0u64,
             },
             "next_segment_id": self.next_segment_id,
             "segment_ids": segment_ids,
@@ -66,10 +61,7 @@ impl SegmentManager {
 
         let quantization = match manifest["quantization_mode"].as_str() {
             Some("sq8") => Some(QuantizationMode::SQ8),
-            Some("pq") => {
-                let subspaces = manifest["pq_subspaces"].as_u64().unwrap_or(96) as usize;
-                Some(QuantizationMode::PQ { subspaces })
-            }
+            Some("pq") => None, // PQ is no longer supported, fall back to full precision
             Some("rabitq") => Some(QuantizationMode::RaBitQ),
             _ => {
                 // Backward compat: check old boolean field
@@ -205,12 +197,6 @@ impl SegmentManager {
             Some(QuantizationMode::SQ8) => {
                 MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
             }
-            Some(QuantizationMode::PQ { subspaces }) => MutableSegment::new_pq(
-                config.dimensions,
-                config.params,
-                config.distance_fn,
-                *subspaces,
-            )?,
             Some(QuantizationMode::RaBitQ) => {
                 MutableSegment::new_rabitq(config.dimensions, config.params, config.distance_fn)?
             }

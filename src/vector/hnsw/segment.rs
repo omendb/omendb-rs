@@ -103,21 +103,6 @@ impl MutableSegment {
         })
     }
 
-    /// Create with PQ quantization
-    pub fn new_pq(
-        dimensions: usize,
-        params: HNSWParams,
-        distance_fn: DistanceFunction,
-        num_subspaces: usize,
-    ) -> crate::vector::hnsw::error::Result<Self> {
-        Ok(Self {
-            index: HNSWIndex::new_with_pq(dimensions, params, distance_fn, num_subspaces)?,
-            id: 0,
-            capacity: 100_000,
-            slots: Vec::new(),
-        })
-    }
-
     /// Create with RaBitQ quantization (1-bit, 32x compression)
     pub fn new_rabitq(
         dimensions: usize,

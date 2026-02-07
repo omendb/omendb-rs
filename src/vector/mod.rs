@@ -23,11 +23,6 @@ pub enum QuantizationMode {
     /// - ~2x faster than f32
     /// - ~99% recall
     SQ8,
-    /// Product Quantization (PQ): f32 -> M bytes (one per subspace)
-    /// - 16-64x compression for 768D+ vectors
-    /// - ~95% recall with rescore
-    /// - `subspaces`: number of subspaces (0 = auto-calculate from dimensions)
-    PQ { subspaces: usize },
     /// RaBitQ 1-bit quantization with random rotation
     /// - 32x compression (1 bit per dimension)
     /// - Fast distance via binary operations
@@ -39,12 +34,6 @@ impl QuantizationMode {
     #[must_use]
     pub fn sq8() -> Self {
         Self::SQ8
-    }
-
-    /// PQ quantization (subspaces auto-calculated from dimensions)
-    #[must_use]
-    pub fn pq() -> Self {
-        Self::PQ { subspaces: 0 }
     }
 
     /// RaBitQ 1-bit quantization (32x compression)
@@ -59,36 +48,9 @@ impl QuantizationMode {
         matches!(self, Self::SQ8)
     }
 
-    /// Check if PQ mode
-    #[must_use]
-    pub fn is_pq(&self) -> bool {
-        matches!(self, Self::PQ { .. })
-    }
-
     /// Check if RaBitQ mode
     #[must_use]
     pub fn is_rabitq(&self) -> bool {
         matches!(self, Self::RaBitQ)
-    }
-
-    /// Resolve PQ subspaces from dimensions (auto-calculate if subspaces == 0).
-    ///
-    /// Targets 8 dimensions per subspace. Falls back to largest divisor <= dim/4.
-    #[must_use]
-    pub fn resolve_subspaces(&self, dimensions: usize) -> Self {
-        match self {
-            Self::PQ { subspaces: 0 } => {
-                let target = dimensions / 8;
-                // Find largest divisor of dimensions that is <= target
-                let resolved = (1..=target)
-                    .rev()
-                    .find(|s| dimensions.is_multiple_of(*s))
-                    .unwrap_or(1);
-                Self::PQ {
-                    subspaces: resolved,
-                }
-            }
-            other => other.clone(),
-        }
     }
 }

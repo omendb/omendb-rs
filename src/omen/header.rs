@@ -24,7 +24,7 @@ pub enum QuantizationCode {
     RaBitQ = 2,
     /// Extended-RaBitQ 4-bit with FFHT (8x compression)
     RaBitQ4 = 3,
-    /// Product Quantization (16-64x compression)
+    /// Product Quantization (legacy, no longer supported at runtime)
     Pq = 4,
 }
 
@@ -44,7 +44,6 @@ impl From<&crate::vector::QuantizationMode> for QuantizationCode {
     fn from(mode: &crate::vector::QuantizationMode) -> Self {
         match mode {
             crate::vector::QuantizationMode::SQ8 => Self::Sq8,
-            crate::vector::QuantizationMode::PQ { .. } => Self::Pq,
             crate::vector::QuantizationMode::RaBitQ => Self::RaBitQ,
         }
     }
@@ -64,11 +63,9 @@ impl QuantizationCode {
     pub fn to_runtime(self) -> Option<crate::vector::QuantizationMode> {
         match self {
             Self::Sq8 => Some(crate::vector::QuantizationMode::SQ8),
-            // PQ subspace count is stored separately (in the index), default to 0 here
-            Self::Pq => Some(crate::vector::QuantizationMode::PQ { subspaces: 0 }),
             Self::RaBitQ => Some(crate::vector::QuantizationMode::RaBitQ),
-            // F32 = no quantization, RaBitQ4 = extended (not yet implemented at runtime)
-            Self::F32 | Self::RaBitQ4 => None,
+            // F32 = no quantization, Pq = legacy (no longer supported), RaBitQ4 = not yet implemented
+            Self::F32 | Self::Pq | Self::RaBitQ4 => None,
         }
     }
 }

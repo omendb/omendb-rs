@@ -66,8 +66,6 @@ pub enum HNSWQuantization {
     None,
     /// SQ8 scalar quantization (4x compression, ~99% recall)
     SQ8,
-    /// Product quantization (16-64x compression, ~95% recall with rescore)
-    PQ { subspaces: usize },
     /// RaBitQ 1-bit quantization (32x compression, fast binary distance)
     RaBitQ,
 }
@@ -197,10 +195,6 @@ impl HNSWIndexBuilder {
             HNSWQuantization::None => CoreHNSW::new(dimensions, params, self.metric, false)?,
             HNSWQuantization::SQ8 => CoreHNSW::new_with_sq8(dimensions, params, self.metric)
                 .map_err(|e| anyhow::anyhow!(e))?,
-            HNSWQuantization::PQ { .. } => {
-                // PQ uses full-precision index; quantization is applied lazily via NodeStorage
-                CoreHNSW::new(dimensions, params, self.metric, false)?
-            }
             HNSWQuantization::RaBitQ => CoreHNSW::new_with_rabitq(dimensions, params, self.metric)
                 .map_err(|e| anyhow::anyhow!(e))?,
         };
