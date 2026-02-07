@@ -55,9 +55,12 @@ impl MultiVecStorage {
     ///
     /// Panics if any token has incorrect dimension.
     pub fn add(&mut self, tokens: &[&[f32]]) -> u32 {
-        let slot = self.offsets.len() as u32;
-        let start = (self.vectors.len() / self.dim) as u32;
-        let count = tokens.len() as u16;
+        let slot =
+            u32::try_from(self.offsets.len()).expect("Multi-vector slot overflow (>4B docs)");
+        let start =
+            u32::try_from(self.vectors.len() / self.dim).expect("Multi-vector offset overflow");
+        let count =
+            u16::try_from(tokens.len()).expect("Token count overflow (>65K tokens per doc)");
 
         // Copy all tokens to flat storage
         for token in tokens {

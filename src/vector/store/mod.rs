@@ -667,9 +667,7 @@ impl VectorStore {
         // Persist deletions
         for id in &valid_ids {
             if let Some(ref mut storage) = self.storage {
-                if let Err(e) = storage.delete(id) {
-                    tracing::warn!(id = %id, error = ?e, "Failed to persist deletion to storage");
-                }
+                storage.delete(id)?;
             }
             if let Some(ref mut text_index) = self.text_index {
                 if let Err(e) = text_index.delete_document(id) {

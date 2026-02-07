@@ -1193,13 +1193,7 @@ impl VectorDatabase {
             ));
         }
 
-        // Remove from cache first
-        {
-            let mut cache = self.collections_cache.write();
-            cache.remove(&name);
-        }
-
-        // Remove .omen file
+        // Remove files first, then cache (if file deletion fails, cache stays consistent)
         std::fs::remove_file(&omen_path).map_err(|e| {
             Error::new(
                 Status::GenericFailure,
@@ -1209,6 +1203,12 @@ impl VectorDatabase {
 
         // Remove .wal file if it exists
         let _ = std::fs::remove_file(&wal_path);
+
+        // Remove from cache only after files are deleted
+        {
+            let mut cache = self.collections_cache.write();
+            cache.remove(&name);
+        }
 
         Ok(())
     }

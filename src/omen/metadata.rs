@@ -330,7 +330,7 @@ impl NumericIndex {
             // Slow path: linear scan
             self.entries
                 .iter()
-                .any(|(v, id)| *id == doc_id && (*v - value).abs() < f64::EPSILON)
+                .any(|(v, id)| *id == doc_id && v.total_cmp(&value).is_eq())
         }
     }
 

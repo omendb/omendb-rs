@@ -653,7 +653,7 @@ impl HNSWIndex {
         }
 
         let sample_size = SAMPLE_SIZE.min(self.len());
-        let step = self.len() / sample_size;
+        let step = (self.len() / sample_size).max(1);
 
         let mut matches = 0;
         for i in 0..sample_size {

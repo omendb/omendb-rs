@@ -93,6 +93,10 @@ impl ScalarParams {
         if !vectors.iter().all(|v| v.len() == dimensions) {
             return Err("All vectors must have same dimensions");
         }
+        // u8×u8 dot product accumulates in u32; max safe dims = u32::MAX / (255*255) ≈ 66k
+        if dimensions > 65_535 {
+            return Err("SQ8 quantization supports at most 65,535 dimensions");
+        }
 
         // Limit samples to avoid OOM for large batches (100k samples is enough for percentiles)
         const MAX_SAMPLES: usize = 100_000;
@@ -347,6 +351,11 @@ impl ScalarParams {
     #[target_feature(enable = "avx2")]
     #[allow(clippy::unused_self)]
     unsafe fn int_dot_product_avx2(&self, query: &[u8], vec: &[u8]) -> u32 {
+        debug_assert_eq!(
+            query.len(),
+            vec.len(),
+            "AVX2 dot product: mismatched lengths"
+        );
         let mut sum = _mm256_setzero_si256();
         let mut i = 0;
 
