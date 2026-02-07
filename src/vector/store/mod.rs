@@ -1392,6 +1392,11 @@ impl VectorStore {
             }
         }
 
+        // Auto-flush for persistent stores to prevent data resurrection on crash
+        if removed_count > 0 && self.storage.is_some() {
+            self.flush()?;
+        }
+
         Ok(removed_count)
     }
 }

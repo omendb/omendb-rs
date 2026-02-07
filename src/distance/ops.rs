@@ -127,7 +127,7 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     let norm_b = dot_product(b, b).sqrt();
 
     if norm_a == 0.0 || norm_b == 0.0 {
-        return 1.0;
+        return f32::NAN;
     }
 
     1.0 - (dot / (norm_a * norm_b))
@@ -330,7 +330,12 @@ mod tests {
     fn test_zero_vectors() {
         let a = [0.0, 0.0, 0.0];
         let b = [1.0, 1.0, 1.0];
-        assert_eq!(cosine_distance(&a, &b), 1.0);
+        // Cosine distance is undefined for zero vectors
+        assert!(cosine_distance(&a, &b).is_nan());
+        // Both zero -> also NaN
+        assert!(cosine_distance(&a, &a).is_nan());
+        // Non-zero to non-zero -> normal distance
+        assert!(!cosine_distance(&b, &b).is_nan());
     }
 
     #[test]

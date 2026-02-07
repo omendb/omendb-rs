@@ -223,14 +223,15 @@ fn matmul_vec(vec: &[f32], matrix: &[Vec<f32>]) -> Vec<f32> {
 
 /// Map a sketch to a partition index using SimHash with Gray code.
 ///
-/// Gray code preserves locality: adjacent buckets differ by one bit.
+/// Gray code preserves locality: adjacent binary values differ by exactly one bit.
 fn simhash_gray_code(sketch: &[f32]) -> usize {
-    let mut gray = 0usize;
+    // Convert sketch signs to binary
+    let mut binary = 0usize;
     for &val in sketch {
-        let bit = usize::from(val > 0.0);
-        gray = (gray << 1) + (bit ^ (gray & 1));
+        binary = (binary << 1) | usize::from(val > 0.0);
     }
-    gray
+    // Standard reflected Gray code
+    binary ^ (binary >> 1)
 }
 
 /// Compute MaxSim score between query and document token sets.
@@ -475,18 +476,32 @@ mod tests {
 
     #[test]
     fn test_simhash_gray_code_locality() {
-        // Adjacent Gray codes differ by one bit
-        // Test that small changes in sketch lead to nearby partitions
-        let sketch1 = vec![1.0, 1.0, 1.0];
-        let sketch2 = vec![1.0, 1.0, -0.001]; // Flip one sign
+        // Flipping the last sign produces consecutive binary values,
+        // which should map to Gray codes differing by exactly 1 bit
+        let sketch1 = vec![1.0, 1.0, 1.0]; // binary 111 = 7
+        let sketch2 = vec![1.0, 1.0, -0.001]; // binary 110 = 6
 
         let p1 = simhash_gray_code(&sketch1);
         let p2 = simhash_gray_code(&sketch2);
 
-        // p1 and p2 should differ by at most 1 in Gray code distance
-        let xor = p1 ^ p2;
-        let bit_diff = xor.count_ones();
-        assert!(bit_diff <= 2, "Gray code should preserve locality");
+        let bit_diff = (p1 ^ p2).count_ones();
+        assert_eq!(
+            bit_diff, 1,
+            "Consecutive binary values must produce Gray codes differing by 1 bit"
+        );
+
+        // Verify the full Gray code property for all 3-bit values
+        for b in 0..7u32 {
+            let g1 = (b as usize) ^ ((b as usize) >> 1);
+            let g2 = ((b + 1) as usize) ^ (((b + 1) as usize) >> 1);
+            assert_eq!(
+                (g1 ^ g2).count_ones(),
+                1,
+                "Gray codes for {} and {} must differ by 1 bit",
+                b,
+                b + 1
+            );
+        }
     }
 
     #[test]

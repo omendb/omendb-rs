@@ -606,6 +606,12 @@ impl VectorStore {
         k: usize,
         options: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
+        if options.filter.is_some() {
+            anyhow::bail!("Metadata filters are not yet supported for multi-vector search");
+        }
+        if options.max_distance.is_some() {
+            anyhow::bail!("max_distance is not yet supported for multi-vector search");
+        }
         match options.rerank {
             Rerank::Off => self.search_multi_approx(query_tokens, k),
             Rerank::On => self.search_multi_rerank(query_tokens, k, 32),
