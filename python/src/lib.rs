@@ -2083,6 +2083,16 @@ fn open(
         ));
     }
 
+    // SQ8 quantization only supports L2 distance
+    if quant_mode.is_some() {
+        let m = metric.as_deref().unwrap_or("l2");
+        if m != "l2" && m != "euclidean" {
+            return Err(PyValueError::new_err(format!(
+                "SQ8 quantization only supports L2 distance, got metric='{m}'"
+            )));
+        }
+    }
+
     // Handle :memory: for in-memory database (must check BEFORE path existence checks)
     if path == ":memory:" {
         // Multi-vector mode: use VectorStore::multi_vector() constructor

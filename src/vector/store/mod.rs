@@ -395,6 +395,7 @@ impl VectorStore {
         if let Some(ref mut storage) = self.storage {
             let metadata_bytes = serde_json::to_vec(&metadata)?;
             storage.wal_append_insert(&id, &vector.data, Some(&metadata_bytes))?;
+            storage.wal_sync()?;
         }
 
         Ok(slot)

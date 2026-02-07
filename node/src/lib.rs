@@ -1721,6 +1721,17 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         ));
     }
 
+    // SQ8 quantization only supports L2 distance
+    if quant_mode.is_some() {
+        let m = opts.metric.as_deref().unwrap_or("l2");
+        if m != "l2" && m != "euclidean" {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!("SQ8 quantization only supports L2 distance, got metric='{m}'"),
+            ));
+        }
+    }
+
     // Validate parameters
     if dimensions == 0 {
         return Err(Error::new(

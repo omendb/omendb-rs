@@ -160,7 +160,11 @@ impl HNSWIndex {
         distance_fn: DistanceFunction,
         use_quantization: bool,
     ) -> Result<Self> {
-        params.validate().map_err(HNSWError::InvalidParams)?;
+        if use_quantization {
+            Self::validate_l2_required(&params, distance_fn, "SQ8 quantization")?;
+        } else {
+            params.validate().map_err(HNSWError::InvalidParams)?;
+        }
 
         let storage = if use_quantization {
             NodeStorage::new_sq8(dimensions, params.m, params.max_level as usize)

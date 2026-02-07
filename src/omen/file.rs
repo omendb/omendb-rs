@@ -891,6 +891,13 @@ impl OmenFile {
         // On Unix: atomic on same filesystem. On Windows (NTFS): atomic for same-dir rename.
         std::fs::rename(&temp_path, &self.path)?;
 
+        // Fsync parent directory to ensure rename is durable (required on Linux ext4)
+        if let Some(parent) = self.path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+
         // Re-open with lock + mmap
         let mut opts = OpenOptions::new();
         opts.read(true).write(true);

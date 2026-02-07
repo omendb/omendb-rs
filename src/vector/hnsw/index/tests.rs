@@ -551,6 +551,26 @@ fn test_index_stats_with_quantization() {
 }
 
 #[test]
+fn test_sq8_rejects_non_l2_metric() {
+    let params = HNSWParams::default();
+
+    // SQ8 + Cosine must fail
+    let result = HNSWIndex::new(8, params, DistanceFunction::Cosine, true);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("L2"));
+
+    // SQ8 + InnerProduct must fail
+    let params = HNSWParams::default();
+    let result = HNSWIndex::new(8, params, DistanceFunction::NegativeDotProduct, true);
+    assert!(result.is_err());
+
+    // SQ8 + L2 must succeed
+    let params = HNSWParams::default();
+    let result = HNSWIndex::new(8, params, DistanceFunction::L2, true);
+    assert!(result.is_ok());
+}
+
+#[test]
 fn test_index_stats_level_distribution() {
     let mut params = HNSWParams::default();
     params.seed = 42; // Fixed seed for reproducibility
