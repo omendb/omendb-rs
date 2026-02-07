@@ -19,7 +19,6 @@ mod file;
 mod graph;
 mod header;
 mod manifest;
-mod metadata;
 mod vectors;
 mod wal;
 
@@ -30,7 +29,6 @@ pub use file::{
 pub use graph::GraphSection;
 pub use header::{Metric, OmenHeader, HEADER_SIZE, MAGIC, VERSION_MAJOR, VERSION_MINOR};
 pub use manifest::{ManifestHeader, NodeLocation, OmenFooter, OmenManifest, SegmentType};
-pub use metadata::{FieldIndex, Filter, FilterValue, MetadataIndex};
 pub use vectors::VectorSection;
 pub use wal::{Wal, WalEntry, WalEntryType};
 

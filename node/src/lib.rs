@@ -585,6 +585,17 @@ impl VectorDatabase {
         }
 
         let query_vec = Vector::new(extract_query_vector(query));
+
+        // Validate query dimensions match the database
+        let expected_dims = self.dimensions;
+        if expected_dims > 0 && query_vec.dim() != expected_dims as usize {
+            return Err(Error::from_reason(format!(
+                "Query vector dimension ({}) does not match database dimension ({})",
+                query_vec.dim(),
+                expected_dims
+            )));
+        }
+
         let ef_usize = ef.map(|e| e as usize);
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
         let max_dist_f32 = max_distance.map(|d| d as f32);

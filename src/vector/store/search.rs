@@ -7,8 +7,9 @@ use super::helpers;
 use super::record_store::RecordStore;
 use super::{MetadataFilter, SearchResult};
 use crate::distance::{cosine_distance, dot_product, l2_distance};
-use crate::omen::{MetadataIndex, Metric};
+use crate::omen::Metric;
 use crate::vector::hnsw::SegmentManager;
+use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
 
 /// Compute distance between two vectors using the given metric.

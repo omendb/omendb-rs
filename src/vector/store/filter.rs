@@ -3,7 +3,7 @@
 //! Provides MongoDB-style filter operators for post-hoc filtering of search results.
 //! Supports both JSON-based evaluation and fast Roaring bitmap evaluation.
 
-use crate::omen::{FieldIndex, MetadataIndex};
+use crate::vector::metadata::{FieldIndex, MetadataIndex};
 use roaring::RoaringBitmap;
 use serde_json::Value as JsonValue;
 

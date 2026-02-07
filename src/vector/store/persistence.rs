@@ -9,11 +9,10 @@ use super::VectorStore;
 use super::{
     DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M, DEFAULT_MAX_TOKENS,
 };
-use crate::omen::{
-    parse_wal_delete, parse_wal_insert, CheckpointOptions, MetadataIndex, OmenFile, WalEntryType,
-};
+use crate::omen::{parse_wal_delete, parse_wal_insert, CheckpointOptions, OmenFile, WalEntryType};
 use crate::text::TextIndex;
 use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
+use crate::vector::metadata::MetadataIndex;
 use crate::vector::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use crate::vector::store::options::VectorStoreOptions;
 use anyhow::Result;

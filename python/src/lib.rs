@@ -1536,9 +1536,7 @@ impl VectorDatabase {
     ///     list[str]: Names of all collections
     fn collections(&self) -> PyResult<Vec<String>> {
         if !self.is_persistent {
-            return Err(PyValueError::new_err(
-                "Collections require persistent storage",
-            ));
+            return Ok(Vec::new());
         }
 
         let base_path = std::path::Path::new(&self.path);
