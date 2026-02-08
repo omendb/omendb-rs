@@ -171,8 +171,8 @@ impl NodeStorage {
             }
             self.rabitq_codes[start..end].copy_from_slice(&codes);
 
-            let meta_start = id_usize * 4;
-            let meta_end = meta_start + 4;
+            let meta_start = id_usize * 3;
+            let meta_end = meta_start + 3;
             if meta_end > self.rabitq_metadata.len() {
                 self.rabitq_metadata.resize(meta_end, 0.0);
             }
@@ -219,7 +219,7 @@ impl NodeStorage {
         self.rabitq_trained = true;
 
         self.rabitq_codes.reserve(num_vectors * code_words);
-        self.rabitq_metadata.reserve(num_vectors * 4);
+        self.rabitq_metadata.reserve(num_vectors * 3);
         self.norms.reserve(num_vectors);
 
         for i in 0..num_vectors {
@@ -233,9 +233,9 @@ impl NodeStorage {
             }
             self.rabitq_codes[start..start + code_words].copy_from_slice(&codes);
 
-            let meta_start = i * 4;
-            if meta_start + 4 > self.rabitq_metadata.len() {
-                self.rabitq_metadata.resize(meta_start + 4, 0.0);
+            let meta_start = i * 3;
+            if meta_start + 3 > self.rabitq_metadata.len() {
+                self.rabitq_metadata.resize(meta_start + 3, 0.0);
             }
             self.rabitq_metadata[meta_start] = dis_u_2;
             self.rabitq_metadata[meta_start + 1] = factor_ip;
@@ -274,8 +274,8 @@ impl NodeStorage {
             return None;
         }
 
-        let meta_start = idx * 4;
-        if meta_start + 4 > self.rabitq_metadata.len() {
+        let meta_start = idx * 3;
+        if meta_start + 3 > self.rabitq_metadata.len() {
             return None;
         }
 

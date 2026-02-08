@@ -170,7 +170,7 @@ impl SegmentManager {
 
             let storage = frozen.storage();
             for id in 0..frozen.len() as u32 {
-                let vector = storage.vector(id).to_vec();
+                let vector = storage.get_vector_ref(id).to_vec();
                 let slot = storage.slot(id);
                 all_vectors.push((vector, slot));
             }

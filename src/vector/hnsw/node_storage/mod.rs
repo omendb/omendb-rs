@@ -153,7 +153,7 @@ pub struct NodeStorage {
     pub(crate) rabitq_params: Option<RaBitQParams>,
     /// RaBitQ binary codes stored contiguously as u64 words: [n_vectors * code_words]
     pub(crate) rabitq_codes: Vec<u64>,
-    /// RaBitQ per-vector metadata: [n_vectors * 4] (dis_u_2, factor_ip, factor_ppc, factor_err)
+    /// RaBitQ per-vector metadata: [n_vectors * 3] (dis_u_2, factor_ip, factor_ppc)
     pub(crate) rabitq_metadata: Vec<f32>,
     /// Original full-precision vectors for RaBitQ (needed for graph construction + rescore)
     pub(crate) rabitq_originals: Vec<f32>,
@@ -217,7 +217,7 @@ impl NodeStorage {
         let vector_size = match mode {
             StorageMode::FullPrecision => dimensions * 4, // f32
             StorageMode::SQ8 => dimensions,               // u8
-            StorageMode::RaBitQ => dimensions.div_ceil(64) * 8, // 1 bit per dim, packed into u64 words
+            StorageMode::RaBitQ => 0, // RaBitQ stores codes in external Vecs, not in node layout
         };
         let metadata_offset = vector_offset + vector_size;
         let raw_size = metadata_offset + 4 + 1; // slot (4) + level (1)
@@ -477,7 +477,7 @@ impl NodeStorage {
     #[inline]
     #[must_use]
     pub fn vector(&self, id: u32) -> &[f32] {
-        debug_assert!(
+        assert!(
             self.mode == StorageMode::FullPrecision,
             "vector() only available in FullPrecision mode, use get_dequantized()"
         );
@@ -492,7 +492,7 @@ impl NodeStorage {
     #[inline]
     #[must_use]
     pub fn quantized_vector(&self, id: u32) -> &[u8] {
-        debug_assert!(
+        assert!(
             self.mode == StorageMode::SQ8,
             "quantized_vector() only available in SQ8 mode"
         );
@@ -552,6 +552,30 @@ impl NodeStorage {
         }
     }
 
+    /// Zero-copy vector access for any mode.
+    /// FullPrecision: from node layout. RaBitQ: from originals/training_buffer.
+    /// Panics if SQ8 (use get_dequantized instead).
+    #[inline]
+    #[must_use]
+    pub fn get_vector_ref(&self, id: u32) -> &[f32] {
+        match self.mode {
+            StorageMode::FullPrecision => self.vector(id),
+            StorageMode::RaBitQ => {
+                let dim = self.dimensions;
+                let start = id as usize * dim;
+                let end = start + dim;
+                if self.rabitq_trained {
+                    &self.rabitq_originals[start..end]
+                } else {
+                    &self.training_buffer[start..end]
+                }
+            }
+            StorageMode::SQ8 => {
+                panic!("get_vector_ref not supported for SQ8, use get_dequantized()")
+            }
+        }
+    }
+
     /// Get squared norm for a vector (used in L2 decomposition)
     #[inline]
     #[must_use]
@@ -561,7 +585,7 @@ impl NodeStorage {
 
     /// Set vector data (handles both full precision and SQ8 modes)
     pub fn set_vector(&mut self, id: u32, vector: &[f32]) {
-        debug_assert_eq!(
+        assert_eq!(
             vector.len(),
             self.dimensions,
             "Vector length {} doesn't match dimensions {}",
@@ -697,7 +721,7 @@ impl NodeStorage {
 
     /// Set level 0 neighbors (overwrites all, colocated storage)
     pub fn set_neighbors(&mut self, id: u32, neighbors: &[u32]) {
-        debug_assert!(
+        assert!(
             neighbors.len() <= self.max_neighbors,
             "Too many neighbors: {} > {}",
             neighbors.len(),
