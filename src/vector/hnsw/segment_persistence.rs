@@ -31,7 +31,10 @@ use std::path::Path;
 use tracing::{error, info, instrument};
 
 /// Current segment file format version
-const SEGMENT_FORMAT_VERSION: u32 = 1;
+///
+/// v1: Raw node data only (no quantization state)
+/// v2: Raw node data + auxiliary data (mode, SQ8, RaBitQ, upper neighbors)
+const SEGMENT_FORMAT_VERSION: u32 = 2;
 
 /// Magic bytes for segment files
 const SEGMENT_MAGIC: &[u8; 8] = b"OMSEG\0\0\0";
@@ -114,6 +117,11 @@ impl FrozenSegment {
             writer.write_all(data_bytes)?;
         }
 
+        // v2: Write auxiliary data (mode, SQ8, RaBitQ, upper neighbors)
+        let aux_data = storage.serialize_auxiliary();
+        writer.write_all(&(aux_data.len() as u64).to_le_bytes())?;
+        writer.write_all(&aux_data)?;
+
         writer.flush()?;
 
         let elapsed = start.elapsed();
@@ -148,18 +156,18 @@ impl FrozenSegment {
             )));
         }
 
-        // Read version
+        // Read version (accept v1 and v2)
         let mut version_bytes = [0u8; 4];
         reader.read_exact(&mut version_bytes)?;
         let version = u32::from_le_bytes(version_bytes);
-        if version != SEGMENT_FORMAT_VERSION {
+        if version != 1 && version != SEGMENT_FORMAT_VERSION {
             error!(
                 version,
                 expected = SEGMENT_FORMAT_VERSION,
                 "Unsupported segment version"
             );
             return Err(HNSWError::Storage(format!(
-                "Unsupported segment version: {version} (expected {SEGMENT_FORMAT_VERSION})"
+                "Unsupported segment version: {version} (expected 1 or {SEGMENT_FORMAT_VERSION})"
             )));
         }
 
@@ -223,7 +231,7 @@ impl FrozenSegment {
         }
 
         // Reconstruct storage
-        let storage = NodeStorage::from_bytes(
+        let mut storage = NodeStorage::from_bytes(
             data,
             len,
             node_size,
@@ -233,6 +241,20 @@ impl FrozenSegment {
             dimensions,
             max_neighbors,
         );
+
+        // v2: Read auxiliary data (mode, SQ8, RaBitQ, upper neighbors)
+        if version >= 2 {
+            let mut aux_len_bytes = [0u8; 8];
+            reader.read_exact(&mut aux_len_bytes)?;
+            let aux_len = u64::from_le_bytes(aux_len_bytes) as usize;
+            if aux_len > 0 {
+                let mut aux_data = vec![0u8; aux_len];
+                reader.read_exact(&mut aux_data)?;
+                storage.deserialize_auxiliary(&aux_data).map_err(|e| {
+                    HNSWError::Storage(format!("Failed to deserialize auxiliary data: {e}"))
+                })?;
+            }
+        }
 
         let elapsed = start.elapsed();
         info!(
@@ -280,13 +302,13 @@ impl FrozenSegment {
             )));
         }
 
-        // Read version
+        // Read version (accept v1 and v2)
         let mut version_bytes = [0u8; 4];
         reader.read_exact(&mut version_bytes)?;
         let version = u32::from_le_bytes(version_bytes);
-        if version != SEGMENT_FORMAT_VERSION {
+        if version != 1 && version != SEGMENT_FORMAT_VERSION {
             return Err(HNSWError::Storage(format!(
-                "Unsupported segment version: {version}"
+                "Unsupported segment version: {version} (expected 1 or {SEGMENT_FORMAT_VERSION})"
             )));
         }
 
@@ -353,7 +375,7 @@ impl FrozenSegment {
 
         // Memory-map the data section (or use empty storage for zero-length)
         let data_size = len * node_size;
-        let storage = if data_size > 0 {
+        let mut storage = if data_size > 0 {
             // Validate file is large enough for declared data
             let file_len = file.metadata()?.len();
             let required_len = data_offset as u64 + data_size as u64;
@@ -383,6 +405,25 @@ impl FrozenSegment {
             // Empty segment - use empty owned storage
             NodeStorage::new(dimensions, max_neighbors, 8)
         };
+
+        // v2: Read auxiliary data from after the mmap section
+        if version >= 2 {
+            use std::io::Seek;
+            let aux_offset = data_offset as u64 + data_size as u64;
+            let mut reader = BufReader::new(&file);
+            reader.seek(std::io::SeekFrom::Start(aux_offset))?;
+
+            let mut aux_len_bytes = [0u8; 8];
+            reader.read_exact(&mut aux_len_bytes)?;
+            let aux_len = u64::from_le_bytes(aux_len_bytes) as usize;
+            if aux_len > 0 {
+                let mut aux_data = vec![0u8; aux_len];
+                reader.read_exact(&mut aux_data)?;
+                storage.deserialize_auxiliary(&aux_data).map_err(|e| {
+                    HNSWError::Storage(format!("Failed to deserialize auxiliary data: {e}"))
+                })?;
+            }
+        }
 
         let elapsed = start.elapsed();
         info!(

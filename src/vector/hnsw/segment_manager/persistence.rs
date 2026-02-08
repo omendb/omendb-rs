@@ -223,4 +223,77 @@ impl SegmentManager {
             last_merge_stats: None,
         })
     }
+
+    /// Load segment manager from a directory using mmap for frozen segments
+    ///
+    /// Like `load()`, but uses memory-mapped files for frozen segment storage.
+    /// This reduces memory usage to working-set size and speeds up open time.
+    #[cfg(feature = "mmap")]
+    pub fn load_mmap<P: AsRef<std::path::Path>>(dir: P) -> Result<Self> {
+        use std::fs;
+
+        let dir = dir.as_ref();
+        info!(path = %dir.display(), "Loading segment manager (mmap)");
+
+        let manifest_path = dir.join("manifest.json");
+        let manifest_bytes = fs::read(&manifest_path).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!("Failed to read manifest: {e}"))
+        })?;
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!("Failed to parse manifest: {e}"))
+        })?;
+
+        let config = Self::parse_config(&manifest);
+        let merge_policy = Self::parse_merge_policy(&manifest);
+        let next_segment_id = manifest["next_segment_id"].as_u64().unwrap_or(0);
+
+        let segment_ids: Vec<u64> = manifest["segment_ids"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(serde_json::Value::as_u64).collect())
+            .unwrap_or_default();
+
+        let mut frozen = Vec::with_capacity(segment_ids.len());
+        for seg_id in segment_ids {
+            let segment_path = dir.join(format!("segment_{seg_id}.bin"));
+            let segment = FrozenSegment::load_mmap(&segment_path)?;
+            frozen.push(Arc::new(segment));
+            debug!(segment_id = seg_id, "Loaded segment (mmap)");
+        }
+
+        let mutable = match &config.quantization {
+            Some(QuantizationMode::SQ8) => {
+                MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
+            }
+            Some(QuantizationMode::RaBitQ) => {
+                MutableSegment::new_rabitq(config.dimensions, config.params, config.distance_fn)?
+            }
+            None => MutableSegment::with_capacity(
+                config.dimensions,
+                config.params,
+                config.distance_fn,
+                config.segment_capacity,
+            )?,
+        };
+
+        let total_vectors: usize = frozen.iter().map(|s| s.len()).sum();
+        info!(
+            segments = frozen.len(),
+            total_vectors, "Segment manager loaded (mmap)"
+        );
+
+        Ok(Self {
+            config,
+            mutable,
+            frozen,
+            next_segment_id,
+            merge_policy,
+            last_merge_stats: None,
+        })
+    }
+
+    /// Load segment manager from a directory using mmap (non-mmap fallback)
+    #[cfg(not(feature = "mmap"))]
+    pub fn load_mmap<P: AsRef<std::path::Path>>(dir: P) -> Result<Self> {
+        Self::load(dir)
+    }
 }

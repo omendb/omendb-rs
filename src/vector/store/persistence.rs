@@ -21,6 +21,18 @@ use serde_json::Value as JsonValue;
 use std::path::Path;
 
 use crate::omen::Metric;
+use std::path::PathBuf;
+
+/// Compute the segments directory path for a given store path.
+///
+/// Works whether the store path is a directory-like path ("mydb.oadb")
+/// or a file path ("mydb.omen"). The segments directory is always a
+/// sibling named "{stem}.segments".
+fn segments_dir_for(path: &Path) -> PathBuf {
+    let mut seg_path = path.as_os_str().to_os_string();
+    seg_path.push(".segments");
+    PathBuf::from(seg_path)
+}
 
 impl VectorStore {
     // ========================================================================
@@ -159,29 +171,61 @@ impl VectorStore {
         let active_count = records.len() as usize;
 
         let segments = if active_count > 0 && dimensions > 0 {
-            // Collect vectors and slots for parallel build
-            let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(active_count);
-            let mut slots: Vec<u32> = Vec::with_capacity(active_count);
-            for (slot, record) in records.iter_live() {
-                vectors.push(record.vector.clone());
-                slots.push(slot);
+            let segments_dir = segments_dir_for(path);
+
+            // Fast path: load persisted segments if available and up-to-date
+            let loaded = if segments_dir.exists() {
+                match SegmentManager::load(&segments_dir) {
+                    Ok(loaded) if loaded.len() == active_count => {
+                        tracing::info!(
+                            segments = loaded.frozen_count(),
+                            total_vectors = active_count,
+                            "Loaded persisted segments (skipped rebuild)"
+                        );
+                        Some(loaded)
+                    }
+                    Ok(loaded) => {
+                        tracing::info!(
+                            segment_vectors = loaded.len(),
+                            record_vectors = active_count,
+                            "Segment count mismatch, rebuilding index"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load segments, rebuilding: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            if let Some(segments) = loaded {
+                Some(segments)
+            } else {
+                // Slow path: rebuild from vectors
+                let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(active_count);
+                let mut slots: Vec<u32> = Vec::with_capacity(active_count);
+                for (slot, record) in records.iter_live() {
+                    vectors.push(record.vector.clone());
+                    slots.push(slot);
+                }
+
+                let config = SegmentConfig::new(dimensions)
+                    .with_params(HNSWParams {
+                        m: hnsw_m,
+                        ef_construction: hnsw_ef_construction,
+                        ..Default::default()
+                    })
+                    .with_distance(distance_metric.into())
+                    .with_quantization(quantization_mode.clone());
+
+                Some(
+                    SegmentManager::build_parallel_with_slots(config, vectors, &slots)
+                        .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?,
+                )
             }
-
-            // Build segment config
-            let config = SegmentConfig::new(dimensions)
-                .with_params(HNSWParams {
-                    m: hnsw_m,
-                    ef_construction: hnsw_ef_construction,
-                    ..Default::default()
-                })
-                .with_distance(distance_metric.into())
-                .with_quantization(quantization_mode.clone());
-
-            // Build segments with parallel construction
-            Some(
-                SegmentManager::build_parallel_with_slots(config, vectors, &slots)
-                    .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?,
-            )
         } else {
             None
         };
@@ -486,6 +530,16 @@ impl VectorStore {
                     multivec_config,
                 },
             )?;
+        }
+
+        // Persist HNSW segments alongside OmenFile checkpoint
+        if let Some(ref mut segments) = self.segments {
+            if let Some(ref path) = self.storage_path {
+                let segments_dir = segments_dir_for(path);
+                segments
+                    .save(&segments_dir)
+                    .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
+            }
         }
 
         if let Some(ref mut text_index) = self.text_index {

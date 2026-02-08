@@ -527,10 +527,13 @@ impl FrozenSegment {
             }
 
             // Convert to output format, sorted by distance
+            // Apply comparison_to_actual to match HNSWIndex::search behavior
+            // (e.g., sqrt for L2 squared distances)
             let mut output: Vec<_> = results
                 .into_iter()
                 .map(|(OrderedFloat(dist), id)| {
-                    SegmentSearchResult::new(id, dist, self.storage.slot(id))
+                    let actual_dist = self.distance_fn.comparison_to_actual(dist);
+                    SegmentSearchResult::new(id, actual_dist, self.storage.slot(id))
                 })
                 .collect();
 
@@ -644,11 +647,13 @@ impl FrozenSegment {
             );
 
             // Convert to results and sort
+            // Apply comparison_to_actual to match HNSWIndex::search behavior
             let mut results: Vec<_> = candidates
                 .into_iter()
                 .map(|id| {
                     let dist = self.compute_distance(query, self.storage.get_vector_ref(id));
-                    SegmentSearchResult::new(id, dist, self.storage.slot(id))
+                    let actual_dist = self.distance_fn.comparison_to_actual(dist);
+                    SegmentSearchResult::new(id, actual_dist, self.storage.slot(id))
                 })
                 .collect();
 

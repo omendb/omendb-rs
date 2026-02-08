@@ -163,6 +163,346 @@ impl NodeStorage {
         }
     }
 
+    /// Serialize auxiliary state (mode, SQ8, RaBitQ, upper neighbors).
+    ///
+    /// Does NOT include the header or raw node data — those are handled
+    /// separately (as_bytes() for save, from_bytes()/from_mmap() for load).
+    /// Used by segment persistence v2 format to append auxiliary data after
+    /// the raw node data in the segment file.
+    #[must_use]
+    pub fn serialize_auxiliary(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+
+        // Mode and trained flag
+        let mode_byte: u8 = match self.mode {
+            StorageMode::FullPrecision => 0,
+            StorageMode::SQ8 => 1,
+            StorageMode::RaBitQ => 3,
+        };
+        out.push(mode_byte);
+        out.push(u8::from(self.sq8_trained));
+
+        // SQ8 params if present
+        if let Some(ref params) = self.sq8_params {
+            out.push(1);
+            out.extend_from_slice(&params.scale.to_le_bytes());
+            out.extend_from_slice(&params.offset.to_le_bytes());
+        } else {
+            out.push(0);
+        }
+
+        // Norms
+        out.extend_from_slice(&(self.norms.len() as u64).to_le_bytes());
+        for &norm in &self.norms {
+            out.extend_from_slice(&norm.to_le_bytes());
+        }
+
+        // SQ8 sums
+        out.extend_from_slice(&(self.sq8_sums.len() as u64).to_le_bytes());
+        for &sum in &self.sq8_sums {
+            out.extend_from_slice(&sum.to_le_bytes());
+        }
+
+        // Legacy PQ fields (write zeros for backward compatibility)
+        out.push(0); // pq_trained = false
+        out.push(0); // no PQ params
+        out.extend_from_slice(&0u64.to_le_bytes()); // pq_codes length = 0
+
+        // RaBitQ state
+        out.push(u8::from(self.rabitq_trained));
+        if let Some(ref params) = self.rabitq_params {
+            out.push(1);
+            let param_bytes = params.serialize_params();
+            out.extend_from_slice(&(param_bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(&param_bytes);
+        } else {
+            out.push(0);
+        }
+        out.extend_from_slice(&(self.rabitq_codes.len() as u64).to_le_bytes());
+        for &word in &self.rabitq_codes {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        out.extend_from_slice(&(self.rabitq_metadata.len() as u64).to_le_bytes());
+        for &m in &self.rabitq_metadata {
+            out.extend_from_slice(&m.to_le_bytes());
+        }
+        let originals_to_write = if self.mode == StorageMode::RaBitQ
+            && !self.rabitq_trained
+            && !self.training_buffer.is_empty()
+        {
+            &self.training_buffer
+        } else {
+            &self.rabitq_originals
+        };
+        out.extend_from_slice(&(originals_to_write.len() as u64).to_le_bytes());
+        for &v in originals_to_write {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+
+        // Upper neighbors
+        out.extend_from_slice(&(self.upper_neighbors.len() as u64).to_le_bytes());
+        for (&node_id, levels) in &self.upper_neighbors {
+            out.extend_from_slice(&node_id.to_le_bytes());
+            out.push(levels.len() as u8);
+            for level_neighbors in levels {
+                out.extend_from_slice(&(level_neighbors.len() as u16).to_le_bytes());
+                for &neighbor in level_neighbors {
+                    out.extend_from_slice(&neighbor.to_le_bytes());
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Restore auxiliary state into an existing NodeStorage that already has
+    /// raw node data loaded (via from_bytes or from_mmap).
+    ///
+    /// This is the inverse of `serialize_auxiliary()`.
+    pub fn deserialize_auxiliary(&mut self, data: &[u8]) -> Result<(), String> {
+        fn read_bytes<'a>(data: &'a [u8], pos: &mut usize, n: usize) -> Result<&'a [u8], String> {
+            if *pos + n > data.len() {
+                return Err(format!(
+                    "Auxiliary data too short: need {} bytes at position {}, have {}",
+                    n,
+                    *pos,
+                    data.len()
+                ));
+            }
+            let result = &data[*pos..*pos + n];
+            *pos += n;
+            Ok(result)
+        }
+
+        fn read_u64(data: &[u8], pos: &mut usize) -> Result<u64, String> {
+            let bytes = read_bytes(data, pos, 8)?;
+            Ok(u64::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid u64")?,
+            ))
+        }
+
+        fn read_u32(data: &[u8], pos: &mut usize) -> Result<u32, String> {
+            let bytes = read_bytes(data, pos, 4)?;
+            Ok(u32::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid u32")?,
+            ))
+        }
+
+        fn read_u16(data: &[u8], pos: &mut usize) -> Result<u16, String> {
+            let bytes = read_bytes(data, pos, 2)?;
+            Ok(u16::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid u16")?,
+            ))
+        }
+
+        fn read_f32(data: &[u8], pos: &mut usize) -> Result<f32, String> {
+            let bytes = read_bytes(data, pos, 4)?;
+            Ok(f32::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid f32")?,
+            ))
+        }
+
+        fn read_i32(data: &[u8], pos: &mut usize) -> Result<i32, String> {
+            let bytes = read_bytes(data, pos, 4)?;
+            Ok(i32::from_le_bytes(
+                bytes.try_into().map_err(|_| "Invalid i32")?,
+            ))
+        }
+
+        fn read_u8(data: &[u8], pos: &mut usize) -> Result<u8, String> {
+            let bytes = read_bytes(data, pos, 1)?;
+            Ok(bytes[0])
+        }
+
+        const MAX_AUX_ELEMENTS: usize = 1_000_000_000;
+        let mut pos = 0;
+
+        // Mode and trained flag
+        let mode_byte = read_u8(data, &mut pos)?;
+        let mode = match mode_byte {
+            0 => StorageMode::FullPrecision,
+            1 => StorageMode::SQ8,
+            2 => return Err("PQ storage mode is no longer supported".to_string()),
+            3 => StorageMode::RaBitQ,
+            _ => return Err(format!("Invalid storage mode: {mode_byte}")),
+        };
+        let sq8_trained = read_u8(data, &mut pos)? != 0;
+
+        // SQ8 params
+        let has_params = read_u8(data, &mut pos)? != 0;
+        let sq8_params = if has_params {
+            let scale = read_f32(data, &mut pos)?;
+            let offset = read_f32(data, &mut pos)?;
+            Some(ScalarParams {
+                scale,
+                offset,
+                dimensions: self.dimensions,
+            })
+        } else {
+            None
+        };
+
+        // Norms
+        let norms_len = read_u64(data, &mut pos)? as usize;
+        if norms_len > MAX_AUX_ELEMENTS {
+            return Err(format!("Norms length {norms_len} exceeds safety cap"));
+        }
+        let mut norms = Vec::with_capacity(norms_len);
+        for _ in 0..norms_len {
+            norms.push(read_f32(data, &mut pos)?);
+        }
+
+        // SQ8 sums
+        let sums_len = read_u64(data, &mut pos)? as usize;
+        if sums_len > MAX_AUX_ELEMENTS {
+            return Err(format!("SQ8 sums length {sums_len} exceeds safety cap"));
+        }
+        let mut sq8_sums = Vec::with_capacity(sums_len);
+        for _ in 0..sums_len {
+            sq8_sums.push(read_i32(data, &mut pos)?);
+        }
+
+        // Legacy PQ state (skip)
+        let _pq_trained = read_u8(data, &mut pos)? != 0;
+        let has_pq_params = read_u8(data, &mut pos)? != 0;
+        if has_pq_params {
+            let codebook_len = read_u64(data, &mut pos)? as usize;
+            let _codebook_bytes = read_bytes(data, &mut pos, codebook_len)?;
+        }
+        let pq_codes_len = read_u64(data, &mut pos)? as usize;
+        let _pq_codes = read_bytes(data, &mut pos, pq_codes_len)?;
+
+        // RaBitQ state
+        let (rabitq_trained, rabitq_params, rabitq_codes, rabitq_metadata, rabitq_originals) =
+            if pos + 2 <= data.len() && mode == StorageMode::RaBitQ {
+                let trained = read_u8(data, &mut pos)? != 0;
+                let has_params = read_u8(data, &mut pos)? != 0;
+                let params = if has_params {
+                    let param_len = read_u64(data, &mut pos)? as usize;
+                    let param_bytes = read_bytes(data, &mut pos, param_len)?;
+                    Some(
+                        crate::compression::rabitq::RaBitQParams::deserialize_params(param_bytes)
+                            .map_err(|e| format!("Failed to deserialize RaBitQ params: {e}"))?,
+                    )
+                } else {
+                    None
+                };
+                let codes_len = read_u64(data, &mut pos)? as usize;
+                if codes_len > MAX_AUX_ELEMENTS {
+                    return Err(format!(
+                        "RaBitQ codes length {codes_len} exceeds safety cap"
+                    ));
+                }
+                let mut codes = Vec::with_capacity(codes_len);
+                for _ in 0..codes_len {
+                    codes.push(read_u64(data, &mut pos)?);
+                }
+                let meta_len = read_u64(data, &mut pos)? as usize;
+                if meta_len > MAX_AUX_ELEMENTS {
+                    return Err(format!(
+                        "RaBitQ metadata length {meta_len} exceeds safety cap"
+                    ));
+                }
+                let mut metadata = Vec::with_capacity(meta_len);
+                for _ in 0..meta_len {
+                    metadata.push(read_f32(data, &mut pos)?);
+                }
+                let originals = if pos + 8 <= data.len() {
+                    let orig_len = read_u64(data, &mut pos)? as usize;
+                    if orig_len > MAX_AUX_ELEMENTS {
+                        return Err(format!(
+                            "RaBitQ originals length {orig_len} exceeds safety cap"
+                        ));
+                    }
+                    let mut orig = Vec::with_capacity(orig_len);
+                    for _ in 0..orig_len {
+                        orig.push(read_f32(data, &mut pos)?);
+                    }
+                    orig
+                } else {
+                    Vec::new()
+                };
+                (trained, params, codes, metadata, originals)
+            } else if pos + 2 <= data.len() && mode != StorageMode::RaBitQ {
+                let _trained = read_u8(data, &mut pos)? != 0;
+                let has_params = read_u8(data, &mut pos)? != 0;
+                if has_params {
+                    let param_len = read_u64(data, &mut pos)? as usize;
+                    let _ = read_bytes(data, &mut pos, param_len)?;
+                }
+                let codes_len = read_u64(data, &mut pos)? as usize;
+                if codes_len > MAX_AUX_ELEMENTS {
+                    return Err(format!(
+                        "RaBitQ codes length {codes_len} exceeds safety cap"
+                    ));
+                }
+                for _ in 0..codes_len {
+                    let _ = read_u64(data, &mut pos)?;
+                }
+                let meta_len = read_u64(data, &mut pos)? as usize;
+                if meta_len > MAX_AUX_ELEMENTS {
+                    return Err(format!(
+                        "RaBitQ metadata length {meta_len} exceeds safety cap"
+                    ));
+                }
+                for _ in 0..meta_len {
+                    let _ = read_f32(data, &mut pos)?;
+                }
+                if pos + 8 <= data.len() {
+                    let orig_len = read_u64(data, &mut pos)? as usize;
+                    if orig_len > MAX_AUX_ELEMENTS {
+                        return Err(format!(
+                            "RaBitQ originals length {orig_len} exceeds safety cap"
+                        ));
+                    }
+                    for _ in 0..orig_len {
+                        let _ = read_f32(data, &mut pos)?;
+                    }
+                }
+                (false, None, Vec::new(), Vec::new(), Vec::new())
+            } else {
+                (false, None, Vec::new(), Vec::new(), Vec::new())
+            };
+
+        // Upper neighbors
+        let upper_count = read_u64(data, &mut pos)? as usize;
+        let mut upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>> =
+            FxHashMap::with_capacity_and_hasher(upper_count, rustc_hash::FxBuildHasher);
+        for _ in 0..upper_count {
+            let node_id = read_u32(data, &mut pos)?;
+            let num_levels = read_u8(data, &mut pos)? as usize;
+            let mut levels = Vec::with_capacity(num_levels);
+            for _ in 0..num_levels {
+                let count = read_u16(data, &mut pos)? as usize;
+                let mut neighbors = Vec::with_capacity(count);
+                for _ in 0..count {
+                    neighbors.push(read_u32(data, &mut pos)?);
+                }
+                levels.push(neighbors);
+            }
+            upper_neighbors.insert(node_id, levels);
+        }
+
+        // Apply to self
+        self.mode = mode;
+        self.sq8_params = sq8_params;
+        self.norms = norms;
+        self.sq8_sums = sq8_sums;
+        self.sq8_trained = sq8_trained;
+        self.upper_neighbors = upper_neighbors;
+        self.rabitq_params = rabitq_params;
+        self.rabitq_codes = rabitq_codes;
+        self.rabitq_metadata = rabitq_metadata;
+        self.rabitq_trained = rabitq_trained;
+        if mode == StorageMode::RaBitQ && !rabitq_trained && !rabitq_originals.is_empty() {
+            self.training_buffer = rabitq_originals;
+        } else {
+            self.rabitq_originals = rabitq_originals;
+        }
+
+        Ok(())
+    }
+
     /// Serialize complete storage state to bytes
     ///
     /// Format:
