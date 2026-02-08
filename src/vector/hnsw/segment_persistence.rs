@@ -42,6 +42,10 @@ const SEGMENT_MAGIC: &[u8; 8] = b"OMSEG\0\0\0";
 /// Storage header size (7 u32 fields)
 const STORAGE_HEADER_SIZE: usize = 7 * 4;
 
+/// Alignment for the raw node data section (cache line).
+/// Ensures mmap'd pointers are safe for f32/SIMD access.
+const DATA_ALIGNMENT: usize = 64;
+
 /// Configure OpenOptions for cross-platform compatibility.
 #[cfg(windows)]
 fn configure_open_options(opts: &mut OpenOptions) {
@@ -110,6 +114,27 @@ impl FrozenSegment {
         writer.write_all(&(storage.metadata_offset() as u32).to_le_bytes())?;
         writer.write_all(&(storage.dimensions() as u32).to_le_bytes())?;
         writer.write_all(&(storage.max_neighbors() as u32).to_le_bytes())?;
+
+        // v2: Write alignment padding so raw data starts at a cache-line boundary.
+        // This ensures mmap'd pointers are safe for f32/SIMD access.
+        {
+            // Current position = magic(8) + version(4) + id(8) + ep(1+0|4)
+            //   + df(4+len) + params(4+len) + header(28)
+            let current_pos = 8
+                + 4
+                + 8
+                + 1
+                + (if self.entry_point().is_some() { 4 } else { 0 })
+                + 4
+                + df_bytes.len()
+                + 4
+                + params_bytes.len()
+                + STORAGE_HEADER_SIZE;
+            let padding = (DATA_ALIGNMENT - (current_pos % DATA_ALIGNMENT)) % DATA_ALIGNMENT;
+            if padding > 0 {
+                writer.write_all(&vec![0u8; padding])?;
+            }
+        }
 
         // Write storage data (raw bytes)
         if !storage.is_empty() {
@@ -218,6 +243,25 @@ impl FrozenSegment {
             u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
         let max_neighbors =
             u32::from_le_bytes([header[24], header[25], header[26], header[27]]) as usize;
+
+        // v2: Skip alignment padding before raw data
+        if version >= 2 {
+            let current_pos = 8
+                + 4
+                + 8
+                + 1
+                + (if entry_point.is_some() { 4 } else { 0 })
+                + 4
+                + df_len
+                + 4
+                + params_len
+                + STORAGE_HEADER_SIZE;
+            let padding = (DATA_ALIGNMENT - (current_pos % DATA_ALIGNMENT)) % DATA_ALIGNMENT;
+            if padding > 0 {
+                let mut pad = vec![0u8; padding];
+                reader.read_exact(&mut pad)?;
+            }
+        }
 
         // Read storage data (with overflow check)
         let data_size = len.checked_mul(node_size).ok_or_else(|| {
@@ -360,9 +404,9 @@ impl FrozenSegment {
         let max_neighbors =
             u32::from_le_bytes([header[24], header[25], header[26], header[27]]) as usize;
 
-        // Calculate data offset
-        // magic(8) + version(4) + id(8) + entry_point(1+0|4) + df(4+len) + params(4+len) + header(28)
-        let data_offset = 8
+        // Calculate data offset with alignment padding (v2)
+        // magic(8) + version(4) + id(8) + entry_point(1+0|4) + df(4+len) + params(4+len) + header(28) + padding
+        let header_end = 8
             + 4
             + 8
             + 1
@@ -372,6 +416,13 @@ impl FrozenSegment {
             + 4
             + params_len
             + STORAGE_HEADER_SIZE;
+        let data_offset = if version >= 2 {
+            // Align to DATA_ALIGNMENT boundary
+            let padding = (DATA_ALIGNMENT - (header_end % DATA_ALIGNMENT)) % DATA_ALIGNMENT;
+            header_end + padding
+        } else {
+            header_end
+        };
 
         // Memory-map the data section (or use empty storage for zero-length)
         let data_size = len * node_size;

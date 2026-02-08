@@ -175,7 +175,7 @@ impl VectorStore {
 
             // Fast path: load persisted segments if available and up-to-date
             let loaded = if segments_dir.exists() {
-                match SegmentManager::load(&segments_dir) {
+                match SegmentManager::load_mmap(&segments_dir) {
                     Ok(loaded) if loaded.len() == active_count => {
                         tracing::info!(
                             segments = loaded.frozen_count(),
