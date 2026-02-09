@@ -190,24 +190,17 @@ impl VectorDatabase {
 
         // Use subscores path when requested
         if subscores.unwrap_or(false) {
-            let results = if let Some(f) = rust_filter {
-                inner
-                    .store
-                    .hybrid_search_with_filter_subscores(
-                        &query_vec,
-                        &actual_query_text,
-                        k,
-                        &f,
-                        alpha,
-                        rrf_k,
-                    )
-                    .map_err(convert_error)?
-            } else {
-                inner
-                    .store
-                    .hybrid_search_with_subscores(&query_vec, &actual_query_text, k, alpha, rrf_k)
-                    .map_err(convert_error)?
-            };
+            let results = inner
+                .store
+                .hybrid_search_with_subscores(
+                    &query_vec,
+                    &actual_query_text,
+                    k,
+                    rust_filter.as_ref(),
+                    alpha,
+                    rrf_k,
+                )
+                .map_err(convert_error)?;
 
             let mut py_results = Vec::with_capacity(results.len());
             for (hybrid_result, metadata) in results {
@@ -216,7 +209,6 @@ impl VectorDatabase {
                 dict.set_item("score", hybrid_result.score)?;
                 dict.set_item("metadata", json_to_pyobject(py, &metadata)?)?;
 
-                // Add subscores (None if document only appeared in one search)
                 match hybrid_result.keyword_score {
                     Some(score) => dict.set_item("keyword_score", score)?,
                     None => dict.set_item("keyword_score", py.None())?,
@@ -232,24 +224,17 @@ impl VectorDatabase {
         }
 
         // Standard path without subscores
-        let results = if let Some(f) = rust_filter {
-            inner
-                .store
-                .hybrid_search_with_filter_rrf_k(
-                    &query_vec,
-                    &actual_query_text,
-                    k,
-                    &f,
-                    alpha,
-                    rrf_k,
-                )
-                .map_err(convert_error)?
-        } else {
-            inner
-                .store
-                .hybrid_search_with_rrf_k(&query_vec, &actual_query_text, k, alpha, rrf_k)
-                .map_err(convert_error)?
-        };
+        let results = inner
+            .store
+            .hybrid_search(
+                &query_vec,
+                &actual_query_text,
+                k,
+                rust_filter.as_ref(),
+                alpha,
+                rrf_k,
+            )
+            .map_err(convert_error)?;
 
         let mut py_results = Vec::with_capacity(results.len());
         for (id, score, metadata) in results {

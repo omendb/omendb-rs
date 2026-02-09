@@ -166,30 +166,17 @@ impl VectorDatabase {
         let inner = self.inner.read();
 
         if subscores.unwrap_or(false) {
-            let results = if let Some(f) = metadata_filter {
-                inner
-                    .store
-                    .hybrid_search_with_filter_subscores(
-                        &query_vec,
-                        &actual_query_text,
-                        k as usize,
-                        &f,
-                        alpha_f32,
-                        rrf_k_usize,
-                    )
-                    .map_err(convert_error)?
-            } else {
-                inner
-                    .store
-                    .hybrid_search_with_subscores(
-                        &query_vec,
-                        &actual_query_text,
-                        k as usize,
-                        alpha_f32,
-                        rrf_k_usize,
-                    )
-                    .map_err(convert_error)?
-            };
+            let results = inner
+                .store
+                .hybrid_search_with_subscores(
+                    &query_vec,
+                    &actual_query_text,
+                    k as usize,
+                    metadata_filter.as_ref(),
+                    alpha_f32,
+                    rrf_k_usize,
+                )
+                .map_err(convert_error)?;
 
             return Ok(results
                 .into_iter()
@@ -203,30 +190,17 @@ impl VectorDatabase {
                 .collect());
         }
 
-        let results = if let Some(f) = metadata_filter {
-            inner
-                .store
-                .hybrid_search_with_filter_rrf_k(
-                    &query_vec,
-                    &actual_query_text,
-                    k as usize,
-                    &f,
-                    alpha_f32,
-                    rrf_k_usize,
-                )
-                .map_err(convert_error)?
-        } else {
-            inner
-                .store
-                .hybrid_search_with_rrf_k(
-                    &query_vec,
-                    &actual_query_text,
-                    k as usize,
-                    alpha_f32,
-                    rrf_k_usize,
-                )
-                .map_err(convert_error)?
-        };
+        let results = inner
+            .store
+            .hybrid_search(
+                &query_vec,
+                &actual_query_text,
+                k as usize,
+                metadata_filter.as_ref(),
+                alpha_f32,
+                rrf_k_usize,
+            )
+            .map_err(convert_error)?;
 
         Ok(results
             .into_iter()

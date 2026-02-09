@@ -14,8 +14,10 @@ use crate::vector::types::Vector;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
 
-impl VectorStore {
+/// ID-score pairs from vector or text search, before fusion.
+type ScoredIds = Vec<(String, f32)>;
 
+impl VectorStore {
     /// Enable text search on this store.
     ///
     /// Creates a text index for BM25 keyword search. Must be called before
@@ -129,83 +131,22 @@ impl VectorStore {
     /// * `query_vector` - Query embedding
     /// * `query_text` - Text query for BM25
     /// * `k` - Number of results to return
+    /// * `filter` - Optional metadata filter
     /// * `alpha` - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
+    /// * `rrf_k` - RRF constant (default=60, higher reduces rank influence)
     pub fn hybrid_search(
         &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
-        alpha: Option<f32>,
-    ) -> Result<Vec<(String, f32, JsonValue)>> {
-        self.hybrid_search_with_rrf_k(query_vector, query_text, k, alpha, None)
-    }
-
-    /// Hybrid search with configurable RRF k constant.
-    ///
-    /// # Arguments
-    /// * `rrf_k` - RRF constant (default=60, higher reduces rank influence)
-    pub fn hybrid_search_with_rrf_k(
-        &self,
-        query_vector: &Vector,
-        query_text: &str,
-        k: usize,
+        filter: Option<&MetadataFilter>,
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(String, f32, JsonValue)>> {
         self.validate_hybrid_search_preconditions(query_vector)?;
 
-        let fetch_k = k * 2;
-
-        let vector_results = self.knn_search(query_vector, fetch_k)?;
-        let vector_results = self.convert_knn_results_to_id_scores(vector_results);
-
-        let text_results = self.text_search(query_text, fetch_k)?;
-
-        let fused = weighted_reciprocal_rank_fusion(
-            vector_results,
-            text_results,
-            k,
-            rrf_k.unwrap_or(DEFAULT_RRF_K),
-            alpha.unwrap_or(0.5),
-        );
-
-        Ok(attach_metadata(&self.records, fused))
-    }
-
-    /// Hybrid search with metadata filter.
-    pub fn hybrid_search_with_filter(
-        &self,
-        query_vector: &Vector,
-        query_text: &str,
-        k: usize,
-        filter: &MetadataFilter,
-        alpha: Option<f32>,
-    ) -> Result<Vec<(String, f32, JsonValue)>> {
-        self.hybrid_search_with_filter_rrf_k(query_vector, query_text, k, filter, alpha, None)
-    }
-
-    /// Hybrid search with filter and configurable RRF k constant.
-    pub fn hybrid_search_with_filter_rrf_k(
-        &self,
-        query_vector: &Vector,
-        query_text: &str,
-        k: usize,
-        filter: &MetadataFilter,
-        alpha: Option<f32>,
-        rrf_k: Option<usize>,
-    ) -> Result<Vec<(String, f32, JsonValue)>> {
-        self.validate_hybrid_search_preconditions(query_vector)?;
-
-        let fetch_k = k * 4;
-
-        let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
-        let vector_results: Vec<(String, f32)> = vector_results
-            .into_iter()
-            .map(|r| (r.id, r.distance))
-            .collect();
-
-        let text_results = self.text_search(query_text, fetch_k)?;
-        let text_results = filter_text_results_by_metadata(&self.records, text_results, filter);
+        let (vector_results, text_results) =
+            self.fetch_hybrid_candidates(query_vector, query_text, k, filter)?;
 
         let fused = weighted_reciprocal_rank_fusion(
             vector_results,
@@ -222,22 +163,27 @@ impl VectorStore {
     ///
     /// Returns [`HybridResult`] with `keyword_score` (BM25) and `semantic_score`
     /// (vector distance) for each result, enabling custom post-processing.
+    ///
+    /// # Arguments
+    /// * `query_vector` - Query embedding
+    /// * `query_text` - Text query for BM25
+    /// * `k` - Number of results to return
+    /// * `filter` - Optional metadata filter
+    /// * `alpha` - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
+    /// * `rrf_k` - RRF constant (default=60, higher reduces rank influence)
     pub fn hybrid_search_with_subscores(
         &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
+        filter: Option<&MetadataFilter>,
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(HybridResult, JsonValue)>> {
         self.validate_hybrid_search_preconditions(query_vector)?;
 
-        let fetch_k = k * 2;
-
-        let vector_results = self.knn_search(query_vector, fetch_k)?;
-        let vector_results = self.convert_knn_results_to_id_scores(vector_results);
-
-        let text_results = self.text_search(query_text, fetch_k)?;
+        let (vector_results, text_results) =
+            self.fetch_hybrid_candidates(query_vector, query_text, k, filter)?;
 
         let fused = weighted_reciprocal_rank_fusion_with_subscores(
             vector_results,
@@ -250,38 +196,37 @@ impl VectorStore {
         Ok(attach_metadata_to_hybrid_results(&self.records, fused))
     }
 
-    /// Hybrid search with filter returning separate keyword and semantic scores.
-    pub fn hybrid_search_with_filter_subscores(
+    /// Fetch vector and text candidates for hybrid search, optionally applying a metadata filter.
+    fn fetch_hybrid_candidates(
         &self,
         query_vector: &Vector,
         query_text: &str,
         k: usize,
-        filter: &MetadataFilter,
-        alpha: Option<f32>,
-        rrf_k: Option<usize>,
-    ) -> Result<Vec<(HybridResult, JsonValue)>> {
-        self.validate_hybrid_search_preconditions(query_vector)?;
+        filter: Option<&MetadataFilter>,
+    ) -> Result<(ScoredIds, ScoredIds)> {
+        if let Some(filter) = filter {
+            let fetch_k = k * 4;
 
-        let fetch_k = k * 4;
+            let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
+            let vector_results: ScoredIds = vector_results
+                .into_iter()
+                .map(|r| (r.id, r.distance))
+                .collect();
 
-        let vector_results = self.knn_search_with_filter(query_vector, fetch_k, filter)?;
-        let vector_results: Vec<(String, f32)> = vector_results
-            .into_iter()
-            .map(|r| (r.id, r.distance))
-            .collect();
+            let text_results = self.text_search(query_text, fetch_k)?;
+            let text_results = filter_text_results_by_metadata(&self.records, text_results, filter);
 
-        let text_results = self.text_search(query_text, fetch_k)?;
-        let text_results = filter_text_results_by_metadata(&self.records, text_results, filter);
+            Ok((vector_results, text_results))
+        } else {
+            let fetch_k = k * 2;
 
-        let fused = weighted_reciprocal_rank_fusion_with_subscores(
-            vector_results,
-            text_results,
-            k,
-            rrf_k.unwrap_or(DEFAULT_RRF_K),
-            alpha.unwrap_or(0.5),
-        );
+            let vector_results = self.knn_search(query_vector, fetch_k)?;
+            let vector_results = self.convert_knn_results_to_id_scores(vector_results);
 
-        Ok(attach_metadata_to_hybrid_results(&self.records, fused))
+            let text_results = self.text_search(query_text, fetch_k)?;
+
+            Ok((vector_results, text_results))
+        }
     }
 
     /// Validate preconditions for hybrid search.

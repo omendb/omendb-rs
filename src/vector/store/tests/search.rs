@@ -1,0 +1,85 @@
+use super::super::*;
+use super::random_vector;
+
+#[test]
+fn test_vector_store_knn_with_hnsw() {
+    let mut store = VectorStore::new(128);
+
+    // Insert some vectors
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Query for nearest neighbors (uses HNSW)
+    let query = random_vector(128, 50);
+    let results = store.knn_search(&query, 10).unwrap();
+
+    assert_eq!(results.len(), 10);
+
+    // Results should be sorted by distance
+    for i in 1..results.len() {
+        assert!(results[i].1 >= results[i - 1].1);
+    }
+}
+
+#[test]
+fn test_vector_store_brute_force() {
+    let mut store = VectorStore::new(128);
+
+    // Insert some vectors
+    for i in 0..100 {
+        store.insert(random_vector(128, i)).unwrap();
+    }
+
+    // Query using brute-force
+    let query = random_vector(128, 50);
+    let results = store.knn_search_brute_force(&query, 10).unwrap();
+
+    assert_eq!(results.len(), 10);
+
+    // Results should be sorted by distance
+    for i in 1..results.len() {
+        assert!(results[i].1 >= results[i - 1].1);
+    }
+}
+
+#[test]
+fn test_search_with_filter() {
+    let mut store = VectorStore::new(128);
+
+    // Insert vectors with metadata
+    store
+        .set(
+            "doc1".to_string(),
+            random_vector(128, 0),
+            serde_json::json!({"author": "Alice", "year": 2024}),
+        )
+        .unwrap();
+
+    store
+        .set(
+            "doc2".to_string(),
+            random_vector(128, 1),
+            serde_json::json!({"author": "Bob", "year": 2023}),
+        )
+        .unwrap();
+
+    store
+        .set(
+            "doc3".to_string(),
+            random_vector(128, 2),
+            serde_json::json!({"author": "Alice", "year": 2022}),
+        )
+        .unwrap();
+
+    // Search with filter for Alice's documents
+    let filter = MetadataFilter::Eq("author".to_string(), serde_json::json!("Alice"));
+    let query = random_vector(128, 0);
+    let results = store.knn_search_with_filter(&query, 10, &filter).unwrap();
+
+    // Should only return Alice's documents (doc1 and doc3)
+    assert_eq!(results.len(), 2);
+    for result in &results {
+        assert_eq!(result.metadata.get("author").unwrap(), "Alice");
+    }
+}
