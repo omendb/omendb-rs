@@ -103,20 +103,6 @@ impl MutableSegment {
         })
     }
 
-    /// Create with RaBitQ quantization (1-bit, 32x compression)
-    pub fn new_rabitq(
-        dimensions: usize,
-        params: HNSWParams,
-        distance_fn: DistanceFunction,
-    ) -> crate::vector::hnsw::error::Result<Self> {
-        Ok(Self {
-            index: HNSWIndex::new_with_rabitq(dimensions, params, distance_fn)?,
-            id: 0,
-            capacity: 100_000,
-            slots: Vec::new(),
-        })
-    }
-
     /// Create from an existing HNSWIndex with slot mapping
     ///
     /// Used for integrating parallel-built indexes into segment system.
@@ -345,31 +331,22 @@ impl FrozenSegment {
     }
 
     /// Create from mutable segment
-    fn from_mutable(mut mutable: MutableSegment) -> Self {
+    fn from_mutable(mutable: MutableSegment) -> Self {
         let dimensions = mutable.index.dimensions();
         let params = *mutable.index.params();
         let distance_fn = mutable.index.distance_function();
         let m = params.m;
-        let is_rabitq = mutable.index.is_rabitq();
 
-        // Create storage with matching mode
-        let mut storage = if is_rabitq {
-            NodeStorage::new_rabitq(dimensions, m, params.max_level as usize)
-        } else {
-            NodeStorage::new(dimensions, m, params.max_level as usize)
-        };
+        let mut storage = NodeStorage::new(dimensions, m, params.max_level as usize);
 
         // Copy all nodes from mutable to frozen
         for id in 0..mutable.index.len() as u32 {
             storage.allocate_node();
 
-            // Copy vector (skip for RaBitQ — vectors live in external Vecs)
-            if !is_rabitq {
-                if let Some(vector) = mutable.index.get_vector(id) {
-                    storage.set_vector(id, vector);
-                } else if let Some(vector) = mutable.index.get_vector_dequantized(id) {
-                    storage.set_vector(id, &vector);
-                }
+            if let Some(vector) = mutable.index.get_vector(id) {
+                storage.set_vector(id, vector);
+            } else if let Some(vector) = mutable.index.get_vector_dequantized(id) {
+                storage.set_vector(id, &vector);
             }
 
             // Copy level 0 neighbors (main graph layer)
@@ -391,18 +368,6 @@ impl FrozenSegment {
             // Use slot from mutable segment's slot tracking
             let slot = mutable.get_slot(id).unwrap_or(id);
             storage.set_slot(id, slot);
-        }
-
-        // Bulk-move RaBitQ external data (zero-copy via mem::take)
-        if is_rabitq {
-            let src = &mut mutable.index.storage;
-            storage.rabitq_params = std::mem::take(&mut src.rabitq_params);
-            storage.rabitq_codes = std::mem::take(&mut src.rabitq_codes);
-            storage.rabitq_metadata = std::mem::take(&mut src.rabitq_metadata);
-            storage.rabitq_originals = std::mem::take(&mut src.rabitq_originals);
-            storage.rabitq_trained = src.rabitq_trained;
-            storage.norms = std::mem::take(&mut src.norms);
-            storage.training_buffer = std::mem::take(&mut src.training_buffer);
         }
 
         Self {

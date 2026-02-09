@@ -133,14 +133,6 @@ impl VectorStoreOptions {
         self.quantization(QuantizationMode::SQ8)
     }
 
-    /// Enable RaBitQ quantization (32x compression, fast binary distance)
-    ///
-    /// Uses 1-bit quantization with random rotation for extreme compression.
-    #[must_use]
-    pub fn quantization_rabitq(self) -> Self {
-        self.quantization(QuantizationMode::RaBitQ)
-    }
-
     /// Set distance metric for similarity search.
     ///
     /// # Metrics

@@ -104,7 +104,6 @@ class VectorDatabase:
     - ~21,000 QPS @ 10K vectors with 100% recall
     - 30,000-67,000 vec/s insert throughput
     - SQ8 quantization (4x compression, ~99% recall)
-    - RaBitQ quantization (32x compression)
     - ACORN-1 filtered search (37.79x speedup)
 
     Supports context manager protocol for automatic cleanup.

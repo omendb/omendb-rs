@@ -33,7 +33,7 @@ use tracing::{error, info, instrument};
 /// Current segment file format version
 ///
 /// v1: Raw node data only (no quantization state)
-/// v2: Raw node data + auxiliary data (mode, SQ8, RaBitQ, upper neighbors)
+/// v2: Raw node data + auxiliary data (mode, SQ8, upper neighbors)
 const SEGMENT_FORMAT_VERSION: u32 = 2;
 
 /// Magic bytes for segment files
@@ -143,7 +143,7 @@ impl FrozenSegment {
             writer.write_all(data_bytes)?;
         }
 
-        // v2: Write auxiliary data (mode, SQ8, RaBitQ, upper neighbors)
+        // v2: Write auxiliary data (mode, SQ8, upper neighbors)
         let aux_data = storage.serialize_auxiliary();
         writer.write_all(&(aux_data.len() as u64).to_le_bytes())?;
         writer.write_all(&aux_data)?;
@@ -287,7 +287,7 @@ impl FrozenSegment {
             max_neighbors,
         );
 
-        // v2: Read auxiliary data (mode, SQ8, RaBitQ, upper neighbors)
+        // v2: Read auxiliary data (mode, SQ8, upper neighbors)
         if version >= 2 {
             let mut aux_len_bytes = [0u8; 8];
             reader.read_exact(&mut aux_len_bytes)?;

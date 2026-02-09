@@ -1,11 +1,9 @@
-//! Quantization support for NodeStorage (SQ8 and RaBitQ)
+//! Quantization support for NodeStorage (SQ8)
 //!
-//! Implements scalar and binary quantization with lazy training.
-//! - SQ8: L2 decomposition for fast integer SIMD distance
-//! - RaBitQ: 1-bit random rotation with binary distance
+//! Implements scalar quantization with lazy training.
+//! SQ8: L2 decomposition for fast integer SIMD distance
 
 use super::NodeStorage;
-use crate::compression::rabitq::{RaBitQParams, RaBitQQueryPrep};
 use crate::compression::scalar::{QueryPrep, ScalarParams};
 
 impl NodeStorage {
@@ -150,162 +148,6 @@ impl NodeStorage {
         }
         count
     }
-
-    /// Set vector in RaBitQ mode with lazy training
-    pub(super) fn set_vector_rabitq(&mut self, id: u32, vector: &[f32]) {
-        let id_usize = id as usize;
-        let dim = self.dimensions;
-
-        if self.rabitq_trained {
-            let params = self
-                .rabitq_params
-                .as_ref()
-                .expect("RaBitQ params should exist");
-            let (codes, dis_u_2, factor_ip, factor_ppc, _factor_err) = params.quantize(vector);
-            let code_words = params.code_words();
-
-            let start = id_usize * code_words;
-            let end = start + code_words;
-            if end > self.rabitq_codes.len() {
-                self.rabitq_codes.resize(end, 0);
-            }
-            self.rabitq_codes[start..end].copy_from_slice(&codes);
-
-            let meta_start = id_usize * 3;
-            let meta_end = meta_start + 3;
-            if meta_end > self.rabitq_metadata.len() {
-                self.rabitq_metadata.resize(meta_end, 0.0);
-            }
-            self.rabitq_metadata[meta_start] = dis_u_2;
-            self.rabitq_metadata[meta_start + 1] = factor_ip;
-            self.rabitq_metadata[meta_start + 2] = factor_ppc;
-
-            let orig_start = id_usize * dim;
-            let orig_end = orig_start + dim;
-            if orig_end > self.rabitq_originals.len() {
-                self.rabitq_originals.resize(orig_end, 0.0);
-            }
-            self.rabitq_originals[orig_start..orig_end].copy_from_slice(vector);
-
-            let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
-            if id_usize >= self.norms.len() {
-                self.norms.resize(id_usize + 1, 0.0);
-            }
-            self.norms[id_usize] = norm_sq;
-        } else {
-            self.training_buffer.extend_from_slice(vector);
-
-            let num_vectors = self.training_buffer.len() / dim;
-            if num_vectors >= 256 {
-                self.train_rabitq_quantization();
-            }
-        }
-    }
-
-    /// Train RaBitQ quantization from buffered vectors
-    pub(super) fn train_rabitq_quantization(&mut self) {
-        let dim = self.dimensions;
-        let num_vectors = self.training_buffer.len() / dim;
-
-        self.rabitq_originals = std::mem::take(&mut self.training_buffer);
-
-        let training_refs: Vec<&[f32]> = (0..num_vectors)
-            .map(|i| &self.rabitq_originals[i * dim..(i + 1) * dim])
-            .collect();
-
-        let params = RaBitQParams::train(&training_refs).expect("Failed to train RaBitQ params");
-        let code_words = params.code_words();
-        self.rabitq_params = Some(params.clone());
-        self.rabitq_trained = true;
-
-        self.rabitq_codes.reserve(num_vectors * code_words);
-        self.rabitq_metadata.reserve(num_vectors * 3);
-        self.norms.reserve(num_vectors);
-
-        for i in 0..num_vectors {
-            let vec_slice = &self.rabitq_originals[i * dim..(i + 1) * dim];
-            let (codes, dis_u_2, factor_ip, factor_ppc, _factor_err) = params.quantize(vec_slice);
-            let norm_sq: f32 = vec_slice.iter().map(|&x| x * x).sum();
-
-            let start = i * code_words;
-            if start + code_words > self.rabitq_codes.len() {
-                self.rabitq_codes.resize(start + code_words, 0);
-            }
-            self.rabitq_codes[start..start + code_words].copy_from_slice(&codes);
-
-            let meta_start = i * 3;
-            if meta_start + 3 > self.rabitq_metadata.len() {
-                self.rabitq_metadata.resize(meta_start + 3, 0.0);
-            }
-            self.rabitq_metadata[meta_start] = dis_u_2;
-            self.rabitq_metadata[meta_start + 1] = factor_ip;
-            self.rabitq_metadata[meta_start + 2] = factor_ppc;
-
-            if i >= self.norms.len() {
-                self.norms.push(norm_sq);
-            } else {
-                self.norms[i] = norm_sq;
-            }
-        }
-    }
-
-    /// Prepare query for RaBitQ distance calculation
-    #[must_use]
-    pub fn prepare_query_rabitq(&self, query: &[f32]) -> Option<RaBitQQueryPrep> {
-        self.rabitq_params
-            .as_ref()
-            .map(|params| params.prepare_query(query))
-    }
-
-    /// Compute RaBitQ approximate L2 distance
-    #[inline]
-    #[must_use]
-    pub fn distance_rabitq(&self, prep: &RaBitQQueryPrep, id: u32) -> Option<f32> {
-        let params = self.rabitq_params.as_ref()?;
-        if !self.rabitq_trained {
-            return None;
-        }
-
-        let idx = id as usize;
-        let code_words = params.code_words();
-        let start = idx * code_words;
-        let end = start + code_words;
-        if end > self.rabitq_codes.len() {
-            return None;
-        }
-
-        let meta_start = idx * 3;
-        if meta_start + 3 > self.rabitq_metadata.len() {
-            return None;
-        }
-
-        let signs = &self.rabitq_codes[start..end];
-        let dis_u_2 = self.rabitq_metadata[meta_start];
-        let factor_ip = self.rabitq_metadata[meta_start + 1];
-        let factor_ppc = self.rabitq_metadata[meta_start + 2];
-
-        Some(RaBitQParams::distance(
-            prep, signs, dis_u_2, factor_ip, factor_ppc,
-        ))
-    }
-
-    /// Batch compute RaBitQ distances
-    #[inline]
-    pub fn distance_rabitq_batch(
-        &self,
-        prep: &RaBitQQueryPrep,
-        ids: &[u32],
-        distances: &mut [f32],
-    ) -> usize {
-        let mut count = 0;
-        for (&id, dist) in ids.iter().zip(distances.iter_mut()) {
-            if let Some(d) = self.distance_rabitq(prep, id) {
-                *dist = d;
-                count += 1;
-            }
-        }
-        count
-    }
 }
 
 #[cfg(test)]
@@ -394,61 +236,6 @@ mod tests {
             "Self-distance should be near zero, got {}",
             self_dist
         );
-    }
-
-    #[test]
-    fn test_rabitq_pretrain_persistence_roundtrip() {
-        // Regression test: RaBitQ with < 256 vectors must survive save/load
-        let dim = 32;
-        let num_vectors = 50; // Well below 256 training threshold
-        let mut storage = NodeStorage::new_rabitq(dim, 4, 8);
-
-        let mut vectors = Vec::new();
-        for i in 0..num_vectors {
-            storage.allocate_node();
-            let vector: Vec<f32> = (0..dim)
-                .map(|j| ((i * dim + j) % 100) as f32 / 100.0)
-                .collect();
-            storage.set_vector(i as u32, &vector);
-            vectors.push(vector);
-        }
-        assert!(
-            !storage.is_trained(),
-            "Should not be trained with only {num_vectors} vectors"
-        );
-
-        // Verify vectors are accessible before save
-        for i in 0..num_vectors {
-            let deq = storage.get_dequantized(i as u32);
-            assert!(
-                deq.is_some(),
-                "Vector {i} should be retrievable before save"
-            );
-        }
-
-        // Serialize and deserialize
-        let bytes = storage.serialize_full();
-        let restored =
-            NodeStorage::deserialize_full(&bytes).expect("Deserialization should succeed");
-
-        assert_eq!(restored.len(), num_vectors);
-        assert!(
-            !restored.is_trained(),
-            "Should still be untrained after load"
-        );
-
-        // All vectors must survive the roundtrip
-        for i in 0..num_vectors {
-            let deq = restored.get_dequantized(i as u32);
-            assert!(deq.is_some(), "Vector {i} lost after save/load roundtrip");
-            let deq = deq.unwrap();
-            for (j, (&orig, &loaded)) in vectors[i].iter().zip(deq.iter()).enumerate() {
-                assert_eq!(
-                    orig, loaded,
-                    "Vector {i} dimension {j} differs after roundtrip"
-                );
-            }
-        }
     }
 
     #[test]

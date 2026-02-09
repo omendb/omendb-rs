@@ -15,11 +15,10 @@ pub fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> us
 
 /// Convert stored quantization mode ID to QuantizationMode.
 ///
-/// Mode IDs: 0=none, 1=sq8, 200=rabitq
+/// Mode IDs: 0=none, 1=sq8
 pub fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
     match mode_id {
         1 => Some(QuantizationMode::SQ8),
-        200 => Some(QuantizationMode::RaBitQ),
         _ => None,
     }
 }
@@ -28,7 +27,6 @@ pub fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
 pub fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
     match mode {
         QuantizationMode::SQ8 => 1,
-        QuantizationMode::RaBitQ => 200,
     }
 }
 

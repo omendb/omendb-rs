@@ -37,14 +37,12 @@ mod quantization;
 mod reorder;
 mod serialization;
 
-use crate::compression::rabitq::RaBitQParams;
 use crate::compression::scalar::ScalarParams;
 use rustc_hash::FxHashMap;
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::fmt;
 use std::ptr::NonNull;
 
-pub use crate::compression::rabitq::RaBitQQueryPrep as RaBitQPrep;
 pub use crate::compression::scalar::QueryPrep;
 
 /// Storage mode for vectors
@@ -55,8 +53,6 @@ pub enum StorageMode {
     FullPrecision,
     /// SQ8 quantized vectors (D bytes per vector, 4x compression)
     SQ8,
-    /// RaBitQ 1-bit quantized vectors (ceil(D/64)*8 bytes per vector, 32x compression)
-    RaBitQ,
 }
 
 /// Cache-line alignment for optimal prefetch
@@ -135,7 +131,7 @@ pub struct NodeStorage {
     pub(crate) upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>>,
 
     // Quantization support
-    /// Storage mode (full precision, SQ8, or RaBitQ)
+    /// Storage mode (full precision or SQ8)
     pub(crate) mode: StorageMode,
     /// Scalar quantization parameters (only for SQ8 mode)
     pub(crate) sq8_params: Option<ScalarParams>,
@@ -147,18 +143,6 @@ pub struct NodeStorage {
     pub(crate) training_buffer: Vec<f32>,
     /// Whether quantization has been trained
     pub(crate) sq8_trained: bool,
-
-    // RaBitQ quantization support
-    /// RaBitQ parameters (random rotation matrix)
-    pub(crate) rabitq_params: Option<RaBitQParams>,
-    /// RaBitQ binary codes stored contiguously as u64 words: [n_vectors * code_words]
-    pub(crate) rabitq_codes: Vec<u64>,
-    /// RaBitQ per-vector metadata: [n_vectors * 3] (dis_u_2, factor_ip, factor_ppc)
-    pub(crate) rabitq_metadata: Vec<f32>,
-    /// Original full-precision vectors for RaBitQ (needed for graph construction + rescore)
-    pub(crate) rabitq_originals: Vec<f32>,
-    /// Whether RaBitQ quantization has been trained
-    pub(crate) rabitq_trained: bool,
 }
 
 impl fmt::Debug for NodeStorage {
@@ -198,12 +182,6 @@ impl NodeStorage {
         Self::with_mode(dimensions, m, max_levels, StorageMode::SQ8)
     }
 
-    /// Create new RaBitQ quantized storage (1-bit, 32x compression)
-    #[must_use]
-    pub fn new_rabitq(dimensions: usize, m: usize, max_levels: usize) -> Self {
-        Self::with_mode(dimensions, m, max_levels, StorageMode::RaBitQ)
-    }
-
     /// Create storage with specified mode
     #[must_use]
     fn with_mode(dimensions: usize, m: usize, max_levels: usize, mode: StorageMode) -> Self {
@@ -217,7 +195,6 @@ impl NodeStorage {
         let vector_size = match mode {
             StorageMode::FullPrecision => dimensions * 4, // f32
             StorageMode::SQ8 => dimensions,               // u8
-            StorageMode::RaBitQ => 0, // RaBitQ stores codes in external Vecs, not in node layout
         };
         let metadata_offset = vector_offset + vector_size;
         let raw_size = metadata_offset + 4 + 1; // slot (4) + level (1)
@@ -243,11 +220,6 @@ impl NodeStorage {
             sq8_sums: Vec::new(),
             training_buffer: Vec::new(),
             sq8_trained: false,
-            rabitq_params: None,
-            rabitq_codes: Vec::new(),
-            rabitq_metadata: Vec::new(),
-            rabitq_originals: Vec::new(),
-            rabitq_trained: false,
         }
     }
 
@@ -286,7 +258,7 @@ impl NodeStorage {
         self.max_level
     }
 
-    /// Storage mode (full precision or SQ8)
+    /// Storage mode
     #[inline]
     #[must_use]
     pub fn mode(&self) -> StorageMode {
@@ -300,14 +272,7 @@ impl NodeStorage {
         self.mode == StorageMode::SQ8
     }
 
-    /// Check if this storage uses RaBitQ quantization
-    #[inline]
-    #[must_use]
-    pub fn is_rabitq(&self) -> bool {
-        self.mode == StorageMode::RaBitQ
-    }
-
-    /// Check if this storage uses any quantization
+    /// Check if this storage uses quantization
     #[inline]
     #[must_use]
     pub fn is_quantized(&self) -> bool {
@@ -321,7 +286,6 @@ impl NodeStorage {
         match self.mode {
             StorageMode::FullPrecision => true,
             StorageMode::SQ8 => self.sq8_trained,
-            StorageMode::RaBitQ => self.rabitq_trained,
         }
     }
 
@@ -529,47 +493,16 @@ impl NodeStorage {
                     }
                 }
             }
-            StorageMode::RaBitQ => {
-                let dim = self.dimensions;
-                let start = id as usize * dim;
-                let end = start + dim;
-                if self.rabitq_trained {
-                    // After training: return from stored originals
-                    if end <= self.rabitq_originals.len() {
-                        Some(self.rabitq_originals[start..end].to_vec())
-                    } else {
-                        None
-                    }
-                } else {
-                    // Before training: return from training buffer
-                    if end <= self.training_buffer.len() {
-                        Some(self.training_buffer[start..end].to_vec())
-                    } else {
-                        None
-                    }
-                }
-            }
         }
     }
 
-    /// Zero-copy vector access for any mode.
-    /// FullPrecision: from node layout. RaBitQ: from originals/training_buffer.
+    /// Zero-copy vector access for full precision mode.
     /// Panics if SQ8 (use get_dequantized instead).
     #[inline]
     #[must_use]
     pub fn get_vector_ref(&self, id: u32) -> &[f32] {
         match self.mode {
             StorageMode::FullPrecision => self.vector(id),
-            StorageMode::RaBitQ => {
-                let dim = self.dimensions;
-                let start = id as usize * dim;
-                let end = start + dim;
-                if self.rabitq_trained {
-                    &self.rabitq_originals[start..end]
-                } else {
-                    &self.training_buffer[start..end]
-                }
-            }
             StorageMode::SQ8 => {
                 panic!("get_vector_ref not supported for SQ8, use get_dequantized()")
             }
@@ -611,9 +544,6 @@ impl NodeStorage {
             }
             StorageMode::SQ8 => {
                 self.set_vector_sq8(id, vector);
-            }
-            StorageMode::RaBitQ => {
-                self.set_vector_rabitq(id, vector);
             }
         }
     }
@@ -915,13 +845,10 @@ impl NodeStorage {
             })
             .sum();
 
-        // Auxiliary storage (SQ8 + RaBitQ)
+        // Auxiliary storage (SQ8)
         let aux_usage = self.norms.len() * 4  // f32 norms
             + self.sq8_sums.len() * 4  // i32 sums
-            + self.training_buffer.len() * 4  // f32 training buffer
-            + self.rabitq_codes.len() * 8  // u64 binary codes
-            + self.rabitq_metadata.len() * 4  // f32 metadata
-            + self.rabitq_originals.len() * 4; // f32 original vectors
+            + self.training_buffer.len() * 4; // f32 training buffer
 
         level0_usage + upper_usage + aux_usage
     }

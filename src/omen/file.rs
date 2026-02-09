@@ -374,12 +374,6 @@ impl OmenFile {
 // OmenFile is now pure I/O: WAL + checkpoint_from_snapshot.
 
 impl OmenFile {
-    /// Store a vector by internal index (no-op, RecordStore is source of truth)
-    #[allow(clippy::unused_self)]
-    pub fn put_vector(&mut self, _id: usize, _vector: &[f32]) -> Result<()> {
-        Ok(())
-    }
-
     /// Store metadata for a vector (no-op, RecordStore is source of truth)
     #[allow(clippy::unused_self)]
     pub fn put_metadata(&mut self, _id: usize, _metadata: &JsonValue) -> Result<()> {
@@ -489,12 +483,6 @@ impl OmenFile {
     // Note: flush(), delete_ratio(), needs_compaction(), compact() removed in Phase 5.
     // VectorStore handles flushing via checkpoint_from_snapshot().
     // Compaction will be implemented at VectorStore level using RecordStore data.
-
-    /// Batch set vectors with metadata and ID mappings (no-op, RecordStore is source of truth)
-    #[allow(clippy::unused_self)]
-    pub fn put_batch(&mut self, _items: Vec<(usize, String, Vec<f32>, JsonValue)>) -> Result<()> {
-        Ok(())
-    }
 }
 
 // ============================================================================

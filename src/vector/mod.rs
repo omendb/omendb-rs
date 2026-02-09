@@ -25,10 +25,6 @@ pub enum QuantizationMode {
     /// - ~2x faster than f32
     /// - ~99% recall
     SQ8,
-    /// RaBitQ 1-bit quantization with random rotation
-    /// - 32x compression (1 bit per dimension)
-    /// - Fast distance via binary operations
-    RaBitQ,
 }
 
 impl QuantizationMode {
@@ -38,21 +34,9 @@ impl QuantizationMode {
         Self::SQ8
     }
 
-    /// RaBitQ 1-bit quantization (32x compression)
-    #[must_use]
-    pub fn rabitq() -> Self {
-        Self::RaBitQ
-    }
-
     /// Check if SQ8 mode
     #[must_use]
     pub fn is_sq8(&self) -> bool {
         matches!(self, Self::SQ8)
-    }
-
-    /// Check if RaBitQ mode
-    #[must_use]
-    pub fn is_rabitq(&self) -> bool {
-        matches!(self, Self::RaBitQ)
     }
 }

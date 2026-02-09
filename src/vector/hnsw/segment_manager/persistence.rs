@@ -27,7 +27,6 @@ impl SegmentManager {
             "quantization_mode": match &self.config.quantization {
                 None => "none",
                 Some(QuantizationMode::SQ8) => "sq8",
-                Some(QuantizationMode::RaBitQ) => "rabitq",
             },
             "generation": self.generation,
             "next_segment_id": self.next_segment_id,
@@ -62,8 +61,7 @@ impl SegmentManager {
 
         let quantization = match manifest["quantization_mode"].as_str() {
             Some("sq8") => Some(QuantizationMode::SQ8),
-            Some("pq") => None, // PQ is no longer supported, fall back to full precision
-            Some("rabitq") => Some(QuantizationMode::RaBitQ),
+            Some("pq" | "rabitq") => None, // Legacy modes, fall back to full precision
             _ => {
                 // Backward compat: check old boolean field
                 if manifest["use_quantization"].as_bool().unwrap_or(false) {
@@ -231,9 +229,6 @@ impl SegmentManager {
         let mutable = match &config.quantization {
             Some(QuantizationMode::SQ8) => {
                 MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
-            }
-            Some(QuantizationMode::RaBitQ) => {
-                MutableSegment::new_rabitq(config.dimensions, config.params, config.distance_fn)?
             }
             None => MutableSegment::with_capacity(
                 config.dimensions,

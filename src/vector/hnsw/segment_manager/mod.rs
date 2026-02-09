@@ -38,7 +38,7 @@ pub struct SegmentConfig {
     pub distance_fn: DistanceFunction,
     /// Max vectors per segment before freezing
     pub segment_capacity: usize,
-    /// Quantization mode (None = full precision, Some(SQ8), Some(RaBitQ))
+    /// Quantization mode (None = full precision, Some(SQ8))
     pub quantization: Option<QuantizationMode>,
 }
 
@@ -117,9 +117,6 @@ impl SegmentManager {
             Some(QuantizationMode::SQ8) => {
                 MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
             }
-            Some(QuantizationMode::RaBitQ) => {
-                MutableSegment::new_rabitq(config.dimensions, config.params, config.distance_fn)?
-            }
             None => MutableSegment::with_capacity(
                 config.dimensions,
                 config.params,
@@ -159,23 +156,10 @@ impl SegmentManager {
     /// Uses HNSWIndex::build_parallel for fast initial construction.
     /// Slots are sequential starting from 0.
     pub fn build_parallel(config: SegmentConfig, vectors: Vec<Vec<f32>>) -> Result<Self> {
-        // RaBitQ uses lazy training and doesn't support parallel build; fall back to sequential
         let use_sq8 = config
             .quantization
             .as_ref()
             .is_some_and(QuantizationMode::is_sq8);
-        let is_rabitq = config
-            .quantization
-            .as_ref()
-            .is_some_and(QuantizationMode::is_rabitq);
-
-        if is_rabitq {
-            let mut mgr = Self::new(config)?;
-            for (i, v) in vectors.into_iter().enumerate() {
-                mgr.insert_with_slot(&v, i as u32)?;
-            }
-            return Ok(mgr);
-        }
 
         let index = HNSWIndex::build_parallel(
             config.dimensions,
@@ -209,18 +193,6 @@ impl SegmentManager {
             .quantization
             .as_ref()
             .is_some_and(QuantizationMode::is_sq8);
-        let is_rabitq = config
-            .quantization
-            .as_ref()
-            .is_some_and(QuantizationMode::is_rabitq);
-
-        if is_rabitq {
-            let mut mgr = Self::new(config)?;
-            for (v, &slot) in vectors.into_iter().zip(slots.iter()) {
-                mgr.insert_with_slot(&v, slot)?;
-            }
-            return Ok(mgr);
-        }
 
         let index = HNSWIndex::build_parallel(
             config.dimensions,
@@ -305,11 +277,6 @@ impl SegmentManager {
         // Create new mutable segment
         let new_mutable = match &self.config.quantization {
             Some(QuantizationMode::SQ8) => MutableSegment::new_quantized(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-            )?,
-            Some(QuantizationMode::RaBitQ) => MutableSegment::new_rabitq(
                 self.config.dimensions,
                 self.config.params,
                 self.config.distance_fn,
@@ -442,7 +409,7 @@ impl SegmentManager {
         &self.config.params
     }
 
-    /// Check if using quantization (SQ8 or RaBitQ)
+    /// Check if using quantization (SQ8)
     #[inline]
     pub fn is_quantized(&self) -> bool {
         self.config.quantization.is_some()

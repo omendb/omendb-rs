@@ -130,11 +130,10 @@ fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMo
             let lower = s.to_lowercase();
             match lower.as_str() {
                 "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
-                "rabitq" | "binary" => Ok(Some(QuantizationMode::rabitq())),
                 _ => Err(Error::new(
                     Status::InvalidArg,
                     format!(
-                        "Unknown quantization mode: '{}'. Valid: true, 'sq8', 'rabitq'",
+                        "Unknown quantization mode: '{}'. Valid: true, 'sq8'",
                         s
                     ),
                 )),
@@ -142,7 +141,7 @@ fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMo
         }
         _ => Err(Error::new(
             Status::InvalidArg,
-            "quantization must be true, false, 'sq8', or 'rabitq'",
+            "quantization must be true, false, or 'sq8'",
         )),
     }
 }
@@ -1688,7 +1687,7 @@ impl VectorDatabase {
 /// - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
 /// - efConstruction: 100 (build quality, higher = better graph, slower build)
 /// - efSearch: 100 (search quality, higher = better recall, slower search)
-/// - quantization: null (true/"sq8" for 4x compression, "rabitq" for 32x compression)
+/// - quantization: null (true/"sq8" for 4x compression)
 /// - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
 #[napi(object)]
 pub struct OpenOptions {

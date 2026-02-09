@@ -33,32 +33,6 @@ fn to_u32(len: usize, what: &str) -> io::Result<u32> {
     })
 }
 
-/// Field types for metadata indexing
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum FieldType {
-    /// String equality (inverted index)
-    Keyword = 1,
-    /// Integer equality/range
-    Integer = 2,
-    /// Float range
-    Float = 3,
-    /// Boolean (two bitmaps: true/false)
-    Boolean = 4,
-}
-
-impl From<u8> for FieldType {
-    fn from(v: u8) -> Self {
-        match v {
-            2 => Self::Integer,
-            3 => Self::Float,
-            4 => Self::Boolean,
-            _ => Self::Keyword, // 1 or unknown -> Keyword
-        }
-    }
-}
-
 /// Keyword index - inverted index for string equality
 #[derive(Debug, Clone, Default)]
 pub struct KeywordIndex {

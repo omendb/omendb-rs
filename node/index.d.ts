@@ -338,7 +338,7 @@ export declare function open(path: string, options?: OpenOptions | undefined | n
  * - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
  * - efConstruction: 100 (build quality, higher = better graph, slower build)
  * - efSearch: 100 (search quality, higher = better recall, slower search)
- * - quantization: null (true/"sq8" for 4x compression, "rabitq" for 32x compression)
+ * - quantization: null (true/"sq8" for 4x compression)
  * - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
  */
 export interface OpenOptions {

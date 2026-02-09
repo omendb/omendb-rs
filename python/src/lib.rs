@@ -47,16 +47,15 @@ fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Quantiza
     if let Ok(mode) = value.extract::<String>() {
         return match mode.to_lowercase().as_str() {
             "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
-            "rabitq" | "binary" => Ok(Some(QuantizationMode::rabitq())),
             _ => Err(PyValueError::new_err(format!(
-                "Unknown quantization mode: '{}'. Valid: True, 'sq8', 'rabitq'",
+                "Unknown quantization mode: '{}'. Valid: True, 'sq8'",
                 mode
             ))),
         };
     }
 
     Err(PyValueError::new_err(
-        "quantization must be True, False, 'sq8', or 'rabitq'",
+        "quantization must be True, False, or 'sq8'",
     ))
 }
 
@@ -2183,7 +2182,6 @@ impl VectorDatabase {
 ///     ef_search (int): Search quality (default: 100, higher = better recall)
 ///     quantization (bool|str): Enable quantization (default: None = full precision)
 ///         - True or "sq8" or "scalar": SQ8 ~4x smaller, ~99% recall (RECOMMENDED)
-///         - "rabitq": RaBitQ 32x compression, binary distance
 ///         - False/None: Full precision (no quantization)
 ///     metric (str): Distance metric for similarity search (default: "l2")
 ///         - "l2" or "euclidean": Euclidean distance (default)

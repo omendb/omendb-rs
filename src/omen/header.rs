@@ -44,7 +44,6 @@ impl From<&crate::vector::QuantizationMode> for QuantizationCode {
     fn from(mode: &crate::vector::QuantizationMode) -> Self {
         match mode {
             crate::vector::QuantizationMode::SQ8 => Self::Sq8,
-            crate::vector::QuantizationMode::RaBitQ => Self::RaBitQ,
         }
     }
 }
@@ -63,9 +62,7 @@ impl QuantizationCode {
     pub fn to_runtime(self) -> Option<crate::vector::QuantizationMode> {
         match self {
             Self::Sq8 => Some(crate::vector::QuantizationMode::SQ8),
-            Self::RaBitQ => Some(crate::vector::QuantizationMode::RaBitQ),
-            // F32 = no quantization, Pq = legacy (no longer supported), RaBitQ4 = not yet implemented
-            Self::F32 | Self::Pq | Self::RaBitQ4 => None,
+            Self::F32 | Self::RaBitQ | Self::RaBitQ4 | Self::Pq => None,
         }
     }
 }
