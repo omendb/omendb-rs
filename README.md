@@ -6,8 +6,8 @@
 
 Embedded vector database for Python and Node.js. No server, no setup, just install.
 
-- **21K QPS** single-threaded search with 100% recall (SIFT-10K)
-- **67K vec/s** insert throughput (1.4x hnswlib)
+- **20K QPS** single-threaded search with 100% recall (SIFT-10K)
+- **105K vec/s** insert throughput (2.2x hnswlib)
 - **SQ8** (4x) and **RaBitQ** (32x) quantization
 - **ACORN-1** predicate-aware filtered search
 - **Hybrid search** -- BM25 text + vector with RRF fusion
@@ -322,12 +322,12 @@ All commands support `--json` for machine-readable output. Use `--collection` to
 
 **SIFT-10K** (128D, M=16, ef=100, k=10, Apple M3 Max):
 
-| Metric      | OmenDB | hnswlib | Ratio |
-| ----------- | ------ | ------- | ----- |
-| Search QPS  | 21,335 | 14,776  | 1.44x |
-| Build vec/s | 67,000 | 47,000  | 1.43x |
-| Recall@10   | 100.0% | 99.5%   | --    |
-| Batch QPS   | 92,000 | --      | --    |
+| Metric      | OmenDB  | hnswlib | Ratio |
+| ----------- | ------- | ------- | ----- |
+| Build vec/s | 105,000 | 47,000  | 2.2x  |
+| Search QPS  | 19,700  | 14,800  | 1.3x  |
+| Batch QPS   | 156,000 | --      | --    |
+| Recall@10   | 100.0%  | 99.5%   | --    |
 
 **SIFT-1M** (1M vectors, 128D, M=16, ef=100, k=10):
 

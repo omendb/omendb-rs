@@ -2,10 +2,10 @@
 """
 OmenDB Benchmark Runner
 
-Runs benchmarks with QPS and recall measurement.
+Runs benchmarks on SIFT-10K (real embeddings) with QPS and recall measurement.
 
 Usage:
-    python benchmarks/run.py                        # Full benchmark (~45s)
+    python benchmarks/run.py                        # SIFT-10K benchmark (~30s)
     python benchmarks/run.py --quick                # Quick run (~10s)
     python benchmarks/run.py --output FILE          # Save results to FILE
     python benchmarks/run.py --history              # Show history
@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 import omendb
 
 DEFAULT_HISTORY_FILE = Path(__file__).parent / "history.jsonl"
+SIFT_10K_PATH = Path(__file__).parent / "data" / "sift-10k.npz"
 
 
 @dataclass
@@ -48,14 +49,16 @@ class BenchmarkConfig:
     k: int
     ef: Optional[int] = None
     m: int = 16
-    ef_construction: int = 200
+    ef_construction: int = 100
     quantization: Optional[str] = None  # None, "sq8", or "rabitq"
+    dataset: str = "sift-10k"
 
 
 @dataclass
 class BenchmarkResult:
     name: str
     config: dict
+    build_vec_per_s: int
     single_qps: float
     batch_qps: float
     single_latency_ms: float
@@ -64,16 +67,25 @@ class BenchmarkResult:
     recall_at_10: Optional[float] = None
 
 
-def brute_force_knn(query: np.ndarray, vectors: np.ndarray, k: int) -> list[int]:
-    """Compute ground truth k-NN using brute force L2 distance."""
-    distances = np.linalg.norm(vectors - query, axis=1)
-    return np.argsort(distances)[:k].tolist()
+def load_sift_10k() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load SIFT-10K dataset (real embeddings with pre-computed ground truth)."""
+    if not SIFT_10K_PATH.exists():
+        print(
+            f"SIFT-10K not found at {SIFT_10K_PATH}. "
+            "Run: python benchmarks/create_subsets.py",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    data = np.load(SIFT_10K_PATH)
+    return data["vectors"], data["queries"], data["ground_truth"]
 
 
-def compute_recall(result_ids: list[str], ground_truth: list[int]) -> float:
-    """Compute recall between HNSW results and brute force ground truth."""
-    hnsw_indices = {int(id[1:]) for id in result_ids}  # d0 -> 0
-    return len(hnsw_indices & set(ground_truth)) / len(ground_truth)
+def compute_recall(result_ids: list[str], ground_truth: np.ndarray, k: int) -> float:
+    """Compute recall@k between HNSW results and brute force ground truth."""
+    hnsw_indices = {int(rid) for rid in result_ids}
+    gt_set = set(ground_truth[:k].tolist())
+    return len(hnsw_indices & gt_set) / k
 
 
 def get_system_info() -> dict:
@@ -117,7 +129,7 @@ def get_system_info() -> dict:
         "os": platform.system(),
         "os_version": platform.release(),
         "arch": platform.machine(),
-        "host": platform.node().split(".")[0],  # Short hostname
+        "host": platform.node().split(".")[0],
     }
 
 
@@ -155,50 +167,42 @@ def get_version_info() -> dict:
     }
 
 
-def generate_vectors(n: int, dim: int) -> np.ndarray:
-    """Generate random vectors for benchmarking."""
-    return np.random.randn(n, dim).astype(np.float32)
-
-
 def run_benchmark(
-    config: BenchmarkConfig, quick: bool = False, measure_recall: bool = False
+    config: BenchmarkConfig,
+    vectors: np.ndarray,
+    queries: np.ndarray,
+    ground_truth: np.ndarray,
+    quick: bool = False,
 ) -> BenchmarkResult:
-    """Run a single benchmark configuration."""
-    np.random.seed(42)  # Reproducibility
-
-    vectors = generate_vectors(config.n_vectors, config.dimensions)
-    queries = generate_vectors(config.n_queries, config.dimensions)
-
-    # Pre-compute ground truth if measuring recall
-    ground_truth = None
-    if measure_recall:
-        ground_truth = [brute_force_knn(q, vectors, config.k) for q in queries]
-
+    """Run a single benchmark configuration on provided dataset."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db = omendb.open(
             f"{tmpdir}/bench",
             dimensions=config.dimensions,
+            m=config.m,
+            ef_construction=config.ef_construction,
             quantization=config.quantization,
         )
 
-        # Insert vectors
-        items = [{"id": f"d{i}", "vector": v.tolist()} for i, v in enumerate(vectors)]
+        # Build index and measure throughput
+        items = [{"id": str(i), "vector": v.tolist()} for i, v in enumerate(vectors)]
+        build_start = time.perf_counter()
         db.set(items)
+        build_time = time.perf_counter() - build_start
+        build_vec_per_s = round(len(vectors) / build_time)
 
-        # Measure recall if requested
-        recall_at_10 = None
-        if measure_recall and ground_truth:
-            recall_sum = 0.0
-            for i, q in enumerate(queries):
-                results = db.search(q.tolist(), k=config.k)
-                result_ids = [r["id"] for r in results]
-                recall_sum += compute_recall(result_ids, ground_truth[i])
-            recall_at_10 = recall_sum / len(queries)
+        # Measure recall
+        recall_sum = 0.0
+        for i, q in enumerate(queries):
+            results = db.search(q.tolist(), k=config.k)
+            result_ids = [r["id"] for r in results]
+            recall_sum += compute_recall(result_ids, ground_truth[i], config.k)
+        recall_at_10 = recall_sum / len(queries)
 
         # Warmup
-        for q in queries[:5]:
+        for q in queries[:10]:
             db.search(q.tolist(), k=config.k)
-        db.search_batch([q.tolist() for q in queries[:5]], k=config.k)
+        db.search_batch([q.tolist() for q in queries[:10]], k=config.k)
 
         # Single-query benchmark
         iterations = 3 if quick else 10
@@ -233,32 +237,31 @@ def run_benchmark(
         quant_suffix = "_rabitq"
 
     return BenchmarkResult(
-        name=f"{config.dimensions}D{quant_suffix}",
+        name=f"{config.dataset}{quant_suffix}",
         config=asdict(config),
+        build_vec_per_s=build_vec_per_s,
         single_qps=round(single_qps),
         batch_qps=round(batch_qps),
         single_latency_ms=round(single_latency_ms, 3),
         batch_latency_ms=round(batch_latency_ms, 3),
         speedup=round(batch_qps / single_qps, 1),
-        recall_at_10=round(recall_at_10, 4) if recall_at_10 else None,
+        recall_at_10=round(recall_at_10, 4),
     )
 
 
 def run_all_benchmarks(
     quick: bool = False, quantization: Optional[str] = None, all_modes: bool = False
 ) -> list[BenchmarkResult]:
-    """Run the standard benchmark suite with recall measurement.
+    """Run benchmarks on SIFT-10K (real embeddings).
 
     Args:
         quick: Use fewer iterations for faster runs
         quantization: Specific mode to test (None, "sq8", "rabitq")
         all_modes: Run all quantization modes (fp32, SQ8, RaBitQ)
     """
-    base_configs = [
-        {"n_vectors": 10_000, "n_queries": 100, "dimensions": 128, "k": 10},
-        {"n_vectors": 10_000, "n_queries": 100, "dimensions": 768, "k": 10},
-        {"n_vectors": 10_000, "n_queries": 100, "dimensions": 1536, "k": 10},
-    ]
+    vectors, queries, ground_truth = load_sift_10k()
+    n_vectors, dimensions = vectors.shape
+    n_queries = queries.shape[0]
 
     # Determine which quantization modes to run
     if all_modes:
@@ -266,19 +269,23 @@ def run_all_benchmarks(
     else:
         quant_modes = [quantization]
 
-    configs = []
-    for base in base_configs:
-        for qmode in quant_modes:
-            configs.append(BenchmarkConfig(**base, quantization=qmode))
-
     results = []
-    for config in configs:
-        mode_str = config.quantization or "fp32"
-        print(f"Running {config.dimensions}D ({mode_str})...", file=sys.stderr)
-        result = run_benchmark(config, quick=quick, measure_recall=True)
+    for qmode in quant_modes:
+        config = BenchmarkConfig(
+            n_vectors=n_vectors,
+            n_queries=n_queries,
+            dimensions=dimensions,
+            k=10,
+            quantization=qmode,
+            dataset="sift-10k",
+        )
+        mode_str = qmode or "fp32"
+        print(f"Running SIFT-10K ({mode_str})...", file=sys.stderr)
+        result = run_benchmark(config, vectors, queries, ground_truth, quick=quick)
         print(
-            f"  {result.single_qps:,} / {result.batch_qps:,} QPS, "
-            f"recall@10: {result.recall_at_10:.1%}",
+            f"  Build: {result.build_vec_per_s:,} vec/s | "
+            f"Search: {result.single_qps:,} / {result.batch_qps:,} QPS | "
+            f"Recall@10: {result.recall_at_10:.1%}",
             file=sys.stderr,
         )
         results.append(result)
@@ -297,9 +304,9 @@ def save_run(
             "b": r.batch_qps,
             "s_ms": r.single_latency_ms,
             "b_ms": r.batch_latency_ms,
+            "build": r.build_vec_per_s,
+            "r": r.recall_at_10,
         }
-        if r.recall_at_10 is not None:
-            entry["r"] = r.recall_at_10
         results_dict[r.name] = entry
 
     run = {
@@ -338,31 +345,24 @@ def load_history(history_file: Path, limit: int = None) -> list[dict]:
 def print_summary(run: dict):
     """Print a summary of a benchmark run."""
     dirty = " [dirty]" if run["git"]["dirty"] else ""
-    has_recall = any("r" in r for r in run["results"].values())
 
-    print(f"\n{'=' * 65}")
-    print("OmenDB Benchmark Results")
-    print(f"{'=' * 65}")
+    print(f"\n{'=' * 70}")
+    print("OmenDB Benchmark Results (SIFT-10K, 128D, M=16, ef_c=100, k=10)")
+    print(f"{'=' * 70}")
     print(f"Time:   {run['ts']}")
     print(f"System: {run['sys']['cpu']} ({run['sys']['cores']} cores)")
     print(f"Git:    {run['git']['commit']} ({run['git']['branch']}){dirty}")
     print()
 
-    if has_recall:
-        print("| Dim   | Single QPS | Batch QPS | Speedup | Recall |")
-        print("|-------|------------|-----------|---------|--------|")
-        for name, r in run["results"].items():
-            speedup = r["b"] / r["s"]
-            recall = f"{r['r']:.1%}" if "r" in r else "-"
-            print(
-                f"| {name:5} | {r['s']:>10,} | {r['b']:>9,} | {speedup:>6.1f}x | {recall:>6} |"
-            )
-    else:
-        print("| Dim   | Single QPS | Batch QPS | Speedup |")
-        print("|-------|------------|-----------|---------|")
-        for name, r in run["results"].items():
-            speedup = r["b"] / r["s"]
-            print(f"| {name:5} | {r['s']:>10,} | {r['b']:>9,} | {speedup:>6.1f}x |")
+    print("| Mode       | Build    | Single QPS | Batch QPS | Speedup | Recall |")
+    print("|------------|----------|------------|-----------|---------|--------|")
+    for name, r in run["results"].items():
+        speedup = r["b"] / r["s"]
+        recall = f"{r['r']:.1%}" if "r" in r else "-"
+        build = f"{r['build']:,}" if "build" in r else "-"
+        print(
+            f"| {name:10} | {build:>8} | {r['s']:>10,} | {r['b']:>9,} | {speedup:>6.1f}x | {recall:>6} |"
+        )
     print()
 
 
@@ -374,54 +374,66 @@ def show_history(history_file: Path, limit: int = 10):
         return
 
     print(f"\n{'=' * 75}")
-    print("Recent Benchmarks (Single / Batch QPS)")
+    print("Recent Benchmarks (SIFT-10K)")
     print(f"{'=' * 75}")
     print(
-        f"| {'Date':10} | {'Commit':7} | {'Host':8} | {'128D':>13} | {'768D':>13} | {'1536D':>13} |"
+        f"| {'Date':10} | {'Commit':7} | {'Host':8} | {'Build':>8} | {'QPS':>8} | {'Batch':>8} | {'Recall':>7} |"
     )
-    print(f"|{'-' * 12}|{'-' * 9}|{'-' * 10}|{'-' * 15}|{'-' * 15}|{'-' * 15}|")
+    print(
+        f"|{'-' * 12}|{'-' * 9}|{'-' * 10}|{'-' * 10}|{'-' * 10}|{'-' * 10}|{'-' * 9}|"
+    )
 
     for run in runs:
         date = run["ts"][:10]
         commit = run["git"]["commit"]
         host = run["sys"]["host"][:8]
 
-        dims = []
-        for d in ["128D", "768D", "1536D"]:
-            if d in run["results"]:
-                r = run["results"][d]
-                dims.append(f"{r['s']:>5,}/{r['b']:>6,}")
-            else:
-                dims.append("-")
+        # Show the fp32 result (or first result)
+        r = None
+        for key in ["sift-10k", "128D"]:
+            if key in run["results"]:
+                r = run["results"][key]
+                break
+        if r is None:
+            r = next(iter(run["results"].values()))
 
-        print(f"| {date} | {commit:7} | {host:8} | {dims[0]} | {dims[1]} | {dims[2]} |")
+        build = f"{r['build']:,}" if "build" in r else "-"
+        recall = f"{r['r']:.1%}" if "r" in r else "-"
+        print(
+            f"| {date} | {commit:7} | {host:8} | {build:>8} | {r['s']:>8,} | {r['b']:>8,} | {recall:>7} |"
+        )
     print()
 
 
 def compare_runs(run1: dict, run2: dict):
     """Compare two benchmark runs."""
-    print(f"\nComparing: {run1['git']['commit']} → {run2['git']['commit']}")
+    print(f"\nComparing: {run1['git']['commit']} -> {run2['git']['commit']}")
     print(f"  Before: {run1['ts']} ({run1['sys']['host']})")
     print(f"  After:  {run2['ts']} ({run2['sys']['host']})")
     print()
-    print("| Dim   | Metric | Before | After  | Change |")
-    print("|-------|--------|--------|--------|--------|")
+    print("| Mode       | Metric | Before | After  | Change |")
+    print("|------------|--------|--------|--------|--------|")
 
-    for dim in ["128D", "768D", "1536D"]:
-        if dim in run1["results"] and dim in run2["results"]:
-            r1, r2 = run1["results"][dim], run2["results"][dim]
-            for metric, key in [("Single", "s"), ("Batch", "b")]:
-                v1, v2 = r1[key], r2[key]
-                change = ((v2 / v1) - 1) * 100
-                sign = "+" if change >= 0 else ""
+    for key in run2["results"]:
+        if key in run1["results"]:
+            r1, r2 = run1["results"][key], run2["results"][key]
+            for metric, mkey in [("Search", "s"), ("Batch", "b"), ("Build", "build")]:
+                if mkey in r1 and mkey in r2:
+                    v1, v2 = r1[mkey], r2[mkey]
+                    change = ((v2 / v1) - 1) * 100
+                    sign = "+" if change >= 0 else ""
+                    print(
+                        f"| {key:10} | {metric:6} | {v1:>6,} | {v2:>6,} | {sign}{change:>5.1f}% |"
+                    )
+            if "r" in r1 and "r" in r2:
                 print(
-                    f"| {dim:5} | {metric:6} | {v1:>6,} | {v2:>6,} | {sign}{change:>5.1f}% |"
+                    f"| {key:10} | {'Recall':6} | {r1['r']:.1%} | {r2['r']:.1%} |        |"
                 )
     print()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OmenDB Benchmark Runner")
+    parser = argparse.ArgumentParser(description="OmenDB Benchmark Runner (SIFT-10K)")
     parser.add_argument("--quick", action="store_true", help="Quick mode (~10s)")
     parser.add_argument("--output", "-o", type=str, help="Save results to file (JSONL)")
     parser.add_argument("--notes", type=str, default="", help="Notes to include")
@@ -455,7 +467,7 @@ def main():
         compare_runs(runs[0], runs[1])
         return
 
-    # Run benchmarks (always includes recall)
+    # Run benchmarks on SIFT-10K
     results = run_all_benchmarks(
         quick=args.quick,
         quantization=args.quantization,
@@ -470,9 +482,9 @@ def main():
             "b": r.batch_qps,
             "s_ms": r.single_latency_ms,
             "b_ms": r.batch_latency_ms,
+            "build": r.build_vec_per_s,
+            "r": r.recall_at_10,
         }
-        if r.recall_at_10 is not None:
-            entry["r"] = r.recall_at_10
         results_dict[r.name] = entry
 
     run = {
