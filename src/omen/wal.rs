@@ -53,12 +53,6 @@ impl WalEntryType {
     }
 }
 
-impl From<u8> for WalEntryType {
-    fn from(v: u8) -> Self {
-        Self::from_byte(v).unwrap_or(Self::Checkpoint)
-    }
-}
-
 /// WAL entry header (20 bytes)
 /// Layout: `entry_type(1)` + reserved(3) + timestamp(8) + `data_len(4)` + checksum(4)
 #[derive(Debug, Clone)]
@@ -82,16 +76,21 @@ impl WalEntryHeader {
         buf
     }
 
-    pub fn from_bytes(buf: &[u8; Self::SIZE]) -> Self {
-        // Direct array indexing - infallible for fixed-size input buffer
-        Self {
-            entry_type: WalEntryType::from(buf[0]),
+    pub fn from_bytes(buf: &[u8; Self::SIZE]) -> io::Result<Self> {
+        let entry_type = WalEntryType::from_byte(buf[0]).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Unknown WAL entry type: {}", buf[0]),
+            )
+        })?;
+        Ok(Self {
+            entry_type,
             timestamp: u64::from_le_bytes([
                 buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
             ]),
             data_len: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
             checksum: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
-        }
+        })
     }
 }
 
@@ -276,7 +275,7 @@ impl Wal {
         loop {
             match file.read_exact(&mut header_buf) {
                 Ok(()) => {
-                    let header = WalEntryHeader::from_bytes(&header_buf);
+                    let header = WalEntryHeader::from_bytes(&header_buf)?;
 
                     // Sanity check: reject obviously corrupted entries
                     if header.data_len > MAX_ENTRY_SIZE {
@@ -349,7 +348,7 @@ impl Wal {
         loop {
             match file.read_exact(&mut header_buf) {
                 Ok(()) => {
-                    let header = WalEntryHeader::from_bytes(&header_buf);
+                    let header = WalEntryHeader::from_bytes(&header_buf)?;
 
                     // Sanity check on data_len
                     if header.data_len > MAX_ENTRY_SIZE {
@@ -380,10 +379,7 @@ impl Wal {
                         continue;
                     }
 
-                    // Only count as checkpoint if it's actually a valid checkpoint entry type
-                    // (not an unknown entry type that defaulted to Checkpoint via From<u8>)
-                    let entry_type_byte = entry.header.entry_type as u8;
-                    if WalEntryType::from_byte(entry_type_byte) == Some(WalEntryType::Checkpoint) {
+                    if entry.header.entry_type == WalEntryType::Checkpoint {
                         last_checkpoint_idx = Some(all_entries.len());
                     }
 
