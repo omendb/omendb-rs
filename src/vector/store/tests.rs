@@ -1601,12 +1601,6 @@ mod persistence_proptest {
         proptest::collection::vec(-100.0f32..100.0f32, dim)
     }
 
-    /// Generate valid ID strings (alphanumeric, no special chars that could break parsing)
-    #[allow(dead_code)]
-    fn arb_id() -> impl Strategy<Value = String> {
-        "[a-zA-Z][a-zA-Z0-9_]{0,15}".prop_map(|s| s)
-    }
-
     proptest! {
         /// WAL recovery without flush - data survives via WAL replay
         #[test]

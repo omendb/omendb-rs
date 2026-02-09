@@ -304,12 +304,6 @@ impl HNSWIndex {
     /// A healthy graph should have reachable_count ≈ total_nodes - deleted_count.
     #[must_use]
     pub fn validate_connectivity(&self) -> (usize, usize) {
-        self.validate_connectivity_verbose(false)
-    }
-
-    /// Validate connectivity with optional verbose output for debugging
-    #[must_use]
-    pub fn validate_connectivity_verbose(&self, verbose: bool) -> (usize, usize) {
         use std::collections::VecDeque;
 
         let entry_point = match self.entry_point {
@@ -327,13 +321,9 @@ impl HNSWIndex {
         while let Some(node_id) = queue.pop_front() {
             let level = self.storage.level(node_id);
 
-            // Visit neighbors at all levels
             for lc in 0..=level {
                 for neighbor_id in self.storage.neighbors_at_level(node_id, lc) {
                     if visited.insert(neighbor_id) {
-                        if verbose {
-                            println!("  BFS: node {node_id} level {lc} -> neighbor {neighbor_id}");
-                        }
                         queue.push_back(neighbor_id);
                     }
                 }
@@ -342,10 +332,6 @@ impl HNSWIndex {
 
         let reachable = visited.len();
         let orphans = self.storage.len() - reachable;
-
-        if verbose {
-            println!("  BFS visited: {visited:?}");
-        }
 
         (reachable, orphans)
     }
