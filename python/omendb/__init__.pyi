@@ -1,6 +1,6 @@
 """Type stubs for omendb - Fast embedded vector database."""
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any, Literal, TypedDict, overload
 
 import numpy as np
@@ -56,6 +56,7 @@ class VectorRecord(TypedDict, total=False):
     vectors: list[list[float]]  # For multi-vector stores
     metadata: dict[str, Any]
     text: str  # For hybrid search - indexed AND auto-stored in metadata["text"]
+    document: str  # For embedding_fn auto-embedding (mutually exclusive with vector)
 
 class MultiVectorConfig(TypedDict, total=False):
     """Configuration for multi-vector (MUVERA) stores."""
@@ -100,9 +101,10 @@ class VectorDatabase:
     """High-performance embedded vector database.
 
     Provides fast similarity search using HNSW indexing with:
-    - ~19,000 QPS @ 10K vectors with 100% recall
-    - 20,000-28,000 vec/s insert throughput
+    - ~21,000 QPS @ 10K vectors with 100% recall
+    - 30,000-67,000 vec/s insert throughput
     - SQ8 quantization (4x compression, ~99% recall)
+    - RaBitQ quantization (32x compression)
     - ACORN-1 filtered search (37.79x speedup)
 
     Supports context manager protocol for automatic cleanup.
@@ -116,6 +118,11 @@ class VectorDatabase:
     @property
     def is_multi_vector(self) -> bool:
         """Check if this is a multi-vector store."""
+        ...
+
+    @property
+    def embedding_fn(self) -> Callable[[list[str]], list[list[float]]] | None:
+        """The embedding function, if configured."""
         ...
 
     # Set methods with multiple signatures
@@ -178,9 +185,35 @@ class VectorDatabase:
         """
         ...
 
+    @overload
+    def search(
+        self,
+        query: str,
+        k: int,
+        ef: int | None = None,
+        filter: MetadataFilter | None = None,
+        max_distance: float | None = None,
+    ) -> list[SearchResult]:
+        """Search with string query (auto-embeds via embedding_fn)."""
+        ...
+
+    @overload
     def search(
         self,
         query: Vector | MultiVector,
+        k: int,
+        ef: int | None = None,
+        filter: MetadataFilter | None = None,
+        max_distance: float | None = None,
+        rerank: bool | None = None,
+        rerank_factor: int | None = None,
+    ) -> list[SearchResult]:
+        """Search with vector query."""
+        ...
+
+    def search(
+        self,
+        query: str | Vector | MultiVector,
         k: int,
         ef: int | None = None,
         filter: MetadataFilter | None = None,
@@ -450,11 +483,16 @@ class VectorDatabase:
         ...
 
     # Collections
-    def collection(self, name: str) -> VectorDatabase:
+    def collection(
+        self,
+        name: str,
+        embedding_fn: Callable[[list[str]], list[list[float]]] | None = None,
+    ) -> VectorDatabase:
         """Create or get a named collection.
 
         Args:
             name: Collection name (alphanumeric and underscores).
+            embedding_fn: Optional callable that embeds text to vectors.
 
         Returns:
             VectorDatabase instance for this collection.
@@ -505,6 +543,36 @@ class VectorDatabase:
         Returns:
             List of results with id, score, and metadata.
         """
+        ...
+
+    @overload
+    def search_hybrid(
+        self,
+        query_vector: str,
+        query_text: str | None = None,
+        *,
+        k: int,
+        filter: MetadataFilter | None = None,
+        alpha: float | None = None,
+        rrf_k: int | None = None,
+        subscores: Literal[False] | None = None,
+    ) -> list[HybridSearchResult]:
+        """Hybrid search with string query (auto-embeds via embedding_fn)."""
+        ...
+
+    @overload
+    def search_hybrid(
+        self,
+        query_vector: str,
+        query_text: str | None = None,
+        *,
+        k: int,
+        filter: MetadataFilter | None = None,
+        alpha: float | None = None,
+        rrf_k: int | None = None,
+        subscores: Literal[True] = ...,
+    ) -> list[HybridSearchResultWithSubscores]:
+        """Hybrid search with string query and subscores."""
         ...
 
     @overload
@@ -596,6 +664,7 @@ def open(
     metric: Literal["l2", "euclidean", "cosine", "dot", "ip"] | None = None,
     multi_vector: bool | MultiVectorConfig | None = None,
     config: dict[str, Any] | None = None,
+    embedding_fn: Callable[[list[str]], list[list[float]]] | None = None,
 ) -> VectorDatabase:
     """Open or create a vector database.
 
@@ -620,6 +689,9 @@ def open(
             - None/False: Disabled (default, single-vector mode)
             Note: Multi-vector stores only support in-memory mode (:memory:).
         config: Advanced config dict (deprecated).
+        embedding_fn: Optional callable that embeds text to vectors.
+            Signature: (texts: list[str]) -> list[list[float]] or 2D numpy array.
+            When set, enables document-based set() and string-based search().
 
     Returns:
         VectorDatabase instance.
@@ -634,6 +706,11 @@ def open(
         >>> mvdb = omendb.open(":memory:", dimensions=128, multi_vector=True)
         >>> mvdb = omendb.open(":memory:", dimensions=128,
         ...                    multi_vector={"repetitions": 10, "partition_bits": 4})
+        >>>
+        >>> # With embedding function
+        >>> db = omendb.open("./vectors", dimensions=384, embedding_fn=my_embed_fn)
+        >>> db.set([{"id": "1", "document": "Hello world"}])  # Auto-embeds
+        >>> results = db.search("Hello", k=5)  # Auto-embeds query
     """
     ...
 
