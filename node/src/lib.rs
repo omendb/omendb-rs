@@ -7,6 +7,7 @@
 #![allow(clippy::collapsible_if)]
 
 use napi::bindgen_prelude::*;
+use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 use omendb_lib::omen::Metric;
 use omendb_lib::vector::{
@@ -279,6 +280,8 @@ pub struct SetItem {
     pub metadata: Option<JsonValue>,
     /// Optional text for hybrid search (auto-enables text search, stored in metadata.text)
     pub text: Option<String>,
+    /// Optional document for auto-embedding via embeddingFn
+    pub document: Option<String>,
 }
 
 // ============================================================================
@@ -346,6 +349,10 @@ struct VectorDatabaseInner {
 // VectorDatabase Class
 // ============================================================================
 
+/// Type alias for embedding function: (texts: string[]) => Float32Array[]
+/// CalleeHandled = false so the JS function is called directly with (value), not (err, value)
+type EmbeddingFn = ThreadsafeFunction<Vec<String>, Vec<Float32Array>, Vec<String>, Status, false>;
+
 #[napi]
 pub struct VectorDatabase {
     inner: Arc<RwLock<VectorDatabaseInner>>,
@@ -353,6 +360,8 @@ pub struct VectorDatabase {
     dimensions: u32,
     is_persistent: bool,
     is_multi_vector: bool,
+    /// Optional embedding function for auto-embedding documents
+    embedding_fn: Option<Arc<EmbeddingFn>>,
     /// Cache of open collection handles (same name = shared state)
     collections_cache: RwLock<HashMap<String, Arc<RwLock<VectorDatabaseInner>>>>,
 }
@@ -371,7 +380,61 @@ impl VectorDatabase {
     /// @param items - Array of {id, vector, metadata?, text?} or {id, vectors, metadata?}
     /// @returns Number of vectors inserted/updated
     #[napi]
-    pub fn set(&self, items: Vec<SetItem>) -> Result<u32> {
+    pub async fn set(&self, items: Vec<SetItem>) -> Result<u32> {
+        // If any items have documents, embed them first
+        let has_documents = items.iter().any(|item| item.document.is_some());
+        let items = if has_documents {
+            let emb_fn = self.embedding_fn.as_ref().ok_or_else(|| {
+                Error::from_reason(
+                    "No embedding function configured. Pass embeddingFn to open() or provide vectors directly.",
+                )
+            })?;
+
+            // Collect documents that need embedding
+            let doc_indices: Vec<usize> = items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.document.is_some())
+                .map(|(i, _)| i)
+                .collect();
+
+            let docs: Vec<String> = doc_indices
+                .iter()
+                .map(|&i| items[i].document.clone().unwrap())
+                .collect();
+
+            // Validate: can't have both vector and document
+            for &i in &doc_indices {
+                if items[i].vector.is_some() {
+                    return Err(Error::from_reason(format!(
+                        "Item '{}': cannot have both 'vector' and 'document' - use one or the other",
+                        items[i].id
+                    )));
+                }
+            }
+
+            // Call embedding function (async - returns Float32Array[])
+            let result: Vec<Float32Array> = emb_fn.call_async(docs).await?;
+
+            if result.len() != doc_indices.len() {
+                return Err(Error::from_reason(format!(
+                    "embeddingFn returned {} vectors for {} documents",
+                    result.len(),
+                    doc_indices.len()
+                )));
+            }
+
+            // Replace document items with embedded vectors
+            let mut items = items;
+            for (idx, embedded) in doc_indices.into_iter().zip(result) {
+                items[idx].vector = Some(embedded);
+                items[idx].document = None;
+            }
+            items
+        } else {
+            items
+        };
+
         if self.is_multi_vector {
             // Multi-vector store: use "vectors" field
             let mut inner = self.inner.write();
@@ -503,9 +566,10 @@ impl VectorDatabase {
     /// db.search([1, 0, 0, 0], 10, { maxDistance: 0.5 });
     /// ```
     #[napi]
-    pub fn search(
+    pub async fn search(
         &self,
-        query: Either<Vec<f64>, Float32Array>,
+        #[napi(ts_arg_type = "Array<number> | Float32Array | string")]
+        query: Either3<Vec<f64>, Float32Array, String>,
         k: u32,
         #[napi(ts_arg_type = "{ filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined")]
         options: Option<JsonValue>,
@@ -540,7 +604,23 @@ impl VectorDatabase {
             }
         }
 
-        let query_vec = Vector::new(extract_query_vector(query));
+        // Handle string query via embedding function
+        let query_vec = match query {
+            Either3::C(text) => {
+                let emb_fn = self.embedding_fn.as_ref().ok_or_else(|| {
+                    Error::from_reason(
+                        "String query requires an embedding function. Pass embeddingFn to open() or provide a vector query.",
+                    )
+                })?;
+                let result: Vec<Float32Array> = emb_fn.call_async(vec![text]).await?;
+                if result.is_empty() {
+                    return Err(Error::from_reason("embeddingFn returned empty result"));
+                }
+                Vector::new(result[0].to_vec())
+            }
+            Either3::A(arr) => Vector::new(arr.into_iter().map(|x| x as f32).collect()),
+            Either3::B(typed) => Vector::new(typed.to_vec()),
+        };
 
         // Validate query dimensions match the database
         let expected_dims = self.dimensions;
@@ -967,6 +1047,12 @@ impl VectorDatabase {
         self.is_multi_vector
     }
 
+    /// Check if an embedding function is configured.
+    #[napi(getter, js_name = "hasEmbeddingFn")]
+    pub fn has_embedding_fn(&self) -> bool {
+        self.embedding_fn.is_some()
+    }
+
     /// Check if database is empty.
     #[napi]
     pub fn is_empty(&self) -> bool {
@@ -1004,7 +1090,12 @@ impl VectorDatabase {
     /// Collection handles share state - changes made through one handle
     /// are immediately visible through another (no flush required).
     #[napi]
-    pub fn collection(&self, name: String) -> Result<VectorDatabase> {
+    pub fn collection(
+        &self,
+        name: String,
+        #[napi(ts_arg_type = "((texts: string[]) => Float32Array[]) | undefined")]
+        embedding_fn: Option<EmbeddingFn>,
+    ) -> Result<VectorDatabase> {
         if name.is_empty() {
             return Err(Error::new(
                 Status::InvalidArg,
@@ -1025,6 +1116,11 @@ impl VectorDatabase {
             ));
         }
 
+        // Resolve embedding function: override > inherit from parent
+        let col_embedding_fn = embedding_fn
+            .map(Arc::new)
+            .or_else(|| self.embedding_fn.clone());
+
         // Check cache first
         {
             let cache = self.collections_cache.read();
@@ -1037,6 +1133,7 @@ impl VectorDatabase {
                     dimensions: self.dimensions,
                     is_persistent: true,
                     is_multi_vector: false,
+                    embedding_fn: col_embedding_fn.clone(),
                     collections_cache: RwLock::new(HashMap::new()),
                 });
             }
@@ -1055,6 +1152,7 @@ impl VectorDatabase {
                 dimensions: self.dimensions,
                 is_persistent: true,
                 is_multi_vector: false,
+                embedding_fn: col_embedding_fn.clone(),
                 collections_cache: RwLock::new(HashMap::new()),
             });
         }
@@ -1087,6 +1185,7 @@ impl VectorDatabase {
             dimensions: self.dimensions,
             is_persistent: true,
             is_multi_vector: false,
+            embedding_fn: col_embedding_fn,
             collections_cache: RwLock::new(HashMap::new()),
         })
     }
@@ -1269,10 +1368,11 @@ impl VectorDatabase {
     /// });
     /// ```
     #[napi(js_name = "searchHybrid")]
-    pub fn search_hybrid(
+    pub async fn search_hybrid(
         &self,
-        query_vector: Either<Vec<f64>, Float32Array>,
-        query_text: String,
+        #[napi(ts_arg_type = "Array<number> | Float32Array | string")]
+        query_vector: Either3<Vec<f64>, Float32Array, String>,
+        query_text: Option<String>,
         k: u32,
         #[napi(ts_arg_type = "{ filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined")]
         options: Option<JsonValue>,
@@ -1306,7 +1406,38 @@ impl VectorDatabase {
             }
         }
 
-        let query_vec = Vector::new(extract_query_vector(query_vector));
+        // Handle string query: auto-embed and use as text query
+        let (query_vec, actual_query_text) = match query_vector {
+            Either3::C(text) => {
+                let emb_fn = self.embedding_fn.as_ref().ok_or_else(|| {
+                    Error::from_reason(
+                        "String query requires an embedding function. Pass embeddingFn to open() or provide (vector, text) arguments.",
+                    )
+                })?;
+                let result: Vec<Float32Array> = emb_fn.call_async(vec![text.clone()]).await?;
+                if result.is_empty() {
+                    return Err(Error::from_reason("embeddingFn returned empty result"));
+                }
+                let vec = Vector::new(result[0].to_vec());
+                let text_q = query_text.unwrap_or(text);
+                (vec, text_q)
+            }
+            Either3::A(arr) => {
+                let text_q = query_text.ok_or_else(|| {
+                    Error::from_reason("query_text is required when query_vector is provided")
+                })?;
+                (
+                    Vector::new(arr.into_iter().map(|x| x as f32).collect()),
+                    text_q,
+                )
+            }
+            Either3::B(typed) => {
+                let text_q = query_text.ok_or_else(|| {
+                    Error::from_reason("query_text is required when query_vector is provided")
+                })?;
+                (Vector::new(typed.to_vec()), text_q)
+            }
+        };
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
         let alpha_f32 = alpha.map(|a| a as f32);
         let rrf_k_usize = rrf_k.map(|k| k as usize);
@@ -1328,7 +1459,7 @@ impl VectorDatabase {
                     .store
                     .hybrid_search_with_filter_subscores(
                         &query_vec,
-                        &query_text,
+                        &actual_query_text,
                         k as usize,
                         &f,
                         alpha_f32,
@@ -1340,7 +1471,7 @@ impl VectorDatabase {
                     .store
                     .hybrid_search_with_subscores(
                         &query_vec,
-                        &query_text,
+                        &actual_query_text,
                         k as usize,
                         alpha_f32,
                         rrf_k_usize,
@@ -1366,7 +1497,7 @@ impl VectorDatabase {
                 .store
                 .hybrid_search_with_filter_rrf_k(
                     &query_vec,
-                    &query_text,
+                    &actual_query_text,
                     k as usize,
                     &f,
                     alpha_f32,
@@ -1378,7 +1509,7 @@ impl VectorDatabase {
                 .store
                 .hybrid_search_with_rrf_k(
                     &query_vec,
-                    &query_text,
+                    &actual_query_text,
                     k as usize,
                     alpha_f32,
                     rrf_k_usize,
@@ -1616,7 +1747,12 @@ pub struct OpenOptions {
 ///
 /// ```
 #[napi]
-pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase> {
+pub fn open(
+    path: String,
+    options: Option<OpenOptions>,
+    #[napi(ts_arg_type = "((texts: string[]) => Float32Array[]) | undefined")]
+    embedding_fn: Option<EmbeddingFn>,
+) -> Result<VectorDatabase> {
     let opts = options.unwrap_or(OpenOptions {
         dimensions: None,
         m: None,
@@ -1626,6 +1762,8 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         metric: None,
         multi_vector: None,
     });
+
+    let embedding_tsfn = embedding_fn.map(Arc::new);
 
     let dimensions = opts.dimensions.unwrap_or(128) as usize;
     let m = opts.m.map(|v| v as usize);
@@ -1752,6 +1890,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
             dimensions: dimensions as u32,
             is_persistent: false,
             is_multi_vector,
+            embedding_fn: embedding_tsfn.clone(),
             collections_cache: RwLock::new(HashMap::new()),
         });
     }
@@ -1792,6 +1931,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
             dimensions: resolved_dims,
             is_persistent: true,
             is_multi_vector: is_mv,
+            embedding_fn: embedding_tsfn.clone(),
             collections_cache: RwLock::new(HashMap::new()),
         });
     }
@@ -1809,6 +1949,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
             dimensions: dimensions as u32,
             is_persistent: true,
             is_multi_vector: true,
+            embedding_fn: embedding_tsfn.clone(),
             collections_cache: RwLock::new(HashMap::new()),
         });
     }
@@ -1833,6 +1974,7 @@ pub fn open(path: String, options: Option<OpenOptions>) -> Result<VectorDatabase
         dimensions: dimensions as u32,
         is_persistent: true,
         is_multi_vector: false,
+        embedding_fn: embedding_tsfn,
         collections_cache: RwLock::new(HashMap::new()),
     })
 }

@@ -111,6 +111,10 @@ function toFloat32Array(arr) {
 
 // Convert VectorItem to use Float32Array
 function convertVectorItem(item) {
+	// Items with document field are handled by native embedding
+	if (item.document !== undefined && item.document !== null) {
+		return item;
+	}
 	if (item.vector === undefined || item.vector === null) {
 		if (Array.isArray(item.vectors)) {
 			throw new Error(
@@ -238,6 +242,10 @@ class VectorDatabase {
 		return this._native.isMultiVector;
 	}
 
+	get hasEmbeddingFn() {
+		return this._native.hasEmbeddingFn;
+	}
+
 	isEmpty() {
 		return this._native.isEmpty();
 	}
@@ -254,8 +262,8 @@ class VectorDatabase {
 		this._native.efSearch = value;
 	}
 
-	collection(name) {
-		return new VectorDatabase(this._native.collection(name));
+	collection(name, embeddingFn) {
+		return new VectorDatabase(this._native.collection(name, embeddingFn));
 	}
 
 	collections() {
@@ -331,8 +339,8 @@ class VectorDatabase {
 	}
 }
 
-function open(path, options) {
-	return new VectorDatabase(nativeBinding.open(path, options));
+function open(path, options, embeddingFn) {
+	return new VectorDatabase(nativeBinding.open(path, options, embeddingFn));
 }
 
 module.exports.VectorDatabase = VectorDatabase;

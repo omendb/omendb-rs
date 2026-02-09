@@ -197,6 +197,60 @@ fn extract_batch_queries(ob: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f32>>> {
     ))
 }
 
+/// Call an embedding function with a batch of documents, returning Vec<Vec<f32>>
+///
+/// The function signature is: (list[str]) -> ndarray[n, dim] or list[list[float]]
+fn call_embedding_fn(
+    py: Python<'_>,
+    embedding_fn: &Py<PyAny>,
+    documents: &[String],
+) -> PyResult<Vec<Vec<f32>>> {
+    let py_list = PyList::new(py, documents)?;
+    let result = embedding_fn.call1(py, (py_list,))?;
+    let result = result.bind(py);
+
+    // Try 2D numpy array first (most common return type)
+    if let Ok(arr) = result.extract::<PyReadonlyArray2<'_, f32>>() {
+        let shape = arr.shape();
+        let n = shape[0];
+        let dim = shape[1];
+        if n != documents.len() {
+            return Err(PyValueError::new_err(format!(
+                "embedding_fn returned {} vectors for {} documents",
+                n,
+                documents.len()
+            )));
+        }
+        let mut vectors = Vec::with_capacity(n);
+        if let Ok(slice) = arr.as_slice() {
+            for i in 0..n {
+                vectors.push(slice[i * dim..(i + 1) * dim].to_vec());
+            }
+        } else {
+            return Err(PyValueError::new_err(
+                "embedding_fn returned non-contiguous array",
+            ));
+        }
+        return Ok(vectors);
+    }
+
+    // Try list of lists
+    if let Ok(list) = result.extract::<Vec<Vec<f32>>>() {
+        if list.len() != documents.len() {
+            return Err(PyValueError::new_err(format!(
+                "embedding_fn returned {} vectors for {} documents",
+                list.len(),
+                documents.len()
+            )));
+        }
+        return Ok(list);
+    }
+
+    Err(PyValueError::new_err(
+        "embedding_fn must return a 2D numpy array or list of lists of floats",
+    ))
+}
+
 /// Convert PyO3 errors to Python exceptions with proper type mapping
 fn convert_error(err: anyhow::Error) -> PyErr {
     let msg = err.to_string();
@@ -268,6 +322,8 @@ pub struct VectorDatabase {
     dimensions: usize,
     is_persistent: bool,
     is_multi_vector: bool,
+    /// Optional embedding function: (list[str]) -> ndarray[n, dim]
+    embedding_fn: Option<Py<PyAny>>,
     /// Cache of open collection handles (same name = same object)
     collections_cache: RwLock<HashMap<String, Py<VectorDatabase>>>,
 }
@@ -451,7 +507,7 @@ impl VectorDatabase {
     ///
     ///     # Batch kwargs
     ///     db.set(ids=["a", "b"], vectors=[[...], [...]], metadatas=[{...}, {...}])
-    #[pyo3(name = "set", signature = (id_or_items=None, vector=None, metadata=None, *, ids=None, vectors=None, metadatas=None))]
+    #[pyo3(name = "set", signature = (id_or_items=None, vector=None, metadata=None, *, ids=None, vectors=None, metadatas=None, document=None, documents=None))]
     fn set_vectors(
         &self,
         py: Python<'_>,
@@ -461,8 +517,51 @@ impl VectorDatabase {
         ids: Option<Vec<String>>,
         vectors: Option<Vec<Vec<f32>>>,
         metadatas: Option<&Bound<'_, PyList>>,
+        document: Option<String>,
+        documents: Option<Vec<String>>,
     ) -> PyResult<usize> {
-        // Handle kwargs batch format (no text support in this path)
+        // Handle kwargs batch with documents: set(ids=["a"], documents=["hello"])
+        if let (Some(ids), Some(docs)) = (&ids, &documents) {
+            if ids.len() != docs.len() {
+                return Err(PyValueError::new_err(format!(
+                    "ids and documents must have same length: {} vs {}",
+                    ids.len(),
+                    docs.len()
+                )));
+            }
+            if vectors.is_some() {
+                return Err(PyValueError::new_err(
+                    "Cannot provide both vectors and documents",
+                ));
+            }
+            let emb_fn = self.embedding_fn.as_ref().ok_or_else(|| {
+                PyValueError::new_err(
+                    "No embedding function configured. Pass embedding_fn to open() or provide vectors directly.",
+                )
+            })?;
+            let embedded = call_embedding_fn(py, emb_fn, docs)?;
+            let batch: Vec<_> = ids
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    let meta = metadatas
+                        .and_then(|m| m.get_item(i).ok())
+                        .map(|m| pyobject_to_json(&m))
+                        .transpose()?
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    Ok((id.clone(), Vector::new(embedded[i].clone()), meta))
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+
+            let inner_arc = Arc::clone(&self.inner);
+            let result = py.detach(|| {
+                let mut inner = inner_arc.write();
+                inner.store.set_batch(batch).map_err(convert_error)
+            })?;
+            return Ok(result.len());
+        }
+
+        // Handle kwargs batch format with vectors: set(ids=["a"], vectors=[[...]])
         if let (Some(ids), Some(vectors)) = (&ids, &vectors) {
             if ids.len() != vectors.len() {
                 return Err(PyValueError::new_err(format!(
@@ -493,11 +592,31 @@ impl VectorDatabase {
             return Ok(result.len());
         }
 
-        // Handle single item: set("id", [...], {...})
+        // Handle single item: set("id", [...], {...}) or set("id", document="hello")
         if let Some(id_or_items) = id_or_items {
             if let Ok(id_str) = id_or_items.extract::<String>() {
-                let vec_data = vector
-                    .ok_or_else(|| PyValueError::new_err("vector required when id is a string"))?;
+                // Validate: can't have both vector and document
+                if vector.is_some() && document.is_some() {
+                    return Err(PyValueError::new_err(
+                        "Cannot provide both vector and document",
+                    ));
+                }
+
+                let vec_data = if let Some(doc) = &document {
+                    // Embed the document
+                    let emb_fn = self.embedding_fn.as_ref().ok_or_else(|| {
+                        PyValueError::new_err(
+                            "No embedding function configured. Pass embedding_fn to open() or provide vectors directly.",
+                        )
+                    })?;
+                    let embedded = call_embedding_fn(py, emb_fn, &[doc.clone()])?;
+                    embedded.into_iter().next().unwrap()
+                } else {
+                    vector.ok_or_else(|| {
+                        PyValueError::new_err("vector or document required when id is a string")
+                    })?
+                };
+
                 let meta = metadata
                     .map(|m| pyobject_to_json(m.as_any()))
                     .transpose()?
@@ -530,8 +649,32 @@ impl VectorDatabase {
                     return Ok(count);
                 }
 
-                // Single-vector store: use "vector" key
-                let parsed = parse_batch_items_with_text(items)?;
+                // Single-vector store: use "vector" or "document" key
+                let mut parsed = parse_batch_items_with_text(items)?;
+
+                // Embed any items that have documents instead of vectors
+                let doc_indices: Vec<usize> = parsed
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| item.document.is_some())
+                    .map(|(i, _)| i)
+                    .collect();
+
+                if !doc_indices.is_empty() {
+                    let emb_fn = self.embedding_fn.as_ref().ok_or_else(|| {
+                        PyValueError::new_err(
+                            "No embedding function configured. Pass embedding_fn to open() or provide vectors directly.",
+                        )
+                    })?;
+                    let docs: Vec<String> = doc_indices
+                        .iter()
+                        .map(|&i| parsed[i].document.clone().unwrap())
+                        .collect();
+                    let embedded = call_embedding_fn(py, emb_fn, &docs)?;
+                    for (j, &idx) in doc_indices.iter().enumerate() {
+                        parsed[idx].vector = Vector::new(embedded[j].clone());
+                    }
+                }
 
                 // Check if any items have text
                 let has_text = parsed.iter().any(|item| item.text.is_some());
@@ -650,6 +793,42 @@ impl VectorDatabase {
         }
 
         let rust_filter = filter.map(parse_filter).transpose()?;
+
+        // If query is a string, auto-embed it
+        if let Ok(query_str) = query.extract::<String>() {
+            let emb_fn = self.embedding_fn.as_ref().ok_or_else(|| {
+                PyValueError::new_err(
+                    "String query requires an embedding function. Pass embedding_fn to open() or provide a vector query.",
+                )
+            })?;
+            let embedded = call_embedding_fn(py, emb_fn, &[query_str])?;
+            let query_vec = Vector::new(embedded.into_iter().next().unwrap());
+
+            // Ensure index is ready before releasing GIL
+            {
+                let inner = self.inner.read();
+                if inner.store.needs_index_rebuild() {
+                    drop(inner);
+                    let mut inner = self.inner.write();
+                    inner.store.ensure_index_ready().map_err(convert_error)?;
+                }
+            }
+
+            let inner_arc = Arc::clone(&self.inner);
+            let metric = self.inner.read().store.metric();
+            let results = py.detach(|| {
+                let inner = inner_arc.read();
+                inner.store.search_with_options_readonly(
+                    &query_vec,
+                    k,
+                    rust_filter.as_ref(),
+                    ef,
+                    max_distance,
+                )
+            });
+            let results = results.map_err(convert_error)?;
+            return results_to_py(py, &results, metric);
+        }
 
         // Multi-vector store: use query() with SearchOptions
         if self.is_multi_vector {
@@ -1283,6 +1462,12 @@ impl VectorDatabase {
         self.is_multi_vector
     }
 
+    /// The embedding function, if configured.
+    #[getter]
+    fn embedding_fn(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.embedding_fn.as_ref().map(|f| f.clone_ref(py))
+    }
+
     /// Check if database is empty.
     fn is_empty(&self) -> bool {
         let inner = self.inner.read();
@@ -1460,7 +1645,13 @@ impl VectorDatabase {
     ///     >>> col1 = db.collection("users")
     ///     >>> col2 = db.collection("users")
     ///     >>> col1 is col2  # True - same object
-    fn collection(&self, py: Python<'_>, name: String) -> PyResult<Py<VectorDatabase>> {
+    #[pyo3(signature = (name, embedding_fn=None))]
+    fn collection(
+        &self,
+        py: Python<'_>,
+        name: String,
+        embedding_fn: Option<Py<PyAny>>,
+    ) -> PyResult<Py<VectorDatabase>> {
         // Validate collection name
         if name.is_empty() {
             return Err(PyValueError::new_err("Collection name cannot be empty"));
@@ -1517,6 +1708,8 @@ impl VectorDatabase {
             dimensions: self.dimensions,
             is_persistent: true,
             is_multi_vector: false, // Collections don't support multi-vector yet
+            embedding_fn: embedding_fn
+                .or_else(|| self.embedding_fn.as_ref().map(|f| f.clone_ref(py))),
             collections_cache: RwLock::new(HashMap::new()),
         };
 
@@ -1681,12 +1874,12 @@ impl VectorDatabase {
     ///     >>> for r in results:
     ///     ...     print(f"{r['id']}: combined={r['score']:.3f}")
     ///     ...     print(f"  keyword={r.get('keyword_score')}, semantic={r.get('semantic_score')}")
-    #[pyo3(name = "search_hybrid", signature = (query_vector, query_text, k, filter=None, alpha=None, rrf_k=None, subscores=None))]
+    #[pyo3(name = "search_hybrid", signature = (query_vector, query_text=None, k=10, filter=None, alpha=None, rrf_k=None, subscores=None))]
     fn search_hybrid(
         &self,
         py: Python<'_>,
         query_vector: &Bound<'_, PyAny>,
-        query_text: &str,
+        query_text: Option<&str>,
         k: usize,
         filter: Option<&Bound<'_, PyDict>>,
         alpha: Option<f32>,
@@ -1711,7 +1904,29 @@ impl VectorDatabase {
             }
         }
 
-        let query_vec = Vector::new(extract_query_vector(query_vector)?);
+        // Resolve query vector and text
+        // If first arg is a string and embedding_fn is set, auto-embed it
+        let (query_vec, actual_query_text) = if let Ok(text) = query_vector.extract::<String>() {
+            let emb_fn = self.embedding_fn.as_ref().ok_or_else(|| {
+                    PyValueError::new_err(
+                        "String query requires an embedding function. Pass embedding_fn to open() or provide (vector, text) arguments.",
+                    )
+                })?;
+            let embedded = call_embedding_fn(py, emb_fn, &[text.clone()])?;
+            let vec = Vector::new(embedded.into_iter().next().unwrap());
+            // Use the string as both vector query (embedded) and text query
+            let text_query = query_text.map(String::from).unwrap_or(text);
+            (vec, text_query)
+        } else {
+            let vec = Vector::new(extract_query_vector(query_vector)?);
+            let text_query = query_text
+                .ok_or_else(|| {
+                    PyValueError::new_err("query_text is required when query_vector is provided")
+                })?
+                .to_string();
+            (vec, text_query)
+        };
+
         let rust_filter = filter.map(parse_filter).transpose()?;
 
         let mut inner = self.inner.write();
@@ -1727,13 +1942,18 @@ impl VectorDatabase {
                 inner
                     .store
                     .hybrid_search_with_filter_subscores(
-                        &query_vec, query_text, k, &f, alpha, rrf_k,
+                        &query_vec,
+                        &actual_query_text,
+                        k,
+                        &f,
+                        alpha,
+                        rrf_k,
                     )
                     .map_err(convert_error)?
             } else {
                 inner
                     .store
-                    .hybrid_search_with_subscores(&query_vec, query_text, k, alpha, rrf_k)
+                    .hybrid_search_with_subscores(&query_vec, &actual_query_text, k, alpha, rrf_k)
                     .map_err(convert_error)?
             };
 
@@ -1763,12 +1983,19 @@ impl VectorDatabase {
         let results = if let Some(f) = rust_filter {
             inner
                 .store
-                .hybrid_search_with_filter_rrf_k(&query_vec, query_text, k, &f, alpha, rrf_k)
+                .hybrid_search_with_filter_rrf_k(
+                    &query_vec,
+                    &actual_query_text,
+                    k,
+                    &f,
+                    alpha,
+                    rrf_k,
+                )
                 .map_err(convert_error)?
         } else {
             inner
                 .store
-                .hybrid_search_with_rrf_k(&query_vec, query_text, k, alpha, rrf_k)
+                .hybrid_search_with_rrf_k(&query_vec, &actual_query_text, k, alpha, rrf_k)
                 .map_err(convert_error)?
         };
 
@@ -1994,8 +2221,9 @@ impl VectorDatabase {
 ///     # With cosine distance metric
 ///     >>> db = omendb.open("./vectors", dimensions=768, metric="cosine")
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, config=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, config=None, embedding_fn=None))]
 fn open(
+    py: Python<'_>,
     path: String,
     dimensions: usize,
     m: Option<usize>,
@@ -2005,6 +2233,7 @@ fn open(
     metric: Option<String>,
     multi_vector: Option<&Bound<'_, PyAny>>,
     config: Option<&Bound<'_, PyDict>>,
+    embedding_fn: Option<Py<PyAny>>,
 ) -> PyResult<VectorDatabase> {
     use std::path::{Path, PathBuf};
 
@@ -2079,6 +2308,7 @@ fn open(
                 dimensions: effective_dims,
                 is_persistent: false,
                 is_multi_vector: true,
+                embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
                 collections_cache: RwLock::new(HashMap::new()),
             });
         }
@@ -2103,6 +2333,7 @@ fn open(
             dimensions: effective_dims,
             is_persistent: false,
             is_multi_vector: false,
+            embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
             collections_cache: RwLock::new(HashMap::new()),
         });
     }
@@ -2142,6 +2373,7 @@ fn open(
                 },
                 is_persistent: true,
                 is_multi_vector: is_mv,
+                embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
                 collections_cache: RwLock::new(HashMap::new()),
             });
         }
@@ -2159,6 +2391,7 @@ fn open(
                 dimensions: effective_dims,
                 is_persistent: true,
                 is_multi_vector: true,
+                embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
                 collections_cache: RwLock::new(HashMap::new()),
             });
         }
@@ -2217,6 +2450,7 @@ fn open(
             dimensions: effective_dims,
             is_persistent: true,
             is_multi_vector: false,
+            embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
             collections_cache: RwLock::new(HashMap::new()),
         });
     }
@@ -2241,6 +2475,7 @@ fn open(
         dimensions: effective_dims,
         is_persistent: false,
         is_multi_vector: false,
+        embedding_fn,
         collections_cache: RwLock::new(HashMap::new()),
     })
 }
@@ -2357,15 +2592,16 @@ fn parse_filter(filter: &Bound<'_, PyDict>) -> PyResult<MetadataFilter> {
     }
 }
 
-/// Parsed batch item with optional text for hybrid search
+/// Parsed batch item with optional text for hybrid search and optional document for embedding
 struct ParsedItem {
     id: String,
     vector: Vector,
     metadata: JsonValue,
     text: Option<String>,
+    document: Option<String>,
 }
 
-// Helper: Parse batch items from a list of dicts, including optional text field
+// Helper: Parse batch items from a list of dicts, including optional text and document fields
 fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<ParsedItem>> {
     let mut batch = Vec::new();
 
@@ -2381,11 +2617,37 @@ fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<Parsed
             })?
             .extract()?;
 
-        // Use "vector" field name
-        let vector_data: Vec<f32> = dict
-            .get_item("vector")?
-            .ok_or_else(|| PyValueError::new_err(format!("Item '{}' missing 'vector' field", id)))?
-            .extract()?;
+        // Check for document field (auto-embedded via embedding_fn)
+        let document: Option<String> = dict
+            .get_item("document")?
+            .map(|d| d.extract())
+            .transpose()
+            .map_err(|_| {
+                PyValueError::new_err(format!("Item '{}': 'document' must be a string", id))
+            })?;
+
+        // Vector is optional when document is present
+        let vector_obj = dict.get_item("vector")?;
+
+        if vector_obj.is_some() && document.is_some() {
+            return Err(PyValueError::new_err(format!(
+                "Item '{}': cannot have both 'vector' and 'document' - use one or the other",
+                id
+            )));
+        }
+
+        let vector = if let Some(v) = vector_obj {
+            let vector_data: Vec<f32> = v.extract()?;
+            Vector::new(vector_data)
+        } else if document.is_some() {
+            // Placeholder - will be replaced after embedding
+            Vector::new(vec![])
+        } else {
+            return Err(PyValueError::new_err(format!(
+                "Item '{}' must have either 'vector' or 'document' field",
+                id
+            )));
+        };
 
         let mut metadata_json = if let Some(metadata_dict) = dict.get_item("metadata")? {
             pyobject_to_json(&metadata_dict)?
@@ -2394,7 +2656,6 @@ fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<Parsed
         };
 
         // Handle optional text field for hybrid search
-        // Text is both indexed for BM25 AND stored in metadata["text"]
         let text: Option<String> = dict
             .get_item("text")?
             .map(|t| t.extract())
@@ -2406,7 +2667,6 @@ fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<Parsed
         // Auto-store text in metadata for retrieval
         if let Some(ref text_str) = text {
             if let Some(obj) = metadata_json.as_object_mut() {
-                // Check for conflict
                 if obj.contains_key("text") {
                     return Err(PyValueError::new_err(format!(
                         "Item '{}': cannot have both 'text' field and 'metadata.text' - use one or the other",
@@ -2419,9 +2679,10 @@ fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult<Vec<Parsed
 
         batch.push(ParsedItem {
             id,
-            vector: Vector::new(vector_data),
+            vector,
             metadata: metadata_json,
             text,
+            document,
         });
     }
 

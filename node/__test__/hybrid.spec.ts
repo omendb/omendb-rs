@@ -25,10 +25,10 @@ describe("Hybrid Search", () => {
 	});
 
 	describe("auto-enable text search", () => {
-		it("should auto-enable text search when using text field", () => {
+		it("should auto-enable text search when using text field", async () => {
 			expect(db.hasTextSearch).toBe(false);
 
-			db.set([
+			await db.set([
 				{
 					id: "doc1",
 					vector: [1.0, 0.0, 0.0, 0.0],
@@ -39,15 +39,15 @@ describe("Hybrid Search", () => {
 			expect(db.hasTextSearch).toBe(true);
 		});
 
-		it("should not enable text search for items without text", () => {
-			db.set([{ id: "doc1", vector: [1.0, 0.0, 0.0, 0.0] }]);
+		it("should not enable text search for items without text", async () => {
+			await db.set([{ id: "doc1", vector: [1.0, 0.0, 0.0, 0.0] }]);
 			expect(db.hasTextSearch).toBe(false);
 		});
 	});
 
 	describe("set with text", () => {
-		it("should insert documents with text", () => {
-			const count = db.set([
+		it("should insert documents with text", async () => {
+			const count = await db.set([
 				{
 					id: "doc1",
 					vector: [1.0, 0.0, 0.0, 0.0],
@@ -67,8 +67,8 @@ describe("Hybrid Search", () => {
 			expect(db.count()).toBe(2);
 		});
 
-		it("should store text in metadata for retrieval", () => {
-			db.set([
+		it("should store text in metadata for retrieval", async () => {
+			await db.set([
 				{
 					id: "doc1",
 					vector: [1.0, 0.0, 0.0, 0.0],
@@ -82,8 +82,8 @@ describe("Hybrid Search", () => {
 	});
 
 	describe("searchText", () => {
-		beforeEach(() => {
-			db.set([
+		beforeEach(async () => {
+			await db.set([
 				{
 					id: "doc1",
 					vector: [1.0, 0.0, 0.0, 0.0],
@@ -130,8 +130,8 @@ describe("Hybrid Search", () => {
 	});
 
 	describe("searchHybrid", () => {
-		beforeEach(() => {
-			db.set([
+		beforeEach(async () => {
+			await db.set([
 				{
 					id: "doc1",
 					vector: [1.0, 0.0, 0.0, 0.0],
@@ -154,8 +154,8 @@ describe("Hybrid Search", () => {
 			db.flush();
 		});
 
-		it("should combine vector and text search", () => {
-			const results = db.searchHybrid([1.0, 0.0, 0.0, 0.0], "learning", 3);
+		it("should combine vector and text search", async () => {
+			const results = await db.searchHybrid([1.0, 0.0, 0.0, 0.0], "learning", 3);
 
 			expect(results.length).toBeGreaterThanOrEqual(1);
 
@@ -167,23 +167,23 @@ describe("Hybrid Search", () => {
 			}
 		});
 
-		it("should return metadata in results", () => {
-			const results = db.searchHybrid([1.0, 0.0, 0.0, 0.0], "machine", 2);
+		it("should return metadata in results", async () => {
+			const results = await db.searchHybrid([1.0, 0.0, 0.0, 0.0], "machine", 2);
 
 			expect(results.length).toBeGreaterThanOrEqual(1);
 			expect(results[0].metadata).toBeDefined();
 			expect(typeof results[0].metadata).toBe("object");
 		});
 
-		it("should accept Float32Array", () => {
+		it("should accept Float32Array", async () => {
 			const query = new Float32Array([1.0, 0.0, 0.0, 0.0]);
-			const results = db.searchHybrid(query, "learning", 3);
+			const results = await db.searchHybrid(query, "learning", 3);
 			expect(results.length).toBeGreaterThanOrEqual(1);
 		});
 
-		it("should support alpha option", () => {
+		it("should support alpha option", async () => {
 			// High alpha (favor vector)
-			const vectorResults = db.searchHybrid(
+			const vectorResults = await db.searchHybrid(
 				[1.0, 0.0, 0.0, 0.0],
 				"web",
 				3,
@@ -191,7 +191,7 @@ describe("Hybrid Search", () => {
 			);
 
 			// Low alpha (favor text)
-			const textResults = db.searchHybrid(
+			const textResults = await db.searchHybrid(
 				[1.0, 0.0, 0.0, 0.0],
 				"web",
 				3,
@@ -202,14 +202,14 @@ describe("Hybrid Search", () => {
 			expect(textResults.length).toBeGreaterThanOrEqual(1);
 		});
 
-		it("should support rrfK option", () => {
-			const defaultResults = db.searchHybrid(
+		it("should support rrfK option", async () => {
+			const defaultResults = await db.searchHybrid(
 				[1.0, 0.0, 0.0, 0.0],
 				"learning",
 				2,
 			);
 
-			const customResults = db.searchHybrid(
+			const customResults = await db.searchHybrid(
 				[1.0, 0.0, 0.0, 0.0],
 				"learning",
 				2,
@@ -220,8 +220,8 @@ describe("Hybrid Search", () => {
 			expect(customResults.length).toBeGreaterThanOrEqual(1);
 		});
 
-		it("should support filter option", () => {
-			const results = db.searchHybrid([1.0, 0.0, 0.0, 0.0], "learning", 10, {
+		it("should support filter option", async () => {
+			const results = await db.searchHybrid([1.0, 0.0, 0.0, 0.0], "learning", 10, {
 				filter: { type: "ml" },
 			});
 
@@ -231,8 +231,8 @@ describe("Hybrid Search", () => {
 			}
 		});
 
-		it("should support subscores option", () => {
-			const results = db.searchHybrid([1.0, 0.0, 0.0, 0.0], "learning", 2, {
+		it("should support subscores option", async () => {
+			const results = await db.searchHybrid([1.0, 0.0, 0.0, 0.0], "learning", 2, {
 				subscores: true,
 			});
 
@@ -244,8 +244,8 @@ describe("Hybrid Search", () => {
 			}
 		});
 
-		it("should work with all options", () => {
-			const results = db.searchHybrid(
+		it("should work with all options", async () => {
+			const results = await db.searchHybrid(
 				[1.0, 0.0, 0.0, 0.0],
 				"learning",
 				2,
@@ -264,8 +264,8 @@ describe("Hybrid Search", () => {
 	});
 
 	describe("flush", () => {
-		it("should commit text index changes", () => {
-			db.set([
+		it("should commit text index changes", async () => {
+			await db.set([
 				{ id: "doc1", vector: [1.0, 0.0, 0.0, 0.0], text: "test document" },
 			]);
 

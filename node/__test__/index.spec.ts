@@ -13,25 +13,25 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("set", () => {
-			it("should insert single vector", () => {
-				const count = db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
+			it("should insert single vector", async () => {
+				const count = await db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
 				expect(count).toBe(1);
 				expect(db.count()).toBe(1);
 			});
 
-			it("should insert batch of vectors", () => {
+			it("should insert batch of vectors", async () => {
 				const items = Array.from({ length: 100 }, (_, i) => ({
 					id: `doc${i}`,
 					vector: Array(128).fill(i / 100),
 					metadata: { index: i },
 				}));
-				const count = db.set(items);
+				const count = await db.set(items);
 				expect(count).toBe(100);
 				expect(db.count()).toBe(100);
 			});
 
-			it("should handle metadata", () => {
-				db.set([
+			it("should handle metadata", async () => {
+				await db.set([
 					{
 						id: "doc1",
 						vector: Array(128).fill(0.1),
@@ -46,8 +46,8 @@ describe("VectorDatabase", () => {
 				});
 			});
 
-			it("should handle text field and auto-store in metadata", () => {
-				db.set([
+			it("should handle text field and auto-store in metadata", async () => {
+				await db.set([
 					{
 						id: "doc1",
 						vector: Array(128).fill(0.1),
@@ -58,9 +58,9 @@ describe("VectorDatabase", () => {
 				expect(doc?.metadata).toEqual({ text: "Hello world" });
 			});
 
-			it("should replace existing vector with same id", () => {
-				db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
-				db.set([
+			it("should replace existing vector with same id", async () => {
+				await db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
+				await db.set([
 					{
 						id: "doc1",
 						vector: Array(128).fill(0.9),
@@ -74,29 +74,29 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("search", () => {
-			beforeEach(() => {
-				db.set([
+			beforeEach(async () => {
+				await db.set([
 					{ id: "a", vector: Array(128).fill(0.1) },
 					{ id: "b", vector: Array(128).fill(0.5) },
 					{ id: "c", vector: Array(128).fill(0.9) },
 				]);
 			});
 
-			it("should return k nearest neighbors", () => {
-				const results = db.search(Array(128).fill(0.5), 2);
+			it("should return k nearest neighbors", async () => {
+				const results = await db.search(Array(128).fill(0.5), 2);
 				expect(results).toHaveLength(2);
 				expect(results[0].id).toBe("b"); // Closest to 0.5
 			});
 
-			it("should return results with distance, score, and metadata", () => {
-				db.set([
+			it("should return results with distance, score, and metadata", async () => {
+				await db.set([
 					{
 						id: "d",
 						vector: Array(128).fill(0.5),
 						metadata: { key: "value" },
 					},
 				]);
-				const results = db.search(Array(128).fill(0.5), 1);
+				const results = await db.search(Array(128).fill(0.5), 1);
 				expect(results[0]).toHaveProperty("id");
 				expect(results[0]).toHaveProperty("distance");
 				expect(results[0]).toHaveProperty("score");
@@ -107,20 +107,20 @@ describe("VectorDatabase", () => {
 				expect(results[0].score).toBeLessThanOrEqual(1);
 			});
 
-			it("should accept Float32Array", () => {
+			it("should accept Float32Array", async () => {
 				const query = new Float32Array(128).fill(0.5);
-				const results = db.search(query, 2);
+				const results = await db.search(query, 2);
 				expect(results).toHaveLength(2);
 			});
 
-			it("should respect ef option", () => {
-				const results = db.search(Array(128).fill(0.5), 2, { ef: 200 });
+			it("should respect ef option", async () => {
+				const results = await db.search(Array(128).fill(0.5), 2, { ef: 200 });
 				expect(results).toHaveLength(2);
 			});
 
-			it("should filter results by metadata", () => {
+			it("should filter results by metadata", async () => {
 				// Add vectors with different categories
-				db.set([
+				await db.set([
 					{
 						id: "cat1",
 						vector: Array(128).fill(0.4),
@@ -134,21 +134,21 @@ describe("VectorDatabase", () => {
 				]);
 
 				// Search with filter - should only return category A
-				const filtered = db.search(Array(128).fill(0.5), 10, {
+				const filtered = await db.search(Array(128).fill(0.5), 10, {
 					filter: { category: "A" },
 				});
 				expect(filtered.every((r) => r.metadata?.category === "A")).toBe(true);
 			});
 
-			it("should filter with comparison operators", () => {
-				db.set([
+			it("should filter with comparison operators", async () => {
+				await db.set([
 					{ id: "n1", vector: Array(128).fill(0.4), metadata: { score: 10 } },
 					{ id: "n2", vector: Array(128).fill(0.5), metadata: { score: 50 } },
 					{ id: "n3", vector: Array(128).fill(0.6), metadata: { score: 90 } },
 				]);
 
 				// Filter for score > 40 (should match n2=50 and n3=90)
-				const filtered = db.search(Array(128).fill(0.5), 10, {
+				const filtered = await db.search(Array(128).fill(0.5), 10, {
 					filter: { score: { $gt: 40 } },
 				});
 				expect(filtered).toHaveLength(2);
@@ -157,38 +157,38 @@ describe("VectorDatabase", () => {
 				);
 			});
 
-			it("should respect maxDistance option", () => {
-				const results = db.search(Array(128).fill(0.5), 10, {
+			it("should respect maxDistance option", async () => {
+				const results = await db.search(Array(128).fill(0.5), 10, {
 					maxDistance: 0.1,
 				});
 				// Should filter out distant results
 				expect(results.every((r) => r.distance <= 0.1)).toBe(true);
 			});
 
-			it("should filter with $not operator", () => {
-				db.set([
+			it("should filter with $not operator", async () => {
+				await db.set([
 					{ id: "a1", vector: Array(128).fill(0.3), metadata: { type: "A" } },
 					{ id: "b1", vector: Array(128).fill(0.5), metadata: { type: "B" } },
 					{ id: "c1", vector: Array(128).fill(0.7), metadata: { type: "C" } },
 				]);
 
 				// $not: exclude type A
-				const filtered = db.search(Array(128).fill(0.5), 10, {
+				const filtered = await db.search(Array(128).fill(0.5), 10, {
 					filter: { $not: { type: "A" } },
 				});
 				expect(filtered.every((r) => r.metadata?.type !== "A")).toBe(true);
 				expect(filtered.some((r) => r.metadata?.type === "B")).toBe(true);
 			});
 
-			it("should filter with $not and compound conditions", () => {
-				db.set([
+			it("should filter with $not and compound conditions", async () => {
+				await db.set([
 					{ id: "x1", vector: Array(128).fill(0.3), metadata: { cat: "A", val: 10 } },
 					{ id: "x2", vector: Array(128).fill(0.5), metadata: { cat: "A", val: 50 } },
 					{ id: "x3", vector: Array(128).fill(0.7), metadata: { cat: "B", val: 30 } },
 				]);
 
 				// NOT (cat=A AND val>=50) => excludes x2
-				const filtered = db.search(Array(128).fill(0.5), 10, {
+				const filtered = await db.search(Array(128).fill(0.5), 10, {
 					filter: { $not: { $and: [{ cat: "A" }, { val: { $gte: 50 } }] } },
 				});
 				const ids = filtered.map((r) => r.id);
@@ -199,12 +199,12 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("searchBatch", () => {
-			beforeEach(() => {
+			beforeEach(async () => {
 				const items = Array.from({ length: 100 }, (_, i) => ({
 					id: `doc${i}`,
 					vector: Array(128).fill(i / 100),
 				}));
-				db.set(items);
+				await db.set(items);
 			});
 
 			it("should search multiple queries in parallel", async () => {
@@ -238,8 +238,8 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("get", () => {
-			it("should return vector by id", () => {
-				db.set([
+			it("should return vector by id", async () => {
+				await db.set([
 					{
 						id: "doc1",
 						vector: Array(128).fill(0.5),
@@ -260,8 +260,8 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("delete", () => {
-			beforeEach(() => {
-				db.set([
+			beforeEach(async () => {
+				await db.set([
 					{ id: "doc1", vector: Array(128).fill(0.1) },
 					{ id: "doc2", vector: Array(128).fill(0.2) },
 					{ id: "doc3", vector: Array(128).fill(0.3) },
@@ -289,8 +289,8 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("update", () => {
-			beforeEach(() => {
-				db.set([
+			beforeEach(async () => {
+				await db.set([
 					{
 						id: "doc1",
 						vector: Array(128).fill(0.1),
@@ -340,18 +340,18 @@ describe("VectorDatabase", () => {
 				expect(db.count()).toBe(0);
 			});
 
-			it("should return correct count after inserts", () => {
-				db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
+			it("should return correct count after inserts", async () => {
+				await db.set([{ id: "doc1", vector: Array(128).fill(0.1) }]);
 				expect(db.count()).toBe(1);
 
-				db.set([{ id: "doc2", vector: Array(128).fill(0.2) }]);
+				await db.set([{ id: "doc2", vector: Array(128).fill(0.2) }]);
 				expect(db.count()).toBe(2);
 			});
 		});
 
 		describe("ids", () => {
-			it("should return all vector IDs", () => {
-				db.set([
+			it("should return all vector IDs", async () => {
+				await db.set([
 					{ id: "a", vector: Array(128).fill(0.1) },
 					{ id: "b", vector: Array(128).fill(0.2) },
 					{ id: "c", vector: Array(128).fill(0.3) },
@@ -362,8 +362,8 @@ describe("VectorDatabase", () => {
 				expect(new Set(ids)).toEqual(new Set(["a", "b", "c"]));
 			});
 
-			it("should exclude deleted vectors", () => {
-				db.set([
+			it("should exclude deleted vectors", async () => {
+				await db.set([
 					{ id: "a", vector: Array(128).fill(0.1) },
 					{ id: "b", vector: Array(128).fill(0.2) },
 				]);
@@ -379,8 +379,8 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("items", () => {
-			it("should return all items with metadata", () => {
-				db.set([
+			it("should return all items with metadata", async () => {
+				await db.set([
 					{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } },
 					{ id: "b", vector: Array(128).fill(0.2), metadata: { x: 2 } },
 				]);
@@ -393,8 +393,8 @@ describe("VectorDatabase", () => {
 				expect(byId.b.metadata).toEqual({ x: 2 });
 			});
 
-			it("should exclude deleted vectors", () => {
-				db.set([
+			it("should exclude deleted vectors", async () => {
+				await db.set([
 					{ id: "a", vector: Array(128).fill(0.1) },
 					{ id: "b", vector: Array(128).fill(0.2) },
 				]);
@@ -407,8 +407,8 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("exists", () => {
-			it("should return true for existing ID", () => {
-				db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
+			it("should return true for existing ID", async () => {
+				await db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
 				expect(db.exists("a")).toBe(true);
 			});
 
@@ -416,16 +416,16 @@ describe("VectorDatabase", () => {
 				expect(db.exists("nonexistent")).toBe(false);
 			});
 
-			it("should return false for deleted ID", () => {
-				db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
+			it("should return false for deleted ID", async () => {
+				await db.set([{ id: "a", vector: Array(128).fill(0.1) }]);
 				db.delete("a");
 				expect(db.exists("a")).toBe(false);
 			});
 		});
 
 		describe("getBatch", () => {
-			beforeEach(() => {
-				db.set([
+			beforeEach(async () => {
+				await db.set([
 					{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } },
 					{ id: "b", vector: Array(128).fill(0.2), metadata: { x: 2 } },
 				]);
@@ -457,8 +457,8 @@ describe("VectorDatabase", () => {
 		});
 
 		describe("deleteByFilter", () => {
-			it("should delete by equality filter", () => {
-				db.set([
+			it("should delete by equality filter", async () => {
+				await db.set([
 					{
 						id: "a",
 						vector: Array(128).fill(0.1),
@@ -481,8 +481,8 @@ describe("VectorDatabase", () => {
 				expect(new Set(db.ids())).toEqual(new Set(["a"]));
 			});
 
-			it("should delete with comparison operators", () => {
-				db.set([
+			it("should delete with comparison operators", async () => {
+				await db.set([
 					{ id: "a", vector: Array(128).fill(0.1), metadata: { score: 0.3 } },
 					{ id: "b", vector: Array(128).fill(0.2), metadata: { score: 0.7 } },
 					{ id: "c", vector: Array(128).fill(0.3), metadata: { score: 0.9 } },
@@ -493,15 +493,15 @@ describe("VectorDatabase", () => {
 				expect(new Set(db.ids())).toEqual(new Set(["b", "c"]));
 			});
 
-			it("should return 0 when no match", () => {
-				db.set([{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } }]);
+			it("should return 0 when no match", async () => {
+				await db.set([{ id: "a", vector: Array(128).fill(0.1), metadata: { x: 1 } }]);
 				const count = db.deleteByFilter({ x: 999 });
 				expect(count).toBe(0);
 				expect(db.ids()).toEqual(["a"]);
 			});
 
-			it("should delete with complex filter", () => {
-				db.set([
+			it("should delete with complex filter", async () => {
+				await db.set([
 					{
 						id: "a",
 						vector: Array(128).fill(0.1),
@@ -547,10 +547,10 @@ describe("VectorDatabase", () => {
 			}
 		});
 
-		it("should persist and reload data", () => {
+		it("should persist and reload data", async () => {
 			// Create and save
 			const db1 = open(dbPath, { dimensions: 64 });
-			db1.set([
+			await db1.set([
 				{
 					id: "persist1",
 					vector: Array(64).fill(0.5),
@@ -569,21 +569,21 @@ describe("VectorDatabase", () => {
 			expect(doc?.metadata).toEqual({ saved: true });
 		});
 
-		it("should support collections", () => {
+		it("should support collections", async () => {
 			const db = open(dbPath, { dimensions: 64 });
 
 			const users = db.collection("users");
 			const products = db.collection("products");
 
-			users.set([{ id: "user1", vector: Array(64).fill(0.1) }]);
-			products.set([{ id: "prod1", vector: Array(64).fill(0.2) }]);
+			await users.set([{ id: "user1", vector: Array(64).fill(0.1) }]);
+			await products.set([{ id: "prod1", vector: Array(64).fill(0.2) }]);
 
 			expect(users.count()).toBe(1);
 			expect(products.count()).toBe(1);
 
 			// IDs are independent
-			users.set([{ id: "item1", vector: Array(64).fill(0.3) }]);
-			products.set([{ id: "item1", vector: Array(64).fill(0.4) }]);
+			await users.set([{ id: "item1", vector: Array(64).fill(0.3) }]);
+			await products.set([{ id: "item1", vector: Array(64).fill(0.4) }]);
 
 			expect(users.count()).toBe(2);
 			expect(products.count()).toBe(2);
@@ -599,10 +599,10 @@ describe("VectorDatabase", () => {
 			expect(names).toEqual(["alpha", "beta", "gamma"]);
 		});
 
-		it("should delete collections", () => {
+		it("should delete collections", async () => {
 			const db = open(dbPath, { dimensions: 64 });
 			const col = db.collection("todelete");
-			col.set([{ id: "doc1", vector: Array(64).fill(0.1) }]);
+			await col.set([{ id: "doc1", vector: Array(64).fill(0.1) }]);
 
 			db.deleteCollection("todelete");
 			expect(db.collections()).not.toContain("todelete");

@@ -36,17 +36,17 @@ describe("Multi-Vector (MUVERA)", () => {
 			db = open(":memory:", { dimensions: 8, multiVector: { dProj: null } });
 		});
 
-		it("should insert using unified set() with vectors field", () => {
+		it("should insert using unified set() with vectors field", async () => {
 			const vectors = [
 				new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
 				new Float32Array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]),
 			];
-			const count = db.set([{ id: "doc1", vectors, metadata: { title: "Test" } }]);
+			const count = await db.set([{ id: "doc1", vectors, metadata: { title: "Test" } }]);
 			expect(count).toBe(1);
 			expect(db.count()).toBe(1);
 		});
 
-		it("should insert multiple docs using unified set() with vectors field", () => {
+		it("should insert multiple docs using unified set() with vectors field", async () => {
 			const items = Array.from({ length: 10 }, (_, i) => ({
 				id: `doc${i}`,
 				vectors: Array.from({ length: 5 }, () =>
@@ -54,7 +54,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				),
 				metadata: { index: i },
 			}));
-			const count = db.set(items);
+			const count = await db.set(items);
 			expect(count).toBe(10);
 			expect(db.count()).toBe(10);
 		});
@@ -78,7 +78,7 @@ describe("Multi-Vector (MUVERA)", () => {
 	describe("unified API - search", () => {
 		let db: VectorDatabase;
 
-		beforeEach(() => {
+		beforeEach(async () => {
 			db = open(":memory:", { dimensions: 8, multiVector: { dProj: null } });
 
 			// Insert 100 docs with distinct patterns using unified API
@@ -89,44 +89,44 @@ describe("Multi-Vector (MUVERA)", () => {
 				);
 				return { id: `doc${i}`, vectors, metadata: { index: i } };
 			});
-			db.set(items);
+			await db.set(items);
 		});
 
-		it("should perform basic multi-vector search with unified search()", () => {
+		it("should perform basic multi-vector search with unified search()", async () => {
 			const query = [
 				[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
 				[0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51],
 			];
-			const results = db.search(query, 5);
+			const results = await db.search(query, 5);
 
 			expect(results).toHaveLength(5);
 			expect(results.every((r) => "id" in r && "distance" in r && "metadata" in r)).toBe(true);
 		});
 
-		it("should search with Float32Array query using unified search()", () => {
+		it("should search with Float32Array query using unified search()", async () => {
 			const query = [
 				new Float32Array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]),
 				new Float32Array([0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51, 0.51]),
 			];
-			const results = db.search(query, 5);
+			const results = await db.search(query, 5);
 			expect(results).toHaveLength(5);
 		});
 
-		it("should search with rerank disabled via options", () => {
+		it("should search with rerank disabled via options", async () => {
 			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
-			const results = db.search(query, 5, { rerank: false });
+			const results = await db.search(query, 5, { rerank: false });
 			expect(results).toHaveLength(5);
 		});
 
-		it("should search with custom rerank factor via options", () => {
+		it("should search with custom rerank factor via options", async () => {
 			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
-			const results = db.search(query, 5, { rerank: true, rerankFactor: 8 });
+			const results = await db.search(query, 5, { rerank: true, rerankFactor: 8 });
 			expect(results).toHaveLength(5);
 		});
 
-		it("should return metadata in results", () => {
+		it("should return metadata in results", async () => {
 			const query = [[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]];
-			const results = db.search(query, 1);
+			const results = await db.search(query, 1);
 
 			expect(results).toHaveLength(1);
 			expect(results[0].metadata).toHaveProperty("index");
@@ -134,18 +134,18 @@ describe("Multi-Vector (MUVERA)", () => {
 	});
 
 	describe("unified API - single-vector store", () => {
-		it("should use unified search() with options on single-vector store", () => {
+		it("should use unified search() with options on single-vector store", async () => {
 			const db = open(":memory:", { dimensions: 8 });
 
 			// Insert with unified API (vector field)
-			db.set([
+			await db.set([
 				{ id: "doc1", vector: new Float32Array(8).fill(0.1), metadata: { category: "A" } },
 				{ id: "doc2", vector: new Float32Array(8).fill(0.2), metadata: { category: "B" } },
 				{ id: "doc3", vector: new Float32Array(8).fill(0.3), metadata: { category: "A" } },
 			]);
 
 			// Search with options object
-			const results = db.search([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 2, {
+			const results = await db.search([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 2, {
 				ef: 100,
 				filter: { category: "A" },
 			});
@@ -154,16 +154,16 @@ describe("Multi-Vector (MUVERA)", () => {
 			expect(results.every(r => r.metadata.category === "A")).toBe(true);
 		});
 
-		it("should maintain backward compatibility with positional args on single-vector store", () => {
+		it("should maintain backward compatibility with positional args on single-vector store", async () => {
 			const db = open(":memory:", { dimensions: 8 });
 
-			db.set([
+			await db.set([
 				{ id: "doc1", vector: new Float32Array(8).fill(0.1) },
 				{ id: "doc2", vector: new Float32Array(8).fill(0.2) },
 			]);
 
 			// Old positional args style: search(query, k, ef, filter, maxDistance)
-			const results = db.search([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 2, 100);
+			const results = await db.search([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 2, 100);
 
 			expect(results).toHaveLength(2);
 		});
@@ -172,7 +172,7 @@ describe("Multi-Vector (MUVERA)", () => {
 	describe("reranking quality", () => {
 		let db: VectorDatabase;
 
-		beforeEach(() => {
+		beforeEach(async () => {
 			db = open(":memory:", { dimensions: 16, multiVector: { dProj: null } });
 
 			// Create docs with overlapping patterns where reranking matters
@@ -186,10 +186,10 @@ describe("Multi-Vector (MUVERA)", () => {
 				});
 				return { id: `doc${i}`, vectors, metadata: { numTokens } };
 			});
-			db.set(items);
+			await db.set(items);
 		});
 
-		it("should return valid results with and without reranking", () => {
+		it("should return valid results with and without reranking", async () => {
 			const query = [
 				(() => {
 					const v = new Float32Array(16).fill(0);
@@ -203,8 +203,8 @@ describe("Multi-Vector (MUVERA)", () => {
 				})(),
 			];
 
-			const resultsNoRerank = db.search(query, 10, { rerank: false });
-			const resultsRerank = db.search(query, 10, { rerank: true });
+			const resultsNoRerank = await db.search(query, 10, { rerank: false });
+			const resultsRerank = await db.search(query, 10, { rerank: true });
 
 			expect(resultsNoRerank).toHaveLength(10);
 			expect(resultsRerank).toHaveLength(10);
@@ -224,12 +224,12 @@ describe("Multi-Vector (MUVERA)", () => {
 			return path.join(os.tmpdir(), `omendb_test_${Date.now()}_${Math.random().toString(36).slice(2)}`);
 		}
 
-		it("should persist multi-vector data across close/reopen", () => {
+		it("should persist multi-vector data across close/reopen", async () => {
 			const dbPath = tempPath();
 			try {
 				// Create and populate (dProj: null for small dim)
 				const db1 = open(dbPath, { dimensions: 8, multiVector: { dProj: null } });
-				db1.set([
+				await db1.set([
 					{ id: "doc1", vectors: [new Float32Array(8).fill(0.1), new Float32Array(8).fill(0.2)], metadata: { title: "first" } },
 					{ id: "doc2", vectors: [new Float32Array(8).fill(0.3)], metadata: { title: "second" } },
 				]);
@@ -243,7 +243,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				expect(db2.count()).toBe(2);
 
 				// Verify search works
-				const results = db2.search([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]], 2);
+				const results = await db2.search([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]], 2);
 				expect(results.length).toBe(2);
 				db2.close();
 			} finally {
@@ -253,12 +253,12 @@ describe("Multi-Vector (MUVERA)", () => {
 			}
 		});
 
-		it("should support reranking after reload", () => {
+		it("should support reranking after reload", async () => {
 			const dbPath = tempPath();
 			try {
 				// Create store with docs (dProj: null for small dim)
 				const db1 = open(dbPath, { dimensions: 4, multiVector: { dProj: null } });
-				db1.set([
+				await db1.set([
 					{ id: "doc1", vectors: [[1, 0, 0, 0], [0, 1, 0, 0]], metadata: {} },
 					{ id: "doc2", vectors: [[0.3, 0.3, 0.3, 0]], metadata: {} },
 				]);
@@ -270,7 +270,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				expect(db2.isMultiVector).toBe(true);
 
 				const query = [[1, 0, 0, 0], [0, 1, 0, 0]];
-				const results = db2.search(query, 2, { rerank: true });
+				const results = await db2.search(query, 2, { rerank: true });
 
 				expect(results.length).toBe(2);
 				// doc1 should be first (better MaxSim match)
@@ -282,7 +282,7 @@ describe("Multi-Vector (MUVERA)", () => {
 			}
 		});
 
-		it("should handle large persistent multi-vector store", () => {
+		it("should handle large persistent multi-vector store", async () => {
 			const dbPath = tempPath();
 			try {
 				// Create store with 100 docs
@@ -296,7 +296,7 @@ describe("Multi-Vector (MUVERA)", () => {
 					}),
 					metadata: { idx: i },
 				}));
-				db1.set(items);
+				await db1.set(items);
 				db1.flush();
 				db1.close();
 
@@ -311,7 +311,7 @@ describe("Multi-Vector (MUVERA)", () => {
 					for (let j = 0; j < 32; j++) vec[j] = Math.random();
 					return vec;
 				});
-				const results = db2.search(query, 5);
+				const results = await db2.search(query, 5);
 				expect(results.length).toBe(5);
 				db2.close();
 			} finally {
@@ -322,7 +322,7 @@ describe("Multi-Vector (MUVERA)", () => {
 	});
 
 	describe("scale", () => {
-		it("should handle 1000 documents with 10 tokens each", () => {
+		it("should handle 1000 documents with 10 tokens each", async () => {
 			const db = open(":memory:", { dimensions: 32, multiVector: true });
 
 			// Insert 1000 docs
@@ -337,7 +337,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				}),
 				metadata: { index: i },
 			}));
-			db.set(items);
+			await db.set(items);
 			expect(db.count()).toBe(1000);
 
 			// Search
@@ -348,11 +348,11 @@ describe("Multi-Vector (MUVERA)", () => {
 				}
 				return vec;
 			});
-			const results = db.search(query, 10);
+			const results = await db.search(query, 10);
 			expect(results).toHaveLength(10);
 		});
 
-		it("should handle variable token counts", () => {
+		it("should handle variable token counts", async () => {
 			const db = open(":memory:", { dimensions: 16, multiVector: { dProj: null } });
 
 			// 1 to 20 tokens per doc
@@ -367,7 +367,7 @@ describe("Multi-Vector (MUVERA)", () => {
 				}),
 				metadata: { numTokens: 1 + (i % 20) },
 			}));
-			db.set(items);
+			await db.set(items);
 			expect(db.count()).toBe(100);
 
 			// Search with varying query sizes
@@ -379,7 +379,7 @@ describe("Multi-Vector (MUVERA)", () => {
 					}
 					return vec;
 				});
-				const results = db.search(query, 5);
+				const results = await db.search(query, 5);
 				expect(results).toHaveLength(5);
 			}
 		});

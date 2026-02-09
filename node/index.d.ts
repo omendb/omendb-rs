@@ -14,7 +14,7 @@ export declare class VectorDatabase {
    * @param items - Array of {id, vector, metadata?, text?} or {id, vectors, metadata?}
    * @returns Number of vectors inserted/updated
    */
-  set(items: Array<SetItem>): number
+  set(items: Array<SetItem>): Promise<number>
   /**
    * Search for k nearest neighbors.
    *
@@ -33,7 +33,7 @@ export declare class VectorDatabase {
    * db.search([1, 0, 0, 0], 10, { maxDistance: 0.5 });
    * ```
    */
-  search(query: Array<number> | Float32Array, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): Array<SearchResult>
+  search(query: Array<number> | Float32Array | string, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): Promise<Array<SearchResult>>
   /**
    * Search multi-vector store with query tokens.
    *
@@ -145,6 +145,8 @@ export declare class VectorDatabase {
   get dimensions(): number
   /** Check if this is a multi-vector store. */
   get isMultiVector(): boolean
+  /** Check if an embedding function is configured. */
+  get hasEmbeddingFn(): boolean
   /** Check if database is empty. */
   isEmpty(): boolean
   /** Get database statistics. */
@@ -159,7 +161,7 @@ export declare class VectorDatabase {
    * Collection handles share state - changes made through one handle
    * are immediately visible through another (no flush required).
    */
-  collection(name: string): VectorDatabase
+  collection(name: string, embeddingFn?: ((texts: string[]) => Float32Array[]) | undefined): VectorDatabase
   /** List all collections. */
   collections(): Array<string>
   /** Delete a collection. */
@@ -203,7 +205,7 @@ export declare class VectorDatabase {
    * });
    * ```
    */
-  searchHybrid(queryVector: Array<number> | Float32Array, queryText: string, k: number, options?: { filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined): Array<HybridSearchResult>
+  searchHybrid(queryVector: Array<number> | Float32Array | string, queryText: string | undefined | null, k: number, options?: { filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined): Promise<Array<HybridSearchResult>>
   /**
    * Flush pending changes to disk.
    *
@@ -326,7 +328,7 @@ export interface HybridSearchResult {
  *
  * ```
  */
-export declare function open(path: string, options?: OpenOptions | undefined | null): VectorDatabase
+export declare function open(path: string, options?: OpenOptions | undefined | null, embeddingFn?: ((texts: string[]) => Float32Array[]) | undefined): VectorDatabase
 
 /**
  * Configuration options for opening a vector database.
@@ -385,6 +387,8 @@ export interface SetItem {
   metadata?: Record<string, unknown> | undefined
   /** Optional text for hybrid search (auto-enables text search, stored in metadata.text) */
   text?: string
+  /** Optional document for auto-embedding via embeddingFn */
+  document?: string
 }
 
 export interface StatsResult {
