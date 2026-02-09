@@ -15,9 +15,6 @@ use anyhow::Result;
 use serde_json::Value as JsonValue;
 
 impl VectorStore {
-    // ========================================================================
-    // Text Search Setup
-    // ========================================================================
 
     /// Enable text search on this store.
     ///
@@ -58,10 +55,6 @@ impl VectorStore {
     pub fn has_text_search(&self) -> bool {
         self.text_index.is_some()
     }
-
-    // ========================================================================
-    // Insert with Text
-    // ========================================================================
 
     /// Upsert vector with text content for hybrid search.
     ///
@@ -111,10 +104,6 @@ impl VectorStore {
         self.set_batch(vector_batch)
     }
 
-    // ========================================================================
-    // Text-Only Search
-    // ========================================================================
-
     /// Search text index only (BM25 scoring).
     ///
     /// Returns documents ranked by keyword relevance without considering
@@ -130,10 +119,6 @@ impl VectorStore {
 
         text_index.search(query, k)
     }
-
-    // ========================================================================
-    // Hybrid Search (Vector + Text)
-    // ========================================================================
 
     /// Hybrid search combining vector similarity and BM25 text relevance.
     ///
@@ -233,10 +218,6 @@ impl VectorStore {
         Ok(attach_metadata(&self.records, fused))
     }
 
-    // ========================================================================
-    // Hybrid Search with Subscores
-    // ========================================================================
-
     /// Hybrid search returning separate keyword and semantic scores.
     ///
     /// Returns [`HybridResult`] with `keyword_score` (BM25) and `semantic_score`
@@ -303,10 +284,6 @@ impl VectorStore {
         Ok(attach_metadata_to_hybrid_results(&self.records, fused))
     }
 
-    // ========================================================================
-    // Internal Helpers
-    // ========================================================================
-
     /// Validate preconditions for hybrid search.
     fn validate_hybrid_search_preconditions(&self, query_vector: &Vector) -> Result<()> {
         if query_vector.data.len() != self.dimensions() {
@@ -334,10 +311,6 @@ impl VectorStore {
             .collect()
     }
 }
-
-// ============================================================================
-// Standalone Helper Functions
-// ============================================================================
 
 /// Attach metadata to fused results.
 fn attach_metadata(

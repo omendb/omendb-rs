@@ -643,10 +643,6 @@ fn test_index_stats_distance_functions() {
     ));
 }
 
-// ========================================
-// Edge Case Tests
-// ========================================
-
 #[test]
 fn test_empty_index_serialization() {
     let dir = tempfile::tempdir().unwrap();
@@ -888,7 +884,6 @@ fn profile_persistence_comprehensive() {
         .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
         .collect();
 
-    // === TEST 1: In-memory (no persistence) ===
     println!("=== 1. In-Memory Mode (no persistence) ===");
     let mut inmem_store = VectorStore::new(dim);
 
@@ -931,7 +926,6 @@ fn profile_persistence_comprehensive() {
     let inmem_search_qps = queries as f64 / inmem_search.as_secs_f64();
     println!("search (metadata): {inmem_search:?} ({inmem_search_qps:.0} QPS)");
 
-    // === TEST 2: Persistent (disk) ===
     println!("\n=== 2. Persistent Mode (disk) ===");
     let tmpdir = tempfile::tempdir().unwrap();
     let path = tmpdir.path().join("profile-oadb");
@@ -984,7 +978,6 @@ fn profile_persistence_comprehensive() {
 
     drop(persist_store);
 
-    // === TEST 3: Cold Start (reopen from disk) ===
     println!("\n=== 3. Cold Start (reload from disk) ===");
     let start = Instant::now();
     let reloaded_store = VectorStore::open(&path).unwrap();
@@ -1000,7 +993,6 @@ fn profile_persistence_comprehensive() {
     let reload_knn_qps = queries as f64 / reload_knn.as_secs_f64();
     println!("knn_search (post-reload): {reload_knn:?} ({reload_knn_qps:.0} QPS)");
 
-    // === SUMMARY ===
     println!("\n=== Summary: Persistence Impact ===");
     println!("| Operation | In-Memory | Persistent | Overhead |");
     println!("|-----------|-----------|--------|----------|");

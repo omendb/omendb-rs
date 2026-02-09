@@ -918,10 +918,6 @@ mod incremental_tests {
     }
 }
 
-// ============================================================================
-// Text Search / Hybrid Search Tests
-// ============================================================================
-
 #[test]
 fn test_enable_text_search() {
     let mut store = VectorStore::new(4);
@@ -1387,10 +1383,6 @@ fn test_hybrid_search_with_filter_subscores() {
     assert!(results[0].0.semantic_score.is_some());
 }
 
-// ============================================================================
-// Property-Based Tests
-// ============================================================================
-
 mod proptest_tests {
     use super::*;
     use proptest::prelude::*;
@@ -1587,10 +1579,6 @@ fn test_set_writes_to_wal() {
         assert_eq!(store.len(), 1, "Should have 1 vector after WAL replay");
     }
 }
-
-// ============================================================================
-// Persistence Round-Trip Property Tests (tk-xvf9)
-// ============================================================================
 
 mod persistence_proptest {
     use super::*;
@@ -1883,10 +1871,6 @@ mod persistence_proptest {
     }
 }
 
-// ============================================================================
-// MUVERA (Multi-Vector) Tests
-// ============================================================================
-
 mod muvera_tests {
     use super::*;
     use crate::vector::muvera::MuveraConfig;
@@ -2159,10 +2143,6 @@ mod muvera_tests {
         assert_eq!(store.len(), 0);
     }
 
-    // ========================================================================
-    // MUV-16: search_multi tests (with MaxSim reranking)
-    // ========================================================================
-
     #[test]
     fn test_search_multi_basic() {
         let config = small_dim_config();
@@ -2338,10 +2318,6 @@ mod muvera_tests {
     }
 }
 
-// ============================================================================
-// Unified API tests
-// ============================================================================
-
 mod unified_api_tests {
     use super::*;
     use crate::vector::muvera::MuveraConfig;
@@ -2366,8 +2342,6 @@ mod unified_api_tests {
             ..Default::default()
         }
     }
-
-    // === Regular store tests ===
 
     #[test]
     fn test_store_single_vector() {
@@ -2489,8 +2463,6 @@ mod unified_api_tests {
         assert!(store.contains("doc1"));
         assert!(store.contains("doc2"));
     }
-
-    // === Multi-vector store tests ===
 
     #[test]
     fn test_store_multi_vector() {
@@ -2675,10 +2647,6 @@ mod unified_api_tests {
         assert_eq!(results.len(), 1);
     }
 }
-
-// ============================================================================
-// Multi-vector persistence tests (MUV-13)
-// ============================================================================
 
 mod multivec_persistence_tests {
     use super::*;

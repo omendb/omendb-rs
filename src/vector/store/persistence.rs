@@ -34,9 +34,6 @@ fn segments_dir_for(path: &Path) -> PathBuf {
 }
 
 impl VectorStore {
-    // ========================================================================
-    // Open/Create
-    // ========================================================================
 
     /// Open a persistent vector store at the given path
     ///
@@ -467,10 +464,6 @@ impl VectorStore {
         })
     }
 
-    // ========================================================================
-    // Flush/Save
-    // ========================================================================
-
     /// Flush all pending changes to disk
     ///
     /// Commits vector/metadata changes and HNSW index to `.omen` storage.
@@ -558,10 +551,6 @@ impl VectorStore {
 
         Ok(())
     }
-
-    // ========================================================================
-    // Persistence Accessors
-    // ========================================================================
 
     /// Check if this store has persistent storage enabled
     #[must_use]

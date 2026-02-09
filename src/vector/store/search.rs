@@ -22,15 +22,11 @@ fn compute_distance(metric: Metric, a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-// ============================================================================
-// Brute Force Search
-// ============================================================================
-
 /// Brute-force K-NN search implementation.
 ///
 /// Scans all live records and returns k nearest neighbors.
 /// Used as fallback when HNSW index is empty or returns no results.
-pub fn brute_force_search(
+pub(crate) fn brute_force_search(
     records: &RecordStore,
     query: &[f32],
     k: usize,
@@ -52,12 +48,8 @@ pub fn brute_force_search(
     distances.into_iter().take(k).collect()
 }
 
-// ============================================================================
-// Result Conversion
-// ============================================================================
-
 /// Convert slot-distance pairs to SearchResult with metadata.
-pub fn slots_to_search_results(
+pub(crate) fn slots_to_search_results(
     records: &RecordStore,
     results: Vec<(usize, f32)>,
 ) -> Vec<SearchResult> {
@@ -75,7 +67,7 @@ pub fn slots_to_search_results(
 }
 
 /// Convert slot-distance pairs to SearchResult, falling back to brute force if empty.
-pub fn slots_to_results_with_fallback(
+pub(crate) fn slots_to_results_with_fallback(
     records: &RecordStore,
     results: Vec<(usize, f32)>,
     query: &[f32],
@@ -93,14 +85,10 @@ pub fn slots_to_results_with_fallback(
     }
 }
 
-// ============================================================================
-// Core Search Implementation
-// ============================================================================
-
 /// Core K-NN search using segments.
 ///
 /// Uses segments if available, falls back to brute force.
-pub fn knn_search_core(
+pub(crate) fn knn_search_core(
     records: &RecordStore,
     segments: Option<&SegmentManager>,
     query: &[f32],
@@ -136,16 +124,12 @@ pub fn knn_search_core(
     Ok(brute_force_search(records, query, k, metric))
 }
 
-// ============================================================================
-// Filtered Search
-// ============================================================================
-
 /// Core filtered search implementation.
 ///
 /// Uses bitmap-based filtering when possible, falls back to JSON matching.
 /// Uses segments (ACORN-1) when available, falls back to brute-force.
 #[allow(clippy::too_many_arguments)]
-pub fn knn_search_filtered_core(
+pub(crate) fn knn_search_filtered_core(
     records: &RecordStore,
     metadata_index: &MetadataIndex,
     segments: Option<&SegmentManager>,

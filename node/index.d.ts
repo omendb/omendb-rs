@@ -2,6 +2,17 @@
 /* eslint-disable */
 export declare class VectorDatabase {
   /**
+   * Get or create a named collection.
+   *
+   * Collection handles share state - changes made through one handle
+   * are immediately visible through another (no flush required).
+   */
+  collection(name: string, embeddingFn?: ((texts: string[]) => Float32Array[]) | undefined): VectorDatabase
+  /** List all collections. */
+  collections(): Array<string>
+  /** Delete a collection. */
+  deleteCollection(name: string): void
+  /**
    * Insert or update vectors.
    *
    * Works for both single-vector and multi-vector stores:
@@ -15,44 +26,6 @@ export declare class VectorDatabase {
    * @returns Number of vectors inserted/updated
    */
   set(items: Array<SetItem>): Promise<number>
-  /**
-   * Search for k nearest neighbors.
-   *
-   * @param query - Query vector (number[] or Float32Array)
-   * @param k - Number of results to return
-   * @param options - Optional search options: {filter?, ef?, maxDistance?}
-   * @returns Array of {id, distance, score, metadata}
-   *
-   * @example
-   * ```javascript
-   * // Basic search
-   * db.search([1, 0, 0, 0], 10);
-   *
-   * // With options
-   * db.search([1, 0, 0, 0], 10, { filter: { category: "A" }, ef: 200 });
-   * db.search([1, 0, 0, 0], 10, { maxDistance: 0.5 });
-   * ```
-   */
-  search(query: Array<number> | Float32Array | string, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): Promise<Array<SearchResult>>
-  /**
-   * Search multi-vector store with query tokens.
-   *
-   * Internal method used by unified search() for multi-vector stores.
-   *
-   * @param query - Query tokens (number[][] or Float32Array[])
-   * @param k - Number of results to return
-   * @param rerank - Enable MaxSim reranking for better quality (default: true)
-   * @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 32)
-   * @returns Array of {id, distance, metadata}
-   */
-  searchMulti(query: Array<Array<number>> | Array<Float32Array>, k: number, rerank?: boolean | undefined | null, rerankFactor?: number | undefined | null): Array<SearchResult>
-  /**
-   * Batch search with parallel execution (async).
-   *
-   * Runs searches in parallel using rayon on a blocking thread pool,
-   * keeping the Node.js event loop free.
-   */
-  searchBatch(queries: Array<Array<number> | Float32Array>, k: number, ef?: number | undefined | null): Promise<Array<Array<SearchResult>>>
   /** Get a vector by ID. */
   get(id: string): GetResult | null
   /**
@@ -156,63 +129,6 @@ export declare class VectorDatabase {
   /** Set ef_search value. */
   set efSearch(efSearch: number)
   /**
-   * Get or create a named collection.
-   *
-   * Collection handles share state - changes made through one handle
-   * are immediately visible through another (no flush required).
-   */
-  collection(name: string, embeddingFn?: ((texts: string[]) => Float32Array[]) | undefined): VectorDatabase
-  /** List all collections. */
-  collections(): Array<string>
-  /** Delete a collection. */
-  deleteCollection(name: string): void
-  /**
-   * Check if text search is enabled.
-   *
-   * Text search is automatically enabled when using set() with text field.
-   */
-  get hasTextSearch(): boolean
-  /**
-   * Search using text only (BM25 scoring).
-   *
-   * @param query - Text query
-   * @param k - Number of results
-   * @returns Array of {id, score, metadata}
-   */
-  searchText(query: string, k: number): Array<TextSearchResult>
-  /**
-   * Hybrid search combining vector similarity and text relevance.
-   *
-   * Uses Reciprocal Rank Fusion (RRF) to combine HNSW and BM25 results.
-   *
-   * @param queryVector - Query embedding
-   * @param queryText - Text query for BM25
-   * @param k - Number of results
-   * @param options - Optional: {filter?, alpha?, rrfK?, subscores?}
-   * @returns Array of {id, score, metadata, keywordScore?, semanticScore?}
-   *
-   * @example
-   * ```javascript
-   * // Basic hybrid search
-   * db.searchHybrid([1, 0, 0, 0], "machine learning", 10);
-   *
-   * // With options
-   * db.searchHybrid([1, 0, 0, 0], "query", 10, {
-   *   filter: { type: "ml" },
-   *   alpha: 0.7,
-   *   rrfK: 60,
-   *   subscores: true
-   * });
-   * ```
-   */
-  searchHybrid(queryVector: Array<number> | Float32Array | string, queryText: string | undefined | null, k: number, options?: { filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined): Promise<Array<HybridSearchResult>>
-  /**
-   * Flush pending changes to disk.
-   *
-   * For hybrid search, this commits text index changes.
-   */
-  flush(): void
-  /**
    * Compact the database by removing deleted records and reclaiming space.
    *
    * This operation removes tombstoned records, reassigns indices to be
@@ -282,6 +198,90 @@ export declare class VectorDatabase {
    * @returns Array of results in same order as input, null for missing IDs
    */
   getBatch(ids: Array<string>): Array<GetResult | undefined | null>
+  /**
+   * Check if text search is enabled.
+   *
+   * Text search is automatically enabled when using set() with text field.
+   */
+  get hasTextSearch(): boolean
+  /**
+   * Search using text only (BM25 scoring).
+   *
+   * @param query - Text query
+   * @param k - Number of results
+   * @returns Array of {id, score, metadata}
+   */
+  searchText(query: string, k: number): Array<TextSearchResult>
+  /**
+   * Hybrid search combining vector similarity and text relevance.
+   *
+   * Uses Reciprocal Rank Fusion (RRF) to combine HNSW and BM25 results.
+   *
+   * @param queryVector - Query embedding
+   * @param queryText - Text query for BM25
+   * @param k - Number of results
+   * @param options - Optional: {filter?, alpha?, rrfK?, subscores?}
+   * @returns Array of {id, score, metadata, keywordScore?, semanticScore?}
+   *
+   * @example
+   * ```javascript
+   * // Basic hybrid search
+   * db.searchHybrid([1, 0, 0, 0], "machine learning", 10);
+   *
+   * // With options
+   * db.searchHybrid([1, 0, 0, 0], "query", 10, {
+   *   filter: { type: "ml" },
+   *   alpha: 0.7,
+   *   rrfK: 60,
+   *   subscores: true
+   * });
+   * ```
+   */
+  searchHybrid(queryVector: Array<number> | Float32Array | string, queryText: string | undefined | null, k: number, options?: { filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined): Promise<Array<HybridSearchResult>>
+  /**
+   * Flush pending changes to disk.
+   *
+   * For hybrid search, this commits text index changes.
+   */
+  flush(): void
+  /**
+   * Search for k nearest neighbors.
+   *
+   * @param query - Query vector (number[] or Float32Array)
+   * @param k - Number of results to return
+   * @param options - Optional search options: {filter?, ef?, maxDistance?}
+   * @returns Array of {id, distance, score, metadata}
+   *
+   * @example
+   * ```javascript
+   * // Basic search
+   * db.search([1, 0, 0, 0], 10);
+   *
+   * // With options
+   * db.search([1, 0, 0, 0], 10, { filter: { category: "A" }, ef: 200 });
+   * db.search([1, 0, 0, 0], 10, { maxDistance: 0.5 });
+   * ```
+   */
+  search(query: Array<number> | Float32Array | string, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): Promise<Array<SearchResult>>
+  /**
+   * Search multi-vector store with query tokens.
+   *
+   * Internal method used by unified search() for multi-vector stores.
+   *
+   * @param query - Query tokens (number[][] or Float32Array[])
+   * @param k - Number of results to return
+   * @param rerank - Enable MaxSim reranking for better quality (default: true)
+   * @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 32)
+   * @returns Array of {id, distance, metadata}
+   */
+  searchMulti(query: Array<Array<number>> | Array<Float32Array>, k: number, rerank?: boolean | undefined | null, rerankFactor?: number | undefined | null): Array<SearchResult>
+  /**
+   * Batch search with parallel execution (async).
+   *
+   * Runs searches in parallel using rayon on a blocking thread pool,
+   * keeping the Node.js event loop free.
+   */
+  searchBatch(queries: Array<Array<number> | Float32Array>, k: number, ef?: number | undefined | null): Promise<Array<Array<SearchResult>>>
 }
 
 export interface GetResult {

@@ -46,10 +46,6 @@ pub struct HNSWParams {
     pub dimensions: usize,
 }
 
-// ============================================================================
-// Builder Pattern
-// ============================================================================
-
 /// Default HNSW M parameter (neighbors per node)
 const DEFAULT_M: usize = 16;
 /// Default HNSW ef_construction parameter (build quality)
@@ -834,10 +830,6 @@ impl HNSWIndex {
 mod tests {
     use super::*;
 
-    // ========================================================================
-    // Builder Pattern Tests
-    // ========================================================================
-
     #[test]
     fn test_builder_basic() {
         let index = HNSWIndex::builder().dimensions(128).build().unwrap();
@@ -906,10 +898,6 @@ mod tests {
         assert!(index.is_sq8());
         assert_eq!(index.dimensions(), 64);
     }
-
-    // ========================================================================
-    // Legacy Constructor Tests
-    // ========================================================================
 
     #[test]
     fn test_hnsw_basic() {

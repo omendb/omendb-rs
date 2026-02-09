@@ -129,10 +129,6 @@ impl MultiVecStorage {
             + self.offsets.len() * std::mem::size_of::<(u32, u16)>()
     }
 
-    // ========================================================================
-    // Serialization for persistence
-    // ========================================================================
-
     /// Serialize vectors to bytes for persistence.
     ///
     /// Layout: flat f32 array in little-endian format.
@@ -400,10 +396,6 @@ mod tests {
         assert!(storage.is_empty());
         assert_eq!(storage.total_tokens(), 0);
     }
-
-    // ========================================================================
-    // Serialization Tests
-    // ========================================================================
 
     #[test]
     fn test_serialization_empty() {

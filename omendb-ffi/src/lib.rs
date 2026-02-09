@@ -593,10 +593,6 @@ pub extern "C" fn omendb_version() -> *const c_char {
         .cast::<c_char>()
 }
 
-// ============================================================================
-// Hybrid Search FFI
-// ============================================================================
-
 /// Enable text search for hybrid search
 ///
 /// # Returns

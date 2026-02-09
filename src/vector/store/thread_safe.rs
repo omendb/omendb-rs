@@ -60,9 +60,6 @@ pub struct ThreadSafeVectorStore {
 }
 
 impl ThreadSafeVectorStore {
-    // ========================================================================
-    // Constructors
-    // ========================================================================
 
     /// Create new thread-safe vector store
     #[must_use]
@@ -94,10 +91,6 @@ impl ThreadSafeVectorStore {
         }
     }
 
-    // ========================================================================
-    // Basic Write Operations (exclusive lock)
-    // ========================================================================
-
     /// Insert vector with ID and metadata
     pub fn set(&self, id: String, vector: Vector, metadata: JsonValue) -> Result<usize> {
         self.inner.write().set(id, vector, metadata)
@@ -117,10 +110,6 @@ impl ThreadSafeVectorStore {
     pub fn flush(&self) -> Result<()> {
         self.inner.write().flush()
     }
-
-    // ========================================================================
-    // Basic Read Operations (shared lock)
-    // ========================================================================
 
     /// Search for k nearest neighbors
     pub fn search(&self, query: &Vector, k: usize) -> Result<Vec<SearchResult>> {
@@ -156,10 +145,6 @@ impl ThreadSafeVectorStore {
     pub fn dimensions(&self) -> usize {
         self.inner.read().records.dimensions() as usize
     }
-
-    // ========================================================================
-    // Direct Access (for advanced use)
-    // ========================================================================
 
     /// Get read lock to underlying store for advanced operations
     ///

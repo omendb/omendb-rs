@@ -521,10 +521,6 @@ impl FrozenSegment {
         &self.storage
     }
 
-    // ============================================================================
-    // Filtered Search (ACORN-1)
-    // ============================================================================
-
     /// Search for k nearest neighbors that match a filter predicate
     ///
     /// Uses ACORN-1 algorithm (arXiv:2403.04871) with adaptive 2-hop expansion

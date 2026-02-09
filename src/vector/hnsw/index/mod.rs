@@ -117,9 +117,6 @@ pub struct HNSWIndex {
 }
 
 impl HNSWIndex {
-    // =========================================================================
-    // Constructors
-    // =========================================================================
 
     /// Build an HNSWIndex with pre-created storage
     fn build(storage: NodeStorage, params: HNSWParams, distance_fn: DistanceFunction) -> Self {
@@ -199,10 +196,6 @@ impl HNSWIndex {
         let storage = NodeStorage::new_sq8(dimensions, params.m, params.max_level as usize);
         Ok(Self::build(storage, params, distance_fn))
     }
-
-    // =========================================================================
-    // Getters
-    // =========================================================================
 
     /// Check if this index uses asymmetric search (SQ8)
     #[must_use]
@@ -434,10 +427,6 @@ impl HNSWIndex {
         Some(self.storage.slot(node_id))
     }
 
-    // =========================================================================
-    // Internal helpers
-    // =========================================================================
-
     /// Assign random level to new node
     ///
     /// Uses exponential decay: P(level = l) = (1/M)^l
@@ -454,10 +443,6 @@ impl HNSWIndex {
         let level = (-rand_val.ln() * self.params.ml) as u8;
         level.min(self.params.max_level - 1)
     }
-
-    // =========================================================================
-    // Distance functions
-    // =========================================================================
 
     /// Distance between nodes for ordering comparisons
     ///

@@ -508,10 +508,6 @@ impl NodeStorage {
         level0_usage + upper_usage + aux_usage
     }
 
-    // =========================================================================
-    // Layout accessors (for persistence)
-    // =========================================================================
-
     /// Offset to neighbors array in node layout
     #[inline]
     #[must_use]
@@ -819,10 +815,6 @@ mod tests {
         storage.add_neighbor(id, 1, 3);
         assert_eq!(storage.neighbor_count_at_level(id, 1), 2);
     }
-
-    // =========================================================================
-    // SQ8 Quantization Tests
-    // =========================================================================
 
     #[test]
     fn test_sq8_node_layout_size() {

@@ -542,8 +542,6 @@ mod tests {
         assert!(results.is_empty());
     }
 
-    // ============== Merge Policy Tests ==============
-
     #[test]
     fn test_merge_policy_disabled() {
         let config = test_config().with_capacity(3);
@@ -794,8 +792,6 @@ mod tests {
         assert!(manager.should_merge(), "Size ratio should trigger merge");
     }
 
-    // ============== Persistence Tests ==============
-
     #[test]
     fn test_save_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
@@ -924,8 +920,6 @@ mod tests {
             assert!((before.distance - after.distance).abs() < 0.001);
         }
     }
-
-    // ============== Filtered Search Tests ==============
 
     #[test]
     fn test_segment_manager_filtered_search() {

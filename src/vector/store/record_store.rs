@@ -104,10 +104,6 @@ impl RecordStore {
         }
     }
 
-    // =========================================================================
-    // Core Operations
-    // =========================================================================
-
     /// Upsert a record (insert or update)
     ///
     /// Returns the slot index where the record was stored.
@@ -219,10 +215,6 @@ impl RecordStore {
             .map(|r| r.id.as_str())
     }
 
-    // =========================================================================
-    // Counts and Dimensions
-    // =========================================================================
-
     /// Get live record count - O(1)
     #[inline]
     pub fn len(&self) -> u32 {
@@ -269,10 +261,6 @@ impl RecordStore {
         self.deleted.len() as f64 / total as f64
     }
 
-    // =========================================================================
-    // Iteration
-    // =========================================================================
-
     /// Iterate over live records with their slot indices
     pub fn iter_live(&self) -> impl Iterator<Item = (u32, &Record)> {
         self.slots
@@ -301,10 +289,6 @@ impl RecordStore {
             .map(|(_, record)| record.vector.clone())
             .collect()
     }
-
-    // =========================================================================
-    // Persistence Support
-    // =========================================================================
 
     /// Get reference to the deleted bitmap
     #[inline]
@@ -360,10 +344,6 @@ impl RecordStore {
     pub fn needs_compaction(&self) -> bool {
         self.delete_ratio() > 0.20
     }
-
-    // =========================================================================
-    // Checkpoint Export
-    // =========================================================================
 
     /// Export vectors for checkpoint (slot-indexed)
     pub fn export_vectors(&self) -> Vec<Option<Vec<f32>>> {

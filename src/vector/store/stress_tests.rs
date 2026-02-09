@@ -27,10 +27,6 @@ fn random_vector(seed: usize, dim: usize) -> Vec<f32> {
         .collect()
 }
 
-// ============================================================================
-// Concurrent Access Tests
-// ============================================================================
-
 /// Heavy concurrent writes - 8 writers, 1000 vectors each
 #[test]
 fn stress_concurrent_writers() {
@@ -227,10 +223,6 @@ fn stress_concurrent_deletes() {
     assert_eq!(store.len(), 0, "All should be deleted");
 }
 
-// ============================================================================
-// Memory Pressure Tests
-// ============================================================================
-
 /// Large vector count - 50K vectors, 128D
 #[test]
 #[ignore] // Run with --ignored for slow tests
@@ -311,10 +303,6 @@ fn stress_high_dimensions() {
     let results = store.search(&query, 10).unwrap();
     assert_eq!(results.len(), 10);
 }
-
-// ============================================================================
-// Crash Recovery Tests
-// ============================================================================
 
 /// Simulated crash mid-batch - verifies WAL recovery
 #[test]
@@ -477,10 +465,6 @@ fn stress_repeated_crash_recovery() {
     let store = VectorStore::open(&path).unwrap();
     assert_eq!(store.len(), num_cycles * vectors_per_cycle);
 }
-
-// ============================================================================
-// Edge Case Tests
-// ============================================================================
 
 /// Very large metadata
 #[test]

@@ -367,10 +367,6 @@ impl OmenFile {
     // VectorStore uses checkpoint_from_snapshot() which takes data from RecordStore.
 }
 
-// ============================================================================
-// Storage API for VectorStore
-// ============================================================================
-
 // Note: Many methods removed in Phase 5. VectorStore uses RecordStore for state.
 // OmenFile is now pure I/O: WAL + checkpoint_from_snapshot.
 
@@ -485,10 +481,6 @@ impl OmenFile {
     // VectorStore handles flushing via checkpoint_from_snapshot().
     // Compaction will be implemented at VectorStore level using RecordStore data.
 }
-
-// ============================================================================
-// Pure I/O API
-// ============================================================================
 
 /// MUVERA config tuple: (repetitions, partition_bits, seed, token_dim, d_proj, pool_factor)
 pub type MuveraConfigTuple = (u8, u8, u64, usize, Option<u8>, Option<u8>);

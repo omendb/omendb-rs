@@ -6,8 +6,6 @@
 use super::MetadataFilter;
 use serde_json::Value as JsonValue;
 
-// === Search Options ===
-
 /// Reranking mode for multi-vector search.
 #[derive(Debug, Clone, Default)]
 pub enum Rerank {
@@ -235,8 +233,6 @@ pub trait VectorInput {
     fn into_vector_data(self) -> VectorData;
 }
 
-// === Single vector implementations ===
-
 impl VectorInput for Vec<f32> {
     fn into_vector_data(self) -> VectorData {
         VectorData::Single(self)
@@ -254,8 +250,6 @@ impl VectorInput for &Vec<f32> {
         VectorData::Single(self.clone())
     }
 }
-
-// === Multi-vector implementations ===
 
 impl VectorInput for Vec<Vec<f32>> {
     fn into_vector_data(self) -> VectorData {
@@ -286,8 +280,6 @@ impl VectorInput for Vec<&[f32]> {
         VectorData::Multi(self.iter().map(|t| t.to_vec()).collect())
     }
 }
-
-// === Query data (borrowed, for search) ===
 
 /// Query representation for search operations.
 #[derive(Debug, Clone)]
@@ -329,8 +321,6 @@ pub trait QueryInput {
     fn to_query_data(&self) -> QueryData<'_>;
 }
 
-// === Single query implementations ===
-
 impl QueryInput for [f32] {
     fn to_query_data(&self) -> QueryData<'_> {
         QueryData::Single(self)
@@ -342,8 +332,6 @@ impl QueryInput for Vec<f32> {
         QueryData::Single(self.as_slice())
     }
 }
-
-// === Multi query implementations ===
 
 impl QueryInput for [Vec<f32>] {
     fn to_query_data(&self) -> QueryData<'_> {
@@ -368,8 +356,6 @@ impl<'a> QueryInput for Vec<&'a [f32]> {
         QueryData::Multi(self.clone())
     }
 }
-
-// === Batch input ===
 
 /// Single item in a batch operation.
 pub trait BatchItem {

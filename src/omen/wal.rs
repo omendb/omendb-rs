@@ -421,10 +421,6 @@ impl Wal {
     }
 }
 
-// ============================================================================
-// WAL Entry Parsing Helpers
-// ============================================================================
-
 /// Maximum string ID length (64KB) - prevents DoS via malicious length field
 const MAX_STRING_ID_LEN: usize = 65536;
 /// Maximum vector dimensions (1M) - prevents DoS via malicious length field

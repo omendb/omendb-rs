@@ -14,9 +14,6 @@ use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 
 impl VectorStore {
-    // ========================================================================
-    // Multi-Vector Accessors
-    // ========================================================================
 
     /// Check if this store is configured for multi-vector documents.
     #[must_use]
@@ -39,10 +36,6 @@ impl VectorStore {
             .as_ref()
             .map(MuveraEncoder::fde_dimension)
     }
-
-    // ========================================================================
-    // Multi-Vector Insert
-    // ========================================================================
 
     /// Insert a document with token embeddings.
     ///
@@ -194,10 +187,6 @@ impl VectorStore {
 
         Ok(())
     }
-
-    // ========================================================================
-    // Multi-Vector Search
-    // ========================================================================
 
     /// Search for similar documents using query tokens.
     ///
@@ -407,10 +396,6 @@ impl VectorStore {
         Ok(results)
     }
 
-    // ========================================================================
-    // Unified API (trait-based dispatch)
-    // ========================================================================
-
     /// Store vector or token embeddings.
     ///
     /// This unified method works for both regular and multi-vector stores:
@@ -619,10 +604,6 @@ impl VectorStore {
         }
     }
 
-    // ========================================================================
-    // Multi-Vector Get
-    // ========================================================================
-
     /// Get stored data by ID.
     ///
     /// Returns `VectorData::Single` for regular stores, `VectorData::Multi` for multi-vector stores.
@@ -682,10 +663,6 @@ impl VectorStore {
             .unwrap_or_else(helpers::default_metadata);
         Some((tokens, metadata))
     }
-
-    // ========================================================================
-    // Multi-Vector Batch Operations
-    // ========================================================================
 
     /// Batch store vectors or token embeddings.
     ///
