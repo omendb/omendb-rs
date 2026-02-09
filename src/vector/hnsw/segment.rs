@@ -264,12 +264,6 @@ impl MutableSegment {
         self.slots.get(local_id as usize).copied()
     }
 
-    /// Access slots for freeze operation
-    #[allow(dead_code)]
-    pub(crate) fn slots(&self) -> &[u32] {
-        &self.slots
-    }
-
     /// Get entry point
     #[inline]
     pub fn entry_point(&self) -> Option<u32> {

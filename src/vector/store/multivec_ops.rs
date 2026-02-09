@@ -742,7 +742,7 @@ impl VectorStore {
             .into_iter()
             .map(|(id, data, meta)| {
                 let VectorData::Single(vec) = data else {
-                    unreachable!()
+                    unreachable!("pre-filtered to Single")
                 };
                 (id, Vector::new(vec), meta)
             })
@@ -761,7 +761,7 @@ impl VectorStore {
             .iter()
             .map(|(id, data, meta)| {
                 let VectorData::Multi(tokens) = data else {
-                    unreachable!()
+                    unreachable!("pre-filtered to Multi")
                 };
                 (id.as_str(), tokens.clone(), meta.clone())
             })
