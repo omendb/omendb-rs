@@ -7,7 +7,7 @@
 Embedded vector database for Python and Node.js. No server, no setup, just install.
 
 - **20K QPS** single-threaded search with 100% recall (SIFT-10K)
-- **105K vec/s** insert throughput (2.2x hnswlib)
+- **105K vec/s** insert throughput
 - **SQ8 quantization** (4x compression, ~99% recall)
 - **ACORN-1** predicate-aware filtered search
 - **Hybrid search** -- BM25 text + vector with RRF fusion
@@ -17,7 +17,6 @@ Embedded vector database for Python and Node.js. No server, no setup, just insta
 ```bash
 pip install omendb       # Python
 npm install omendb       # Node.js
-cargo install omendb     # CLI
 ```
 
 ## Quick Start
@@ -94,7 +93,6 @@ const results = db.search(new Float32Array(128).fill(0.1), 5);
 - **O(1) lazy delete + compaction** -- deleted records cleaned up in background
 - **Segment-based architecture** -- background merging for sustained write throughput
 - **Context manager** (Python) / `close()` (Node.js) for resource cleanup
-- **CLI tool** -- inspect, search, export, compact database files
 
 ## Platforms
 
@@ -302,30 +300,16 @@ mvdb.set([{
 results = mvdb.search([[0.1]*128, [0.15]*128], k=5)  # MaxSim scoring
 ```
 
-## CLI
-
-```bash
-cargo install omendb
-
-omendb info ./mydb                         # Database info, stats, collections
-omendb search ./mydb -q 0.1,0.2,... -k 5  # Search by vector
-omendb get ./mydb doc1                     # Get vector by ID
-omendb export ./mydb -o data.jsonl         # Export to JSONL
-omendb compact ./mydb                      # Remove tombstones
-```
-
-All commands support `--json` for machine-readable output. Use `--collection` to target a specific collection.
-
 ## Performance
 
 **SIFT-10K** (128D, M=16, ef=100, k=10, Apple M3 Max):
 
-| Metric      | OmenDB  | hnswlib | Ratio |
-| ----------- | ------- | ------- | ----- |
-| Build vec/s | 105,000 | 47,000  | 2.2x  |
-| Search QPS  | 19,700  | 14,800  | 1.3x  |
-| Batch QPS   | 156,000 | --      | --    |
-| Recall@10   | 100.0%  | 99.5%   | --    |
+| Metric    | Result     |
+| --------- | ---------- |
+| Build     | 105K vec/s |
+| Search    | 19.7K QPS  |
+| Batch     | 156K QPS   |
+| Recall@10 | 100.0%     |
 
 **SIFT-1M** (1M vectors, 128D, M=16, ef=100, k=10):
 
@@ -359,7 +343,6 @@ db = omendb.open("./db", dimensions=768, quantization=True)          # SQ8
 - **Recall**: Validated against brute-force ground truth on SIFT/GloVe
 - **Reproduce**:
   - Quick (10K): `uv run python benchmarks/run.py`
-  - SIFT-1M: `uv run python benchmarks/ann_dataset_test.py --dataset sift-128-euclidean`
 
 </details>
 
