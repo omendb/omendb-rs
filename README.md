@@ -313,7 +313,7 @@ omendb info ./mydb                        # Database info
 omendb stats ./mydb                       # Detailed statistics
 omendb count ./mydb                       # Vector count
 omendb ids ./mydb                         # List all IDs
-omendb search ./mydb -q 0.1,0.2,... -k 5 # Search
+omendb search ./mydb -q 0.1,0.2,... -k 5  # Search
 omendb get ./mydb doc1                    # Get by ID
 omendb collections ./mydb                 # List collections
 omendb bench ./mydb                       # Benchmark

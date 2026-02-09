@@ -34,8 +34,8 @@ enum Commands {
     Search {
         path: PathBuf,
         /// Comma-separated query vector
-        #[arg(short = 'v', long)]
-        vector: Option<String>,
+        #[arg(short = 'q', long)]
+        query: Option<String>,
         /// Read query vector from JSON file
         #[arg(long)]
         file: Option<PathBuf>,
@@ -109,15 +109,15 @@ enum Commands {
     /// Export vectors to JSON/JSONL
     Export {
         path: PathBuf,
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
         /// Output format: json or jsonl
         #[arg(long, default_value = "jsonl")]
         format: String,
         /// Export from a collection
         #[arg(long)]
         collection: Option<String>,
-        /// Only export IDs (no vectors)
-        #[arg(long)]
-        ids_only: bool,
     },
     /// Compact database (remove tombstones)
     Compact { path: PathBuf },
@@ -131,7 +131,7 @@ fn main() -> Result<()> {
         Commands::Collections { path } => cmd_collections(&path),
         Commands::Search {
             path,
-            vector,
+            query,
             file,
             k,
             ef,
@@ -141,7 +141,7 @@ fn main() -> Result<()> {
             json,
         } => cmd_search(
             &path,
-            vector,
+            query,
             file,
             k,
             ef,
@@ -171,10 +171,10 @@ fn main() -> Result<()> {
         } => cmd_bench(&path, queries, runs, ef, k, json),
         Commands::Export {
             path,
+            output,
             format,
             collection,
-            ids_only,
-        } => cmd_export(&path, &format, collection, ids_only),
+        } => cmd_export(&path, output, &format, collection),
         Commands::Compact { path } => cmd_compact(&path),
     }
 }
@@ -427,10 +427,9 @@ fn parse_filter(s: &str) -> Result<MetadataFilter> {
     MetadataFilter::from_json(&value).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 fn cmd_search(
     path: &Path,
-    vector_str: Option<String>,
+    query_str: Option<String>,
     file: Option<PathBuf>,
     k: usize,
     ef: Option<usize>,
@@ -439,12 +438,12 @@ fn cmd_search(
     collection: Option<String>,
     json_output: bool,
 ) -> Result<()> {
-    let query_data = if let Some(ref v) = vector_str {
+    let query_data = if let Some(ref v) = query_str {
         parse_vector(v)?
     } else if let Some(ref f) = file {
         parse_vector_file(f)?
     } else {
-        bail!("Provide a query vector with -v or --file");
+        bail!("Provide a query vector with -q or --file");
     };
 
     let store = open_store(path, collection.as_deref())?;
@@ -617,15 +616,23 @@ fn cmd_bench(
     Ok(())
 }
 
-fn cmd_export(path: &Path, format: &str, collection: Option<String>, ids_only: bool) -> Result<()> {
+fn cmd_export(
+    path: &Path,
+    output: Option<PathBuf>,
+    format: &str,
+    collection: Option<String>,
+) -> Result<()> {
+    use std::io::{BufWriter, Write};
+
     let store = open_store(path, collection.as_deref())?;
 
-    if ids_only {
-        for id in store.ids() {
-            println!("{id}");
-        }
-        return Ok(());
-    }
+    let mut writer: Box<dyn Write> = if let Some(ref out_path) = output {
+        Box::new(BufWriter::new(fs::File::create(out_path).with_context(
+            || format!("Failed to create {}", out_path.display()),
+        )?))
+    } else {
+        Box::new(BufWriter::new(std::io::stdout().lock()))
+    };
 
     match format {
         "jsonl" => {
@@ -635,7 +642,8 @@ fn cmd_export(path: &Path, format: &str, collection: Option<String>, ids_only: b
                     "vector": vector,
                     "metadata": metadata,
                 });
-                println!("{}", serde_json::to_string(&obj)?);
+                serde_json::to_writer(&mut writer, &obj)?;
+                writeln!(writer)?;
             }
         }
         "json" => {
@@ -650,9 +658,14 @@ fn cmd_export(path: &Path, format: &str, collection: Option<String>, ids_only: b
                     })
                 })
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&items)?);
+            serde_json::to_writer_pretty(&mut writer, &items)?;
+            writeln!(writer)?;
         }
         _ => bail!("Unknown format: '{}'. Use 'json' or 'jsonl'.", format),
+    }
+
+    if let Some(ref out_path) = output {
+        eprintln!("Exported {} vectors to {}", store.len(), out_path.display());
     }
     Ok(())
 }
