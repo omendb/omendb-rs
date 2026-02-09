@@ -200,10 +200,7 @@ fn test_compact_all_deleted() {
 
 #[test]
 fn test_quantization_insert() {
-    use crate::vector::QuantizationMode;
-
-    // Create store with SQ8 quantization
-    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::SQ8);
+    let mut store = VectorStore::new_with_quantization(128);
 
     // Insert vectors
     for i in 0..50 {
@@ -217,10 +214,7 @@ fn test_quantization_insert() {
 
 #[test]
 fn test_quantization_search_accuracy() {
-    use crate::vector::QuantizationMode;
-
-    // Create store with SQ8 quantization
-    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::SQ8);
+    let mut store = VectorStore::new_with_quantization(128);
 
     // Insert vectors
     for i in 0..100 {
@@ -242,10 +236,7 @@ fn test_quantization_search_accuracy() {
 
 #[test]
 fn test_quantization_batch_insert() {
-    use crate::vector::QuantizationMode;
-
-    // Create store with SQ8 quantization
-    let mut store = VectorStore::new_with_quantization(128, QuantizationMode::SQ8);
+    let mut store = VectorStore::new_with_quantization(128);
 
     // Batch insert vectors
     let vectors: Vec<Vector> = (0..100).map(|i| random_vector(128, i)).collect();
@@ -1516,8 +1507,6 @@ mod proptest_tests {
         fn sq8_quantized_roundtrip(
             num_vectors in 10usize..30
         ) {
-            use crate::vector::QuantizationMode;
-
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("sq8quant.omen");
 
@@ -1525,7 +1514,7 @@ mod proptest_tests {
             {
                 let mut store = VectorStoreOptions::default()
                     .dimensions(64)
-                    .quantization(QuantizationMode::SQ8)
+                    .quantization(true)
                     .open(&path)
                     .unwrap();
 

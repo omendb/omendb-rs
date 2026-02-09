@@ -33,7 +33,6 @@ pub use thread_safe::ThreadSafeVectorStore;
 use super::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::types::Vector;
-use super::QuantizationMode;
 use crate::omen::OmenFile;
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
@@ -104,8 +103,8 @@ pub struct VectorStore {
     /// Text search configuration (used by `enable_text_search`)
     text_search_config: Option<TextSearchConfig>,
 
-    /// Pending quantization mode (deferred until first insert for training)
-    pending_quantization: Option<QuantizationMode>,
+    /// SQ8 quantization enabled (deferred until first insert for training)
+    pending_quantization: bool,
 
     /// HNSW parameters for lazy initialization
     hnsw_m: usize,
@@ -150,7 +149,7 @@ impl VectorStore {
             storage_path: None,
             text_index: None,
             text_search_config: None,
-            pending_quantization: None,
+            pending_quantization: false,
             hnsw_m: DEFAULT_HNSW_M,
             hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
             hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
@@ -238,13 +237,13 @@ impl VectorStore {
         self.distance_metric
     }
 
-    /// Create new vector store with quantization
+    /// Create new vector store with SQ8 quantization
     ///
     /// Quantization is trained on the first batch of vectors inserted.
     #[must_use]
-    pub fn new_with_quantization(dimensions: usize, mode: QuantizationMode) -> Self {
+    pub fn new_with_quantization(dimensions: usize) -> Self {
         let mut store = Self::with_defaults(dimensions, Metric::L2);
-        store.pending_quantization = Some(mode);
+        store.pending_quantization = true;
         store
     }
 
@@ -342,7 +341,7 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(self.distance_metric.into())
-                .with_quantization(self.pending_quantization.clone());
+                .with_quantization(self.pending_quantization);
 
             self.segments = Some(
                 SegmentManager::new(config)
@@ -478,7 +477,7 @@ impl VectorStore {
                         ..Default::default()
                     })
                     .with_distance(self.distance_metric.into())
-                    .with_quantization(self.pending_quantization.clone());
+                    .with_quantization(self.pending_quantization);
 
                 // Use parallel build with slot mapping
                 self.segments = Some(
@@ -487,10 +486,9 @@ impl VectorStore {
                 );
 
                 // Handle quantization mode persistence
-                if let Some(quant_mode) = self.pending_quantization.take() {
+                if self.pending_quantization {
                     if let Some(ref mut storage) = self.storage {
-                        storage
-                            .put_quantization_mode(helpers::quantization_mode_to_id(&quant_mode))?;
+                        storage.put_quantization_mode(helpers::quantization_to_id(true))?;
                     }
                 }
 
@@ -800,7 +798,7 @@ impl VectorStore {
                     ..Default::default()
                 })
                 .with_distance(self.distance_metric.into())
-                .with_quantization(self.pending_quantization.clone());
+                .with_quantization(self.pending_quantization);
 
             self.segments = Some(
                 SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
@@ -841,7 +839,7 @@ impl VectorStore {
                 ..Default::default()
             })
             .with_distance(self.distance_metric.into())
-            .with_quantization(self.pending_quantization.clone());
+            .with_quantization(self.pending_quantization);
 
         // Rebuild with parallel construction
         self.segments = Some(
@@ -1303,10 +1301,10 @@ impl VectorStore {
         self.hnsw_ef_construction
     }
 
-    /// Get the quantization mode, if any
+    /// Check if SQ8 quantization is enabled
     #[must_use]
-    pub fn quantization_mode(&self) -> Option<&QuantizationMode> {
-        self.pending_quantization.as_ref()
+    pub fn is_quantized(&self) -> bool {
+        self.pending_quantization
     }
 
     /// Number of deleted (tombstoned) records

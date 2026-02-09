@@ -45,16 +45,6 @@ use std::ptr::NonNull;
 
 pub use crate::compression::scalar::QueryPrep;
 
-/// Storage mode for vectors
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StorageMode {
-    /// Full precision f32 vectors (D * 4 bytes per vector)
-    #[default]
-    FullPrecision,
-    /// SQ8 quantized vectors (D bytes per vector, 4x compression)
-    SQ8,
-}
-
 /// Cache-line alignment for optimal prefetch
 const CACHE_LINE: usize = 64;
 
@@ -131,8 +121,8 @@ pub struct NodeStorage {
     pub(crate) upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>>,
 
     // Quantization support
-    /// Storage mode (full precision or SQ8)
-    pub(crate) mode: StorageMode,
+    /// Whether SQ8 quantization is enabled (true = SQ8, false = full precision)
+    pub(crate) sq8: bool,
     /// Scalar quantization parameters (only for SQ8 mode)
     pub(crate) sq8_params: Option<ScalarParams>,
     /// Squared norms for each vector (used in L2 decomposition)
@@ -151,7 +141,7 @@ impl fmt::Debug for NodeStorage {
             .field("len", &self.len)
             .field("dimensions", &self.dimensions)
             .field("max_neighbors", &self.max_neighbors)
-            .field("mode", &self.mode)
+            .field("sq8", &self.sq8)
             .field("sq8_trained", &self.sq8_trained)
             .finish_non_exhaustive()
     }
@@ -166,7 +156,7 @@ impl NodeStorage {
     /// - `max_levels`: Maximum number of levels in the HNSW graph
     #[must_use]
     pub fn new(dimensions: usize, m: usize, max_levels: usize) -> Self {
-        Self::with_mode(dimensions, m, max_levels, StorageMode::FullPrecision)
+        Self::create(dimensions, m, max_levels, false)
     }
 
     /// Create new SQ8 quantized storage
@@ -179,12 +169,12 @@ impl NodeStorage {
     /// Quantization is trained lazily after 256 vectors are inserted.
     #[must_use]
     pub fn new_sq8(dimensions: usize, m: usize, max_levels: usize) -> Self {
-        Self::with_mode(dimensions, m, max_levels, StorageMode::SQ8)
+        Self::create(dimensions, m, max_levels, true)
     }
 
-    /// Create storage with specified mode
+    /// Create storage with the given quantization setting
     #[must_use]
-    fn with_mode(dimensions: usize, m: usize, max_levels: usize, mode: StorageMode) -> Self {
+    fn create(dimensions: usize, m: usize, max_levels: usize, sq8: bool) -> Self {
         let max_neighbors = m * 2; // Level 0 gets M*2
         let max_neighbors_upper = m; // Upper levels get M
 
@@ -192,9 +182,10 @@ impl NodeStorage {
         // Vector size depends on mode: f32 (4 bytes) vs u8 (1 byte)
         let neighbors_offset = 4; // 2 (count) + 2 (padding) = 4
         let vector_offset = neighbors_offset + max_neighbors * 4;
-        let vector_size = match mode {
-            StorageMode::FullPrecision => dimensions * 4, // f32
-            StorageMode::SQ8 => dimensions,               // u8
+        let vector_size = if sq8 {
+            dimensions // u8
+        } else {
+            dimensions * 4 // f32
         };
         let metadata_offset = vector_offset + vector_size;
         let raw_size = metadata_offset + 4 + 1; // slot (4) + level (1)
@@ -214,7 +205,7 @@ impl NodeStorage {
             max_neighbors_upper,
             max_level: max_levels,
             upper_neighbors: FxHashMap::default(),
-            mode,
+            sq8,
             sq8_params: None,
             norms: Vec::new(),
             sq8_sums: Vec::new(),
@@ -258,35 +249,18 @@ impl NodeStorage {
         self.max_level
     }
 
-    /// Storage mode
-    #[inline]
-    #[must_use]
-    pub fn mode(&self) -> StorageMode {
-        self.mode
-    }
-
     /// Check if this storage uses SQ8 quantization
     #[inline]
     #[must_use]
     pub fn is_sq8(&self) -> bool {
-        self.mode == StorageMode::SQ8
+        self.sq8
     }
 
-    /// Check if this storage uses quantization
-    #[inline]
-    #[must_use]
-    pub fn is_quantized(&self) -> bool {
-        self.mode != StorageMode::FullPrecision
-    }
-
-    /// Check if quantization is trained (only relevant for quantized modes)
+    /// Check if quantization is trained (always true for full precision)
     #[inline]
     #[must_use]
     pub fn is_trained(&self) -> bool {
-        match self.mode {
-            StorageMode::FullPrecision => true,
-            StorageMode::SQ8 => self.sq8_trained,
-        }
+        !self.sq8 || self.sq8_trained
     }
 
     /// Number of nodes
@@ -442,8 +416,8 @@ impl NodeStorage {
     #[must_use]
     pub fn vector(&self, id: u32) -> &[f32] {
         assert!(
-            self.mode == StorageMode::FullPrecision,
-            "vector() only available in FullPrecision mode, use get_dequantized()"
+            !self.sq8,
+            "vector() only available in full precision mode, use get_dequantized()"
         );
         let ptr = self.node_ptr(id);
         unsafe {
@@ -456,10 +430,7 @@ impl NodeStorage {
     #[inline]
     #[must_use]
     pub fn quantized_vector(&self, id: u32) -> &[u8] {
-        assert!(
-            self.mode == StorageMode::SQ8,
-            "quantized_vector() only available in SQ8 mode"
-        );
+        assert!(self.sq8, "quantized_vector() only available in SQ8 mode");
         let ptr = self.node_ptr(id);
         unsafe {
             let vec_ptr = ptr.add(self.vector_offset);
@@ -474,24 +445,23 @@ impl NodeStorage {
     /// In quantized modes after training, returns the dequantized/reconstructed vector.
     #[must_use]
     pub fn get_dequantized(&self, id: u32) -> Option<Vec<f32>> {
-        match self.mode {
-            StorageMode::FullPrecision => Some(self.vector(id).to_vec()),
-            StorageMode::SQ8 => {
-                let id_usize = id as usize;
-                if self.sq8_trained {
-                    let params = self.sq8_params.as_ref()?;
-                    let quantized = self.quantized_vector(id);
-                    Some(params.dequantize(quantized))
-                } else {
-                    let dim = self.dimensions;
-                    let start = id_usize * dim;
-                    let end = start + dim;
-                    if end <= self.training_buffer.len() {
-                        Some(self.training_buffer[start..end].to_vec())
-                    } else {
-                        None
-                    }
-                }
+        if !self.sq8 {
+            return Some(self.vector(id).to_vec());
+        }
+
+        let id_usize = id as usize;
+        if self.sq8_trained {
+            let params = self.sq8_params.as_ref()?;
+            let quantized = self.quantized_vector(id);
+            Some(params.dequantize(quantized))
+        } else {
+            let dim = self.dimensions;
+            let start = id_usize * dim;
+            let end = start + dim;
+            if end <= self.training_buffer.len() {
+                Some(self.training_buffer[start..end].to_vec())
+            } else {
+                None
             }
         }
     }
@@ -501,12 +471,11 @@ impl NodeStorage {
     #[inline]
     #[must_use]
     pub fn get_vector_ref(&self, id: u32) -> &[f32] {
-        match self.mode {
-            StorageMode::FullPrecision => self.vector(id),
-            StorageMode::SQ8 => {
-                panic!("get_vector_ref not supported for SQ8, use get_dequantized()")
-            }
-        }
+        assert!(
+            !self.sq8,
+            "get_vector_ref not supported for SQ8, use get_dequantized()"
+        );
+        self.vector(id)
     }
 
     /// Get squared norm for a vector (used in L2 decomposition)
@@ -526,25 +495,22 @@ impl NodeStorage {
             self.dimensions
         );
 
-        match self.mode {
-            StorageMode::FullPrecision => {
-                // Store vector directly and compute norm
-                let ptr = self.node_ptr_mut(id);
-                unsafe {
-                    let vec_ptr = ptr.add(self.vector_offset) as *mut f32;
-                    std::ptr::copy_nonoverlapping(vector.as_ptr(), vec_ptr, self.dimensions);
-                }
-                // Compute and store squared norm
-                let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
-                let id_usize = id as usize;
-                if id_usize >= self.norms.len() {
-                    self.norms.resize(id_usize + 1, 0.0);
-                }
-                self.norms[id_usize] = norm_sq;
+        if self.sq8 {
+            self.set_vector_sq8(id, vector);
+        } else {
+            // Store vector directly and compute norm
+            let ptr = self.node_ptr_mut(id);
+            unsafe {
+                let vec_ptr = ptr.add(self.vector_offset) as *mut f32;
+                std::ptr::copy_nonoverlapping(vector.as_ptr(), vec_ptr, self.dimensions);
             }
-            StorageMode::SQ8 => {
-                self.set_vector_sq8(id, vector);
+            // Compute and store squared norm
+            let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
+            let id_usize = id as usize;
+            if id_usize >= self.norms.len() {
+                self.norms.resize(id_usize + 1, 0.0);
             }
+            self.norms[id_usize] = norm_sq;
         }
     }
 
@@ -1182,8 +1148,8 @@ mod tests {
         assert!(sq8_storage.node_size() < fp_storage.node_size());
 
         // Verify mode
-        assert_eq!(fp_storage.mode(), StorageMode::FullPrecision);
-        assert_eq!(sq8_storage.mode(), StorageMode::SQ8);
+        assert!(!fp_storage.is_sq8());
+        assert!(sq8_storage.is_sq8());
     }
 
     #[test]

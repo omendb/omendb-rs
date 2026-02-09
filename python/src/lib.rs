@@ -6,7 +6,7 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use omendb_lib::omen::Metric;
 use omendb_lib::text::TextSearchConfig;
 use omendb_lib::vector::{
-    muvera::MultiVectorConfig, MetadataFilter, QuantizationMode, SearchResult, Vector, VectorStore,
+    muvera::MultiVectorConfig, MetadataFilter, SearchResult, Vector, VectorStore,
     VectorStoreOptions,
 };
 use omendb_lib::{Rerank, SearchOptions};
@@ -21,32 +21,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Parse quantization parameter and return QuantizationMode if enabled
+/// Parse quantization parameter and return bool (true = SQ8 enabled)
 ///
 /// Accepts:
 /// - True → SQ8 (4x compression, ~99% recall) - RECOMMENDED
 /// - "sq8" or "scalar" → SQ8 (explicit)
 /// - None/False → no quantization (full precision)
-///
-/// Returns Ok(Some(mode)) if quantization enabled, Ok(None) if disabled
-fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<Option<QuantizationMode>> {
+fn parse_quantization(ob: Option<&Bound<'_, PyAny>>) -> PyResult<bool> {
     let Some(value) = ob else {
-        return Ok(None);
+        return Ok(false);
     };
 
     // Handle boolean: True enables SQ8 (default), False disables
     if let Ok(b) = value.extract::<bool>() {
-        return if b {
-            Ok(Some(QuantizationMode::SQ8))
-        } else {
-            Ok(None)
-        };
+        return Ok(b);
     }
 
     // Handle string quantization modes
     if let Ok(mode) = value.extract::<String>() {
         return match mode.to_lowercase().as_str() {
-            "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
+            "sq8" | "scalar" => Ok(true),
             _ => Err(PyValueError::new_err(format!(
                 "Unknown quantization mode: '{}'. Valid: True, 'sq8'",
                 mode
@@ -267,7 +261,7 @@ fn build_store_options(
     m: Option<usize>,
     ef_construction: Option<usize>,
     ef_search: Option<usize>,
-    quant_mode: Option<QuantizationMode>,
+    quantization: bool,
     metric: Option<&str>,
 ) -> PyResult<VectorStoreOptions> {
     let mut options = VectorStoreOptions::default().dimensions(dimensions);
@@ -281,8 +275,8 @@ fn build_store_options(
     if let Some(ef_s) = ef_search {
         options = options.ef_search(ef_s);
     }
-    if let Some(mode) = quant_mode {
-        options = options.quantization(mode);
+    if quantization {
+        options = options.quantization(true);
     }
     if let Some(metric_str) = metric {
         options = options.metric(metric_str).map_err(PyValueError::new_err)?;
@@ -2278,14 +2272,14 @@ fn open(
     let is_multi_vec = mv_config.is_some();
 
     // Multi-vector stores don't support quantization yet
-    if is_multi_vec && quant_mode.is_some() {
+    if is_multi_vec && quant_mode {
         return Err(PyValueError::new_err(
             "Multi-vector stores don't support quantization yet",
         ));
     }
 
     // Quantization only supports L2 distance
-    if quant_mode.is_some() {
+    if quant_mode {
         let m = metric.as_deref().unwrap_or("l2");
         if m != "l2" && m != "euclidean" {
             return Err(PyValueError::new_err(format!(
@@ -2317,7 +2311,7 @@ fn open(
             m,
             ef_construction,
             ef_search,
-            quant_mode.clone(),
+            quant_mode,
             metric.as_deref(),
         )?;
 
@@ -2400,7 +2394,7 @@ fn open(
             m,
             ef_construction,
             ef_search,
-            quant_mode.clone(),
+            quant_mode,
             metric.as_deref(),
         )?;
 
@@ -2430,7 +2424,7 @@ fn open(
         }
 
         // Check if enabling quantization on existing non-empty database
-        if db_path.exists() && quant_mode.is_some() {
+        if db_path.exists() && quant_mode {
             let existing = VectorStore::open(&path).map_err(convert_error)?;
             if !existing.is_empty() {
                 return Err(PyValueError::new_err(

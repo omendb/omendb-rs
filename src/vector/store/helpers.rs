@@ -2,7 +2,6 @@
 //!
 //! These functions have no VectorStore dependency and can be tested in isolation.
 
-use crate::vector::QuantizationMode;
 use serde_json::Value as JsonValue;
 
 /// Compute effective ef_search value.
@@ -13,21 +12,16 @@ pub fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> us
     ef.unwrap_or(stored_ef).max(k)
 }
 
-/// Convert stored quantization mode ID to QuantizationMode.
+/// Convert stored quantization mode ID to bool.
 ///
 /// Mode IDs: 0=none, 1=sq8
-pub fn quantization_mode_from_id(mode_id: u64) -> Option<QuantizationMode> {
-    match mode_id {
-        1 => Some(QuantizationMode::SQ8),
-        _ => None,
-    }
+pub fn quantization_from_id(mode_id: u64) -> bool {
+    mode_id == 1
 }
 
-/// Convert QuantizationMode to storage mode ID.
-pub fn quantization_mode_to_id(mode: &QuantizationMode) -> u64 {
-    match mode {
-        QuantizationMode::SQ8 => 1,
-    }
+/// Convert quantization bool to storage mode ID.
+pub fn quantization_to_id(enabled: bool) -> u64 {
+    u64::from(enabled)
 }
 
 /// Default empty JSON object for missing metadata.

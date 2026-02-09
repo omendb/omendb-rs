@@ -5,7 +5,6 @@
 use super::VectorStore;
 use crate::omen::Metric;
 use crate::text::TextSearchConfig;
-use crate::vector::QuantizationMode;
 use anyhow::Result;
 use std::path::Path;
 
@@ -51,8 +50,8 @@ pub struct VectorStoreOptions {
     /// HNSW `ef_search`: search quality/speed tradeoff (default: 100)
     pub(super) ef_search: Option<usize>,
 
-    /// Quantization mode (SQ8 for asymmetric HNSW search)
-    pub(super) quantization: Option<QuantizationMode>,
+    /// SQ8 quantization enabled (true = 4x compression, false = full precision)
+    pub(super) quantization: bool,
 
     /// Distance metric for similarity search (default: L2)
     pub(super) metric: Option<Metric>,
@@ -106,31 +105,21 @@ impl VectorStoreOptions {
         self
     }
 
-    /// Enable quantization for memory-efficient storage.
+    /// Enable SQ8 quantization for memory-efficient storage.
     ///
-    /// # Modes
-    /// - `QuantizationMode::SQ8`: 4x compression, similar speed, ~99% recall
+    /// SQ8: 4x compression, similar speed, ~99% recall.
     ///
     /// # Example
     /// ```ignore
-    /// // SQ8 (recommended)
     /// let store = VectorStoreOptions::default()
     ///     .dimensions(768)
-    ///     .quantization(QuantizationMode::sq8())
+    ///     .quantization(true)
     ///     .open("./vectors")?;
     /// ```
     #[must_use]
-    pub fn quantization(mut self, mode: QuantizationMode) -> Self {
-        self.quantization = Some(mode);
+    pub fn quantization(mut self, enabled: bool) -> Self {
+        self.quantization = enabled;
         self
-    }
-
-    /// Enable SQ8 quantization (4x compression, similar speed, ~99% recall)
-    ///
-    /// Convenience method for the most common quantization mode.
-    #[must_use]
-    pub fn quantization_sq8(self) -> Self {
-        self.quantization(QuantizationMode::SQ8)
     }
 
     /// Set distance metric for similarity search.

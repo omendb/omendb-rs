@@ -465,26 +465,23 @@ impl HNSWIndex {
     #[inline]
     pub(super) fn distance_between_cmp(&self, id_a: u32, id_b: u32) -> Result<f32> {
         if self.storage.is_sq8() {
-            // SQ8 mode: use prepared query for id_a, compute distance to id_b
-            if let Some(vec_a) = self.storage.get_dequantized(id_a) {
-                if let Some(prep) = self.storage.prepare_query(&vec_a) {
-                    if let Some(dist) = self.storage.distance_sq8(&prep, id_b) {
-                        return Ok(dist);
-                    }
-                }
-            }
-            // SQ8 fallback: dequantize both (slow but necessary)
             let vec_a = self
                 .storage
                 .get_dequantized(id_a)
                 .ok_or(HNSWError::VectorNotFound(id_a))?;
+            // Try SQ8 fast path with dequantized query
+            if let Some(prep) = self.storage.prepare_query(&vec_a) {
+                if let Some(dist) = self.storage.distance_sq8(&prep, id_b) {
+                    return Ok(dist);
+                }
+            }
+            // Fallback: dequantize both
             let vec_b = self
                 .storage
                 .get_dequantized(id_b)
                 .ok_or(HNSWError::VectorNotFound(id_b))?;
             Ok(self.distance_fn.distance_for_comparison(&vec_a, &vec_b))
         } else {
-            // Full precision: use zero-copy references (no allocation)
             let vec_a = self.storage.vector(id_a);
             let vec_b = self.storage.vector(id_b);
             Ok(self.distance_fn.distance_for_comparison(vec_a, vec_b))
@@ -497,15 +494,11 @@ impl HNSWIndex {
     #[inline(always)]
     pub(super) fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
         if self.storage.is_sq8() {
-            // SQ8 fast path
             if let Some(prep) = self.storage.prepare_query(query) {
                 if let Some(dist) = self.storage.distance_sq8(&prep, id) {
                     return Ok(dist);
                 }
             }
-        }
-        // Full precision path (also handles fallback)
-        if self.storage.is_sq8() {
             let vec = self
                 .storage
                 .get_dequantized(id)
@@ -523,15 +516,11 @@ impl HNSWIndex {
     #[inline]
     pub(super) fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
         if self.storage.is_sq8() {
-            // SQ8: use prepared query (returns squared L2, already accurate)
             if let Some(prep) = self.storage.prepare_query(query) {
                 if let Some(dist) = self.storage.distance_sq8(&prep, id) {
                     return Ok(dist.sqrt());
                 }
             }
-        }
-        // Full precision path (also handles fallback)
-        if self.storage.is_sq8() {
             let vec = self
                 .storage
                 .get_dequantized(id)

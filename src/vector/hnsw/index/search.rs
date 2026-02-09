@@ -13,15 +13,23 @@ use tracing::{debug, error, instrument};
 ///
 /// Encapsulates all data needed for optimized distance computation (SQ8, L2 decomposition, etc.)
 /// to avoid repeated branching and parameter passing in the hot loop.
+///
+/// When `sq8_prep` is `Some`, the SQ8 integer SIMD path is used.
+/// When `sq8_prep` is `None`, full-precision f32 distance is computed.
+/// Callers that need full precision simply pass `force_full_precision: true`
+/// to `new()`, which prevents `sq8_prep` from being populated.
 struct DistanceContext<'a> {
     query: &'a [f32],
     sq8_prep: Option<QueryPrep>,
-    force_full_precision: bool,
     storage: &'a NodeStorage,
 }
 
 impl<'a> DistanceContext<'a> {
     /// Create a new distance context for the current search
+    ///
+    /// If `force_full_precision` is true, the SQ8 path is disabled regardless
+    /// of storage mode. This is used during graph construction where quantization
+    /// noise would hurt graph quality.
     fn new(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
         let sq8_prep = if force_full_precision {
             None
@@ -32,7 +40,6 @@ impl<'a> DistanceContext<'a> {
         Self {
             query,
             sq8_prep,
-            force_full_precision,
             storage: &index.storage,
         }
     }
@@ -40,16 +47,14 @@ impl<'a> DistanceContext<'a> {
     /// Compute distance to a node using the best available method
     #[inline(always)]
     fn compute<D: Distance>(&self, node_id: u32) -> Result<f32> {
-        // SQ8 fast path (skip if force_full_precision)
-        if !self.force_full_precision {
-            if let Some(ref prep) = self.sq8_prep {
-                if let Some(dist) = self.storage.distance_sq8(prep, node_id) {
-                    return Ok(dist);
-                }
+        // SQ8 fast path
+        if let Some(ref prep) = self.sq8_prep {
+            if let Some(dist) = self.storage.distance_sq8(prep, node_id) {
+                return Ok(dist);
             }
         }
 
-        // Full precision fallback
+        // Full precision path (also fallback for untrained SQ8)
         if self.storage.is_sq8() {
             let vec = self
                 .storage
@@ -57,7 +62,6 @@ impl<'a> DistanceContext<'a> {
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
             Ok(D::distance(self.query, &vec))
         } else {
-            // Direct access for full precision
             let vec = self.storage.vector(node_id);
             Ok(D::distance(self.query, vec))
         }
@@ -66,7 +70,7 @@ impl<'a> DistanceContext<'a> {
     /// Check if batch distance computation is available (SQ8 mode)
     #[inline(always)]
     fn has_batch(&self) -> bool {
-        !self.force_full_precision && self.sq8_prep.is_some()
+        self.sq8_prep.is_some()
     }
 
     /// Batch compute distances to multiple nodes (SQ8 fast path)

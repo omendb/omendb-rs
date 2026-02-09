@@ -11,8 +11,7 @@ use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 use omendb_lib::omen::Metric;
 use omendb_lib::vector::{
-    muvera::MultiVectorConfig, MetadataFilter, QuantizationMode, Vector, VectorStore,
-    VectorStoreOptions,
+    muvera::MultiVectorConfig, MetadataFilter, Vector, VectorStore, VectorStoreOptions,
 };
 use omendb_lib::{Rerank, SearchOptions};
 use parking_lot::RwLock;
@@ -120,16 +119,15 @@ fn parse_multi_vector(value: &serde_json::Value) -> Result<Option<MultiVectorCon
     }
 }
 
-/// Parse quantization option from JS value (bool or string)
-fn parse_quantization(value: &serde_json::Value) -> Result<Option<QuantizationMode>> {
+/// Parse quantization option from JS value (bool or string) -> bool
+fn parse_quantization(value: &serde_json::Value) -> Result<bool> {
     match value {
-        serde_json::Value::Null => Ok(None),
-        serde_json::Value::Bool(true) => Ok(Some(QuantizationMode::SQ8)),
-        serde_json::Value::Bool(false) => Ok(None),
+        serde_json::Value::Null => Ok(false),
+        serde_json::Value::Bool(b) => Ok(*b),
         serde_json::Value::String(s) => {
             let lower = s.to_lowercase();
             match lower.as_str() {
-                "sq8" | "scalar" => Ok(Some(QuantizationMode::SQ8)),
+                "sq8" | "scalar" => Ok(true),
                 _ => Err(Error::new(
                     Status::InvalidArg,
                     format!(
@@ -1775,7 +1773,7 @@ pub fn open(
         .as_ref()
         .map(parse_quantization)
         .transpose()?
-        .flatten();
+        .unwrap_or(false);
 
     // Parse multi_vector config
     let multi_vector_config = opts
@@ -1789,7 +1787,7 @@ pub fn open(
     let is_multi_vector = multi_vector_config.is_some();
 
     // Validate multi-vector constraints
-    if is_multi_vector && quant_mode.is_some() {
+    if is_multi_vector && quant_mode {
         return Err(Error::new(
             Status::InvalidArg,
             "multi-vector stores do not support quantization yet",
@@ -1797,7 +1795,7 @@ pub fn open(
     }
 
     // Quantization only supports L2 distance
-    if quant_mode.is_some() {
+    if quant_mode {
         let m = opts.metric.as_deref().unwrap_or("l2");
         if m != "l2" && m != "euclidean" {
             return Err(Error::new(
@@ -1861,8 +1859,8 @@ pub fn open(
     if let Some(ef_s) = ef_search {
         store_options = store_options.ef_search(ef_s);
     }
-    if let Some(ref mode) = quant_mode {
-        store_options = store_options.quantization(mode.clone());
+    if quant_mode {
+        store_options = store_options.quantization(true);
     }
     if let Some(ref metric_str) = opts.metric {
         store_options = store_options
@@ -1954,7 +1952,7 @@ pub fn open(
     }
 
     // Check if enabling quantization on existing non-empty database
-    if db_path.exists() && quant_mode.is_some() {
+    if db_path.exists() && quant_mode {
         let existing = VectorStore::open(&path).map_err(convert_error)?;
         if !existing.is_empty() {
             return Err(Error::new(

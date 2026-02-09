@@ -250,20 +250,12 @@ impl SegmentManager {
         }
 
         // Build merged index
-        let mut merged_index = match &self.config.quantization {
-            Some(crate::vector::QuantizationMode::SQ8) => HNSWIndex::new(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                true,
-            )?,
-            None => HNSWIndex::new(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                false,
-            )?,
-        };
+        let mut merged_index = HNSWIndex::new(
+            self.config.dimensions,
+            self.config.params,
+            self.config.distance_fn,
+            self.config.quantization,
+        )?;
 
         // Insert all vectors with slot tracking
         let (collected_slots, insert_duration) =
@@ -359,20 +351,12 @@ impl SegmentManager {
         }
 
         // Build merged index
-        let mut merged_index = match &self.config.quantization {
-            Some(crate::vector::QuantizationMode::SQ8) => HNSWIndex::new(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                true,
-            )?,
-            None => HNSWIndex::new(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                false,
-            )?,
-        };
+        let mut merged_index = HNSWIndex::new(
+            self.config.dimensions,
+            self.config.params,
+            self.config.distance_fn,
+            self.config.quantization,
+        )?;
 
         // Insert all vectors with slot tracking
         let (collected_slots, insert_duration) =

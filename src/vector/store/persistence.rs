@@ -74,8 +74,8 @@ impl VectorStore {
 
         // Check quantization
         let _is_quantized = storage.is_quantized()?;
-        let quantization_mode =
-            helpers::quantization_mode_from_id(storage.get_quantization_mode()?.unwrap_or(0));
+        let quantization =
+            helpers::quantization_from_id(storage.get_quantization_mode()?.unwrap_or(0));
 
         // Build RecordStore from snapshot
         let mut deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
@@ -225,7 +225,7 @@ impl VectorStore {
                         ..Default::default()
                     })
                     .with_distance(distance_metric.into())
-                    .with_quantization(quantization_mode.clone());
+                    .with_quantization(quantization);
 
                 Some(
                     SegmentManager::build_parallel_with_slots(config, vectors, &slots)
@@ -318,7 +318,7 @@ impl VectorStore {
             storage_path: Some(path.to_path_buf()),
             text_index,
             text_search_config: None,
-            pending_quantization: quantization_mode,
+            pending_quantization: quantization,
             hnsw_m: if hnsw_m > 0 { hnsw_m } else { DEFAULT_HNSW_M },
             hnsw_ef_construction: if hnsw_ef_construction > 0 {
                 hnsw_ef_construction
@@ -391,7 +391,7 @@ impl VectorStore {
         let distance_metric = options.metric.unwrap_or(Metric::L2);
 
         // Quantization is deferred until first insert
-        let pending_quantization = options.quantization.clone();
+        let pending_quantization = options.quantization;
 
         // Save dimensions to storage if set
         if dimensions > 0 {
@@ -399,8 +399,8 @@ impl VectorStore {
         }
 
         // Save quantization mode to storage if set
-        if let Some(ref q) = options.quantization {
-            storage.put_quantization_mode(helpers::quantization_mode_to_id(q))?;
+        if options.quantization {
+            storage.put_quantization_mode(helpers::quantization_to_id(true))?;
         }
 
         // Initialize text index if enabled
@@ -440,7 +440,7 @@ impl VectorStore {
 
         let distance_metric = options.metric.unwrap_or(Metric::L2);
 
-        let pending_quantization = options.quantization.clone();
+        let pending_quantization = options.quantization;
 
         let text_index = if let Some(ref config) = options.text_search_config {
             Some(TextIndex::open_in_memory_with_config(config)?)

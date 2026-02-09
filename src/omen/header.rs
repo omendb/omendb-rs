@@ -40,30 +40,23 @@ impl From<u8> for QuantizationCode {
     }
 }
 
-impl From<&crate::vector::QuantizationMode> for QuantizationCode {
-    fn from(mode: &crate::vector::QuantizationMode) -> Self {
-        match mode {
-            crate::vector::QuantizationMode::SQ8 => Self::Sq8,
-        }
-    }
-}
-
-impl From<crate::vector::QuantizationMode> for QuantizationCode {
-    fn from(mode: crate::vector::QuantizationMode) -> Self {
-        Self::from(&mode)
-    }
-}
-
 impl QuantizationCode {
-    /// Convert to runtime `QuantizationMode`.
-    ///
-    /// Returns `None` for `F32` (no quantization) or unsupported legacy codes (RaBitQ).
+    /// Create from runtime bool (true = SQ8, false = F32).
     #[must_use]
-    pub fn to_runtime(self) -> Option<crate::vector::QuantizationMode> {
-        match self {
-            Self::Sq8 => Some(crate::vector::QuantizationMode::SQ8),
-            Self::F32 | Self::RaBitQ | Self::RaBitQ4 | Self::Pq => None,
+    pub fn from_enabled(sq8: bool) -> Self {
+        if sq8 {
+            Self::Sq8
+        } else {
+            Self::F32
         }
+    }
+
+    /// Convert to runtime bool (true = SQ8 enabled).
+    ///
+    /// Returns `false` for `F32` (no quantization) or unsupported legacy codes (RaBitQ, PQ).
+    #[must_use]
+    pub fn to_runtime(self) -> bool {
+        matches!(self, Self::Sq8)
     }
 }
 

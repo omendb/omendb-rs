@@ -6,7 +6,6 @@ use super::{MergePolicy, SegmentConfig, SegmentManager};
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment};
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
-use crate::vector::QuantizationMode;
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -23,11 +22,8 @@ impl SegmentManager {
             },
             "distance_fn": format!("{:?}", self.config.distance_fn),
             "segment_capacity": self.config.segment_capacity,
-            "use_quantization": self.config.quantization.is_some(),
-            "quantization_mode": match &self.config.quantization {
-                None => "none",
-                Some(QuantizationMode::SQ8) => "sq8",
-            },
+            "use_quantization": self.config.quantization,
+            "quantization_mode": if self.config.quantization { "sq8" } else { "none" },
             "generation": self.generation,
             "next_segment_id": self.next_segment_id,
             "segment_ids": segment_ids,
@@ -60,16 +56,8 @@ impl SegmentManager {
         let segment_capacity = manifest["segment_capacity"].as_u64().unwrap_or(100_000) as usize;
 
         let quantization = match manifest["quantization_mode"].as_str() {
-            Some("sq8") => Some(QuantizationMode::SQ8),
-            Some("pq" | "rabitq") => None, // Legacy modes, fall back to full precision
-            _ => {
-                // Backward compat: check old boolean field
-                if manifest["use_quantization"].as_bool().unwrap_or(false) {
-                    Some(QuantizationMode::SQ8)
-                } else {
-                    None
-                }
-            }
+            Some("sq8") => true,
+            _ => manifest["use_quantization"].as_bool().unwrap_or(false),
         };
 
         SegmentConfig {
@@ -226,16 +214,15 @@ impl SegmentManager {
         }
 
         // Create empty mutable segment
-        let mutable = match &config.quantization {
-            Some(QuantizationMode::SQ8) => {
-                MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
-            }
-            None => MutableSegment::with_capacity(
+        let mutable = if config.quantization {
+            MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
+        } else {
+            MutableSegment::with_capacity(
                 config.dimensions,
                 config.params,
                 config.distance_fn,
                 config.segment_capacity,
-            )?,
+            )?
         };
 
         let total_vectors: usize = frozen.iter().map(|s| s.len()).sum();

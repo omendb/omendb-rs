@@ -2,7 +2,7 @@
 //!
 //! Supports both owned heap allocations and memory-mapped files.
 
-use super::{NodeStorage, StorageBacking, StorageMode, CACHE_LINE};
+use super::{NodeStorage, StorageBacking, CACHE_LINE};
 use crate::compression::scalar::ScalarParams;
 use rustc_hash::FxHashMap;
 use std::alloc::Layout;
@@ -164,7 +164,7 @@ impl NodeStorage {
             max_neighbors_upper,
             max_level: 8, // Default max level
             upper_neighbors: FxHashMap::default(),
-            mode: StorageMode::FullPrecision, // Default to full precision for loaded data
+            sq8: false, // Default to full precision for loaded data
             sq8_params: None,
             norms: Vec::new(),
             sq8_sums: Vec::new(),
@@ -200,7 +200,7 @@ impl NodeStorage {
             max_neighbors_upper,
             max_level: 8,
             upper_neighbors: FxHashMap::default(),
-            mode: StorageMode::FullPrecision,
+            sq8: false,
             sq8_params: None,
             norms: Vec::new(),
             sq8_sums: Vec::new(),
@@ -386,10 +386,7 @@ impl NodeStorage {
         let mut out = Vec::with_capacity(256 + self.norms.len() * 4);
 
         // Mode and trained flag
-        let mode_byte: u8 = match self.mode {
-            StorageMode::FullPrecision => 0,
-            StorageMode::SQ8 => 1,
-        };
+        let mode_byte = u8::from(self.sq8);
         out.push(mode_byte);
         out.push(u8::from(self.sq8_trained));
 
@@ -407,15 +404,15 @@ impl NodeStorage {
 
         // Mode and trained flag
         let mode_byte = read_u8(data, &mut pos)?;
-        let mode = match mode_byte {
-            0 | 3 => StorageMode::FullPrecision,
-            1 => StorageMode::SQ8,
+        let sq8 = match mode_byte {
+            0 | 3 => false,
+            1 => true,
             2 => return Err("PQ storage mode is no longer supported".to_string()),
             _ => return Err(format!("Invalid storage mode: {mode_byte}")),
         };
         let sq8_trained = read_u8(data, &mut pos)? != 0;
 
-        self.mode = mode;
+        self.sq8 = sq8;
         self.sq8_trained = sq8_trained;
 
         self.deserialize_aux_body(data, &mut pos)
@@ -444,10 +441,7 @@ impl NodeStorage {
         out.extend_from_slice(&(self.max_neighbors as u64).to_le_bytes());
 
         // Mode and trained flag
-        let mode_byte: u8 = match self.mode {
-            StorageMode::FullPrecision => 0,
-            StorageMode::SQ8 => 1,
-        };
+        let mode_byte = u8::from(self.sq8);
         out.push(mode_byte);
         out.push(u8::from(self.sq8_trained));
 
@@ -500,9 +494,9 @@ impl NodeStorage {
 
         // Mode and trained flag
         let mode_byte = read_u8(data, &mut pos)?;
-        let mode = match mode_byte {
-            0 | 3 => StorageMode::FullPrecision,
-            1 => StorageMode::SQ8,
+        let sq8 = match mode_byte {
+            0 | 3 => false,
+            1 => true,
             2 => return Err("PQ storage mode is no longer supported".to_string()),
             _ => return Err(format!("Invalid storage mode: {mode_byte}")),
         };
@@ -530,8 +524,8 @@ impl NodeStorage {
             max_neighbors,
         );
 
-        // Set mode and trained before deserializing aux body
-        storage.mode = mode;
+        // Set sq8 and trained before deserializing aux body
+        storage.sq8 = sq8;
         storage.sq8_trained = sq8_trained;
 
         // Deserialize auxiliary body (SQ8 params, norms, upper neighbors)

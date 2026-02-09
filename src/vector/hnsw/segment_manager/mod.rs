@@ -23,7 +23,6 @@ use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::MergeStats;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
-use crate::vector::QuantizationMode;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -38,8 +37,8 @@ pub struct SegmentConfig {
     pub distance_fn: DistanceFunction,
     /// Max vectors per segment before freezing
     pub segment_capacity: usize,
-    /// Quantization mode (None = full precision, Some(SQ8))
-    pub quantization: Option<QuantizationMode>,
+    /// SQ8 quantization enabled (true = 4x compression, false = full precision)
+    pub quantization: bool,
 }
 
 impl SegmentConfig {
@@ -50,7 +49,7 @@ impl SegmentConfig {
             params: HNSWParams::default(),
             distance_fn: DistanceFunction::L2,
             segment_capacity: 100_000,
-            quantization: None,
+            quantization: false,
         }
     }
 
@@ -75,10 +74,10 @@ impl SegmentConfig {
         self
     }
 
-    /// Set quantization mode
+    /// Set SQ8 quantization (true = enabled, false = full precision)
     #[must_use]
-    pub fn with_quantization(mut self, mode: Option<QuantizationMode>) -> Self {
-        self.quantization = mode;
+    pub fn with_quantization(mut self, quantization: bool) -> Self {
+        self.quantization = quantization;
         self
     }
 }
@@ -113,16 +112,15 @@ impl SegmentManager {
 
     /// Create new segment manager with custom merge policy
     pub fn with_merge_policy(config: SegmentConfig, merge_policy: MergePolicy) -> Result<Self> {
-        let mutable = match &config.quantization {
-            Some(QuantizationMode::SQ8) => {
-                MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
-            }
-            None => MutableSegment::with_capacity(
+        let mutable = if config.quantization {
+            MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
+        } else {
+            MutableSegment::with_capacity(
                 config.dimensions,
                 config.params,
                 config.distance_fn,
                 config.segment_capacity,
-            )?,
+            )?
         };
 
         Ok(Self {
@@ -156,16 +154,11 @@ impl SegmentManager {
     /// Uses HNSWIndex::build_parallel for fast initial construction.
     /// Slots are sequential starting from 0.
     pub fn build_parallel(config: SegmentConfig, vectors: Vec<Vec<f32>>) -> Result<Self> {
-        let use_sq8 = config
-            .quantization
-            .as_ref()
-            .is_some_and(QuantizationMode::is_sq8);
-
         let index = HNSWIndex::build_parallel(
             config.dimensions,
             config.params,
             config.distance_fn,
-            use_sq8,
+            config.quantization,
             vectors,
         )?;
         let mutable = MutableSegment::from_index_sequential(index);
@@ -189,16 +182,11 @@ impl SegmentManager {
         vectors: Vec<Vec<f32>>,
         slots: &[u32],
     ) -> Result<Self> {
-        let use_sq8 = config
-            .quantization
-            .as_ref()
-            .is_some_and(QuantizationMode::is_sq8);
-
         let index = HNSWIndex::build_parallel(
             config.dimensions,
             config.params,
             config.distance_fn,
-            use_sq8,
+            config.quantization,
             vectors,
         )?;
         let mutable = MutableSegment::from_index(index, slots);
@@ -275,18 +263,19 @@ impl SegmentManager {
     /// if conditions are met.
     fn freeze_mutable(&mut self) -> Result<()> {
         // Create new mutable segment
-        let new_mutable = match &self.config.quantization {
-            Some(QuantizationMode::SQ8) => MutableSegment::new_quantized(
+        let new_mutable = if self.config.quantization {
+            MutableSegment::new_quantized(
                 self.config.dimensions,
                 self.config.params,
                 self.config.distance_fn,
-            )?,
-            None => MutableSegment::with_capacity(
+            )?
+        } else {
+            MutableSegment::with_capacity(
                 self.config.dimensions,
                 self.config.params,
                 self.config.distance_fn,
                 self.config.segment_capacity,
-            )?,
+            )?
         };
 
         // Swap in new mutable, freeze old one
@@ -412,7 +401,7 @@ impl SegmentManager {
     /// Check if using quantization (SQ8)
     #[inline]
     pub fn is_quantized(&self) -> bool {
-        self.config.quantization.is_some()
+        self.config.quantization
     }
 
     /// Get the generation counter (incremented on each save)

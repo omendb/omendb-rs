@@ -112,7 +112,7 @@ fn run_with_sq8(ops: Vec<QuantizedOp>) {
 
     let mut store = match VectorStoreOptions::default()
         .dimensions(DIMENSIONS)
-        .quantization_sq8()
+        .quantization(true)
         .open(temp_dir.path())
     {
         Ok(s) => s,
