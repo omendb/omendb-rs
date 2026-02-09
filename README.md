@@ -95,7 +95,7 @@ const results = db.search(new Float32Array(128).fill(0.1), 5);
 - **O(1) lazy delete + compaction** -- deleted records cleaned up in background
 - **Segment-based architecture** -- background merging for sustained write throughput
 - **Context manager** (Python) / `close()` (Node.js) for resource cleanup
-- **CLI tool** -- info, stats, search, bench, export, compact, and more
+- **CLI tool** -- inspect, search, export, compact database files
 
 ## Platforms
 
@@ -309,17 +309,14 @@ results = mvdb.search([[0.1]*128, [0.15]*128], k=5)  # MaxSim scoring
 ```bash
 cargo install omendb
 
-omendb info ./mydb                        # Database info
-omendb stats ./mydb                       # Detailed statistics
-omendb count ./mydb                       # Vector count
-omendb ids ./mydb                         # List all IDs
-omendb search ./mydb -q 0.1,0.2,... -k 5  # Search
-omendb get ./mydb doc1                    # Get by ID
-omendb collections ./mydb                 # List collections
-omendb bench ./mydb                       # Benchmark
-omendb export ./mydb -o data.json         # Export
-omendb compact ./mydb                     # Compact database
+omendb info ./mydb                         # Database info, stats, collections
+omendb search ./mydb -q 0.1,0.2,... -k 5  # Search by vector
+omendb get ./mydb doc1                     # Get vector by ID
+omendb export ./mydb -o data.jsonl         # Export to JSONL
+omendb compact ./mydb                      # Remove tombstones
 ```
+
+All commands support `--json` for machine-readable output. Use `--collection` to target a specific collection.
 
 ## Performance
 
