@@ -135,16 +135,6 @@ def main():
     sq8_nr_batch = benchmark_batch(db_sq8_nr, queries, "sq8-nr")
     print()
 
-    # Test RaBitQ
-    print("--- RaBitQ Quantization ---")
-    db_rabitq = omendb.open(":memory:", dimensions=DIMENSIONS, quantization="rabitq")
-    db_rabitq.set(items)
-
-    profile_search_components(db_rabitq, queries[0], "rabitq")
-    rabitq_qps = benchmark_search(db_rabitq, queries, "rabitq single")
-    rabitq_batch = benchmark_batch(db_rabitq, queries, "rabitq")
-    print()
-
     # Summary
     print("=== Summary ===")
     print(f"{'Mode':<15} {'Single QPS':>12} {'Batch QPS':>12} {'vs FP32':>10}")
@@ -154,9 +144,6 @@ def main():
     )
     print(
         f"{'sq8-nr':<15} {sq8_nr_qps:>12.0f} {sq8_nr_batch:>12.0f} {sq8_nr_qps / fp32_qps:>10.2f}x"
-    )
-    print(
-        f"{'rabitq':<15} {rabitq_qps:>12.0f} {rabitq_batch:>12.0f} {rabitq_qps / fp32_qps:>10.2f}x"
     )
 
 

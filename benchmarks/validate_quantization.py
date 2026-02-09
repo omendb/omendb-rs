@@ -2,12 +2,9 @@
 """
 Quantization Recall & Performance Validation
 
-Validates recall and performance claims for all quantization modes:
+Validates recall and performance claims for quantization modes:
 - f32 (baseline): Full precision
 - sq8: 4x compression, ~99% recall
-- rabitq: 8x compression, ~96% recall
-- rabitq-2: 16x compression, ~93% recall
-- rabitq-8: 4x compression, ~99% recall
 
 Usage:
     python benchmarks/validate_quantization.py           # 10K vectors (quick)
@@ -162,7 +159,7 @@ def main():
     parser.add_argument(
         "--modes",
         type=str,
-        default="f32,sq8,rabitq,rabitq-2,rabitq-8",
+        default="f32,sq8",
         help="Comma-separated modes to test",
     )
     args = parser.parse_args()
@@ -214,9 +211,6 @@ def main():
     expected = {
         "f32": (1.00, "baseline"),
         "sq8": (0.99, "~99%"),
-        "rabitq": (0.96, "~96%"),
-        "rabitq-2": (0.93, "~93%"),
-        "rabitq-8": (0.99, "~99%"),
     }
 
     baseline_qps = next((r.single_qps for r in results if r.mode == "f32"), None)

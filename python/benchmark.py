@@ -312,7 +312,7 @@ def benchmark_recall(db, vectors: np.ndarray, queries: np.ndarray, k: int = 10) 
 
 def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits: int = 0):
     """Run full benchmark suite for given parameters."""
-    mode = f"RaBitQ-{quantize_bits}bit" if quantize_bits > 0 else "f32"
+    mode = f"SQ{quantize_bits}" if quantize_bits > 0 else "f32"
     print(f"\n{'=' * 60}")
     print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode})")
     print(f"{'=' * 60}")
@@ -559,7 +559,7 @@ def main():
         type=int,
         choices=[0, 2, 4, 8],
         default=0,
-        help="RaBitQ quantization bits (0=none, 2/4/8=quantized)",
+        help="Quantization bits (0=none, 2/4/8=quantized)",
     )
     parser.add_argument("--output", "-o", type=str, help="Save results to JSON file")
     parser.add_argument("--no-history", action="store_true", help="Don't append to history.json")

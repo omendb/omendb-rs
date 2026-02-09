@@ -12,7 +12,7 @@ Usage:
     python benchmarks/run.py --compare              # Compare last 2 runs
     python benchmarks/run.py --notes "text"         # Add notes to run
     python benchmarks/run.py -q sq8                 # Test SQ8 quantization
-    python benchmarks/run.py --all-modes            # Test fp32, SQ8, RaBitQ
+    python benchmarks/run.py --all-modes            # Test fp32 and SQ8
 
 Save to cloud/ for canonical history:
     python benchmarks/run.py --output ../../cloud/benchmarks/history.jsonl
@@ -50,7 +50,7 @@ class BenchmarkConfig:
     ef: Optional[int] = None
     m: int = 16
     ef_construction: int = 100
-    quantization: Optional[str] = None  # None, "sq8", or "rabitq"
+    quantization: Optional[str] = None  # None or "sq8"
     dataset: str = "sift-10k"
 
 
@@ -233,8 +233,6 @@ def run_benchmark(
     quant_suffix = ""
     if config.quantization == "sq8":
         quant_suffix = "_sq8"
-    elif config.quantization == "rabitq":
-        quant_suffix = "_rabitq"
 
     return BenchmarkResult(
         name=f"{config.dataset}{quant_suffix}",
@@ -256,8 +254,8 @@ def run_all_benchmarks(
 
     Args:
         quick: Use fewer iterations for faster runs
-        quantization: Specific mode to test (None, "sq8", "rabitq")
-        all_modes: Run all quantization modes (fp32, SQ8, RaBitQ)
+        quantization: Specific mode to test (None or "sq8")
+        all_modes: Run all quantization modes (fp32, SQ8)
     """
     vectors, queries, ground_truth = load_sift_10k()
     n_vectors, dimensions = vectors.shape
@@ -265,7 +263,7 @@ def run_all_benchmarks(
 
     # Determine which quantization modes to run
     if all_modes:
-        quant_modes = [None, "sq8", "rabitq"]
+        quant_modes = [None, "sq8"]
     else:
         quant_modes = [quantization]
 
@@ -443,13 +441,13 @@ def main():
     parser.add_argument(
         "--quantization",
         "-q",
-        choices=["sq8", "rabitq"],
+        choices=["sq8"],
         help="Test specific quantization mode",
     )
     parser.add_argument(
         "--all-modes",
         action="store_true",
-        help="Run all quantization modes (fp32, SQ8, RaBitQ)",
+        help="Run all quantization modes (fp32, SQ8)",
     )
     args = parser.parse_args()
 

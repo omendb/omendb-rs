@@ -26,13 +26,13 @@ PAPERS = [
         },
     },
     {
-        "id": "rabitq",
+        "id": "scann",
         "vector": [0.2, 0.3, 0.4],
         "metadata": {
-            "title": "RaBitQ",
-            "year": 2024,
-            "venue": "SIGMOD",
-            "citations": 50,
+            "title": "ScaNN",
+            "year": 2020,
+            "venue": "ICML",
+            "citations": 500,
             "seminal": False,
         },
     },

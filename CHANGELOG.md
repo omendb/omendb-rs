@@ -18,7 +18,7 @@
 ### Documentation
 
 - Fix Node.js README: correct install command (`@omendb/omendb`), fix API docs
-- Remove stale RaBitQ references from CLAUDE.md
+- Remove RaBitQ references from README, CLAUDE.md, examples, and benchmarks
 - Remove internal docs from public repo
 
 ### Cleanup

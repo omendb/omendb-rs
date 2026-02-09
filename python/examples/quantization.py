@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-OmenDB quantization example — SQ8 and RaBitQ compression.
+OmenDB quantization example — SQ8 compression.
 
 Demonstrates:
 - SQ8 quantization (4x compression, ~99% recall)
-- RaBitQ quantization (32x compression)
 - Comparing results between modes
 """
 
@@ -29,10 +28,6 @@ db_full.set([{"id": f"v{i}", "vector": v} for i, v in enumerate(vectors)])
 db_sq8 = omendb.open(":memory:", dimensions=dim, quantization="sq8")
 db_sq8.set([{"id": f"v{i}", "vector": v} for i, v in enumerate(vectors)])
 
-# RaBitQ quantization — 32x smaller (needs 256+ vectors for training, falls back to exact for fewer)
-db_rabitq = omendb.open(":memory:", dimensions=dim, quantization="rabitq")
-db_rabitq.set([{"id": f"v{i}", "vector": v} for i, v in enumerate(vectors)])
-
 # Compare search results
 query = vectors[0]
 k = 5
@@ -43,8 +38,4 @@ for r in db_full.search(query, k=k):
 
 print("\nSQ8 results:")
 for r in db_sq8.search(query, k=k):
-    print(f"  {r['id']}: {r['distance']:.6f}")
-
-print("\nRaBitQ results:")
-for r in db_rabitq.search(query, k=k):
     print(f"  {r['id']}: {r['distance']:.6f}")

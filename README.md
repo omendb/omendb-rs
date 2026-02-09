@@ -8,7 +8,7 @@ Embedded vector database for Python and Node.js. No server, no setup, just insta
 
 - **20K QPS** single-threaded search with 100% recall (SIFT-10K)
 - **105K vec/s** insert throughput (2.2x hnswlib)
-- **SQ8** (4x) and **RaBitQ** (32x) quantization
+- **SQ8 quantization** (4x compression, ~99% recall)
 - **ACORN-1** predicate-aware filtered search
 - **Hybrid search** -- BM25 text + vector with RRF fusion
 - **Multi-vector** -- ColBERT/MaxSim with MUVERA and token pooling
@@ -84,7 +84,6 @@ const results = db.search(new Float32Array(128).fill(0.1), 5);
 - **HNSW graph indexing** -- SIMD-accelerated distance computation
 - **ACORN-1 filtered search** -- predicate-aware graph traversal, 37.79x speedup over post-filtering
 - **SQ8 quantization** -- 4x compression, ~99% recall
-- **RaBitQ quantization** -- 32x compression (1-bit with FFHT rotation), rescore restores exact recall
 - **BM25 text search** -- full-text search via Tantivy
 - **Hybrid search** -- RRF fusion of vector + text results
 - **Multi-vector / ColBERT** -- MUVERA + MaxSim scoring for token-level retrieval
@@ -214,7 +213,6 @@ db = omendb.open(
 
 # Quantization options:
 # - True or "sq8": SQ8 ~4x smaller, ~99% recall (recommended)
-# - "rabitq": RaBitQ ~32x smaller, ~95% recall (rescore restores exact recall)
 # - None/False: Full precision (default)
 
 # Distance metric options:
@@ -338,15 +336,13 @@ All commands support `--json` for machine-readable output. Use `--collection` to
 
 **Quantization:**
 
-| Mode   | Compression | Recall                   | Use Case             |
-| ------ | ----------- | ------------------------ | -------------------- |
-| f32    | 1x          | 100%                     | Default              |
-| SQ8    | 4x          | ~99%                     | Recommended for most |
-| RaBitQ | 32x         | ~95% (100% with rescore) | Large datasets       |
+| Mode | Compression | Recall | Use Case             |
+| ---- | ----------- | ------ | -------------------- |
+| f32  | 1x          | 100%   | Default              |
+| SQ8  | 4x          | ~99%   | Recommended for most |
 
 ```python
 db = omendb.open("./db", dimensions=768, quantization=True)          # SQ8
-db = omendb.open("./db", dimensions=768, quantization="rabitq")      # RaBitQ
 ```
 
 **Filtered search** (ACORN-1, SIFT-10K, 10% selectivity):
@@ -412,7 +408,7 @@ See complete working examples:
 - [`python/examples/filters.py`](python/examples/filters.py) -- All filter operators
 - [`python/examples/rag.py`](python/examples/rag.py) -- RAG workflow with mock embeddings
 - [`python/examples/embedding_fn.py`](python/examples/embedding_fn.py) -- Auto-embedding with embedding_fn
-- [`python/examples/quantization.py`](python/examples/quantization.py) -- SQ8 and RaBitQ quantization
+- [`python/examples/quantization.py`](python/examples/quantization.py) -- SQ8 quantization
 - [`node/examples/quickstart.js`](node/examples/quickstart.js) -- Minimal Node.js example
 - [`node/examples/embedding_fn.js`](node/examples/embedding_fn.js) -- Auto-embedding with embeddingFn
 - [`node/examples/multivector.ts`](node/examples/multivector.ts) -- Multi-vector / ColBERT

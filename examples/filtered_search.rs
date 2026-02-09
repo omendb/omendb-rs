@@ -18,9 +18,9 @@ fn main() -> anyhow::Result<()> {
             json!({"year": 2018, "venue": "PAMI", "citations": 1500}),
         ),
         (
-            "rabitq",
+            "scann",
             vec![0.2; 64],
-            json!({"year": 2024, "venue": "SIGMOD", "citations": 50}),
+            json!({"year": 2020, "venue": "ICML", "citations": 500}),
         ),
         (
             "diskann",

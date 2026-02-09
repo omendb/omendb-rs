@@ -40,7 +40,7 @@ class OmenDBVectorStore(BasePydanticVectorStore):
 
     Features:
         - HNSW index with adaptive parameters
-        - Extended RaBitQ quantization (8x compression)
+        - SQ8 quantization (4x compression)
         - ACORN-1 filtered search (37.79x speedup)
         - MongoDB-style metadata filtering
         - Automatic persistence with persistent storage

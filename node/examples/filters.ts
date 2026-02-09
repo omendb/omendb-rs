@@ -19,9 +19,9 @@ const PAPERS = [
 		metadata: { title: "HNSW", year: 2018, venue: "PAMI", citations: 1500, seminal: true },
 	},
 	{
-		id: "rabitq",
+		id: "scann",
 		vector: new Float32Array([0.2, 0.3, 0.4]),
-		metadata: { title: "RaBitQ", year: 2024, venue: "SIGMOD", citations: 50, seminal: false },
+		metadata: { title: "ScaNN", year: 2020, venue: "ICML", citations: 500, seminal: false },
 	},
 	{
 		id: "diskann",
