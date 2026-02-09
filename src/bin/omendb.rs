@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -178,12 +179,29 @@ fn main() -> Result<()> {
     }
 }
 
-fn open_store(path: &Path, collection: Option<&str>) -> Result<VectorStore> {
+fn resolve_store_path(path: &Path, collection: Option<&str>) -> Result<PathBuf> {
     let store_path = if let Some(col) = collection {
+        if col.is_empty() || col.contains('/') || col.contains('\\') || col.contains("..") {
+            bail!("Invalid collection name: '{col}'");
+        }
         path.join("collections").join(col)
     } else {
         path.to_path_buf()
     };
+    Ok(store_path)
+}
+
+fn require_exists(path: &Path) -> Result<()> {
+    let omen_path = OmenFile::compute_omen_path(path);
+    if !omen_path.exists() {
+        bail!("Database not found at {}", path.display());
+    }
+    Ok(())
+}
+
+fn open_store(path: &Path, collection: Option<&str>) -> Result<VectorStore> {
+    let store_path = resolve_store_path(path, collection)?;
+    require_exists(&store_path)?;
     VectorStore::open(&store_path)
         .with_context(|| format!("Failed to open database at {}", store_path.display()))
 }
@@ -204,19 +222,23 @@ fn quant_name(store: &VectorStore) -> &'static str {
     }
 }
 
+fn append_ext(path: &Path, ext: &str) -> PathBuf {
+    let mut s: OsString = path.as_os_str().into();
+    s.push(ext);
+    PathBuf::from(s)
+}
+
 fn file_size(path: &Path) -> Result<u64> {
     let omen_path = OmenFile::compute_omen_path(path);
     let mut total = 0u64;
     if omen_path.exists() {
         total += fs::metadata(&omen_path)?.len();
     }
-    // WAL file
-    let wal_path = path.with_extension("wal");
+    let wal_path = append_ext(path, ".wal");
     if wal_path.exists() {
         total += fs::metadata(&wal_path)?.len();
     }
-    // Segments directory
-    let seg_dir = PathBuf::from(format!("{}.segments", omen_path.display()));
+    let seg_dir = append_ext(path, ".segments");
     if seg_dir.exists() {
         for entry in fs::read_dir(&seg_dir)? {
             let entry = entry?;
@@ -366,9 +388,14 @@ fn cmd_collections(path: &Path) -> Result<()> {
 fn parse_vector(s: &str) -> Result<Vec<f32>> {
     s.split(',')
         .map(|v| {
-            v.trim()
+            let f = v
+                .trim()
                 .parse::<f32>()
-                .with_context(|| format!("Invalid float: '{}'", v.trim()))
+                .with_context(|| format!("Invalid float: '{}'", v.trim()))?;
+            if !f.is_finite() {
+                bail!("Non-finite value: '{}'", v.trim());
+            }
+            Ok(f)
         })
         .collect()
 }
@@ -381,9 +408,14 @@ fn parse_vector_file(path: &Path) -> Result<Vec<f32>> {
         serde_json::Value::Array(arr) => arr
             .iter()
             .map(|v| {
-                v.as_f64()
-                    .map(|f| f as f32)
-                    .with_context(|| format!("Expected number, got: {v}"))
+                let f = v
+                    .as_f64()
+                    .with_context(|| format!("Expected number, got: {v}"))?
+                    as f32;
+                if !f.is_finite() {
+                    bail!("Non-finite value in vector file");
+                }
+                Ok(f)
             })
             .collect(),
         _ => bail!("Expected JSON array of floats"),
@@ -518,22 +550,27 @@ fn cmd_bench(
     if count == 0 {
         bail!("Database is empty, nothing to benchmark");
     }
+    if runs == 0 || queries == 0 {
+        bail!("--queries and --runs must be >= 1");
+    }
 
-    // Sample query vectors from the database
-    let items = store.items();
+    // Sample query vectors by ID to avoid loading all items
+    let ids = store.ids();
     let num_queries = queries.min(count);
-    let query_vecs: Vec<Vector> = items
+    let query_vecs: Vec<Vector> = ids
         .iter()
         .take(num_queries)
-        .map(|(_, v, _)| Vector::new(v.clone()))
+        .filter_map(|id| store.get(id).map(|(v, _)| v))
         .collect();
 
-    println!("OmenDB Benchmark ({} vectors, {}D)", count, dims);
-    println!();
+    if !json_output {
+        println!("OmenDB Benchmark ({} vectors, {}D)", count, dims);
+        println!();
+    }
 
     // Warm up
     for q in query_vecs.iter().take(10.min(num_queries)) {
-        let _ = store.search_with_ef(q, k, None, Some(ef));
+        store.search_with_ef(q, k, None, Some(ef))?;
     }
 
     let mut run_results = Vec::new();
@@ -541,7 +578,7 @@ fn cmd_bench(
     for run in 0..runs {
         let start = Instant::now();
         for q in &query_vecs {
-            let _ = store.search_with_ef(q, k, None, Some(ef));
+            store.search_with_ef(q, k, None, Some(ef))?;
         }
         let elapsed = start.elapsed();
         let qps = query_vecs.len() as f64 / elapsed.as_secs_f64();
@@ -621,10 +658,12 @@ fn cmd_export(path: &Path, format: &str, collection: Option<String>, ids_only: b
 }
 
 fn cmd_compact(path: &Path) -> Result<()> {
-    let mut store = open_store(path, None)?;
+    let store_path = resolve_store_path(path, None)?;
+    require_exists(&store_path)?;
+    let mut store = VectorStore::open(&store_path)
+        .with_context(|| format!("Failed to open database at {}", store_path.display()))?;
     let removed = store.compact()?;
     if removed > 0 {
-        store.flush()?;
         println!("Removed {} tombstones", removed);
     } else {
         println!("No tombstones to remove");
