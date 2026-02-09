@@ -352,6 +352,7 @@ impl NodeStorage {
 
         // Copy old data if any
         if old_capacity > 0 {
+            // SAFETY: Valid source (old_data with old_capacity checked), destination (new_ptr from successful alloc), non-overlapping (different allocations)
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     old_data.as_ptr(),
@@ -386,6 +387,7 @@ impl NodeStorage {
         let offset = (id as usize)
             .checked_mul(self.node_size)
             .expect("Node offset overflow");
+        // SAFETY: Bounds checked: id < self.len, offset computed via checked_mul
         unsafe { base.add(offset) }
     }
 
@@ -406,6 +408,7 @@ impl NodeStorage {
         let offset = (id as usize)
             .checked_mul(self.node_size)
             .expect("Node offset overflow");
+        // SAFETY: Bounds checked: id < self.len, offset computed via checked_mul
         unsafe { data.as_ptr().add(offset) }
     }
 
@@ -420,6 +423,7 @@ impl NodeStorage {
             "vector() only available in full precision mode, use get_dequantized()"
         );
         let ptr = self.node_ptr(id);
+        // SAFETY: Pointer from node_ptr() (bounds checked), dimensions matches allocation layout
         unsafe {
             let vec_ptr = ptr.add(self.vector_offset) as *const f32;
             std::slice::from_raw_parts(vec_ptr, self.dimensions)
@@ -432,6 +436,7 @@ impl NodeStorage {
     pub fn quantized_vector(&self, id: u32) -> &[u8] {
         assert!(self.sq8, "quantized_vector() only available in SQ8 mode");
         let ptr = self.node_ptr(id);
+        // SAFETY: Pointer from node_ptr() (bounds checked), quantized_dim matches allocation layout
         unsafe {
             let vec_ptr = ptr.add(self.vector_offset);
             std::slice::from_raw_parts(vec_ptr, self.dimensions)
@@ -500,6 +505,7 @@ impl NodeStorage {
         } else {
             // Store vector directly and compute norm
             let ptr = self.node_ptr_mut(id);
+            // SAFETY: Pointer from node_ptr_mut() (bounds checked), size = dimensions * 4 matches allocation layout
             unsafe {
                 let vec_ptr = ptr.add(self.vector_offset) as *mut f32;
                 std::ptr::copy_nonoverlapping(vector.as_ptr(), vec_ptr, self.dimensions);
@@ -519,6 +525,7 @@ impl NodeStorage {
     #[must_use]
     pub fn neighbor_count(&self, id: u32) -> usize {
         let ptr = self.node_ptr(id);
+        // SAFETY: Pointer from node_ptr() (bounds checked), first 2 bytes of neighbor region are the count
         unsafe { u16::from_le_bytes([*ptr, *ptr.add(1)]) as usize }
     }
 
@@ -561,6 +568,7 @@ impl NodeStorage {
         }
         let count = count.min(self.max_neighbors);
         let ptr = self.node_ptr(id);
+        // SAFETY: Pointer from node_ptr() (bounds checked), count clamped to max_neighbors
         unsafe {
             let neighbors_ptr = ptr.add(self.neighbors_offset) as *const u32;
             std::slice::from_raw_parts(neighbors_ptr, count)
@@ -624,6 +632,7 @@ impl NodeStorage {
             self.max_neighbors
         );
         let ptr = self.node_ptr_mut(id);
+        // SAFETY: Pointer from node_ptr_mut() (bounds checked), count bounded by max_neighbors
         unsafe {
             // Write count
             let count = neighbors.len() as u16;
@@ -668,6 +677,7 @@ impl NodeStorage {
                 return; // At capacity
             }
             let ptr = self.node_ptr_mut(id);
+            // SAFETY: Count checked against max_neighbors, pointer from node_ptr_mut() (bounds checked)
             unsafe {
                 // Update count
                 let new_count = (count + 1) as u16;
@@ -735,6 +745,7 @@ impl NodeStorage {
     #[must_use]
     pub fn slot(&self, id: u32) -> u32 {
         let ptr = self.node_ptr(id);
+        // SAFETY: Pointer from node_ptr() (bounds checked), offset within node layout
         unsafe {
             let slot_ptr = ptr.add(self.metadata_offset) as *const u32;
             u32::from_le(*slot_ptr)
@@ -744,6 +755,7 @@ impl NodeStorage {
     /// Set slot ID
     pub fn set_slot(&mut self, id: u32, slot: u32) {
         let ptr = self.node_ptr_mut(id);
+        // SAFETY: Pointer from node_ptr_mut() (bounds checked), offset within node layout
         unsafe {
             let slot_ptr = ptr.add(self.metadata_offset) as *mut u32;
             *slot_ptr = slot.to_le();
@@ -755,12 +767,14 @@ impl NodeStorage {
     #[must_use]
     pub fn level(&self, id: u32) -> u8 {
         let ptr = self.node_ptr(id);
+        // SAFETY: Pointer from node_ptr() (bounds checked), offset within node layout
         unsafe { *ptr.add(self.metadata_offset + 4) }
     }
 
     /// Set node level
     pub fn set_level(&mut self, id: u32, level: u8) {
         let ptr = self.node_ptr_mut(id);
+        // SAFETY: Pointer from node_ptr_mut() (bounds checked), offset within node layout
         unsafe {
             *ptr.add(self.metadata_offset + 4) = level;
         }
@@ -781,6 +795,7 @@ impl NodeStorage {
         let ptr = self.node_ptr(id);
 
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: Read-only hint, pointer from node_ptr() (bounds checked)
         unsafe {
             use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             _mm_prefetch(ptr as *const i8, _MM_HINT_T0);
@@ -854,6 +869,7 @@ impl Drop for NodeStorage {
                 capacity,
             } => {
                 if *capacity > 0 {
+                    // SAFETY: capacity > 0 checked, layout matches original allocation
                     unsafe {
                         dealloc(data.as_ptr(), *layout);
                     }

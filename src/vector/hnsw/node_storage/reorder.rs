@@ -75,6 +75,7 @@ impl NodeStorage {
         let new_size = n * self.node_size;
         let layout = Layout::from_size_align(new_size, CACHE_LINE)
             .map_err(|e| format!("Invalid layout for reorder: {e}"))?;
+        // SAFETY: Layout validated by Layout::from_size_align, null checked after alloc
         let new_ptr = unsafe { alloc_zeroed(layout) };
         if new_ptr.is_null() {
             return Err(format!("Allocation failed for reorder: {new_size} bytes"));
@@ -83,19 +84,23 @@ impl NodeStorage {
         // Copy nodes in BFS order
         for (new_idx, &old_id) in bfs_order.iter().enumerate() {
             let old_ptr = self.node_ptr(old_id);
+            // SAFETY: BFS order bounded by n, offset = new_idx * node_size within allocation
             let new_node_ptr = unsafe { new_ptr.add(new_idx * self.node_size) };
 
+            // SAFETY: BFS order bounded by n, offset = new_idx * node_size within allocation
             // Copy the node data
             unsafe {
                 std::ptr::copy_nonoverlapping(old_ptr, new_node_ptr, self.node_size);
             }
 
             // Update neighbor IDs to use new indices
+            // SAFETY: new_node_ptr points within allocation, reading count from start of node
             let count_ptr = new_node_ptr as *mut u16;
             let count = unsafe { *count_ptr } as usize;
             let neighbors_ptr = unsafe { new_node_ptr.add(self.neighbors_offset) as *mut u32 };
 
             for i in 0..count.min(self.max_neighbors) {
+                // SAFETY: i bounded by count and max_neighbors, within node's neighbor region
                 let old_neighbor = unsafe { *neighbors_ptr.add(i) };
                 if (old_neighbor as usize) < old_to_new.len() {
                     unsafe {
@@ -164,6 +169,7 @@ impl NodeStorage {
 
         // Deallocate old backing
         match old_backing {
+            // SAFETY: Only if old_capacity > 0, layout matches original allocation
             StorageBacking::Owned {
                 data,
                 layout: old_layout,

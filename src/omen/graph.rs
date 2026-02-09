@@ -120,6 +120,7 @@ impl GraphSection {
             return None;
         }
 
+        // SAFETY: Bounds checked above
         let offset = unsafe {
             let ptr = self.data.add(offset_pos).cast::<u32>();
             ptr.read_unaligned().to_le() as usize
@@ -131,6 +132,7 @@ impl GraphSection {
             return None;
         }
 
+        // SAFETY: Bounds checked above
         let neighbor_count = unsafe {
             let ptr = self.data.add(neighbor_start).cast::<u32>();
             ptr.read_unaligned().to_le() as usize

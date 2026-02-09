@@ -163,12 +163,14 @@ impl NeighborLists {
         // This is a lightweight hint - the actual neighbor data follows
         let ptr = &self.neighbors[node_idx][level_idx] as *const _ as *const u8;
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: Pointer within bounds-checked array/slice, prefetch is a non-faulting read hint
         unsafe {
             use std::arch::x86_64::_mm_prefetch;
             use std::arch::x86_64::_MM_HINT_T0;
             _mm_prefetch(ptr.cast(), _MM_HINT_T0);
         }
         #[cfg(target_arch = "aarch64")]
+        // SAFETY: Pointer within bounds-checked array/slice, prefetch is a non-faulting read hint
         unsafe {
             std::arch::asm!(
                 "prfm pldl1keep, [{ptr}]",

@@ -206,6 +206,7 @@ impl OmenFile {
         let header = OmenHeader::from_bytes(&header_buf)?;
 
         let mmap = if file_len > HEADER_SIZE as u64 {
+            // SAFETY: File exclusively locked via flock, valid file descriptor
             Some(unsafe { MmapMut::map_mut(&file)? })
         } else {
             None
@@ -892,6 +893,7 @@ impl OmenFile {
         configure_open_options(&mut opts);
         let file = opts.open(&self.path)?;
         lock_exclusive(&file)?;
+        // SAFETY: File exclusively locked via flock, valid file descriptor
         self.mmap = Some(unsafe { MmapMut::map_mut(&file)? });
         self.file = Some(file);
 

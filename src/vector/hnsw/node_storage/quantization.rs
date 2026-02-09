@@ -16,6 +16,7 @@ impl NodeStorage {
             let quant = params.quantize(vector);
 
             let ptr = self.node_ptr_mut(id);
+            // SAFETY: Pointer from node_ptr_mut() (bounds checked), size = quantized_dim matches layout
             unsafe {
                 let vec_ptr = ptr.add(self.vector_offset);
                 std::ptr::copy_nonoverlapping(quant.data.as_ptr(), vec_ptr, self.dimensions);
@@ -33,6 +34,7 @@ impl NodeStorage {
             self.training_buffer.extend_from_slice(vector);
 
             let ptr = self.node_ptr_mut(id);
+            // SAFETY: Pointer from node_ptr_mut() (bounds checked), zeroing quantized region within layout
             unsafe {
                 let vec_ptr = ptr.add(self.vector_offset);
                 std::ptr::write_bytes(vec_ptr, 0, self.dimensions);
@@ -66,6 +68,7 @@ impl NodeStorage {
             let quant = params.quantize(vec_slice);
 
             let ptr = self.node_ptr_mut(i as u32);
+            // SAFETY: Pointer from node_ptr_mut() (bounds checked), size = quantized_dim matches layout
             unsafe {
                 let vec_ptr = ptr.add(self.vector_offset);
                 std::ptr::copy_nonoverlapping(quant.data.as_ptr(), vec_ptr, dim);

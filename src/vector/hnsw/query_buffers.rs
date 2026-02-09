@@ -82,10 +82,12 @@ impl VisitedList {
         if idx < self.visited.len() {
             let ptr = self.visited.as_ptr().wrapping_add(idx);
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: Pointer within bounds-checked array/slice, prefetch is a non-faulting read hint
             unsafe {
                 std::arch::x86_64::_mm_prefetch(ptr.cast::<i8>(), std::arch::x86_64::_MM_HINT_T0);
             }
             #[cfg(target_arch = "aarch64")]
+            // SAFETY: Pointer within bounds-checked array/slice, prefetch is a non-faulting read hint
             unsafe {
                 std::arch::asm!(
                     "prfm pldl1keep, [{ptr}]",

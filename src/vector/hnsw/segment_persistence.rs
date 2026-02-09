@@ -437,6 +437,7 @@ impl FrozenSegment {
                 )));
             }
 
+            // SAFETY: File size validated above, offset within file bounds
             let mmap = unsafe {
                 MmapOptions::new()
                     .offset(data_offset as u64)

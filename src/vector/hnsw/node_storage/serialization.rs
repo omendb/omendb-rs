@@ -75,6 +75,7 @@ impl NodeStorage {
                 if self.len == 0 {
                     &[]
                 } else {
+                    // SAFETY: self.len == 0 guard above, pointer from valid owned allocation, size = len * node_size
                     unsafe { std::slice::from_raw_parts(data.as_ptr(), self.len * self.node_size) }
                 }
             }

@@ -279,6 +279,7 @@ impl HNSWIndex {
         // Read nodes (raw bytes for fast I/O)
         let mut nodes = vec![HNSWNode::default(); num_nodes];
         if num_nodes > 0 {
+            // SAFETY: Guard num_nodes > 0 above, buffer allocated with correct size for HNSWNode array
             let nodes_bytes = unsafe {
                 std::slice::from_raw_parts_mut(
                     nodes.as_mut_ptr().cast::<u8>(),
