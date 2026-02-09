@@ -271,42 +271,30 @@ impl VectorStore {
     }
 
     /// K-nearest neighbors search using HNSW
-    ///
-    /// Takes `&self` for concurrent read access. Index initialization happens
-    /// on first insert, not first search.
     pub fn knn_search(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
-        self.knn_search_readonly(query, k, None)
+        self.knn_search_with_ef(query, k, None)
     }
 
     /// K-nearest neighbors search with optional ef override
-    ///
-    /// Takes `&self` for concurrent read access.
-    pub fn knn_search_with_ef(
-        &self,
-        query: &Vector,
-        k: usize,
-        ef: Option<usize>,
-    ) -> Result<Vec<(usize, f32)>> {
-        self.knn_search_readonly(query, k, ef)
-    }
-
-    /// Read-only K-nearest neighbors search (for parallel execution)
     #[inline]
-    pub fn knn_search_readonly(
+    pub(crate) fn knn_search_with_ef(
         &self,
         query: &Vector,
         k: usize,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
-        // Use provided ef, or fall back to stored hnsw_ef_search
-        // Ensure ef >= k (HNSW requirement)
         let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
         self.knn_search_ef(query, k, effective_ef)
     }
 
-    /// Fast K-nearest neighbors search with concrete ef value
+    /// K-nearest neighbors search with concrete ef value
     #[inline]
-    pub fn knn_search_ef(&self, query: &Vector, k: usize, ef: usize) -> Result<Vec<(usize, f32)>> {
+    pub(crate) fn knn_search_ef(
+        &self,
+        query: &Vector,
+        k: usize,
+        ef: usize,
+    ) -> Result<Vec<(usize, f32)>> {
         if query.dim() != self.dimensions() {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
@@ -326,35 +314,20 @@ impl VectorStore {
     }
 
     /// K-nearest neighbors search with metadata filtering
-    ///
-    /// Takes `&self` for concurrent read access.
     pub fn knn_search_with_filter(
         &self,
         query: &Vector,
         k: usize,
         filter: &MetadataFilter,
     ) -> Result<Vec<SearchResult>> {
-        self.knn_search_with_filter_ef_readonly(query, k, filter, None)
+        self.knn_search_with_filter_ef(query, k, filter, None)
     }
 
-    /// K-nearest neighbors search with metadata filtering and optional ef override
-    ///
-    /// Takes `&self` for concurrent read access.
-    pub fn knn_search_with_filter_ef(
-        &self,
-        query: &Vector,
-        k: usize,
-        filter: &MetadataFilter,
-        ef: Option<usize>,
-    ) -> Result<Vec<SearchResult>> {
-        self.knn_search_with_filter_ef_readonly(query, k, filter, ef)
-    }
-
-    /// Read-only filtered search (for parallel execution)
+    /// Filtered K-nearest neighbors search with optional ef override
     ///
     /// Uses Roaring bitmap index for O(1) filter evaluation when possible,
     /// falls back to JSON-based filtering for complex filters.
-    pub fn knn_search_with_filter_ef_readonly(
+    pub(crate) fn knn_search_with_filter_ef(
         &self,
         query: &Vector,
         k: usize,
@@ -376,33 +349,16 @@ impl VectorStore {
     }
 
     /// Search with optional filter (convenience method)
-    ///
-    /// Takes `&self` for concurrent read access.
     pub fn search(
         &self,
         query: &Vector,
         k: usize,
         filter: Option<&MetadataFilter>,
     ) -> Result<Vec<SearchResult>> {
-        self.search_with_options_readonly(query, k, filter, None, None)
-    }
-
-    /// Search with optional filter and ef override
-    ///
-    /// Takes `&self` for concurrent read access.
-    pub fn search_with_ef(
-        &self,
-        query: &Vector,
-        k: usize,
-        filter: Option<&MetadataFilter>,
-        ef: Option<usize>,
-    ) -> Result<Vec<SearchResult>> {
-        self.search_with_options_readonly(query, k, filter, ef, None)
+        self.search_with_options(query, k, filter, None, None)
     }
 
     /// Search with all options: filter, ef override, and max_distance
-    ///
-    /// Takes `&self` for concurrent read access.
     pub fn search_with_options(
         &self,
         query: &Vector,
@@ -411,33 +367,10 @@ impl VectorStore {
         ef: Option<usize>,
         max_distance: Option<f32>,
     ) -> Result<Vec<SearchResult>> {
-        self.search_with_options_readonly(query, k, filter, ef, max_distance)
-    }
-
-    /// Read-only search with optional filter (for parallel execution)
-    pub fn search_with_ef_readonly(
-        &self,
-        query: &Vector,
-        k: usize,
-        filter: Option<&MetadataFilter>,
-        ef: Option<usize>,
-    ) -> Result<Vec<SearchResult>> {
-        self.search_with_options_readonly(query, k, filter, ef, None)
-    }
-
-    /// Read-only search with all options (for parallel execution)
-    pub fn search_with_options_readonly(
-        &self,
-        query: &Vector,
-        k: usize,
-        filter: Option<&MetadataFilter>,
-        ef: Option<usize>,
-        max_distance: Option<f32>,
-    ) -> Result<Vec<SearchResult>> {
         let mut results = if let Some(f) = filter {
-            self.knn_search_with_filter_ef_readonly(query, k, f, ef)?
+            self.knn_search_with_filter_ef(query, k, f, ef)?
         } else {
-            let slot_results = self.knn_search_readonly(query, k, ef)?;
+            let slot_results = self.knn_search_with_ef(query, k, ef)?;
             search::slots_to_results_with_fallback(
                 &self.records,
                 slot_results,
@@ -454,45 +387,20 @@ impl VectorStore {
         Ok(results)
     }
 
-    /// Search with SearchParams/SearchOptions struct
-    ///
-    /// Unified method using builder pattern for search options.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let params = SearchParams::new().filter(my_filter).ef(200);
-    /// let results = store.search_with_params(&query, k, &params)?;
-    /// ```
+    /// Search with SearchOptions struct
     pub fn search_with_params(
         &self,
         query: &Vector,
         k: usize,
         params: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
-        self.search_with_options_readonly(
+        self.search_with_options(
             query,
             k,
             params.filter.as_ref(),
             params.ef,
             params.max_distance,
         )
-    }
-
-    /// Parallel batch search for multiple queries
-    #[must_use]
-    pub fn search_batch(
-        &self,
-        queries: &[Vector],
-        k: usize,
-        ef: Option<usize>,
-    ) -> Vec<Result<Vec<(usize, f32)>>> {
-        // Use provided ef, or fall back to stored hnsw_ef_search
-        // Ensure ef >= k (HNSW requirement)
-        let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
-        queries
-            .par_iter()
-            .map(|q| self.knn_search_ef(q, k, effective_ef))
-            .collect()
     }
 
     /// Parallel batch search with metadata
@@ -505,7 +413,7 @@ impl VectorStore {
     ) -> Vec<Result<Vec<SearchResult>>> {
         queries
             .par_iter()
-            .map(|q| self.search_with_ef_readonly(q, k, None, ef))
+            .map(|q| self.search_with_options(q, k, None, ef, None))
             .collect()
     }
 

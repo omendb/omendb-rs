@@ -811,7 +811,7 @@ impl VectorDatabase {
             let metric = self.inner.read().store.metric();
             let results = py.detach(|| {
                 let inner = inner_arc.read();
-                inner.store.search_with_options_readonly(
+                inner.store.search_with_options(
                     &query_vec,
                     k,
                     rust_filter.as_ref(),
@@ -899,13 +899,9 @@ impl VectorDatabase {
         // Release GIL during compute-intensive search
         let results = py.detach(|| {
             let inner = inner_arc.read();
-            inner.store.search_with_options_readonly(
-                &query_vec,
-                k,
-                rust_filter.as_ref(),
-                ef,
-                max_distance,
-            )
+            inner
+                .store
+                .search_with_options(&query_vec, k, rust_filter.as_ref(), ef, max_distance)
         });
 
         let results = results.map_err(convert_error)?;
@@ -940,7 +936,7 @@ impl VectorDatabase {
                 let inner = inner_arc.read();
                 let _ = inner
                     .store
-                    .search_with_options_readonly(&query_vec, k, None, None, None);
+                    .search_with_options(&query_vec, k, None, None, None);
             });
         }
         let t_search_total = t0.elapsed().as_micros() as f64;

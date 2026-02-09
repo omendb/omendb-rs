@@ -590,7 +590,7 @@ impl VectorStore {
         options: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
         let query_vec = Vector::new(query.to_vec());
-        self.search_with_options_readonly(
+        self.search_with_options(
             &query_vec,
             k,
             options.filter.as_ref(),

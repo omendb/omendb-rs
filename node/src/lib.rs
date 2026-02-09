@@ -647,7 +647,7 @@ impl VectorDatabase {
         let metric = inner.store.metric();
         let results = inner
             .store
-            .search_with_options_readonly(
+            .search_with_options(
                 &query_vec,
                 k as usize,
                 metadata_filter.as_ref(),
