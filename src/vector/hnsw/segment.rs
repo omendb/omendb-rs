@@ -69,7 +69,7 @@ impl MutableSegment {
         Ok(Self {
             index: HNSWIndex::new(dimensions, params, distance_fn, false)?,
             id: 0,
-            capacity: 100_000, // Default capacity
+            capacity: crate::vector::hnsw::SegmentConfig::DEFAULT_CAPACITY,
             slots: Vec::new(),
         })
     }
@@ -98,7 +98,7 @@ impl MutableSegment {
         Ok(Self {
             index: HNSWIndex::new(dimensions, params, distance_fn, true)?,
             id: 0,
-            capacity: 100_000,
+            capacity: crate::vector::hnsw::SegmentConfig::DEFAULT_CAPACITY,
             slots: Vec::new(),
         })
     }
@@ -115,7 +115,9 @@ impl MutableSegment {
         );
         Self {
             id: 0,
-            capacity: index.len().max(100_000),
+            capacity: index
+                .len()
+                .max(crate::vector::hnsw::SegmentConfig::DEFAULT_CAPACITY),
             slots: slots.to_vec(),
             index,
         }
@@ -127,7 +129,7 @@ impl MutableSegment {
         let slots: Vec<u32> = (0..len as u32).collect();
         Self {
             id: 0,
-            capacity: len.max(100_000),
+            capacity: len.max(crate::vector::hnsw::SegmentConfig::DEFAULT_CAPACITY),
             slots,
             index,
         }

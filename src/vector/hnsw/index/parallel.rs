@@ -407,9 +407,9 @@ impl ParallelBuilder {
                     .results_with_dist
                     .push((c.node_id, c.distance.into_inner()));
             }
-            buffers.results_with_dist.sort_unstable_by(|a, b| {
-                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            buffers
+                .results_with_dist
+                .sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
 
             // Take ownership - buffer will be cleared on next use anyway
             std::mem::take(&mut buffers.results_with_dist)

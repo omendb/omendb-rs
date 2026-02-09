@@ -17,6 +17,15 @@ use crate::vector::hnsw::merge::GraphMerger;
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
 use rayon::prelude::*;
 
+/// Number of clusters per thread for parallel batch construction
+const CLUSTERS_PER_THREAD: usize = 4;
+/// Minimum vectors per cluster (below this, clustering is pointless)
+const MIN_VECTORS_PER_CLUSTER: usize = 100;
+/// Fraction of cluster nodes to check for cross-cluster boundary connections
+const BOUNDARY_RATIO: f32 = 0.1;
+/// Distance epsilon for SQ8 quantization tolerance in centroid matching
+const SQ8_DISTANCE_EPSILON: f32 = 0.01;
+
 /// Cluster of vectors for parallel construction
 pub struct Cluster {
     /// Indices of vectors in this cluster (into original vector array)
@@ -65,7 +74,7 @@ pub fn kmeans_cluster(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<C
                     .iter()
                     .enumerate()
                     .map(|(i, c)| (i, l2_distance_squared(v, c)))
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
                     .map_or(0, |(i, _)| i);
 
                 let old = *assignment;
@@ -102,7 +111,10 @@ fn kmeans_plus_plus_init(vectors: &[Vec<f32>], k: usize) -> Vec<Vec<f32>> {
 
         for (i, v) in vectors.iter().enumerate() {
             // Skip if already a centroid (use larger epsilon for SQ8 quantization tolerance)
-            if centroids.iter().any(|c| l2_distance_squared(v, c) < 0.01) {
+            if centroids
+                .iter()
+                .any(|c| l2_distance_squared(v, c) < SQ8_DISTANCE_EPSILON)
+            {
                 continue;
             }
 
@@ -226,7 +238,9 @@ impl BatchBuilder {
 
         // Determine number of clusters based on CPU count
         let num_threads = rayon::current_num_threads();
-        let num_clusters = (num_threads * 4).min(vectors.len() / 100).max(2);
+        let num_clusters = (num_threads * CLUSTERS_PER_THREAD)
+            .min(vectors.len() / MIN_VECTORS_PER_CLUSTER)
+            .max(2);
 
         // Phase 1: Cluster vectors (~1% of build time)
         let clusters = kmeans_cluster(vectors, num_clusters, 10);
@@ -303,9 +317,7 @@ impl BatchBuilder {
             return Ok(());
         }
 
-        // For each cluster, find boundary nodes (closest to other centroids)
-        let boundary_ratio = 0.1; // Top 10% closest to other centroids
-        let ef_boundary = m * 4; // Higher ef for boundary search
+        let ef_boundary = m * CLUSTERS_PER_THREAD;
 
         for (cluster_idx, cluster) in clusters.iter().enumerate() {
             if cluster.is_empty() {
@@ -328,11 +340,9 @@ impl BatchBuilder {
             }
 
             // Sort by distance to other centroids (ascending = closest first)
-            boundary_candidates
-                .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            boundary_candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
 
-            // Take top boundary_ratio as boundary nodes
-            let num_boundary = (cluster.len() as f32 * boundary_ratio).ceil() as usize;
+            let num_boundary = (cluster.len() as f32 * BOUNDARY_RATIO).ceil() as usize;
             let num_boundary = num_boundary.max(1).min(cluster.len());
 
             // For each boundary node, do a search and add any missing connections
@@ -343,7 +353,9 @@ impl BatchBuilder {
                 // Find this vector's ID in the merged index
                 // (we need to search since IDs may have been remapped during merge)
                 // Use larger epsilon for SQ8 quantization tolerance
-                if let Some(self_result) = results.iter().find(|r| r.distance < 0.01) {
+                if let Some(self_result) =
+                    results.iter().find(|r| r.distance < SQ8_DISTANCE_EPSILON)
+                {
                     let node_id = self_result.id;
 
                     // Get current neighbors

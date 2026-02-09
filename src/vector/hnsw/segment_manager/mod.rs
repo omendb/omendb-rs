@@ -42,13 +42,16 @@ pub struct SegmentConfig {
 }
 
 impl SegmentConfig {
+    /// Default segment capacity before freezing
+    pub const DEFAULT_CAPACITY: usize = 100_000;
+
     /// Create default config
     pub fn new(dimensions: usize) -> Self {
         Self {
             dimensions,
             params: HNSWParams::default(),
             distance_fn: DistanceFunction::L2,
-            segment_capacity: 100_000,
+            segment_capacity: Self::DEFAULT_CAPACITY,
             quantization: false,
         }
     }

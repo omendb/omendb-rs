@@ -803,28 +803,20 @@ impl OmenFile {
         // Store multi-vector offsets in manifest (small, atomic with manifest)
         manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
 
-        // Update config
         let live_count = vectors.len().saturating_sub(deleted.len());
-        manifest
-            .config
-            .insert("count".to_string(), live_count as u64);
-        manifest
-            .config
-            .insert("dimensions".to_string(), u64::from(self.header.dimensions));
-        manifest
-            .config
-            .insert("hnsw_m".to_string(), u64::from(self.header.hnsw_m));
-        manifest.config.insert(
-            "hnsw_ef_construction".to_string(),
-            u64::from(self.header.hnsw_ef_construction),
-        );
-        manifest.config.insert(
-            "hnsw_ef_search".to_string(),
-            u64::from(self.header.hnsw_ef_search),
-        );
-        manifest
-            .config
-            .insert("metric".to_string(), self.header.metric as u64);
+        for (key, val) in [
+            ("count", live_count as u64),
+            ("dimensions", u64::from(self.header.dimensions)),
+            ("hnsw_m", u64::from(self.header.hnsw_m)),
+            (
+                "hnsw_ef_construction",
+                u64::from(self.header.hnsw_ef_construction),
+            ),
+            ("hnsw_ef_search", u64::from(self.header.hnsw_ef_search)),
+            ("metric", self.header.metric as u64),
+        ] {
+            manifest.config.insert(key.to_string(), val);
+        }
 
         // Store MUVERA config in manifest.config
         if let Some((reps, bits, seed, token_dim, d_proj, pool_factor)) = options.multivec_config {
@@ -922,7 +914,13 @@ fn read_vector_from_bytes(bytes: &[u8], dimensions: usize) -> Vec<f32> {
     bytes
         .chunks_exact(4)
         .take(dimensions)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap_or([0; 4])))
+        .map(|chunk| {
+            f32::from_le_bytes(
+                chunk
+                    .try_into()
+                    .expect("chunks_exact(4) guarantees 4 bytes"),
+            )
+        })
         .collect()
 }
 
