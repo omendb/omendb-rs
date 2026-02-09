@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 omendb_lib = { package = "omendb", path = ".." }
 
 # PyO3 for Python bindings (latest stable)
-pyo3 = { version = "0.27", features = ["extension-module"] }
+pyo3 = { version = "0.27", features = ["extension-module", "multiple-pymethods"] }
 
 # For JSON serialization (metadata)
 serde_json = "1.0"
