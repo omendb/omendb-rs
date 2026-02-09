@@ -561,26 +561,29 @@ impl HNSWIndex {
         }
     }
 
-    /// Actual distance (with sqrt for L2)
+    /// Exact distance using full-precision vectors (with sqrt for L2).
+    ///
+    /// For RaBitQ: uses original vectors (zero-copy) instead of approximate
+    /// binary distance. This is the rescore step — beam search finds candidates
+    /// with fast approximate distance, then this reranks with exact distance.
+    ///
+    /// For SQ8: uses the SQ8 distance which is already high-accuracy (98-99% recall).
     #[inline]
     pub(super) fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
         if self.storage.is_sq8() {
-            // SQ8: use prepared query (returns squared L2)
+            // SQ8: use prepared query (returns squared L2, already accurate)
             if let Some(prep) = self.storage.prepare_query(query) {
                 if let Some(dist) = self.storage.distance_sq8(&prep, id) {
                     return Ok(dist.sqrt());
                 }
             }
         } else if self.storage.is_rabitq() {
-            // RaBitQ: use binary distance (returns approximate squared L2)
-            if let Some(prep) = self.storage.prepare_query_rabitq(query) {
-                if let Some(dist) = self.storage.distance_rabitq(&prep, id) {
-                    return Ok(dist.max(0.0).sqrt());
-                }
-            }
+            // RaBitQ rescore: compute exact distance from original vectors
+            let vec = self.storage.get_vector_ref(id);
+            return Ok(self.distance_fn.distance(query, vec));
         }
         // Full precision path (also handles fallback)
-        if self.storage.is_sq8() || self.storage.is_rabitq() {
+        if self.storage.is_sq8() {
             let vec = self
                 .storage
                 .get_dequantized(id)

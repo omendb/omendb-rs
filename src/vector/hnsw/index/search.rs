@@ -463,7 +463,13 @@ impl HNSWIndex {
         }
 
         // Beam search at layer 0 (find ef nearest)
-        let candidates = self.search_layer(query, &nearest, ef.max(k), 0)?;
+        // RaBitQ: oversample 2x to give rescore more candidates to rerank
+        let search_ef = if self.storage.is_rabitq() {
+            ef.max(k * 2)
+        } else {
+            ef.max(k)
+        };
+        let candidates = self.search_layer(query, &nearest, search_ef, 0)?;
 
         // Convert to SearchResult and return k nearest
         // Pre-allocate with exact capacity to avoid reallocations
@@ -598,8 +604,14 @@ impl HNSWIndex {
         }
 
         // Beam search at layer 0 (find ef nearest that match filter)
+        // RaBitQ: oversample 2x to give rescore more candidates to rerank
+        let search_ef = if self.storage.is_rabitq() {
+            ef.max(k * 2)
+        } else {
+            ef.max(k)
+        };
         let candidates =
-            self.search_layer_with_filter(query, &nearest, ef.max(k), 0, &slot_filter)?;
+            self.search_layer_with_filter(query, &nearest, search_ef, 0, &slot_filter)?;
 
         // Convert to SearchResult and return k nearest
         // Pre-allocate with exact capacity to avoid reallocations
