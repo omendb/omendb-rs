@@ -1291,6 +1291,30 @@ impl VectorStore {
         self.hnsw_ef_search
     }
 
+    /// Get HNSW M parameter (neighbors per node)
+    #[must_use]
+    pub fn hnsw_m(&self) -> usize {
+        self.hnsw_m
+    }
+
+    /// Get HNSW ef_construction parameter (build quality)
+    #[must_use]
+    pub fn hnsw_ef_construction(&self) -> usize {
+        self.hnsw_ef_construction
+    }
+
+    /// Get the quantization mode, if any
+    #[must_use]
+    pub fn quantization_mode(&self) -> Option<&QuantizationMode> {
+        self.pending_quantization.as_ref()
+    }
+
+    /// Number of deleted (tombstoned) records
+    #[must_use]
+    pub fn deleted_count(&self) -> usize {
+        self.records.deleted_count() as usize
+    }
+
     /// Get index-to-ID mapping (for FFI bindings)
     ///
     /// Returns a HashMap mapping internal slot indices to string IDs.
