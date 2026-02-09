@@ -101,6 +101,8 @@ pub struct SegmentManager {
     pub(crate) merge_policy: MergePolicy,
     /// Statistics from last merge operation
     pub(crate) last_merge_stats: Option<MergeStats>,
+    /// Generation counter, incremented on each save for staleness detection
+    pub(crate) generation: u64,
 }
 
 impl SegmentManager {
@@ -133,6 +135,7 @@ impl SegmentManager {
             next_segment_id: 0,
             merge_policy,
             last_merge_stats: None,
+            generation: 0,
         })
     }
 
@@ -147,6 +150,7 @@ impl SegmentManager {
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
+            generation: 0,
         }
     }
 
@@ -189,6 +193,7 @@ impl SegmentManager {
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
+            generation: 0,
         })
     }
 
@@ -233,6 +238,7 @@ impl SegmentManager {
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
+            generation: 0,
         })
     }
 
@@ -440,6 +446,11 @@ impl SegmentManager {
     #[inline]
     pub fn is_quantized(&self) -> bool {
         self.config.quantization.is_some()
+    }
+
+    /// Get the generation counter (incremented on each save)
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Get current merge policy

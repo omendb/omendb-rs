@@ -25,9 +25,8 @@ use std::path::PathBuf;
 
 /// Compute the segments directory path for a given store path.
 ///
-/// Works whether the store path is a directory-like path ("mydb.oadb")
-/// or a file path ("mydb.omen"). The segments directory is always a
-/// sibling named "{stem}.segments".
+/// Appends `.segments` to the full path. For example, "mydb.oadb"
+/// becomes "mydb.oadb.segments".
 fn segments_dir_for(path: &Path) -> PathBuf {
     let mut seg_path = path.as_os_str().to_os_string();
     seg_path.push(".segments");
@@ -172,14 +171,19 @@ impl VectorStore {
 
         let segments = if active_count > 0 && dimensions > 0 {
             let segments_dir = segments_dir_for(path);
+            let stored_generation = storage.get_config("segments_generation")?.unwrap_or(0);
 
             // Fast path: load persisted segments if available and up-to-date
             let loaded = if segments_dir.exists() {
                 match SegmentManager::load(&segments_dir) {
-                    Ok(loaded) if loaded.len() == active_count => {
+                    Ok(loaded)
+                        if loaded.len() == active_count
+                            && loaded.generation() == stored_generation =>
+                    {
                         tracing::info!(
                             segments = loaded.frozen_count(),
                             total_vectors = active_count,
+                            generation = stored_generation,
                             "Loaded persisted segments (skipped rebuild)"
                         );
                         Some(loaded)
@@ -188,7 +192,9 @@ impl VectorStore {
                         tracing::info!(
                             segment_vectors = loaded.len(),
                             record_vectors = active_count,
-                            "Segment count mismatch, rebuilding index"
+                            segment_generation = loaded.generation(),
+                            stored_generation,
+                            "Segment count or generation mismatch, rebuilding index"
                         );
                         None
                     }
@@ -539,6 +545,10 @@ impl VectorStore {
                 segments
                     .save(&segments_dir)
                     .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
+                // Store generation for staleness detection on next open
+                if let Some(ref mut storage) = self.storage {
+                    storage.put_config("segments_generation", segments.generation())?;
+                }
             }
         }
 

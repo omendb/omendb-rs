@@ -132,7 +132,8 @@ impl FrozenSegment {
                 + STORAGE_HEADER_SIZE;
             let padding = (DATA_ALIGNMENT - (current_pos % DATA_ALIGNMENT)) % DATA_ALIGNMENT;
             if padding > 0 {
-                writer.write_all(&vec![0u8; padding])?;
+                let zeros = [0u8; 64];
+                writer.write_all(&zeros[..padding])?;
             }
         }
 
@@ -258,8 +259,8 @@ impl FrozenSegment {
                 + STORAGE_HEADER_SIZE;
             let padding = (DATA_ALIGNMENT - (current_pos % DATA_ALIGNMENT)) % DATA_ALIGNMENT;
             if padding > 0 {
-                let mut pad = vec![0u8; padding];
-                reader.read_exact(&mut pad)?;
+                let mut pad = [0u8; 64];
+                reader.read_exact(&mut pad[..padding])?;
             }
         }
 
