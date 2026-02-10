@@ -29,7 +29,7 @@ function simulateTokens(text: string, dim: number): Float32Array[] {
 	});
 }
 
-function main() {
+async function main() {
 	console.log("=== In-Memory Multi-Vector Search ===\n");
 
 	// Create multi-vector store with default config (good balance of speed/quality)
@@ -45,7 +45,7 @@ function main() {
 	];
 
 	// Insert with token embeddings
-	db.set(
+	await db.set(
 		documents.map((doc) => ({
 			id: doc.id,
 			vectors: simulateTokens(doc.text, 64),
@@ -91,7 +91,7 @@ function main() {
 		const persistentDb = open(dbPath, { dimensions: 32, multiVector: true });
 
 		// Insert documents
-		persistentDb.set([
+		await persistentDb.set([
 			{
 				id: "persistent1",
 				vectors: [new Float32Array(32).fill(0.1), new Float32Array(32).fill(0.2)],

@@ -81,7 +81,7 @@ omendb-ffi/             # C FFI bindings
 
 **Hot path optimizations applied:**
 
-- `knn_search_ef()` avoids Option overhead (~40% faster)
+- `knn_search_ef()` (pub(crate)) avoids Option overhead (~40% faster)
 - `search_batch()` pre-computes ef once
 - Sequential HNSW insert (parallel degrades recall)
 
@@ -94,15 +94,15 @@ cd python && uv run python ../benchmarks/run.py           # Full (~60s)
 
 Expected (10K vectors, M3 Max):
 
-- 128D: ~11,500 QPS single, ~67,000 QPS batch
+- 128D: ~19,700 QPS single, ~156,000 QPS batch
 - 768D: ~2,400 QPS single, ~15,000 QPS batch
 
 ## Testing
 
 ```bash
 cargo test --lib                              # 441 Rust tests
-cd python && uv run pytest tests/ -x          # 285 Python tests
-cd node && bun test                           # 88 Node tests
+cd python && uv run pytest tests/ -x          # 313 Python tests
+cd node && bun test                           # 104 Node tests
 cd python && uv run pytest tests/test_recall.py  # Recall verification
 ```
 
@@ -119,10 +119,10 @@ Before ANY release, complete ALL of these checks:
 cargo test --lib
 cargo clippy --lib -- -D warnings
 
-# Python (must pass 285+ tests)
+# Python (must pass 313+ tests)
 cd python && uv run pytest tests/ -x
 
-# Node (must pass 88+ tests)
+# Node (must pass 104+ tests)
 cd node && bun test
 ```
 
@@ -130,10 +130,10 @@ cd node && bun test
 
 ```bash
 # Standard benchmark (10k/128D) - compare against history.json
-cd python && uv run python benchmark.py
+cd python && uv run python ../benchmarks/run.py
 
 # Full benchmark (multiple dimensions and scales)
-cd python && uv run python benchmark.py --full
+cd python && uv run python ../benchmarks/run.py --full
 
 # Check for regressions against previous versions in python/benchmarks/history.json
 ```
@@ -178,7 +178,6 @@ gh workflow run release.yml
 
 ## Dependencies
 
-- **seerdb**: Storage layer (separate crate)
 - **tantivy**: BM25 text search
 
 ## Common Tasks
@@ -186,7 +185,7 @@ gh workflow run release.yml
 **Add a new Python API method:**
 
 1. Add Rust method in `src/vector/store/mod.rs`
-2. Expose in `python/src/lib.rs`
+2. Expose in `python/src/`
 3. Add test in `python/tests/`
 
 **Optimize search path:**

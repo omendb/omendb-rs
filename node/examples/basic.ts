@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-function main() {
+async function main() {
 	// Use a temp directory for this example
 	const tmpDir = mkdtempSync(join(tmpdir(), "omendb-"));
 	const dbPath = join(tmpDir, "vectors");
@@ -25,7 +25,7 @@ function main() {
 
 		// --- INSERT ---
 		// Add vectors individually or in batches
-		db.set([
+		await db.set([
 			{ id: "a", vector: new Float32Array([1.0, 0.0, 0.0]), metadata: { axis: "x" } },
 			{ id: "b", vector: new Float32Array([0.0, 1.0, 0.0]), metadata: { axis: "y" } },
 			{ id: "c", vector: new Float32Array([0.0, 0.0, 1.0]), metadata: { axis: "z" } },
@@ -35,7 +35,7 @@ function main() {
 
 		// --- SEARCH ---
 		// Find vectors similar to query
-		const results = db.search([1.0, 0.0, 0.0], 3);
+		const results = await db.search([1.0, 0.0, 0.0], 3);
 		console.log("\nSearch results for [1, 0, 0]:");
 		for (const r of results) {
 			console.log(`  ${r.id}: distance=${r.distance.toFixed(3)}, axis=${r.metadata.axis}`);
@@ -50,7 +50,7 @@ function main() {
 
 		// --- UPDATE ---
 		// Replace embedding and/or metadata
-		db.set([
+		await db.set([
 			{ id: "a", vector: new Float32Array([0.9, 0.1, 0.0]), metadata: { axis: "x", modified: true } },
 		]);
 		const updated = db.get("a");
@@ -75,7 +75,7 @@ function main() {
 			id: `rand_${i}`,
 			vector: new Float32Array([Math.random(), Math.random(), Math.random()]),
 		}));
-		db2.set(batch);
+		await db2.set(batch);
 		console.log(`After batch insert: ${db2.length} vectors`);
 
 		// Batch search (async, runs in parallel on thread pool)
@@ -84,10 +84,9 @@ function main() {
 			Math.random(),
 			Math.random(),
 		]);
-		db2.searchBatch(queries, 5).then((batchResults) => {
-			console.log(`Batch search: ${batchResults.length} result sets, ${batchResults[0].length} results each`);
-			db2.close();
-		});
+		const batchResults = await db2.searchBatch(queries, 5);
+		console.log(`Batch search: ${batchResults.length} result sets, ${batchResults[0].length} results each`);
+		db2.close();
 	} finally {
 		// Cleanup
 		setTimeout(() => rmSync(tmpDir, { recursive: true, force: true }), 100);

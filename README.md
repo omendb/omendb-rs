@@ -96,11 +96,10 @@ const results = db.search(new Float32Array(128).fill(0.1), 5);
 
 ## Platforms
 
-| Platform                     | Status       |
-| ---------------------------- | ------------ |
-| Linux (x86_64, ARM64)        | Supported    |
-| macOS (Intel, Apple Silicon) | Supported    |
-| Windows (x86_64)             | Experimental |
+| Platform                     | Status    |
+| ---------------------------- | --------- |
+| Linux (x86_64, ARM64)        | Supported |
+| macOS (Intel, Apple Silicon) | Supported |
 
 ## API Reference
 

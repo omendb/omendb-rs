@@ -24,11 +24,11 @@ fn main() -> anyhow::Result<()> {
 
     // Search for similar vectors
     let query = Vector::new(vec![1.0; 128]);
-    let results = store.knn_search(&query, 2)?;
+    let results = store.search(&query, 2, None)?;
 
     println!("\nTop 2 similar vectors:");
-    for (idx, distance) in &results {
-        println!("  idx={}, distance={:.4}", idx, distance);
+    for r in &results {
+        println!("  id={}, distance={:.4}", r.id, r.distance);
     }
 
     // Get by ID

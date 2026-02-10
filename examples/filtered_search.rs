@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
 
     // Filter: year >= 2020
     let filter = MetadataFilter::Gte("year".into(), 2020.0);
-    let results = store.knn_search_with_filter(&query, 10, &filter)?;
+    let results = store.search(&query, 10, Some(&filter))?;
     println!(
         "year >= 2020: {:?}",
         results.iter().map(|r| &r.id).collect::<Vec<_>>()
@@ -55,7 +55,7 @@ fn main() -> anyhow::Result<()> {
 
     // Filter: venue in ["VLDB", "SIGMOD"]
     let filter = MetadataFilter::In("venue".into(), vec![json!("VLDB"), json!("SIGMOD")]);
-    let results = store.knn_search_with_filter(&query, 10, &filter)?;
+    let results = store.search(&query, 10, Some(&filter))?;
     println!(
         "venue in [VLDB, SIGMOD]: {:?}",
         results.iter().map(|r| &r.id).collect::<Vec<_>>()
@@ -63,7 +63,7 @@ fn main() -> anyhow::Result<()> {
 
     // Filter: citations > 500
     let filter = MetadataFilter::Gt("citations".into(), 500.0);
-    let results = store.knn_search_with_filter(&query, 10, &filter)?;
+    let results = store.search(&query, 10, Some(&filter))?;
     println!(
         "citations > 500: {:?}",
         results.iter().map(|r| &r.id).collect::<Vec<_>>()
@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
         MetadataFilter::Gte("year".into(), 2018.0),
         MetadataFilter::Gt("citations".into(), 100.0),
     ]);
-    let results = store.knn_search_with_filter(&query, 10, &filter)?;
+    let results = store.search(&query, 10, Some(&filter))?;
     println!(
         "year >= 2018 AND citations > 100: {:?}",
         results.iter().map(|r| &r.id).collect::<Vec<_>>()

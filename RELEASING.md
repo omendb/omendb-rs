@@ -25,10 +25,10 @@ git push origin v0.0.27
 
 ## Pre-Release Checklist
 
-- [ ] All tests pass (`cargo test --lib`)
+- [ ] Rust tests pass, 441+ (`cargo test --lib`)
 - [ ] Clippy clean (`cargo clippy --lib -- -D warnings`)
-- [ ] Python tests pass (`cd python && uv run pytest tests/ -x`)
-- [ ] Node tests pass (`cd node && bun test`)
+- [ ] Python tests pass, 313+ (`cd python && uv run pytest tests/ -x`)
+- [ ] Node tests pass, 104+ (`cd node && bun test`)
 - [ ] CHANGELOG.md updated with release notes
 - [ ] Version synced across all locations
 
