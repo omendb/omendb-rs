@@ -51,16 +51,16 @@ impl MultiVecStorage {
 
     /// Add a multi-vector document and return its slot ID.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if any token has incorrect dimension.
-    pub fn add(&mut self, tokens: &[&[f32]]) -> u32 {
-        let slot =
-            u32::try_from(self.offsets.len()).expect("Multi-vector slot overflow (>4B docs)");
-        let start =
-            u32::try_from(self.vectors.len() / self.dim).expect("Multi-vector offset overflow");
-        let count =
-            u16::try_from(tokens.len()).expect("Token count overflow (>65K tokens per doc)");
+    /// Returns error if slot count exceeds u32, offset exceeds u32, or token count exceeds u16.
+    pub fn add(&mut self, tokens: &[&[f32]]) -> Result<u32, &'static str> {
+        let slot = u32::try_from(self.offsets.len())
+            .map_err(|_| "Multi-vector slot overflow (>4B docs)")?;
+        let start = u32::try_from(self.vectors.len() / self.dim)
+            .map_err(|_| "Multi-vector offset overflow")?;
+        let count = u16::try_from(tokens.len())
+            .map_err(|_| "Token count overflow (>65K tokens per doc)")?;
 
         // Copy all tokens to flat storage
         for token in tokens {
@@ -75,7 +75,7 @@ impl MultiVecStorage {
         }
 
         self.offsets.push((start, count));
-        slot
+        Ok(slot)
     }
 
     /// Get tokens for a document by slot ID.
@@ -262,7 +262,7 @@ mod tests {
         let mut storage = MultiVecStorage::new(4);
         let tokens: Vec<&[f32]> = vec![&[1.0, 2.0, 3.0, 4.0], &[5.0, 6.0, 7.0, 8.0]];
 
-        let slot = storage.add(&tokens);
+        let slot = storage.add(&tokens).unwrap();
 
         assert_eq!(slot, 0);
         assert_eq!(storage.len(), 1);
@@ -279,8 +279,8 @@ mod tests {
             &[17.0, 18.0, 19.0, 20.0],
         ];
 
-        let slot1 = storage.add(&doc1);
-        let slot2 = storage.add(&doc2);
+        let slot1 = storage.add(&doc1).unwrap();
+        let slot2 = storage.add(&doc2).unwrap();
 
         // Verify slot1
         let retrieved1: Vec<&[f32]> = storage.get(slot1).unwrap().collect();
@@ -308,7 +308,7 @@ mod tests {
         let mut storage = MultiVecStorage::new(4);
         let empty: Vec<&[f32]> = vec![];
 
-        let slot = storage.add(&empty);
+        let slot = storage.add(&empty).unwrap();
 
         assert_eq!(slot, 0);
         assert_eq!(storage.len(), 1);
@@ -320,7 +320,7 @@ mod tests {
     fn test_get_tokens_convenience() {
         let mut storage = MultiVecStorage::new(4);
         let tokens: Vec<&[f32]> = vec![&[1.0, 2.0, 3.0, 4.0], &[5.0, 6.0, 7.0, 8.0]];
-        let slot = storage.add(&tokens);
+        let slot = storage.add(&tokens).unwrap();
 
         let retrieved = storage.get_tokens(slot).unwrap();
         assert_eq!(retrieved.len(), 2);
@@ -333,7 +333,7 @@ mod tests {
         let token = vec![0.0f32; 128];
         let tokens: Vec<&[f32]> = vec![&token; 100]; // 100 tokens
 
-        storage.add(&tokens);
+        storage.add(&tokens).unwrap();
 
         // 100 tokens * 128 dims * 4 bytes = 51,200 bytes for vectors
         // 1 doc * size_of::<(u32, u16)>() bytes for offset (8 bytes due to alignment)
@@ -352,11 +352,11 @@ mod tests {
         let doc3: Vec<&[f32]> = vec![&[13.0, 14.0, 15.0, 16.0]];
         let doc4: Vec<&[f32]> = vec![&[17.0, 18.0, 19.0, 20.0]];
 
-        storage.add(&doc0); // slot 0
-        storage.add(&doc1); // slot 1
-        storage.add(&doc2); // slot 2
-        storage.add(&doc3); // slot 3
-        storage.add(&doc4); // slot 4
+        storage.add(&doc0).unwrap(); // slot 0
+        storage.add(&doc1).unwrap(); // slot 1
+        storage.add(&doc2).unwrap(); // slot 2
+        storage.add(&doc3).unwrap(); // slot 3
+        storage.add(&doc4).unwrap(); // slot 4
 
         // Simulate deleting slots 1 and 3 (keep 0, 2, 4)
         // After compaction: 0->0, 2->1, 4->2
@@ -387,7 +387,7 @@ mod tests {
     fn test_compact_empty() {
         let mut storage = MultiVecStorage::new(4);
         let doc: Vec<&[f32]> = vec![&[1.0, 2.0, 3.0, 4.0]];
-        storage.add(&doc);
+        storage.add(&doc).unwrap();
 
         // All deleted - empty mapping
         let old_to_new: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
@@ -421,8 +421,8 @@ mod tests {
             &[17.0, 18.0, 19.0, 20.0],
         ];
 
-        storage.add(&doc1);
-        storage.add(&doc2);
+        storage.add(&doc1).unwrap();
+        storage.add(&doc2).unwrap();
 
         // Serialize
         let vec_bytes = storage.vectors_to_bytes();
@@ -487,7 +487,7 @@ mod tests {
                 .map(|t| vec![(i * num_tokens + t) as f32; 128])
                 .collect();
             let token_refs: Vec<&[f32]> = tokens.iter().map(|v| v.as_slice()).collect();
-            storage.add(&token_refs);
+            storage.add(&token_refs).unwrap();
         }
 
         // Serialize

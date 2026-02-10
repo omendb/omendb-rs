@@ -590,7 +590,7 @@ mod tests {
         let mut storage = NodeStorage::new(4, 2, 8);
         let vector = vec![1.0f32, 2.0, 3.0, 4.0];
         storage.allocate_node();
-        storage.set_vector(0, &vector);
+        storage.set_vector(0, &vector).unwrap();
 
         let retrieved = storage.vector(0);
         assert_eq!(retrieved, &vector[..]);
@@ -652,7 +652,7 @@ mod tests {
             assert_eq!(id, i as u32);
 
             let vector: Vec<f32> = (0..4).map(|j| (i * 4 + j) as f32).collect();
-            storage.set_vector(id, &vector);
+            storage.set_vector(id, &vector).unwrap();
             storage.set_slot(id, i as u32 * 10);
             storage.set_level(id, (i % 8) as u8);
 
@@ -842,7 +842,7 @@ mod tests {
         for i in 0..10 {
             storage.allocate_node();
             let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32).collect();
-            storage.set_vector(i as u32, &vector);
+            storage.set_vector(i as u32, &vector).unwrap();
         }
 
         // Norms should be stored for full precision too

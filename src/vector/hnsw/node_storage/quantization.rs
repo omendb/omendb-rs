@@ -8,7 +8,11 @@ use crate::compression::scalar::{QueryPrep, ScalarParams};
 
 impl NodeStorage {
     /// Set vector in SQ8 mode with lazy training
-    pub(super) fn set_vector_sq8(&mut self, id: u32, vector: &[f32]) {
+    ///
+    /// # Errors
+    ///
+    /// Returns error if SQ8 training fails (e.g., dimension exceeds 65K).
+    pub(super) fn set_vector_sq8(&mut self, id: u32, vector: &[f32]) -> Result<(), &'static str> {
         let id_usize = id as usize;
 
         if self.sq8_trained {
@@ -42,13 +46,18 @@ impl NodeStorage {
 
             let num_vectors = self.training_buffer.len() / self.dimensions;
             if num_vectors >= 256 {
-                self.train_quantization();
+                self.train_quantization()?;
             }
         }
+        Ok(())
     }
 
     /// Train SQ8 quantization from buffered vectors
-    pub(super) fn train_quantization(&mut self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns error if ScalarParams::train fails.
+    pub(super) fn train_quantization(&mut self) -> Result<(), &'static str> {
         let dim = self.dimensions;
         let num_vectors = self.training_buffer.len() / dim;
 
@@ -56,7 +65,7 @@ impl NodeStorage {
             .map(|i| &self.training_buffer[i * dim..(i + 1) * dim])
             .collect();
 
-        let params = ScalarParams::train(&training_refs).expect("Failed to train SQ8 params");
+        let params = ScalarParams::train(&training_refs)?;
         self.sq8_params = Some(params);
         self.sq8_trained = true;
 
@@ -88,6 +97,7 @@ impl NodeStorage {
 
         self.training_buffer.clear();
         self.training_buffer.shrink_to_fit();
+        Ok(())
     }
 
     /// Prepare query for SQ8 distance calculation
@@ -165,18 +175,18 @@ mod tests {
         for i in 0..255 {
             storage.allocate_node();
             let vector: Vec<f32> = (0..4).map(|j| (i * 4 + j) as f32).collect();
-            storage.set_vector(i as u32, &vector);
+            storage.set_vector(i as u32, &vector).unwrap();
         }
         assert!(!storage.is_trained());
 
         storage.allocate_node();
         let vector: Vec<f32> = (0..4).map(|j| (255 * 4 + j) as f32).collect();
-        storage.set_vector(255, &vector);
+        storage.set_vector(255, &vector).unwrap();
         assert!(storage.is_trained());
 
         storage.allocate_node();
         let vector: Vec<f32> = (0..4).map(|j| (256 * 4 + j) as f32).collect();
-        storage.set_vector(256, &vector);
+        storage.set_vector(256, &vector).unwrap();
         assert_eq!(storage.len(), 257);
     }
 
@@ -187,7 +197,7 @@ mod tests {
         for i in 0..256 {
             storage.allocate_node();
             let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32 / 255.0).collect();
-            storage.set_vector(i as u32, &vector);
+            storage.set_vector(i as u32, &vector).unwrap();
         }
         assert!(storage.is_trained());
 
@@ -208,7 +218,7 @@ mod tests {
             let vector: Vec<f32> = (0..128)
                 .map(|j| ((i * 128 + j) % 255) as f32 / 255.0)
                 .collect();
-            storage.set_vector(i as u32, &vector);
+            storage.set_vector(i as u32, &vector).unwrap();
         }
         assert!(storage.is_trained());
 
@@ -232,7 +242,7 @@ mod tests {
         }
 
         storage.allocate_node();
-        storage.set_vector(256, &query);
+        storage.set_vector(256, &query).unwrap();
         let self_dist = storage.distance_sq8(&prep, 256).unwrap();
         assert!(
             self_dist.abs() < 0.1,
@@ -248,7 +258,7 @@ mod tests {
         for i in 0..256 {
             storage.allocate_node();
             let vector: Vec<f32> = (0..4).map(|j| (i + j) as f32).collect();
-            storage.set_vector(i as u32, &vector);
+            storage.set_vector(i as u32, &vector).unwrap();
         }
 
         for i in 0..256 {

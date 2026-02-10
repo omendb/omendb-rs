@@ -31,7 +31,7 @@ impl HNSWIndex {
     }
 
     /// Store vector and create node, returns (node_id, level)
-    fn store_and_create_node(&mut self, vector: &[f32]) -> (u32, u8) {
+    fn store_and_create_node(&mut self, vector: &[f32]) -> Result<(u32, u8)> {
         // Allocate node in unified storage
         let node_id = self.storage.allocate_node();
 
@@ -39,7 +39,9 @@ impl HNSWIndex {
         let level = self.random_level();
 
         // Store vector in colocated storage
-        self.storage.set_vector(node_id, vector);
+        self.storage
+            .set_vector(node_id, vector)
+            .map_err(HNSWError::storage)?;
 
         // Set node metadata
         self.storage.set_slot(node_id, node_id); // slot == node_id for new nodes
@@ -50,7 +52,7 @@ impl HNSWIndex {
             self.storage.allocate_upper_levels(node_id, level);
         }
 
-        (node_id, level)
+        Ok((node_id, level))
     }
 
     /// Update entry point if new node has higher level
@@ -80,7 +82,7 @@ impl HNSWIndex {
     #[instrument(skip(self, vector), fields(dimensions = vector.len(), index_size = self.len()))]
     pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
         self.validate_insert_vector(vector)?;
-        let (node_id, level) = self.store_and_create_node(vector);
+        let (node_id, level) = self.store_and_create_node(vector)?;
 
         // If this is the first node, set as entry point and return
         if self.entry_point.is_none() {
@@ -171,7 +173,7 @@ impl HNSWIndex {
         ef: usize,
     ) -> Result<u32> {
         self.validate_insert_vector(vector)?;
-        let (node_id, level) = self.store_and_create_node(vector);
+        let (node_id, level) = self.store_and_create_node(vector)?;
 
         // If this is the first node, set as entry point and return
         if self.entry_point.is_none() {
@@ -308,7 +310,9 @@ impl HNSWIndex {
             let level = self.random_level();
 
             // Store vector
-            self.storage.set_vector(node_id, vector);
+            self.storage
+                .set_vector(node_id, vector)
+                .map_err(HNSWError::storage)?;
 
             // Set node metadata
             self.storage.set_slot(node_id, node_id);

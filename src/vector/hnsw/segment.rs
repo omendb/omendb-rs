@@ -340,9 +340,13 @@ impl FrozenSegment {
             storage.allocate_node();
 
             if let Some(vector) = mutable.index.get_vector(id) {
-                storage.set_vector(id, vector);
+                storage
+                    .set_vector(id, vector)
+                    .expect("non-SQ8 frozen storage");
             } else if let Some(vector) = mutable.index.get_vector_dequantized(id) {
-                storage.set_vector(id, &vector);
+                storage
+                    .set_vector(id, &vector)
+                    .expect("non-SQ8 frozen storage");
             }
 
             // Copy level 0 neighbors (main graph layer)

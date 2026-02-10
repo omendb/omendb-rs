@@ -14,7 +14,6 @@ use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 
 impl VectorStore {
-
     /// Check if this store is configured for multi-vector documents.
     #[must_use]
     pub fn is_multi_vector(&self) -> bool {
@@ -172,7 +171,9 @@ impl VectorStore {
                 .iter()
                 .map(std::vec::Vec::as_slice)
                 .collect();
-            multivec_storage.add(&token_refs);
+            multivec_storage
+                .add(&token_refs)
+                .map_err(|e| anyhow::anyhow!(e))?;
         }
 
         // Prepare batch for set_batch (maintains original batch order - set_batch reorders internally)
@@ -507,7 +508,9 @@ impl VectorStore {
             .multivec_storage
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
-        let token_slot = multivec_storage.add(&final_refs);
+        let token_slot = multivec_storage
+            .add(&final_refs)
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         if slot as u32 != token_slot {
             anyhow::bail!(

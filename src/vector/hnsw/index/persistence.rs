@@ -339,7 +339,9 @@ impl HNSWIndex {
 
             // Copy vector
             if let Some(vec) = vectors.get_dequantized(node.id) {
-                storage.set_vector(node_id, &vec);
+                storage
+                    .set_vector(node_id, &vec)
+                    .map_err(HNSWError::storage)?;
             }
 
             // Set metadata

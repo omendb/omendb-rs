@@ -84,7 +84,11 @@ impl NodeStorage {
     }
 
     /// Set vector data (handles both full precision and SQ8 modes)
-    pub fn set_vector(&mut self, id: u32, vector: &[f32]) {
+    ///
+    /// # Errors
+    ///
+    /// Returns error if SQ8 quantization training fails.
+    pub fn set_vector(&mut self, id: u32, vector: &[f32]) -> Result<(), &'static str> {
         assert_eq!(
             vector.len(),
             self.dimensions,
@@ -94,7 +98,7 @@ impl NodeStorage {
         );
 
         if self.sq8 {
-            self.set_vector_sq8(id, vector);
+            self.set_vector_sq8(id, vector)?;
         } else {
             // Store vector directly and compute norm
             let ptr = self.node_ptr_mut(id);
@@ -111,5 +115,6 @@ impl NodeStorage {
             }
             self.norms[id_usize] = norm_sq;
         }
+        Ok(())
     }
 }

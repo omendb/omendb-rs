@@ -34,7 +34,6 @@ fn segments_dir_for(path: &Path) -> PathBuf {
 }
 
 impl VectorStore {
-
     /// Open a persistent vector store at the given path
     ///
     /// Creates a new database if it doesn't exist, or loads existing data.
@@ -491,7 +490,7 @@ impl VectorStore {
             let metadata = self.records.export_metadata();
 
             // Serialize MetadataIndex for fast recovery
-            let metadata_index_bytes = self.metadata_index.to_bytes().ok();
+            let metadata_index_bytes = Some(self.metadata_index.to_bytes()?);
 
             // Export multi-vector data if present
             let (multivec_bytes, multivec_offsets, multivec_config) =

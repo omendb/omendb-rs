@@ -124,7 +124,7 @@ impl ParallelBuilder {
     /// Build index from vectors using parallel construction
     pub fn build(mut self, vectors: Vec<Vec<f32>>) -> Result<HNSWIndex> {
         if vectors.is_empty() {
-            return Ok(self.into_index());
+            return self.into_index();
         }
 
         let batch_size = vectors.len();
@@ -186,7 +186,7 @@ impl ParallelBuilder {
             "Parallel construction complete"
         );
 
-        Ok(self.into_index())
+        self.into_index()
     }
 
     /// Allocate all nodes and assign levels
@@ -651,7 +651,7 @@ impl ParallelBuilder {
     /// Convert builder to HNSWIndex
     ///
     /// Builds NodeStorage from vectors and neighbors.
-    fn into_index(self) -> HNSWIndex {
+    fn into_index(self) -> Result<HNSWIndex> {
         let entry_point = self.entry_point.load(Ordering::Acquire);
         let n = self.vectors.len();
 
@@ -677,7 +677,9 @@ impl ParallelBuilder {
 
             // Allocate node and set metadata
             storage.allocate_node();
-            storage.set_vector(node_id_u32, &self.vectors[node_id]);
+            storage
+                .set_vector(node_id_u32, &self.vectors[node_id])
+                .map_err(HNSWError::storage)?;
             storage.set_slot(node_id_u32, node_id_u32);
             storage.set_level(node_id_u32, level);
 
@@ -695,7 +697,7 @@ impl ParallelBuilder {
             }
         }
 
-        HNSWIndex {
+        Ok(HNSWIndex {
             storage,
             entry_point: if entry_point == u32::MAX {
                 None
@@ -705,7 +707,7 @@ impl ParallelBuilder {
             params: self.params,
             distance_fn: self.distance_fn,
             rng_state: self.rng_state.load(Ordering::Relaxed),
-        }
+        })
     }
 }
 
