@@ -301,6 +301,11 @@ pub unsafe extern "C" fn omendb_get(
         return -1;
     }
 
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
+        return -1;
+    }
+
     let ids_str = match CStr::from_ptr(ids_json).to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -335,11 +340,6 @@ pub unsafe extern "C" fn omendb_get(
             return -1;
         }
     };
-
-    if result.is_null() {
-        set_last_error("Output pointer is NULL".to_string());
-        return -1;
-    }
 
     match CString::new(json_str) {
         Ok(cstr) => {
@@ -439,6 +439,11 @@ pub unsafe extern "C" fn omendb_search(
         return -1;
     }
 
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
+        return -1;
+    }
+
     if query_len != db.dimensions {
         set_last_error(format!(
             "Query dimension mismatch: expected {}, got {query_len}",
@@ -504,11 +509,6 @@ pub unsafe extern "C" fn omendb_search(
             return -1;
         }
     };
-
-    if result.is_null() {
-        set_last_error("Output pointer is NULL".to_string());
-        return -1;
-    }
 
     match CString::new(json_str) {
         Ok(cstr) => {
@@ -766,6 +766,11 @@ pub unsafe extern "C" fn omendb_text_search(
         return -1;
     }
 
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
+        return -1;
+    }
+
     let query_str = match CStr::from_ptr(query).to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -801,11 +806,6 @@ pub unsafe extern "C" fn omendb_text_search(
             return -1;
         }
     };
-
-    if result.is_null() {
-        set_last_error("Output pointer is NULL".to_string());
-        return -1;
-    }
 
     match CString::new(json_str) {
         Ok(cstr) => {
@@ -865,6 +865,11 @@ pub unsafe extern "C" fn omendb_hybrid_search(
 
     if query_text.is_null() {
         set_last_error("Null query_text pointer".to_string());
+        return -1;
+    }
+
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
         return -1;
     }
 
@@ -941,11 +946,6 @@ pub unsafe extern "C" fn omendb_hybrid_search(
             return -1;
         }
     };
-
-    if result.is_null() {
-        set_last_error("Output pointer is NULL".to_string());
-        return -1;
-    }
 
     match CString::new(json_str) {
         Ok(cstr) => {
@@ -1248,7 +1248,7 @@ pub unsafe extern "C" fn omendb_stats(db: *const OmenDB, result: *mut *mut c_cha
 
     let stats = json!({
         "count": db.store.len(),
-        "dimensions": db.dimensions,
+        "dimensions": db.store.dimensions(),
         "quantized": db.store.is_quantized(),
         "memory_bytes": db.store.memory_usage(),
     });
