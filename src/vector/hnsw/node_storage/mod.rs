@@ -41,7 +41,7 @@ mod vectors;
 
 use crate::compression::scalar::ScalarParams;
 use rustc_hash::FxHashMap;
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
 use std::fmt;
 use std::ptr::NonNull;
 
@@ -344,12 +344,16 @@ impl NodeStorage {
             old_capacity * 2
         };
         let new_size = new_capacity * self.node_size;
-        let new_layout = Layout::from_size_align(new_size, CACHE_LINE).expect("Invalid layout");
+        let new_layout =
+            Layout::from_size_align(new_size, CACHE_LINE).expect("Node storage layout overflow");
 
         // SAFETY: We're allocating zeroed memory with valid layout
         let new_ptr = unsafe {
             let ptr = alloc_zeroed(new_layout);
-            NonNull::new(ptr).expect("Allocation failed")
+            if ptr.is_null() {
+                handle_alloc_error(new_layout);
+            }
+            NonNull::new_unchecked(ptr)
         };
 
         // Copy old data if any

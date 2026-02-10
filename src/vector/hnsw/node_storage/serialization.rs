@@ -140,7 +140,8 @@ impl NodeStorage {
                 }
                 // Copy data to properly aligned allocation
                 std::ptr::copy_nonoverlapping(data.as_ptr(), raw, data.len());
-                NonNull::new(raw).expect("Allocation should not return null")
+                // SAFETY: raw null-checked above
+                NonNull::new_unchecked(raw)
             };
             // data is dropped here, freeing the original unaligned allocation
             StorageBacking::Owned {

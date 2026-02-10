@@ -16,7 +16,10 @@ impl NodeStorage {
         let id_usize = id as usize;
 
         if self.sq8_trained {
-            let params = self.sq8_params.as_ref().expect("SQ8 params should exist");
+            let params = self
+                .sq8_params
+                .as_ref()
+                .ok_or("SQ8 params missing despite trained flag")?;
             let quant = params.quantize(vector);
 
             let ptr = self.node_ptr_mut(id);

@@ -161,7 +161,8 @@ impl NodeStorage {
         let old_backing = std::mem::replace(
             &mut self.backing,
             StorageBacking::Owned {
-                data: NonNull::new(new_ptr).expect("Allocation should not return null"),
+                // SAFETY: new_ptr null-checked at line 80
+                data: unsafe { NonNull::new_unchecked(new_ptr) },
                 layout,
                 capacity: n,
             },

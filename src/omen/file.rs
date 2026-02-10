@@ -283,23 +283,27 @@ impl OmenFile {
             .config
             .get("dimensions")
             .copied()
-            .unwrap_or(u64::from(header.dimensions)) as u32;
+            .unwrap_or(u64::from(header.dimensions));
+        let dimensions = u32::try_from(dimensions).unwrap_or(header.dimensions);
         let hnsw_m = manifest
             .config
             .get("hnsw_m")
             .copied()
-            .unwrap_or(u64::from(header.hnsw_m)) as u32;
+            .unwrap_or(u64::from(header.hnsw_m));
+        let hnsw_m = u32::try_from(hnsw_m).unwrap_or(header.hnsw_m);
         let hnsw_ef_construction = manifest
             .config
             .get("hnsw_ef_construction")
             .copied()
-            .unwrap_or(u64::from(header.hnsw_ef_construction))
-            as u32;
+            .unwrap_or(u64::from(header.hnsw_ef_construction));
+        let hnsw_ef_construction =
+            u32::try_from(hnsw_ef_construction).unwrap_or(header.hnsw_ef_construction);
         let hnsw_ef_search = manifest
             .config
             .get("hnsw_ef_search")
             .copied()
-            .unwrap_or(u64::from(header.hnsw_ef_search)) as u32;
+            .unwrap_or(u64::from(header.hnsw_ef_search));
+        let hnsw_ef_search = u32::try_from(hnsw_ef_search).unwrap_or(header.hnsw_ef_search);
         let metric = manifest.config.get("metric").map_or(header.metric, |&v| {
             crate::omen::header::Metric::from(v as u8)
         });
@@ -388,7 +392,10 @@ impl OmenFile {
         self.config.insert(key.to_string(), value);
         // Sync to header
         match key {
-            "dimensions" => self.header.dimensions = value as u32,
+            "dimensions" => {
+                self.header.dimensions =
+                    u32::try_from(value).map_err(|_| anyhow::anyhow!("dimensions overflow u32"))?;
+            }
             "quantization" => {
                 self.header.quantization = crate::omen::header::QuantizationCode::from(value as u8);
             }
@@ -600,7 +607,7 @@ impl OmenFile {
                         let vec = read_vector_from_bytes(&mmap[start..end], dim);
                         // Infer dimensions from first vector if header says 0
                         if snapshot.dimensions == 0 && !vec.is_empty() {
-                            snapshot.dimensions = vec.len() as u32;
+                            snapshot.dimensions = u32::try_from(vec.len()).unwrap_or(u32::MAX);
                         }
                         snapshot.vectors[idx] = Some(vec);
                     }
@@ -788,7 +795,9 @@ impl OmenFile {
         // Build new manifest
         let mut manifest = OmenManifest::new();
         manifest.nodes = new_nodes;
-        manifest.max_node_id = (vectors.len() as u32).saturating_sub(1);
+        manifest.max_node_id = u32::try_from(vectors.len())
+            .unwrap_or(u32::MAX)
+            .saturating_sub(1);
 
         // Build index_to_id from id_to_slot
         let index_to_id: HashMap<u32, String> = id_to_slot
