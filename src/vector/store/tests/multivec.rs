@@ -1,8 +1,8 @@
 use super::super::*;
-use crate::vector::muvera::MuveraConfig;
+use crate::vector::muvera::MultiVectorConfig;
 
-fn small_dim_config() -> MuveraConfig {
-    MuveraConfig {
+fn small_dim_config() -> MultiVectorConfig {
+    MultiVectorConfig {
         d_proj: None,
         ..Default::default()
     }
@@ -23,7 +23,7 @@ mod muvera {
 
     #[test]
     fn test_multi_vector_creates_encoder() {
-        let config = MuveraConfig::default(); // d_proj=16
+        let config = MultiVectorConfig::default(); // d_proj=16
         let store = VectorStore::multi_vector_with(128, config);
 
         assert!(store.is_multi_vector());
@@ -90,7 +90,7 @@ mod muvera {
 
     #[test]
     fn test_set_multi_error_on_empty_tokens() {
-        let mut store = VectorStore::multi_vector_with(128, MuveraConfig::default());
+        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default());
 
         let tokens: Vec<&[f32]> = vec![];
         let result = store.set_multi("doc1", &tokens, serde_json::json!({}));
@@ -101,7 +101,7 @@ mod muvera {
 
     #[test]
     fn test_set_multi_error_on_wrong_dimension() {
-        let mut store = VectorStore::multi_vector_with(128, MuveraConfig::default());
+        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default());
 
         let tokens = random_tokens(10, 64, 0); // Wrong dimension
         let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
@@ -177,7 +177,7 @@ mod muvera {
 
     #[test]
     fn test_search_multi_approx_error_on_empty_query() {
-        let mut store = VectorStore::multi_vector_with(128, MuveraConfig::default());
+        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default());
 
         // Insert a document first
         let tokens = random_tokens(10, 128, 0);
@@ -445,10 +445,6 @@ mod muvera {
 
 mod unified_api {
     use super::*;
-
-    fn random_vec(dim: usize, seed: usize) -> Vec<f32> {
-        (0..dim).map(|i| ((seed + i) as f32) * 0.1).collect()
-    }
 
     #[test]
     fn test_store_single_vector() {

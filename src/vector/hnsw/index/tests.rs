@@ -1593,6 +1593,3 @@ fn test_optimize_maintains_recall_sq8() {
         recall_after
     );
 }
-
-use rand::Rng as _;
-use rand::SeedableRng as _;

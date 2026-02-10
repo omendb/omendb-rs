@@ -488,8 +488,16 @@ impl OmenFile {
     // Compaction will be implemented at VectorStore level using RecordStore data.
 }
 
-/// MUVERA config tuple: (repetitions, partition_bits, seed, token_dim, d_proj, pool_factor)
-pub type MuveraConfigTuple = (u8, u8, u64, usize, Option<u8>, Option<u8>);
+/// Persisted MUVERA configuration for multi-vector storage.
+#[derive(Debug, Clone)]
+pub struct PersistedMuveraConfig {
+    pub repetitions: u8,
+    pub partition_bits: u8,
+    pub seed: u64,
+    pub token_dim: usize,
+    pub d_proj: Option<u8>,
+    pub pool_factor: Option<u8>,
+}
 
 /// Snapshot data loaded from OmenFile
 #[derive(Debug, Default)]
@@ -513,7 +521,7 @@ pub struct OmenSnapshot {
     /// Multi-vector offset table (if persisted)
     pub multivec_offsets: Option<Vec<u8>>,
     /// MUVERA config
-    pub multivec_config: Option<MuveraConfigTuple>,
+    pub multivec_config: Option<PersistedMuveraConfig>,
 }
 
 /// Options for checkpoint_from_snapshot
@@ -528,7 +536,7 @@ pub struct CheckpointOptions<'a> {
     /// Multi-vector offset table (from MultiVecStorage::offsets_to_bytes)
     pub multivec_offsets: Option<&'a [u8]>,
     /// MUVERA config
-    pub multivec_config: Option<MuveraConfigTuple>,
+    pub multivec_config: Option<PersistedMuveraConfig>,
 }
 
 impl OmenFile {
@@ -673,14 +681,14 @@ impl OmenFile {
 
         if let (Some(reps), Some(bits), Some(seed), Some(token_dim)) = (reps, bits, seed, token_dim)
         {
-            snapshot.multivec_config = Some((
-                reps as u8,
-                bits as u8,
+            snapshot.multivec_config = Some(PersistedMuveraConfig {
+                repetitions: reps as u8,
+                partition_bits: bits as u8,
                 seed,
-                token_dim as usize,
+                token_dim: token_dim as usize,
                 d_proj,
                 pool_factor,
-            ));
+            });
         }
 
         Ok(snapshot)
@@ -823,23 +831,24 @@ impl OmenFile {
         }
 
         // Store MUVERA config in manifest.config
-        if let Some((reps, bits, seed, token_dim, d_proj, pool_factor)) = options.multivec_config {
+        if let Some(cfg) = options.multivec_config {
             manifest
                 .config
-                .insert("muvera_repetitions".to_string(), reps as u64);
+                .insert("muvera_repetitions".to_string(), cfg.repetitions as u64);
+            manifest.config.insert(
+                "muvera_partition_bits".to_string(),
+                cfg.partition_bits as u64,
+            );
+            manifest.config.insert("muvera_seed".to_string(), cfg.seed);
             manifest
                 .config
-                .insert("muvera_partition_bits".to_string(), bits as u64);
-            manifest.config.insert("muvera_seed".to_string(), seed);
-            manifest
-                .config
-                .insert("muvera_token_dim".to_string(), token_dim as u64);
-            if let Some(d) = d_proj {
+                .insert("muvera_token_dim".to_string(), cfg.token_dim as u64);
+            if let Some(d) = cfg.d_proj {
                 manifest
                     .config
                     .insert("muvera_d_proj".to_string(), d as u64);
             }
-            if let Some(pf) = pool_factor {
+            if let Some(pf) = cfg.pool_factor {
                 manifest
                     .config
                     .insert("muvera_pool_factor".to_string(), pf as u64);

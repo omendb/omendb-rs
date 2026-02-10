@@ -189,7 +189,6 @@ fn test_persistent_search() {
 
 mod incremental_tests {
     use super::super::super::*;
-    use super::super::random_vector;
 
     #[test]
     fn test_incremental_set_batch() {

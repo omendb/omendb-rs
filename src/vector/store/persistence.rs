@@ -9,7 +9,10 @@ use super::VectorStore;
 use super::{
     DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M, DEFAULT_MAX_TOKENS,
 };
-use crate::omen::{parse_wal_delete, parse_wal_insert, CheckpointOptions, OmenFile, WalEntryType};
+use crate::omen::{
+    parse_wal_delete, parse_wal_insert, CheckpointOptions, OmenFile, PersistedMuveraConfig,
+    WalEntryType,
+};
 use crate::text::TextIndex;
 use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use crate::vector::metadata::MetadataIndex;
@@ -271,19 +274,18 @@ impl VectorStore {
 
         // Reconstruct multi-vector state if config is present
         let (muvera_encoder, multivec_storage, distance_metric) =
-            if let Some((reps, bits, seed, token_dim, d_proj, pool_factor)) =
-                snapshot.multivec_config
-            {
+            if let Some(mv_cfg) = snapshot.multivec_config {
                 let config = MultiVectorConfig {
-                    repetitions: reps,
-                    partition_bits: bits,
-                    d_proj,
-                    seed,
-                    pool_factor,
+                    repetitions: mv_cfg.repetitions,
+                    partition_bits: mv_cfg.partition_bits,
+                    d_proj: mv_cfg.d_proj,
+                    seed: mv_cfg.seed,
+                    pool_factor: mv_cfg.pool_factor,
                 };
-                let encoder = MuveraEncoder::new(token_dim, config);
+                let encoder = MuveraEncoder::new(mv_cfg.token_dim, config);
 
                 // Reconstruct storage from persisted bytes
+                let token_dim = mv_cfg.token_dim;
                 let storage = match (&snapshot.multivec_bytes, &snapshot.multivec_offsets) {
                     (Some(vec_bytes), Some(off_bytes)) => {
                         match MultiVecStorage::from_bytes(vec_bytes, off_bytes, token_dim) {
@@ -501,14 +503,14 @@ impl VectorStore {
                     (
                         Some(mvs.vectors_to_bytes()),
                         Some(mvs.offsets_to_bytes()),
-                        Some((
-                            config.repetitions,
-                            config.partition_bits,
-                            config.seed,
-                            enc.token_dimension(),
-                            config.d_proj,
-                            config.pool_factor,
-                        )),
+                        Some(PersistedMuveraConfig {
+                            repetitions: config.repetitions,
+                            partition_bits: config.partition_bits,
+                            seed: config.seed,
+                            token_dim: enc.token_dimension(),
+                            d_proj: config.d_proj,
+                            pool_factor: config.pool_factor,
+                        }),
                     )
                 } else {
                     (None, None, None)

@@ -1,7 +1,7 @@
 //! MUVERA encoder for multi-vector to FDE transformation.
 
 use crate::distance::dot_product as dot;
-use crate::vector::muvera::MuveraConfig;
+use crate::vector::muvera::config::MultiVectorConfig;
 use rand::prelude::*;
 use rand_distr::StandardNormal;
 
@@ -25,7 +25,7 @@ pub enum AggMode {
 /// Hyperplanes and projection matrix are pre-computed and cached.
 #[derive(Debug, Clone)]
 pub struct MuveraEncoder {
-    config: MuveraConfig,
+    config: MultiVectorConfig,
     token_dim: usize,
     proj_dim: usize,
     fde_dim: usize,
@@ -42,7 +42,7 @@ impl MuveraEncoder {
     ///
     /// Panics if d_proj exceeds token_dim.
     #[must_use]
-    pub fn new(token_dim: usize, config: MuveraConfig) -> Self {
+    pub fn new(token_dim: usize, config: MultiVectorConfig) -> Self {
         let proj_dim = config.proj_dim(token_dim);
 
         // Validate d_proj <= token_dim
@@ -100,7 +100,7 @@ impl MuveraEncoder {
 
     /// Get the configuration.
     #[must_use]
-    pub fn config(&self) -> &MuveraConfig {
+    pub fn config(&self) -> &MultiVectorConfig {
         &self.config
     }
 
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_encoder_dimensions_with_dproj() {
-        let config = MuveraConfig::default(); // d_proj=Some(16)
+        let config = MultiVectorConfig::default(); // d_proj=Some(16)
         let encoder = MuveraEncoder::new(128, config);
         // 8 reps * 16 partitions * 16 (d_proj) = 2,048
         assert_eq!(encoder.fde_dimension(), 2048);
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_encoder_dimensions_no_dproj() {
-        let config = MuveraConfig {
+        let config = MultiVectorConfig {
             d_proj: None,
             ..Default::default()
         };
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_empty_tokens() {
-        let encoder = MuveraEncoder::new(128, MuveraConfig::default());
+        let encoder = MuveraEncoder::new(128, MultiVectorConfig::default());
         let fde = encoder.encode_query(&[]);
         assert_eq!(fde.len(), 2048); // With d_proj=16
         assert!(fde.iter().all(|&v| v == 0.0));
@@ -382,7 +382,7 @@ mod tests {
         // Use d_proj=None since token_dim=4 < default d_proj=16
         let encoder = MuveraEncoder::new(
             4,
-            MuveraConfig {
+            MultiVectorConfig {
                 repetitions: 2,
                 partition_bits: 2,
                 d_proj: None,
@@ -401,7 +401,7 @@ mod tests {
         // Use d_proj=None since token_dim=4 < default d_proj=16
         let encoder = MuveraEncoder::new(
             4,
-            MuveraConfig {
+            MultiVectorConfig {
                 repetitions: 2,
                 partition_bits: 2,
                 d_proj: None,
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_deterministic_encoding() {
-        let encoder = MuveraEncoder::new(128, MuveraConfig::default());
+        let encoder = MuveraEncoder::new(128, MultiVectorConfig::default());
         let token = vec![0.1f32; 128];
         let tokens: Vec<&[f32]> = vec![&token];
 
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "d_proj")]
     fn test_dproj_exceeds_token_dim() {
-        let config = MuveraConfig {
+        let config = MultiVectorConfig {
             d_proj: Some(200),
             ..Default::default()
         };
@@ -529,7 +529,7 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(12345);
         let dim = 64; // More realistic dimension
-        let encoder = MuveraEncoder::new(dim, MuveraConfig::default());
+        let encoder = MuveraEncoder::new(dim, MultiVectorConfig::default());
 
         let num_pairs = 200; // More samples for stability
         let mut fde_scores = Vec::with_capacity(num_pairs);
@@ -599,7 +599,7 @@ mod tests {
         let dim = 64;
         let encoder = MuveraEncoder::new(
             dim,
-            MuveraConfig {
+            MultiVectorConfig {
                 repetitions: 10,
                 partition_bits: 4,
                 d_proj: Some(16),

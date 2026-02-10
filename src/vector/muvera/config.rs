@@ -155,9 +155,6 @@ impl MultiVectorConfig {
     }
 }
 
-// Keep old name as alias for internal migration
-pub type MuveraConfig = MultiVectorConfig;
-
 #[cfg(test)]
 mod tests {
     use super::*;

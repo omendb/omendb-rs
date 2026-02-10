@@ -110,6 +110,7 @@ fn main() {
         repetitions: 10,
         partition_bits: 4,
         seed: 42,
+        ..Default::default()
     };
     let encoder = MuveraEncoder::new(dim, config);
 
