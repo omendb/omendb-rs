@@ -81,13 +81,6 @@ impl VectorStore {
 
     /// Get HNSW `ef_search` parameter
     #[must_use]
-    pub fn get_ef_search(&self) -> Option<usize> {
-        // Return stored value even if no index yet
-        Some(self.hnsw_ef_search)
-    }
-
-    /// Get HNSW `ef_search` parameter (Rust API guidelines naming)
-    #[must_use]
     pub fn ef_search(&self) -> usize {
         self.hnsw_ef_search
     }

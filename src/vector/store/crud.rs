@@ -6,8 +6,9 @@ use super::VectorStore;
 use super::{HNSWParams, MetadataFilter, SegmentConfig, SegmentManager, Vector};
 
 impl VectorStore {
-    /// Insert vector and return its slot ID
-    pub fn insert(&mut self, vector: Vector) -> Result<usize> {
+    /// Insert vector and return its slot ID (used in tests)
+    #[allow(dead_code)]
+    pub(crate) fn insert(&mut self, vector: Vector) -> Result<usize> {
         // Generate a unique ID for unnamed vectors
         let slot = self.records.slot_count();
         let id = format!("__auto_{slot}");
@@ -19,7 +20,8 @@ impl VectorStore {
     ///
     /// This is the primary method for inserting vectors with metadata support.
     /// Returns error if ID already exists (use set for insert-or-update semantics).
-    pub fn insert_with_metadata(
+    #[allow(dead_code)]
+    pub(crate) fn insert_with_metadata(
         &mut self,
         id: String,
         vector: Vector,

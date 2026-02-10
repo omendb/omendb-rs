@@ -774,7 +774,7 @@ pub unsafe extern "C" fn omendb_text_search(
         }
     };
 
-    let search_results = match db.store.text_search(query_str, k) {
+    let search_results = match db.store.search_text(query_str, k) {
         Ok(r) => r,
         Err(e) => {
             set_last_error(format!("Text search failed: {e}"));
@@ -920,7 +920,7 @@ pub unsafe extern "C" fn omendb_hybrid_search(
     let search_results =
         match db
             .store
-            .hybrid_search(&vector, text_str, k, filter.as_ref(), alpha_opt, rrf_k_opt)
+            .search_hybrid(&vector, text_str, k, filter.as_ref(), alpha_opt, rrf_k_opt)
         {
             Ok(r) => r,
             Err(e) => {
@@ -976,6 +976,291 @@ pub unsafe extern "C" fn omendb_flush(db: *mut OmenDB) -> i32 {
         Ok(()) => 0,
         Err(e) => {
             set_last_error(format!("Flush failed: {e}"));
+            -1
+        }
+    }
+}
+
+/// Update a vector's data and/or metadata
+///
+/// # Arguments
+/// * `db` - Database handle
+/// * `id` - Vector ID to update (null-terminated UTF-8)
+/// * `vector` - New vector data (NULL to keep existing)
+/// * `vector_dim` - Length of vector array (ignored if vector is NULL)
+/// * `metadata_json` - New metadata JSON (NULL to keep existing)
+///
+/// # Returns
+/// 0 on success, -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+/// - `id` must be a valid, null-terminated UTF-8 string
+/// - `vector` must be NULL or point to at least `vector_dim` valid f32 values
+/// - `metadata_json` must be NULL or a valid, null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn omendb_update(
+    db: *mut OmenDB,
+    id: *const c_char,
+    vector: *const f32,
+    vector_dim: usize,
+    metadata_json: *const c_char,
+) -> i32 {
+    clear_last_error();
+
+    let Some(db) = db.as_mut() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    if id.is_null() {
+        set_last_error("Null id pointer".to_string());
+        return -1;
+    }
+
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid id string: {e}"));
+            return -1;
+        }
+    };
+
+    let vector_opt = if vector.is_null() {
+        None
+    } else {
+        let data: Vec<f32> = std::slice::from_raw_parts(vector, vector_dim).to_vec();
+        Some(Vector::new(data))
+    };
+
+    let metadata_opt: Option<JsonValue> = if metadata_json.is_null() {
+        None
+    } else {
+        let meta_str = match CStr::from_ptr(metadata_json).to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(format!("Invalid metadata string: {e}"));
+                return -1;
+            }
+        };
+        match serde_json::from_str(meta_str) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                set_last_error(format!("Invalid metadata JSON: {e}"));
+                return -1;
+            }
+        }
+    };
+
+    match db.store.update(id_str, vector_opt, metadata_opt) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(format!("Update failed: {e}"));
+            -1
+        }
+    }
+}
+
+/// Delete vectors matching a metadata filter
+///
+/// # Arguments
+/// * `db` - Database handle
+/// * `filter_json` - MongoDB-style filter JSON string
+///
+/// # Returns
+/// Count of deleted items, or -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+/// - `filter_json` must be a valid, null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn omendb_delete_by_filter(
+    db: *mut OmenDB,
+    filter_json: *const c_char,
+) -> i64 {
+    clear_last_error();
+
+    let Some(db) = db.as_mut() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    if filter_json.is_null() {
+        set_last_error("Null filter_json pointer".to_string());
+        return -1;
+    }
+
+    let filter_str = match CStr::from_ptr(filter_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid filter string: {e}"));
+            return -1;
+        }
+    };
+
+    let filter_value: JsonValue = match serde_json::from_str(filter_str) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(format!("Invalid filter JSON: {e}"));
+            return -1;
+        }
+    };
+
+    let filter = match MetadataFilter::from_json(&filter_value) {
+        Ok(f) => f,
+        Err(e) => {
+            set_last_error(format!("Invalid filter format: {e}"));
+            return -1;
+        }
+    };
+
+    match db.store.delete_by_filter(&filter) {
+        Ok(count) => i64::try_from(count).unwrap_or(i64::MAX),
+        Err(e) => {
+            set_last_error(format!("Delete by filter failed: {e}"));
+            -1
+        }
+    }
+}
+
+/// Compact the database by removing deleted records
+///
+/// # Returns
+/// Count of compacted (removed) items, or -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+#[no_mangle]
+pub unsafe extern "C" fn omendb_compact(db: *mut OmenDB) -> i64 {
+    clear_last_error();
+
+    let Some(db) = db.as_mut() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    match db.store.compact() {
+        Ok(count) => i64::try_from(count).unwrap_or(i64::MAX),
+        Err(e) => {
+            set_last_error(format!("Compact failed: {e}"));
+            -1
+        }
+    }
+}
+
+/// Optimize index for cache-efficient search
+///
+/// Reorders nodes for better memory locality, improving search performance.
+///
+/// # Returns
+/// Count of reordered items, or -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+#[no_mangle]
+pub unsafe extern "C" fn omendb_optimize(db: *mut OmenDB) -> i64 {
+    clear_last_error();
+
+    let Some(db) = db.as_mut() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    match db.store.optimize() {
+        Ok(count) => i64::try_from(count).unwrap_or(i64::MAX),
+        Err(e) => {
+            set_last_error(format!("Optimize failed: {e}"));
+            -1
+        }
+    }
+}
+
+/// Check if an ID exists in the database
+///
+/// # Returns
+/// 1 if exists, 0 if not, -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+/// - `id` must be a valid, null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn omendb_exists(db: *const OmenDB, id: *const c_char) -> i32 {
+    clear_last_error();
+
+    let Some(db) = db.as_ref() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    if id.is_null() {
+        set_last_error("Null id pointer".to_string());
+        return -1;
+    }
+
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid id string: {e}"));
+            return -1;
+        }
+    };
+
+    i32::from(db.store.contains(id_str))
+}
+
+/// Get database statistics as JSON
+///
+/// # Arguments
+/// * `db` - Database handle
+/// * `result` - Output pointer for stats JSON (caller must free with `omendb_free_string`)
+///
+/// Result JSON format:
+/// ```json
+/// {"count": N, "dimensions": D, "quantized": false, "memory_bytes": N}
+/// ```
+///
+/// # Returns
+/// 0 on success, -1 on error
+///
+/// # Safety
+/// - `db` must be a valid pointer returned by `omendb_open`
+/// - `result` must be a valid pointer to a `*mut c_char`
+#[no_mangle]
+pub unsafe extern "C" fn omendb_stats(db: *const OmenDB, result: *mut *mut c_char) -> i32 {
+    clear_last_error();
+
+    let Some(db) = db.as_ref() else {
+        set_last_error("Null database handle".to_string());
+        return -1;
+    };
+
+    if result.is_null() {
+        set_last_error("Output pointer is NULL".to_string());
+        return -1;
+    }
+
+    let stats = json!({
+        "count": db.store.len(),
+        "dimensions": db.dimensions,
+        "quantized": db.store.is_quantized(),
+        "memory_bytes": db.store.memory_usage(),
+    });
+
+    let json_str = match serde_json::to_string(&stats) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("JSON serialize error: {e}"));
+            return -1;
+        }
+    };
+
+    match CString::new(json_str) {
+        Ok(cstr) => {
+            *result = cstr.into_raw();
+            0
+        }
+        Err(e) => {
+            set_last_error(format!("CString error: {e}"));
             -1
         }
     }

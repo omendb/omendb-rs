@@ -68,7 +68,13 @@ impl VectorStore {
     /// - Token array is empty
     /// - Token dimension doesn't match configured dimension
     /// - Token count exceeds `max_tokens` (default 512)
-    pub fn set_multi(&mut self, id: &str, tokens: &[&[f32]], metadata: JsonValue) -> Result<()> {
+    #[allow(dead_code)]
+    pub(crate) fn set_multi(
+        &mut self,
+        id: &str,
+        tokens: &[&[f32]],
+        metadata: JsonValue,
+    ) -> Result<()> {
         self.store_multi_internal(tokens, id, metadata)
     }
 
@@ -84,7 +90,11 @@ impl VectorStore {
     /// # Errors
     ///
     /// Returns an error if any document fails validation (same rules as `set_multi`).
-    pub fn set_multi_batch(&mut self, batch: Vec<(&str, Vec<Vec<f32>>, JsonValue)>) -> Result<()> {
+    #[allow(dead_code)]
+    pub(crate) fn set_multi_batch(
+        &mut self,
+        batch: Vec<(&str, Vec<Vec<f32>>, JsonValue)>,
+    ) -> Result<()> {
         if batch.is_empty() {
             return Ok(());
         }
@@ -214,7 +224,12 @@ impl VectorStore {
     ///
     /// let results = store.search_multi(&refs, 10).unwrap();
     /// ```
-    pub fn search_multi(&self, query_tokens: &[&[f32]], k: usize) -> Result<Vec<SearchResult>> {
+    #[allow(dead_code)]
+    pub(crate) fn search_multi(
+        &self,
+        query_tokens: &[&[f32]],
+        k: usize,
+    ) -> Result<Vec<SearchResult>> {
         // Default rerank factor of 32 (fetch 32x candidates, rerank to k)
         self.search_multi_rerank(query_tokens, k, 32)
     }
@@ -225,7 +240,7 @@ impl VectorStore {
     /// results based on FDE (Fixed Dimensional Encoding) similarity only.
     ///
     /// For higher quality results, use `search_multi()` which includes reranking.
-    pub fn search_multi_approx(
+    pub(crate) fn search_multi_approx(
         &self,
         query_tokens: &[&[f32]],
         k: usize,
@@ -292,7 +307,7 @@ impl VectorStore {
     /// * `query_tokens` - Query token embeddings
     /// * `k` - Number of results to return
     /// * `rerank_factor` - Fetch this many times k candidates before reranking
-    pub fn search_multi_rerank(
+    pub(crate) fn search_multi_rerank(
         &self,
         query_tokens: &[&[f32]],
         k: usize,
@@ -530,7 +545,8 @@ impl VectorStore {
     ///
     /// For multi-vector stores, reranking is enabled by default for quality.
     /// Use `query_with_options` with `Rerank::Off` for fast approximate search.
-    pub fn query<Q: super::input::QueryInput>(
+    #[allow(dead_code)]
+    pub(crate) fn query<Q: super::input::QueryInput>(
         &self,
         query: &Q,
         k: usize,
@@ -670,7 +686,8 @@ impl VectorStore {
     /// Batch store vectors or token embeddings.
     ///
     /// More efficient than calling `store()` in a loop.
-    pub fn store_batch<I, B>(&mut self, batch: I) -> Result<()>
+    #[allow(dead_code)]
+    pub(crate) fn store_batch<I, B>(&mut self, batch: I) -> Result<()>
     where
         I: IntoIterator<Item = B>,
         B: BatchItem,

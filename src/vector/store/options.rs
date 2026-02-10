@@ -154,7 +154,7 @@ impl VectorStoreOptions {
     /// Enable tantivy-based full-text search with default configuration.
     ///
     /// When enabled, you can use `set_with_text()` to index text alongside vectors,
-    /// and `hybrid_search()` to search both with RRF fusion.
+    /// and `search_hybrid()` to search both with RRF fusion.
     ///
     /// Uses 50MB writer buffer by default. For custom memory settings,
     /// use `text_search_config()` instead.

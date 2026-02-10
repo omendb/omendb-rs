@@ -71,7 +71,7 @@ impl VectorDatabase {
             inner.store.flush().map_err(convert_error)?;
         }
 
-        let results = inner.store.text_search(query, k).map_err(convert_error)?;
+        let results = inner.store.search_text(query, k).map_err(convert_error)?;
 
         let mut py_results = Vec::with_capacity(results.len());
         for (id, score) in results {
@@ -192,7 +192,7 @@ impl VectorDatabase {
         if subscores.unwrap_or(false) {
             let results = inner
                 .store
-                .hybrid_search_with_subscores(
+                .search_hybrid_with_subscores(
                     &query_vec,
                     &actual_query_text,
                     k,
@@ -226,7 +226,7 @@ impl VectorDatabase {
         // Standard path without subscores
         let results = inner
             .store
-            .hybrid_search(
+            .search_hybrid(
                 &query_vec,
                 &actual_query_text,
                 k,

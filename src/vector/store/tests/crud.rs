@@ -34,11 +34,11 @@ fn test_ef_search_tuning() {
     }
 
     // Check default ef_search (fixed default: M=16, ef_construction=100, ef_search=100)
-    assert_eq!(store.get_ef_search(), Some(100));
+    assert_eq!(store.ef_search(), 100);
 
     // Tune ef_search
     store.set_ef_search(600);
-    assert_eq!(store.get_ef_search(), Some(600));
+    assert_eq!(store.ef_search(), 600);
 }
 
 #[test]

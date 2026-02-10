@@ -21,7 +21,7 @@ impl VectorStore {
     /// Enable text search on this store.
     ///
     /// Creates a text index for BM25 keyword search. Must be called before
-    /// using `set_with_text()`, `text_search()`, or `hybrid_search()`.
+    /// using `set_with_text()`, `search_text()`, or `search_hybrid()`.
     pub fn enable_text_search(&mut self) -> Result<()> {
         self.enable_text_search_with_config(None)
     }
@@ -114,7 +114,7 @@ impl VectorStore {
     /// # Arguments
     /// * `query` - Text query
     /// * `k` - Number of results to return
-    pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<(String, f32)>> {
+    pub fn search_text(&self, query: &str, k: usize) -> Result<Vec<(String, f32)>> {
         let Some(ref text_index) = self.text_index else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
@@ -134,7 +134,7 @@ impl VectorStore {
     /// * `filter` - Optional metadata filter
     /// * `alpha` - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
     /// * `rrf_k` - RRF constant (default=60, higher reduces rank influence)
-    pub fn hybrid_search(
+    pub fn search_hybrid(
         &self,
         query_vector: &Vector,
         query_text: &str,
@@ -171,7 +171,7 @@ impl VectorStore {
     /// * `filter` - Optional metadata filter
     /// * `alpha` - Weight for vector vs text (0.0=text only, 1.0=vector only, default=0.5)
     /// * `rrf_k` - RRF constant (default=60, higher reduces rank influence)
-    pub fn hybrid_search_with_subscores(
+    pub fn search_hybrid_with_subscores(
         &self,
         query_vector: &Vector,
         query_text: &str,
@@ -213,7 +213,7 @@ impl VectorStore {
                 .map(|r| (r.id, r.distance))
                 .collect();
 
-            let text_results = self.text_search(query_text, fetch_k)?;
+            let text_results = self.search_text(query_text, fetch_k)?;
             let text_results = filter_text_results_by_metadata(&self.records, text_results, filter);
 
             Ok((vector_results, text_results))
@@ -223,7 +223,7 @@ impl VectorStore {
             let vector_results = self.knn_search(query_vector, fetch_k)?;
             let vector_results = self.convert_knn_results_to_id_scores(vector_results);
 
-            let text_results = self.text_search(query_text, fetch_k)?;
+            let text_results = self.search_text(query_text, fetch_k)?;
 
             Ok((vector_results, text_results))
         }

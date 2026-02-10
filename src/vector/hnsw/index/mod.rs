@@ -117,7 +117,6 @@ pub struct HNSWIndex {
 }
 
 impl HNSWIndex {
-
     /// Build an HNSWIndex with pre-created storage
     fn build(storage: NodeStorage, params: HNSWParams, distance_fn: DistanceFunction) -> Self {
         Self {

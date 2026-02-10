@@ -40,7 +40,7 @@ impl VectorDatabase {
 
         let results = inner
             .store
-            .text_search(&query, k as usize)
+            .search_text(&query, k as usize)
             .map_err(convert_error)?;
 
         Ok(results
@@ -168,7 +168,7 @@ impl VectorDatabase {
         if subscores.unwrap_or(false) {
             let results = inner
                 .store
-                .hybrid_search_with_subscores(
+                .search_hybrid_with_subscores(
                     &query_vec,
                     &actual_query_text,
                     k as usize,
@@ -192,7 +192,7 @@ impl VectorDatabase {
 
         let results = inner
             .store
-            .hybrid_search(
+            .search_hybrid(
                 &query_vec,
                 &actual_query_text,
                 k as usize,

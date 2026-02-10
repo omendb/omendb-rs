@@ -60,7 +60,6 @@ pub struct ThreadSafeVectorStore {
 }
 
 impl ThreadSafeVectorStore {
-
     /// Create new thread-safe vector store
     #[must_use]
     pub fn new(dimensions: usize) -> Self {

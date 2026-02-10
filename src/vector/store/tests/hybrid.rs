@@ -36,7 +36,7 @@ fn test_set_with_text() {
     assert_eq!(store.len(), 1);
 
     // Text search should find it
-    let results = store.text_search("machine", 10).unwrap();
+    let results = store.search_text("machine", 10).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].0, "doc1");
 }
@@ -84,7 +84,7 @@ fn test_text_search_bm25() {
     store.flush().unwrap();
 
     // Search for "rust" - doc2 should rank higher (higher term frequency)
-    let results = store.text_search("rust", 10).unwrap();
+    let results = store.search_text("rust", 10).unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0, "doc2"); // Higher BM25 score
     assert_eq!(results[1].0, "doc1");
@@ -131,7 +131,7 @@ fn test_hybrid_search() {
     // Query: similar to doc1/doc3 vectors, text matches doc1/doc2
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
     let results = store
-        .hybrid_search(&query, "machine learning", 3, None, None, None)
+        .search_hybrid(&query, "machine learning", 3, None, None, None)
         .unwrap();
 
     assert!(!results.is_empty());
@@ -170,7 +170,7 @@ fn test_hybrid_search_with_filter() {
     let filter = MetadataFilter::Eq("year".to_string(), serde_json::json!(2024));
 
     let results = store
-        .hybrid_search(&query, "machine", 10, Some(&filter), None, None)
+        .search_hybrid(&query, "machine", 10, Some(&filter), None, None)
         .unwrap();
 
     // Only doc1 should match the filter
@@ -210,7 +210,7 @@ fn test_hybrid_search_empty_text() {
 
     // Empty text query should still return vector search results
     let results = store
-        .hybrid_search(&query, "", 10, None, None, None)
+        .search_hybrid(&query, "", 10, None, None, None)
         .unwrap();
     assert_eq!(results.len(), 1);
 }
@@ -246,13 +246,13 @@ fn test_hybrid_search_alpha_weighting() {
 
     // alpha=1.0: vector only - vec_winner should win
     let results = store
-        .hybrid_search(&query, "machine learning", 2, None, Some(1.0), None)
+        .search_hybrid(&query, "machine learning", 2, None, Some(1.0), None)
         .unwrap();
     assert_eq!(results[0].0, "vec_winner");
 
     // alpha=0.0: text only - text_winner should win
     let results = store
-        .hybrid_search(&query, "machine learning", 2, None, Some(0.0), None)
+        .search_hybrid(&query, "machine learning", 2, None, Some(0.0), None)
         .unwrap();
     assert_eq!(results[0].0, "text_winner");
 }
@@ -274,7 +274,7 @@ fn test_hybrid_search_k_zero() {
 
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
     // k=0 should return an error (HNSW requires k > 0)
-    let result = store.hybrid_search(&query, "test", 0, None, None, None);
+    let result = store.search_hybrid(&query, "test", 0, None, None, None);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("k=0"));
 }
@@ -296,7 +296,7 @@ fn test_hybrid_search_dimension_mismatch() {
 
     // Query with wrong dimension (8 instead of 4)
     let wrong_query = Vector::new(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let result = store.hybrid_search(&wrong_query, "test", 10, None, None, None);
+    let result = store.search_hybrid(&wrong_query, "test", 10, None, None, None);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -325,7 +325,7 @@ fn test_hybrid_search_large_k() {
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
     // Request more results than available
     let results = store
-        .hybrid_search(&query, "document", 100, None, None, None)
+        .search_hybrid(&query, "document", 100, None, None, None)
         .unwrap();
     // Should return at most 3 (the number of documents)
     assert!(results.len() <= 3);
@@ -345,7 +345,7 @@ fn test_hybrid_search_without_text_enabled() {
         .unwrap();
 
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
-    let result = store.hybrid_search(&query, "test", 10, None, None, None);
+    let result = store.search_hybrid(&query, "test", 10, None, None, None);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -392,7 +392,7 @@ fn test_hybrid_search_with_subscores() {
 
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
     let results = store
-        .hybrid_search_with_subscores(&query, "machine learning", 3, None, None, None)
+        .search_hybrid_with_subscores(&query, "machine learning", 3, None, None, None)
         .unwrap();
 
     assert_eq!(results.len(), 3);
@@ -459,7 +459,7 @@ fn test_hybrid_search_with_filter_subscores() {
     let filter = MetadataFilter::Gte("year".to_string(), 2024.0);
 
     let results = store
-        .hybrid_search_with_subscores(&query, "machine learning", 10, Some(&filter), None, None)
+        .search_hybrid_with_subscores(&query, "machine learning", 10, Some(&filter), None, None)
         .unwrap();
 
     // Only doc1 should match (year >= 2024)

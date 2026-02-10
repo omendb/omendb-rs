@@ -50,8 +50,8 @@
 //!
 //! // Search
 //! let query = Vector::new(vec![1.0; 128]);
-//! let results = store.knn_search(&query, 2).unwrap();
-//! // results: [(0, 0.0), (1, 1.13)] - (index, distance)
+//! let results = store.search(&query, 2, None).unwrap();
+//! // results: [{id: "doc1", distance: 0.0, ...}, ...]
 //!
 //! // Get by ID
 //! let (vec, metadata) = store.get("doc1").unwrap();
@@ -69,7 +69,7 @@
 //!
 //! let query = Vector::new(vec![0.1; 64]);
 //! let filter = MetadataFilter::Gte("year".into(), 2024.0);
-//! let results = store.knn_search_with_filter(&query, 10, &filter).unwrap();
+//! let results = store.search(&query, 10, Some(&filter)).unwrap();
 //! // Only returns vectors where year >= 2024
 //! ```
 //!

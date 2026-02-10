@@ -169,17 +169,17 @@ impl VectorStore {
     ///
     /// ```rust
     /// use omendb::VectorStore;
+    /// use serde_json::json;
     ///
     /// // Create store for 128-dimensional token embeddings
     /// let mut store = VectorStore::multi_vector(128);
     ///
     /// // Insert document with token embeddings
-    /// let tokens: Vec<Vec<f32>> = vec![vec![0.1; 128]; 10]; // 10 tokens
-    /// let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
-    /// store.set_multi("doc1", &refs, serde_json::json!({})).unwrap();
+    /// let tokens = vec![vec![0.1; 128]; 10]; // 10 tokens
+    /// store.store("doc1", tokens.clone(), json!({})).unwrap();
     ///
     /// // Search with query tokens
-    /// let results = store.search_multi(&refs, 10).unwrap();
+    /// let results = store.query_with_options(&tokens, 10, &Default::default()).unwrap();
     /// ```
     #[must_use]
     pub fn multi_vector(token_dim: usize) -> Self {
@@ -271,7 +271,7 @@ impl VectorStore {
     }
 
     /// K-nearest neighbors search using HNSW
-    pub fn knn_search(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
+    pub(crate) fn knn_search(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
         self.knn_search_with_ef(query, k, None)
     }
 
@@ -314,7 +314,7 @@ impl VectorStore {
     }
 
     /// K-nearest neighbors search with metadata filtering
-    pub fn knn_search_with_filter(
+    pub(crate) fn knn_search_with_filter(
         &self,
         query: &Vector,
         k: usize,
@@ -417,8 +417,13 @@ impl VectorStore {
             .collect()
     }
 
-    /// Brute-force K-NN search (fallback)
-    pub fn knn_search_brute_force(&self, query: &Vector, k: usize) -> Result<Vec<(usize, f32)>> {
+    /// Brute-force K-NN search (fallback, used in tests)
+    #[allow(dead_code)]
+    pub(crate) fn knn_search_brute_force(
+        &self,
+        query: &Vector,
+        k: usize,
+    ) -> Result<Vec<(usize, f32)>> {
         if query.dim() != self.dimensions() {
             anyhow::bail!(
                 "Query dimension mismatch: expected {}, got {}",
