@@ -60,21 +60,21 @@ async function main() {
 	console.log(`\nQuery: "${queryText}" (${queryTokens.length} tokens)`);
 
 	// Default search (rerank=true for best quality)
-	const results = db.search(queryTokens, 3);
+	const results = await db.search(queryTokens, 3);
 	console.log("\nTop 3 results (with MaxSim reranking):");
 	for (const r of results) {
 		console.log(`  ${r.id}: score=${r.distance.toFixed(4)} - "${r.metadata.text}"`);
 	}
 
 	// Fast search (rerank=false, ~2x faster, lower recall)
-	const fastResults = db.search(queryTokens, 3, { rerank: false });
+	const fastResults = await db.search(queryTokens, 3, { rerank: false });
 	console.log("\nFast search (no reranking):");
 	for (const r of fastResults) {
 		console.log(`  ${r.id}: score=${r.distance.toFixed(4)} - "${r.metadata.text}"`);
 	}
 
 	// High-quality search (larger rerank factor)
-	const qualityResults = db.search(queryTokens, 3, { rerankFactor: 8 });
+	const qualityResults = await db.search(queryTokens, 3, { rerankFactor: 8 });
 	console.log("\nHigh-quality search (rerankFactor=8):");
 	for (const r of qualityResults) {
 		console.log(`  ${r.id}: score=${r.distance.toFixed(4)} - "${r.metadata.text}"`);
@@ -112,7 +112,7 @@ async function main() {
 		console.log(`Reopened: ${reopened.length} documents, multiVector=${reopened.isMultiVector}`);
 
 		// MaxSim reranking works after reload
-		const persistedResults = reopened.search(
+		const persistedResults = await reopened.search(
 			[new Float32Array(32).fill(0.1), new Float32Array(32).fill(0.15)],
 			2,
 			{ rerank: true }

@@ -45,51 +45,51 @@ const PAPERS = [
 	},
 ];
 
-function main() {
+async function main() {
 	// 3D vectors for simple demonstration
 	const db = open(":memory:", { dimensions: 3 });
-	db.set(PAPERS);
+	await db.set(PAPERS);
 
 	const query = [0.3, 0.4, 0.5];
 
 	// --- EQUALITY ---
 	// Implicit (shorthand)
-	let results = db.search(query, 10, { filter: { venue: "VLDB" } });
+	let results = await db.search(query, 10, { filter: { venue: "VLDB" } });
 	console.log("venue = 'VLDB':", results.map((r) => r.id));
 
 	// Explicit $eq
-	results = db.search(query, 10, { filter: { seminal: { $eq: true } } });
+	results = await db.search(query, 10, { filter: { seminal: { $eq: true } } });
 	console.log("seminal = true:", results.map((r) => r.id));
 
 	// --- COMPARISON ---
-	results = db.search(query, 10, { filter: { citations: { $gt: 500 } } });
+	results = await db.search(query, 10, { filter: { citations: { $gt: 500 } } });
 	console.log("citations > 500:", results.map((r) => r.id));
 
-	results = db.search(query, 10, { filter: { year: { $gte: 2020 } } });
+	results = await db.search(query, 10, { filter: { year: { $gte: 2020 } } });
 	console.log("year >= 2020:", results.map((r) => r.id));
 
 	// --- SET MEMBERSHIP ---
-	results = db.search(query, 10, { filter: { venue: { $in: ["VLDB", "SIGMOD"] } } });
+	results = await db.search(query, 10, { filter: { venue: { $in: ["VLDB", "SIGMOD"] } } });
 	console.log("venue in [VLDB, SIGMOD]:", results.map((r) => r.id));
 
 	// --- NEGATION ---
-	results = db.search(query, 10, { filter: { venue: { $ne: "arXiv" } } });
+	results = await db.search(query, 10, { filter: { venue: { $ne: "arXiv" } } });
 	console.log("venue != 'arXiv':", results.map((r) => r.id));
 
 	// --- LOGICAL AND ---
-	results = db.search(query, 10, {
+	results = await db.search(query, 10, {
 		filter: { $and: [{ year: { $gte: 2020 } }, { venue: { $in: ["VLDB", "SIGMOD"] } }] },
 	});
 	console.log("year >= 2020 AND venue in DB confs:", results.map((r) => r.id));
 
 	// --- LOGICAL OR ---
-	results = db.search(query, 10, {
+	results = await db.search(query, 10, {
 		filter: { $or: [{ citations: { $gt: 1000 } }, { year: { $gte: 2024 } }] },
 	});
 	console.log("citations > 1000 OR year >= 2024:", results.map((r) => r.id));
 
 	// --- COMBINED RANGE ---
-	results = db.search(query, 10, { filter: { year: { $gte: 2018, $lte: 2020 } } });
+	results = await db.search(query, 10, { filter: { year: { $gte: 2018, $lte: 2020 } } });
 	console.log("2018 <= year <= 2020:", results.map((r) => r.id));
 
 	console.log("\n--- Supported Operators ---");
