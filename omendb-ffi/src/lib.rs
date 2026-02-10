@@ -917,29 +917,17 @@ pub unsafe extern "C" fn omendb_hybrid_search(
         }
     };
 
-    let search_results = if let Some(f) = filter {
+    let search_results =
         match db
             .store
-            .hybrid_search_with_filter_rrf_k(&vector, text_str, k, &f, alpha_opt, rrf_k_opt)
+            .hybrid_search(&vector, text_str, k, filter.as_ref(), alpha_opt, rrf_k_opt)
         {
             Ok(r) => r,
             Err(e) => {
                 set_last_error(format!("Hybrid search failed: {e}"));
                 return -1;
             }
-        }
-    } else {
-        match db
-            .store
-            .hybrid_search_with_rrf_k(&vector, text_str, k, alpha_opt, rrf_k_opt)
-        {
-            Ok(r) => r,
-            Err(e) => {
-                set_last_error(format!("Hybrid search failed: {e}"));
-                return -1;
-            }
-        }
-    };
+        };
 
     let json_results: Vec<JsonValue> = search_results
         .into_iter()

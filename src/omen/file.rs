@@ -68,9 +68,15 @@ impl<'a> SegmentWriter<'a> {
         self.file.seek(SeekFrom::Start(self.current_offset))?;
         self.file.write_all(data)?;
 
+        let length = u32::try_from(data.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Segment data exceeds u32::MAX bytes",
+            )
+        })?;
         let location = NodeLocation {
             offset: self.current_offset,
-            length: data.len() as u32,
+            length,
             segment_type,
         };
 
@@ -708,6 +714,12 @@ impl OmenFile {
                     format!("Vector size overflow: dim={dim}"),
                 )
             })?;
+        if vectors.len() > u32::MAX as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Vector count {} exceeds u32 maximum", vectors.len()),
+            ));
+        }
         let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
 
         // Write complete checkpoint to temp file
