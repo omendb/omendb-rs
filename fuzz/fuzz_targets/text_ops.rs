@@ -148,7 +148,7 @@ fuzz_target!(|data: &[u8]| {
             } => {
                 sanitize_vector(&mut vector);
                 let v = Vector::new(vector);
-                let _ = store.hybrid_search(&v, &text, k.min(100), None);
+                let _ = store.search_hybrid(&v, &text, k.min(100), None, None, None);
             }
         }
     }

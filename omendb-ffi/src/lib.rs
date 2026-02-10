@@ -1029,6 +1029,13 @@ pub unsafe extern "C" fn omendb_update(
     let vector_opt = if vector.is_null() {
         None
     } else {
+        if vector_dim != db.dimensions {
+            set_last_error(format!(
+                "Vector dimension mismatch: expected {}, got {vector_dim}",
+                db.dimensions
+            ));
+            return -1;
+        }
         let data: Vec<f32> = std::slice::from_raw_parts(vector, vector_dim).to_vec();
         Some(Vector::new(data))
     };

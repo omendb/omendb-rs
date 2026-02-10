@@ -24,21 +24,23 @@ fn bench_search(c: &mut Criterion) {
 
         // Create and populate store
         let mut store = VectorStore::new(dim);
-        for v in &vectors {
-            store.insert(v.clone()).expect("insert");
+        for (i, v) in vectors.iter().enumerate() {
+            store
+                .set(format!("v{i}"), v.clone(), json!({}))
+                .expect("set");
         }
 
         // Ensure index is ready before benchmarking
         store.ensure_index_ready().expect("index ready");
 
-        // Benchmark readonly path (fast - no &mut self overhead)
+        // Benchmark search path
         group.bench_with_input(
             BenchmarkId::new("knn_search", format!("{n_vectors}x{dim}D")),
             &(n_vectors, dim),
             |b, _| {
                 b.iter(|| {
                     for q in &queries {
-                        black_box(store.knn_search_readonly(q, 10, None).expect("search"));
+                        black_box(store.search(q, 10, None).expect("search"));
                     }
                 })
             },
@@ -58,8 +60,10 @@ fn bench_search_ef_comparison(c: &mut Criterion) {
     let queries = generate_vectors(100, dim);
 
     let mut store = VectorStore::new(dim);
-    for v in &vectors {
-        store.insert(v.clone()).expect("insert");
+    for (i, v) in vectors.iter().enumerate() {
+        store
+            .set(format!("v{i}"), v.clone(), json!({}))
+            .expect("set");
     }
 
     for ef in [64, 100, 200] {
@@ -69,7 +73,11 @@ fn bench_search_ef_comparison(c: &mut Criterion) {
             |b, &ef| {
                 b.iter(|| {
                     for q in &queries {
-                        black_box(store.knn_search_with_ef(q, 10, Some(ef)).expect("search"));
+                        black_box(
+                            store
+                                .search_with_options(q, 10, None, Some(ef), None)
+                                .expect("search"),
+                        );
                     }
                 })
             },
@@ -91,27 +99,29 @@ fn bench_search_with_metadata(c: &mut Criterion) {
 
     let mut store = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
-        // Insert with ID and metadata like Python does
         store
-            .insert_with_metadata(format!("d{i}"), v.clone(), json!({"cat": i % 10}))
-            .expect("insert");
+            .set(format!("d{i}"), v.clone(), json!({"cat": i % 10}))
+            .expect("set");
     }
 
-    // Test with metadata path (search_with_ef returns metadata)
+    // Test with metadata path
     group.bench_function("768D_ef64_with_metadata", |b| {
         b.iter(|| {
             for q in &queries {
-                // This matches Python: search_with_ef returns (index, distance, metadata)
-                black_box(store.search_with_ef(q, 10, None, Some(64)).expect("search"));
+                black_box(
+                    store
+                        .search_with_options(q, 10, None, Some(64), None)
+                        .expect("search"),
+                );
             }
         })
     });
 
-    // Compare: without metadata
-    group.bench_function("768D_ef64_no_metadata", |b| {
+    // Compare: without ef override
+    group.bench_function("768D_default_ef", |b| {
         b.iter(|| {
             for q in &queries {
-                black_box(store.knn_search_with_ef(q, 10, Some(64)).expect("search"));
+                black_box(store.search(q, 10, None).expect("search"));
             }
         })
     });

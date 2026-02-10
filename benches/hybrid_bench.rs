@@ -129,7 +129,11 @@ fn bench_hybrid_search(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("rrf", alpha_label), &alpha, |b, &alpha| {
             b.iter(|| {
                 for (qv, qt) in query_vectors.iter().zip(query_texts.iter().cycle()) {
-                    black_box(store.hybrid_search(qv, qt, 10, Some(alpha)).unwrap());
+                    black_box(
+                        store
+                            .search_hybrid(qv, qt, 10, None, Some(alpha), None)
+                            .unwrap(),
+                    );
                 }
             })
         });
@@ -155,7 +159,7 @@ fn bench_hybrid_overhead(c: &mut Criterion) {
     let mut vector_store = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         vector_store
-            .insert_with_metadata(format!("doc{i}"), v.clone(), json!({}))
+            .set(format!("doc{i}"), v.clone(), json!({}))
             .unwrap();
     }
 
@@ -174,7 +178,7 @@ fn bench_hybrid_overhead(c: &mut Criterion) {
     group.bench_function("vector_only_768D", |b| {
         b.iter(|| {
             for q in &query_vectors {
-                black_box(vector_store.knn_search(q, 10).unwrap());
+                black_box(vector_store.search(q, 10, None).unwrap());
             }
         })
     });
@@ -182,7 +186,11 @@ fn bench_hybrid_overhead(c: &mut Criterion) {
     group.bench_function("hybrid_768D", |b| {
         b.iter(|| {
             for q in &query_vectors {
-                black_box(hybrid_store.hybrid_search(q, query_text, 10, None).unwrap());
+                black_box(
+                    hybrid_store
+                        .search_hybrid(q, query_text, 10, None, None, None)
+                        .unwrap(),
+                );
             }
         })
     });

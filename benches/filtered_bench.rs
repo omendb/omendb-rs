@@ -4,8 +4,7 @@
 //! Run: cargo bench --bench filtered_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omendb::vector::store::MetadataFilter;
-use omendb::vector::{Vector, VectorStore};
+use omendb::{MetadataFilter, Vector, VectorStore};
 use rand::Rng;
 use serde_json::json;
 
@@ -31,7 +30,7 @@ fn bench_filtered_search(c: &mut Criterion) {
     // Insert with category metadata (10 categories, ~1000 vectors each)
     for (i, v) in vectors.iter().enumerate() {
         store
-            .insert_with_metadata(
+            .set(
                 format!("d{i}"),
                 v.clone(),
                 json!({
@@ -58,7 +57,7 @@ fn bench_filtered_search(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("unfiltered", "100%"), |b| {
         b.iter(|| {
             for q in &queries {
-                black_box(store.knn_search_readonly(q, 10, None).expect("search"));
+                black_box(store.search(q, 10, None).expect("search"));
             }
         })
     });
@@ -67,11 +66,7 @@ fn bench_filtered_search(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("filtered", "10%"), |b| {
         b.iter(|| {
             for q in &queries {
-                black_box(
-                    store
-                        .knn_search_with_filter(q, 10, &filter_10pct)
-                        .expect("search"),
-                );
+                black_box(store.search(q, 10, Some(&filter_10pct)).expect("search"));
             }
         })
     });
@@ -80,11 +75,7 @@ fn bench_filtered_search(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("filtered", "1%"), |b| {
         b.iter(|| {
             for q in &queries {
-                black_box(
-                    store
-                        .knn_search_with_filter(q, 10, &filter_1pct)
-                        .expect("search"),
-                );
+                black_box(store.search(q, 10, Some(&filter_1pct)).expect("search"));
             }
         })
     });
@@ -93,11 +84,7 @@ fn bench_filtered_search(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("filtered", "0.1%"), |b| {
         b.iter(|| {
             for q in &queries {
-                black_box(
-                    store
-                        .knn_search_with_filter(q, 10, &filter_01pct)
-                        .expect("search"),
-                );
+                black_box(store.search(q, 10, Some(&filter_01pct)).expect("search"));
             }
         })
     });
@@ -119,7 +106,7 @@ fn bench_filtered_recall(c: &mut Criterion) {
 
     for (i, v) in vectors.iter().enumerate() {
         store
-            .insert_with_metadata(
+            .set(
                 format!("d{i}"),
                 v.clone(),
                 json!({
@@ -139,12 +126,10 @@ fn bench_filtered_recall(c: &mut Criterion) {
             let mut total_recall = 0.0;
             for q in &queries {
                 // Get HNSW results
-                let hnsw_results = store
-                    .knn_search_with_filter(q, 10, &filter)
-                    .expect("search");
+                let hnsw_results = store.search(q, 10, Some(&filter)).expect("search");
 
                 // Get brute force ground truth
-                let mut brute_force: Vec<(usize, f32)> = vectors
+                let mut brute_force: Vec<(String, f32)> = vectors
                     .iter()
                     .enumerate()
                     .filter(|(i, _)| i % 10 == 0) // Same filter
@@ -155,7 +140,7 @@ fn bench_filtered_recall(c: &mut Criterion) {
                             .zip(&v.data)
                             .map(|(a, b)| (a - b).powi(2))
                             .sum::<f32>();
-                        (i, dist)
+                        (format!("d{i}"), dist)
                     })
                     .collect();
                 brute_force.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -163,9 +148,9 @@ fn bench_filtered_recall(c: &mut Criterion) {
 
                 // Calculate recall
                 let ground_truth: std::collections::HashSet<_> =
-                    brute_force.iter().map(|(i, _)| *i).collect();
+                    brute_force.iter().map(|(id, _)| id.clone()).collect();
                 let found: std::collections::HashSet<_> =
-                    hnsw_results.iter().map(|(i, _, _)| *i).collect();
+                    hnsw_results.iter().map(|r| r.id.clone()).collect();
                 let recall = found.intersection(&ground_truth).count() as f64 / 10.0;
                 total_recall += recall;
             }
