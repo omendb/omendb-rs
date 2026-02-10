@@ -89,13 +89,9 @@ impl NodeStorage {
     ///
     /// Returns error if SQ8 quantization training fails.
     pub fn set_vector(&mut self, id: u32, vector: &[f32]) -> Result<(), &'static str> {
-        assert_eq!(
-            vector.len(),
-            self.dimensions,
-            "Vector length {} doesn't match dimensions {}",
-            vector.len(),
-            self.dimensions
-        );
+        if vector.len() != self.dimensions {
+            return Err("Vector dimension mismatch");
+        }
 
         if self.sq8 {
             self.set_vector_sq8(id, vector)?;

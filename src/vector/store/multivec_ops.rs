@@ -173,7 +173,7 @@ impl VectorStore {
                 .collect();
             multivec_storage
                 .add(&token_refs)
-                .map_err(|e| anyhow::anyhow!(e))?;
+                .map_err(anyhow::Error::msg)?;
         }
 
         // Prepare batch for set_batch (maintains original batch order - set_batch reorders internally)
@@ -510,7 +510,7 @@ impl VectorStore {
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
         let token_slot = multivec_storage
             .add(&final_refs)
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .map_err(anyhow::Error::msg)?;
 
         if slot as u32 != token_slot {
             anyhow::bail!(

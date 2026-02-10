@@ -342,11 +342,11 @@ impl FrozenSegment {
             if let Some(vector) = mutable.index.get_vector(id) {
                 storage
                     .set_vector(id, vector)
-                    .expect("non-SQ8 frozen storage");
+                    .expect("set_vector cannot fail on non-SQ8 storage");
             } else if let Some(vector) = mutable.index.get_vector_dequantized(id) {
                 storage
                     .set_vector(id, &vector)
-                    .expect("non-SQ8 frozen storage");
+                    .expect("set_vector cannot fail on non-SQ8 storage");
             }
 
             // Copy level 0 neighbors (main graph layer)
