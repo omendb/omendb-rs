@@ -21,6 +21,27 @@
 - Remove RaBitQ references from README, CLAUDE.md, examples, and benchmarks
 - Remove internal docs from public repo
 
+### API Changes
+
+- Rename `text_search` → `search_text`, `hybrid_search` → `search_hybrid` (verb-first consistency)
+- Remove `get_ef_search()` — use `ef_search` property instead (Python: `db.ef_search`, Node: `db.efSearch`)
+- Reduce ~16 internal methods from `pub` to `pub(crate)`
+- Remove `MuveraConfig` type alias (use `MultiVectorConfig` directly)
+
+### FFI
+
+- Add 12 new FFI functions: update, delete_by_filter, compact, optimize, exists, stats, enable_text_search, has_text_search, set_with_text, text_search, hybrid_search, flush (21 total)
+- Regenerate C header (`include/omendb.h`) with all functions and correct field names
+- Fix late null-pointer checks — validate all output pointers before work
+- Use `store.dimensions()` in stats instead of cached copy
+
+### Robustness
+
+- Use `handle_alloc_error` instead of `expect` on allocation failure in node_storage
+- Guard u64→u32 config casts with `try_from` fallbacks in file.rs
+- Return error from SQ8 params invariant instead of panicking
+- Replace `MuveraConfigTuple` (6-element tuple) with `PersistedMuveraConfig` named struct
+
 ### Cleanup
 
 - Remove dead code: `SearchConfig`, duplicate `get_by_internal_index`, `_bench_*` functions

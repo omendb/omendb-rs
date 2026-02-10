@@ -153,8 +153,8 @@ db.optimize()                           # Reorder for cache locality
 db.merge_from(other_db)                 # Merge databases
 
 # Config
-db.get_ef_search()                      # Get search quality
-db.set_ef_search(200)                   # Set search quality
+db.ef_search                            # Get search quality
+db.ef_search = 200                      # Set search quality
 db.dimensions                           # Vector dimensionality
 db.stats()                              # Database statistics
 ```
@@ -361,13 +361,13 @@ The `ef_search` parameter controls the recall/speed tradeoff at query time. High
 
 ```python
 # Check current value
-print(db.get_ef_search())  # 100
+print(db.ef_search)  # 100
 
 # Increase for better recall (slower)
-db.set_ef_search(200)
+db.ef_search = 200
 
 # Decrease for speed (may reduce recall)
-db.set_ef_search(50)
+db.ef_search = 50
 
 # Per-query override
 results = db.search(query, k=10, ef=300)
