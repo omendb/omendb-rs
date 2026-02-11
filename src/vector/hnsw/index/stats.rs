@@ -87,7 +87,7 @@ impl HNSWIndex {
     /// ```rust,no_run
     /// # use omendb::vector::hnsw::*;
     /// # fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    /// # let mut index = HNSWIndex::new(128, HNSWParams::default(), DistanceFunction::L2, false)?;
+    /// # let mut index = HNSWIndex::new(128, HNSWParams::default(), Metric::L2, false)?;
     /// // After building index...
     /// let edges = index.get_all_edges();
     /// for (node_id, level, neighbors) in edges {

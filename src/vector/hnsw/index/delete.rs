@@ -340,7 +340,7 @@ impl HNSWIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
+    use crate::vector::hnsw::types::{HNSWParams, Metric};
 
     const TEST_EF_SEARCH: usize = 50;
 
@@ -350,7 +350,7 @@ mod tests {
             ef_construction: 50,
             ..Default::default()
         };
-        let mut index = HNSWIndex::new(dimensions, params, DistanceFunction::L2, false).unwrap();
+        let mut index = HNSWIndex::new(dimensions, params, Metric::L2, false).unwrap();
 
         // Insert random vectors
         for i in 0..num_vectors {
@@ -478,7 +478,7 @@ mod tests {
 #[cfg(test)]
 mod small_graph_tests {
     use super::*;
-    use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
+    use crate::vector::hnsw::types::{HNSWParams, Metric};
 
     #[test]
     fn test_small_graph_lazy_delete() {
@@ -488,7 +488,7 @@ mod small_graph_tests {
             ef_construction: 100,
             ..Default::default()
         };
-        let mut index = HNSWIndex::new(128, params, DistanceFunction::L2, false).unwrap();
+        let mut index = HNSWIndex::new(128, params, Metric::L2, false).unwrap();
 
         // Insert 5 uniform vectors
         for i in 0..5 {

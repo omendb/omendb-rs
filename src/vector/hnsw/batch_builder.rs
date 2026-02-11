@@ -14,7 +14,7 @@ use crate::distance::l2_distance_squared;
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::GraphMerger;
-use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
+use crate::vector::hnsw::types::{HNSWParams, Metric};
 use rayon::prelude::*;
 
 /// Number of clusters per thread for parallel batch construction
@@ -223,7 +223,7 @@ impl BatchBuilder {
     pub fn build(
         vectors: &[Vec<f32>],
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
     ) -> Result<HNSWIndex> {
         if vectors.is_empty() {
             return HNSWIndex::new(0, params, distance_fn, false);
@@ -294,7 +294,7 @@ impl BatchBuilder {
         vectors: &[Vec<f32>],
         dimensions: usize,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
     ) -> Result<HNSWIndex> {
         let mut index = HNSWIndex::new(dimensions, params, distance_fn, false)?;
         for vector in vectors {
@@ -381,7 +381,7 @@ impl BatchBuilder {
     pub fn build_quantized(
         vectors: &[Vec<f32>],
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
     ) -> Result<HNSWIndex> {
         if vectors.is_empty() {
             return HNSWIndex::new(0, params, distance_fn, true);
@@ -442,7 +442,7 @@ mod tests {
         let vectors: Vec<Vec<f32>> = (0..50).map(|i| vec![i as f32, 0.0, 0.0, 0.0]).collect();
 
         let params = HNSWParams::default();
-        let index = BatchBuilder::build(&vectors, params, DistanceFunction::L2).unwrap();
+        let index = BatchBuilder::build(&vectors, params, Metric::L2).unwrap();
 
         assert_eq!(index.len(), 50);
 
@@ -463,7 +463,7 @@ mod tests {
             ef_construction: 50,
             ..Default::default()
         };
-        let index = BatchBuilder::build(&vectors, params, DistanceFunction::L2).unwrap();
+        let index = BatchBuilder::build(&vectors, params, Metric::L2).unwrap();
 
         assert_eq!(index.len(), 500);
 
@@ -489,7 +489,7 @@ mod tests {
             ef_construction: 50,
             ..Default::default()
         };
-        let index = BatchBuilder::build(&vectors, params, DistanceFunction::L2).unwrap();
+        let index = BatchBuilder::build(&vectors, params, Metric::L2).unwrap();
 
         assert_eq!(index.len(), 2000);
     }
@@ -543,7 +543,7 @@ mod tests {
             ef_construction: 100,
             ..Default::default()
         };
-        let index = BatchBuilder::build(&vectors, params, DistanceFunction::L2).unwrap();
+        let index = BatchBuilder::build(&vectors, params, Metric::L2).unwrap();
         assert_eq!(index.len(), 2000);
 
         // Test query in overlap region (5, 5) - should find vectors from multiple clusters
@@ -625,10 +625,10 @@ mod tests {
         };
 
         // Build with batch builder (clustering + IGTM merge)
-        let batch_index = BatchBuilder::build(&vectors, params, DistanceFunction::L2).unwrap();
+        let batch_index = BatchBuilder::build(&vectors, params, Metric::L2).unwrap();
 
         // Build sequentially
-        let mut sequential_index = HNSWIndex::new(4, params, DistanceFunction::L2, false).unwrap();
+        let mut sequential_index = HNSWIndex::new(4, params, Metric::L2, false).unwrap();
         for v in &vectors {
             sequential_index.insert(v).unwrap();
         }

@@ -102,7 +102,7 @@ pub mod vector;
 // Re-export core types
 pub use compression::{QueryPrep, ScalarParams};
 pub use distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
-pub use types::{CompactionStats, DistanceMetric, OmenDBError, Result, VectorID};
+pub use types::{CompactionStats, Metric, OmenDBError, Result, VectorID};
 pub use vector::{
     muvera::MultiVectorConfig,
     store::{

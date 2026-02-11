@@ -5,7 +5,7 @@
 use super::{MergePolicy, SegmentConfig, SegmentManager};
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment};
-use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
+use crate::vector::hnsw::types::{HNSWParams, Metric};
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -49,9 +49,9 @@ impl SegmentManager {
             ..Default::default()
         };
         let distance_fn = match manifest["distance_fn"].as_str().unwrap_or("L2") {
-            "Cosine" => DistanceFunction::Cosine,
-            "NegativeDotProduct" => DistanceFunction::NegativeDotProduct,
-            _ => DistanceFunction::L2,
+            "Cosine" => Metric::Cosine,
+            "NegativeDotProduct" | "InnerProduct" => Metric::InnerProduct,
+            _ => Metric::L2,
         };
         let segment_capacity = manifest["segment_capacity"].as_u64().unwrap_or(100_000) as usize;
 

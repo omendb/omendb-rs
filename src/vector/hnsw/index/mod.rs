@@ -17,15 +17,15 @@
 macro_rules! dispatch_distance {
     ($distance_fn:expr, $Type:ident => $body:expr) => {
         match $distance_fn {
-            crate::vector::hnsw::types::DistanceFunction::L2 => {
+            crate::vector::hnsw::types::Metric::L2 => {
                 type $Type = crate::vector::hnsw::types::L2;
                 $body
             }
-            crate::vector::hnsw::types::DistanceFunction::Cosine => {
+            crate::vector::hnsw::types::Metric::Cosine => {
                 type $Type = crate::vector::hnsw::types::Cosine;
                 $body
             }
-            crate::vector::hnsw::types::DistanceFunction::NegativeDotProduct => {
+            crate::vector::hnsw::types::Metric::InnerProduct => {
                 type $Type = crate::vector::hnsw::types::NegDot;
                 $body
             }
@@ -48,7 +48,7 @@ pub use parallel::ParallelBuilder;
 
 use super::error::{HNSWError, Result};
 use super::node_storage::NodeStorage;
-use super::types::{DistanceFunction, HNSWParams};
+use super::types::{HNSWParams, Metric};
 use serde::{Deserialize, Serialize};
 
 /// Index statistics for monitoring and debugging
@@ -82,7 +82,7 @@ pub struct IndexStats {
     pub params: HNSWParams,
 
     /// Distance function
-    pub distance_function: DistanceFunction,
+    pub distance_function: Metric,
 
     /// Whether quantization is enabled
     pub quantization_enabled: bool,
@@ -110,7 +110,7 @@ pub struct HNSWIndex {
     pub(super) params: HNSWParams,
 
     /// Distance function
-    pub(super) distance_fn: DistanceFunction,
+    pub(super) distance_fn: Metric,
 
     /// Random number generator seed state
     pub(super) rng_state: u64,
@@ -118,7 +118,7 @@ pub struct HNSWIndex {
 
 impl HNSWIndex {
     /// Build an HNSWIndex with pre-created storage
-    fn build(storage: NodeStorage, params: HNSWParams, distance_fn: DistanceFunction) -> Self {
+    fn build(storage: NodeStorage, params: HNSWParams, distance_fn: Metric) -> Self {
         Self {
             storage,
             entry_point: None,
@@ -131,11 +131,11 @@ impl HNSWIndex {
     /// Validate params and check that distance function is L2 (required for quantized modes)
     fn validate_l2_required(
         params: &HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
         mode_name: &str,
     ) -> Result<()> {
         params.validate().map_err(HNSWError::InvalidParams)?;
-        if !matches!(distance_fn, DistanceFunction::L2) {
+        if !matches!(distance_fn, Metric::L2) {
             return Err(HNSWError::InvalidParams(format!(
                 "{mode_name} only supports L2 distance function"
             )));
@@ -153,7 +153,7 @@ impl HNSWIndex {
     pub fn new(
         dimensions: usize,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
         use_quantization: bool,
     ) -> Result<Self> {
         if use_quantization {
@@ -184,12 +184,12 @@ impl HNSWIndex {
     /// # Example
     /// ```ignore
     /// let params = HNSWParams::default();
-    /// let index = HNSWIndex::new_with_sq8(768, params, DistanceFunction::L2)?;
+    /// let index = HNSWIndex::new_with_sq8(768, params, Metric::L2)?;
     /// ```
     pub fn new_with_sq8(
         dimensions: usize,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
     ) -> Result<Self> {
         Self::validate_l2_required(&params, distance_fn, "SQ8 quantization")?;
         let storage = NodeStorage::new_sq8(dimensions, params.m, params.max_level as usize);
@@ -363,7 +363,7 @@ impl HNSWIndex {
         // Distance function
         let df_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
-        let distance_fn: DistanceFunction = postcard::from_bytes(&data[pos..pos + df_len])?;
+        let distance_fn: Metric = postcard::from_bytes(&data[pos..pos + df_len])?;
         pos += df_len;
 
         // Params
@@ -399,7 +399,7 @@ impl HNSWIndex {
 
     /// Get distance function
     #[must_use]
-    pub fn distance_function(&self) -> DistanceFunction {
+    pub fn distance_function(&self) -> Metric {
         self.distance_fn
     }
 

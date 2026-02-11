@@ -8,7 +8,7 @@
 use super::HNSWIndex;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::NodeStorage;
-use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
+use crate::vector::hnsw::types::{HNSWParams, Metric};
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
@@ -38,7 +38,7 @@ impl HNSWIndex {
     /// - Magic: b"HNSWIDX\0" (8 bytes)
     /// - Version: u32 (4 bytes)
     /// - Entry point: Option<u32> (1 + 4 bytes)
-    /// - Distance function: `DistanceFunction` (length-prefixed postcard)
+    /// - Distance function: `Metric` (length-prefixed postcard)
     /// - Params: `HNSWParams` (length-prefixed postcard)
     /// - RNG state: u64 (8 bytes)
     /// - Storage: `NodeStorage` (length-prefixed blob)
@@ -169,7 +169,7 @@ impl HNSWIndex {
         }
         let mut df_bytes = vec![0u8; df_len];
         reader.read_exact(&mut df_bytes)?;
-        let distance_fn: DistanceFunction = postcard::from_bytes(&df_bytes)?;
+        let distance_fn: Metric = postcard::from_bytes(&df_bytes)?;
 
         // Read params (length-prefixed postcard)
         reader.read_exact(&mut len_bytes)?;
@@ -262,7 +262,7 @@ impl HNSWIndex {
         let df_len = u32::from_le_bytes(len_bytes) as usize;
         let mut df_bytes = vec![0u8; df_len];
         reader.read_exact(&mut df_bytes)?;
-        let distance_fn: DistanceFunction = postcard::from_bytes(&df_bytes)?;
+        let distance_fn: Metric = postcard::from_bytes(&df_bytes)?;
 
         // Read params (length-prefixed postcard)
         reader.read_exact(&mut len_bytes)?;

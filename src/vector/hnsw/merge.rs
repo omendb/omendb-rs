@@ -343,7 +343,7 @@ impl Default for GraphMerger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::hnsw::{DistanceFunction, HNSWParams};
+    use crate::vector::hnsw::{HNSWParams, Metric};
 
     fn create_test_index(num_vectors: usize, dim: usize) -> HNSWIndex {
         let params = HNSWParams {
@@ -351,7 +351,7 @@ mod tests {
             ef_construction: 100,
             ..Default::default()
         };
-        let mut index = HNSWIndex::new(dim, params, DistanceFunction::L2, false).unwrap();
+        let mut index = HNSWIndex::new(dim, params, Metric::L2, false).unwrap();
 
         for i in 0..num_vectors {
             let vector: Vec<f32> = (0..dim).map(|j| (i * dim + j) as f32 / 100.0).collect();
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn test_merge_empty_small_graph() {
         let mut large = create_test_index(100, 8);
-        let small = HNSWIndex::new(8, HNSWParams::default(), DistanceFunction::L2, false).unwrap();
+        let small = HNSWIndex::new(8, HNSWParams::default(), Metric::L2, false).unwrap();
 
         let merger = GraphMerger::new();
         let stats = merger.merge_graphs(&mut large, &small).unwrap();

@@ -24,7 +24,7 @@
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::NodeStorage;
 use crate::vector::hnsw::segment::FrozenSegment;
-use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
+use crate::vector::hnsw::types::{HNSWParams, Metric};
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
@@ -219,7 +219,7 @@ impl FrozenSegment {
         let df_len = u32::from_le_bytes(len_bytes) as usize;
         let mut df_bytes = vec![0u8; df_len];
         reader.read_exact(&mut df_bytes)?;
-        let distance_fn: DistanceFunction = postcard::from_bytes(&df_bytes)?;
+        let distance_fn: Metric = postcard::from_bytes(&df_bytes)?;
 
         // Read params
         reader.read_exact(&mut len_bytes)?;
@@ -379,7 +379,7 @@ impl FrozenSegment {
         let df_len = u32::from_le_bytes(len_bytes) as usize;
         let mut df_bytes = vec![0u8; df_len];
         reader.read_exact(&mut df_bytes)?;
-        let distance_fn: DistanceFunction = postcard::from_bytes(&df_bytes)?;
+        let distance_fn: Metric = postcard::from_bytes(&df_bytes)?;
 
         // Read params
         reader.read_exact(&mut len_bytes)?;
@@ -516,7 +516,7 @@ mod tests {
         let path = dir.path().join("segment.bin");
 
         // Create mutable segment and insert vectors
-        let mut mutable = MutableSegment::new(4, default_params(), DistanceFunction::L2).unwrap();
+        let mut mutable = MutableSegment::new(4, default_params(), Metric::L2).unwrap();
         for i in 0..10 {
             mutable.insert(&[i as f32, 0.0, 0.0, 0.0]).unwrap();
         }
@@ -545,7 +545,7 @@ mod tests {
         let path = dir.path().join("empty_segment.bin");
 
         // Create empty frozen segment
-        let mutable = MutableSegment::new(4, default_params(), DistanceFunction::L2).unwrap();
+        let mutable = MutableSegment::new(4, default_params(), Metric::L2).unwrap();
         let frozen = mutable.freeze();
         assert_eq!(frozen.len(), 0);
 
@@ -564,8 +564,7 @@ mod tests {
 
         // Create segment with many vectors
         let mut mutable =
-            MutableSegment::with_capacity(128, default_params(), DistanceFunction::L2, 1000)
-                .unwrap();
+            MutableSegment::with_capacity(128, default_params(), Metric::L2, 1000).unwrap();
         for i in 0..500 {
             let vector: Vec<f32> = (0..128)
                 .map(|j| ((i * 128 + j) % 256) as f32 / 256.0)
@@ -597,8 +596,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("cosine_segment.bin");
 
-        let mut mutable =
-            MutableSegment::new(4, default_params(), DistanceFunction::Cosine).unwrap();
+        let mut mutable = MutableSegment::new(4, default_params(), Metric::Cosine).unwrap();
         mutable.insert(&[1.0, 0.0, 0.0, 0.0]).unwrap();
         mutable.insert(&[0.0, 1.0, 0.0, 0.0]).unwrap();
         mutable.insert(&[0.707, 0.707, 0.0, 0.0]).unwrap();
@@ -607,7 +605,7 @@ mod tests {
         frozen.save(&path).unwrap();
 
         let loaded = FrozenSegment::load(&path).unwrap();
-        assert_eq!(loaded.distance_function(), DistanceFunction::Cosine);
+        assert_eq!(loaded.distance_function(), Metric::Cosine);
 
         let results = loaded.search(&[1.0, 0.0, 0.0, 0.0], 3, 50);
         assert!(!results.is_empty());

@@ -12,7 +12,7 @@
 
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::node_storage::NodeStorage;
-use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
+use crate::vector::hnsw::types::{HNSWParams, Metric};
 
 /// Search result from a segment
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl MutableSegment {
     pub fn new(
         dimensions: usize,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
     ) -> crate::vector::hnsw::error::Result<Self> {
         Ok(Self {
             index: HNSWIndex::new(dimensions, params, distance_fn, false)?,
@@ -66,7 +66,7 @@ impl MutableSegment {
     pub fn with_capacity(
         dimensions: usize,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
         capacity: usize,
     ) -> crate::vector::hnsw::error::Result<Self> {
         Ok(Self {
@@ -81,7 +81,7 @@ impl MutableSegment {
     pub fn new_quantized(
         dimensions: usize,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
     ) -> crate::vector::hnsw::error::Result<Self> {
         Ok(Self {
             index: HNSWIndex::new(dimensions, params, distance_fn, true)?,
@@ -166,7 +166,7 @@ impl MutableSegment {
 
     /// Get distance function
     #[inline]
-    pub fn distance_function(&self) -> DistanceFunction {
+    pub fn distance_function(&self) -> Metric {
         self.index.distance_function()
     }
 
@@ -296,7 +296,7 @@ impl FrozenSegment {
         id: u64,
         entry_point: Option<u32>,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
         storage: NodeStorage,
     ) -> Self {
         Self {
@@ -396,7 +396,7 @@ impl FrozenSegment {
 
     /// Get distance function
     #[inline]
-    pub fn distance_function(&self) -> DistanceFunction {
+    pub fn distance_function(&self) -> Metric {
         self.index.distance_function()
     }
 
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_mutable_segment_insert_and_search() {
-        let mut segment = MutableSegment::new(4, default_params(), DistanceFunction::L2).unwrap();
+        let mut segment = MutableSegment::new(4, default_params(), Metric::L2).unwrap();
 
         // Insert some vectors
         let v1 = vec![1.0, 0.0, 0.0, 0.0];
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_frozen_segment_search() {
-        let mut mutable = MutableSegment::new(4, default_params(), DistanceFunction::L2).unwrap();
+        let mut mutable = MutableSegment::new(4, default_params(), Metric::L2).unwrap();
 
         // Insert vectors
         mutable.insert(&[1.0, 0.0, 0.0, 0.0]).unwrap();
@@ -513,8 +513,7 @@ mod tests {
     #[test]
     fn test_frozen_segment_preserves_graph() {
         let mut mutable =
-            MutableSegment::with_capacity(128, default_params(), DistanceFunction::L2, 1000)
-                .unwrap();
+            MutableSegment::with_capacity(128, default_params(), Metric::L2, 1000).unwrap();
 
         // Insert 100 random-ish vectors
         for i in 0..100 {
@@ -543,14 +542,13 @@ mod tests {
 
     #[test]
     fn test_segment_capacity() {
-        let segment =
-            MutableSegment::with_capacity(4, default_params(), DistanceFunction::L2, 5).unwrap();
+        let segment = MutableSegment::with_capacity(4, default_params(), Metric::L2, 5).unwrap();
         assert!(!segment.is_full());
     }
 
     #[test]
     fn test_frozen_segment_filtered_search() {
-        let mut mutable = MutableSegment::new(4, default_params(), DistanceFunction::L2).unwrap();
+        let mut mutable = MutableSegment::new(4, default_params(), Metric::L2).unwrap();
 
         // Insert vectors with slots 0-9
         for i in 0..10 {
@@ -575,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_frozen_segment_filtered_search_no_matches() {
-        let mut mutable = MutableSegment::new(4, default_params(), DistanceFunction::L2).unwrap();
+        let mut mutable = MutableSegment::new(4, default_params(), Metric::L2).unwrap();
 
         for i in 0..10 {
             let vector = vec![i as f32, 0.0, 0.0, 0.0];
@@ -592,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_mutable_segment_filtered_search() {
-        let mut segment = MutableSegment::new(4, default_params(), DistanceFunction::L2).unwrap();
+        let mut segment = MutableSegment::new(4, default_params(), Metric::L2).unwrap();
 
         // Insert with custom slots
         for i in 0..20 {

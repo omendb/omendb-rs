@@ -24,7 +24,7 @@ mod storage;
 mod types;
 
 // Public API exports
-pub use types::{Candidate, DistanceFunction, HNSWNode, HNSWParams, SearchResult};
+pub use types::{Candidate, HNSWNode, HNSWParams, Metric, SearchResult};
 
 // Export trait-based distance types for monomorphization
 pub use types::{Cosine, Distance, NegDot, L2};

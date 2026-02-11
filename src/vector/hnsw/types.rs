@@ -220,78 +220,12 @@ impl Default for HNSWNode {
 // Compile-time assertion that HNSWNode is exactly 64 bytes
 const _: () = assert!(std::mem::size_of::<HNSWNode>() == 64);
 
-/// Distance function for vector similarity
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DistanceFunction {
-    /// L2 / Euclidean distance
-    L2,
-    /// Cosine distance (1 - cosine similarity)
-    Cosine,
-    /// Negative inner product (for maximum inner product search)
-    NegativeDotProduct,
-}
-
-impl DistanceFunction {
-    /// Compute distance between two vectors
-    ///
-    /// Uses SIMD-accelerated implementations when `simd` feature is enabled.
-    /// Falls back to optimized scalar implementations otherwise.
-    #[must_use]
-    pub fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        match self {
-            Self::L2 => l2_distance(a, b),
-            Self::Cosine => cosine_distance(a, b),
-            Self::NegativeDotProduct => -dot_product(a, b),
-        }
-    }
-
-    /// Compute distance for internal comparisons (optimized, may not be actual distance)
-    ///
-    /// For L2: returns squared distance (skips sqrt) since relative ordering is preserved
-    /// For Cosine/NegativeDotProduct: same as `distance()`
-    ///
-    /// This is ~10-15% faster for L2 in HNSW `search_layer`.
-    #[inline(always)]
-    #[must_use]
-    pub fn distance_for_comparison(&self, a: &[f32], b: &[f32]) -> f32 {
-        match self {
-            Self::L2 => l2_distance_squared(a, b),
-            Self::Cosine => cosine_distance(a, b),
-            Self::NegativeDotProduct => -dot_product(a, b),
-        }
-    }
-
-    /// Compute distance for comparisons with precomputed query norm
-    ///
-    /// Like `distance_for_comparison` but avoids redundant query norm computation
-    /// for cosine distance. L2 and NegativeDotProduct ignore the norm parameter.
-    #[inline(always)]
-    #[must_use]
-    pub fn distance_for_comparison_precomputed(&self, a: &[f32], b: &[f32], a_norm: f32) -> f32 {
-        match self {
-            Self::L2 => l2_distance_squared(a, b),
-            Self::Cosine => cosine_distance_precomputed(a, b, a_norm),
-            Self::NegativeDotProduct => -dot_product(a, b),
-        }
-    }
-
-    /// Convert comparison distance back to actual distance
-    ///
-    /// For L2: applies sqrt
-    /// For others: identity
-    #[inline]
-    #[must_use]
-    pub fn comparison_to_actual(&self, d: f32) -> f32 {
-        match self {
-            Self::L2 => d.sqrt(),
-            _ => d,
-        }
-    }
-}
+// Re-export Metric as the canonical distance enum
+pub use crate::types::Metric;
 
 // Re-export SIMD distance functions (single source of truth)
 pub use crate::distance::{
-    cosine_distance, cosine_distance_precomputed, dot_product, l2_distance, l2_distance_squared,
+    cosine_distance, cosine_distance_precomputed, dot_product, l2_distance_squared,
 };
 
 // Distance trait for monomorphization (~10-15% faster search via static dispatch)
@@ -316,7 +250,7 @@ pub trait Distance: Copy + Clone + Send + Sync + 'static {
     fn to_actual(d: f32) -> f32;
 
     /// Get the enum variant for runtime dispatch when needed
-    fn as_enum() -> DistanceFunction;
+    fn as_enum() -> Metric;
 }
 
 /// L2 (Euclidean) distance
@@ -335,8 +269,8 @@ impl Distance for L2 {
     }
 
     #[inline(always)]
-    fn as_enum() -> DistanceFunction {
-        DistanceFunction::L2
+    fn as_enum() -> Metric {
+        Metric::L2
     }
 }
 
@@ -361,8 +295,8 @@ impl Distance for Cosine {
     }
 
     #[inline(always)]
-    fn as_enum() -> DistanceFunction {
-        DistanceFunction::Cosine
+    fn as_enum() -> Metric {
+        Metric::Cosine
     }
 }
 
@@ -382,8 +316,8 @@ impl Distance for NegDot {
     }
 
     #[inline(always)]
-    fn as_enum() -> DistanceFunction {
-        DistanceFunction::NegativeDotProduct
+    fn as_enum() -> Metric {
+        Metric::InnerProduct
     }
 }
 

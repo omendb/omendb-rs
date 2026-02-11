@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn test_hnsw_index_creation() {
     let params = HNSWParams::default();
-    let index = HNSWIndex::new(128, params, DistanceFunction::L2, false).unwrap();
+    let index = HNSWIndex::new(128, params, Metric::L2, false).unwrap();
 
     assert_eq!(index.len(), 0);
     assert_eq!(index.dimensions(), 128);
@@ -15,7 +15,7 @@ fn test_hnsw_index_creation() {
 #[test]
 fn test_hnsw_index_insert_single() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     let vec = vec![1.0, 2.0, 3.0];
     let id = index.insert(&vec).unwrap();
@@ -28,7 +28,7 @@ fn test_hnsw_index_insert_single() {
 #[test]
 fn test_hnsw_index_insert_multiple() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     let vec1 = vec![1.0, 2.0, 3.0];
     let vec2 = vec![4.0, 5.0, 6.0];
@@ -47,7 +47,7 @@ fn test_hnsw_index_insert_multiple() {
 #[test]
 fn test_hnsw_index_dimension_validation() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     let wrong_dim = vec![1.0, 2.0]; // Only 2 dimensions
     assert!(index.insert(&wrong_dim).is_err());
@@ -56,7 +56,7 @@ fn test_hnsw_index_dimension_validation() {
 #[test]
 fn test_hnsw_index_insert_nan_rejected() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // NaN should be rejected
     let vec_nan = vec![1.0, f32::NAN, 3.0];
@@ -68,7 +68,7 @@ fn test_hnsw_index_insert_nan_rejected() {
 #[test]
 fn test_hnsw_index_insert_infinity_rejected() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Positive infinity should be rejected
     let vec_inf = vec![1.0, f32::INFINITY, 3.0];
@@ -86,7 +86,7 @@ fn test_hnsw_index_insert_infinity_rejected() {
 #[test]
 fn test_hnsw_index_search_nan_rejected() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert a valid vector first
     index.insert(&[1.0, 2.0, 3.0]).unwrap();
@@ -101,7 +101,7 @@ fn test_hnsw_index_search_nan_rejected() {
 #[test]
 fn test_hnsw_index_search_infinity_rejected() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert a valid vector first
     index.insert(&[1.0, 2.0, 3.0]).unwrap();
@@ -116,7 +116,7 @@ fn test_hnsw_index_search_infinity_rejected() {
 #[test]
 fn test_hnsw_index_search_invalid_params_ef_less_than_k() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert vectors
     index.insert(&[1.0, 2.0, 3.0]).unwrap();
@@ -135,7 +135,7 @@ fn test_hnsw_index_search_invalid_params_ef_less_than_k() {
 #[test]
 fn test_hnsw_index_search_invalid_params_ef_zero() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     index.insert(&[1.0, 2.0, 3.0]).unwrap();
 
@@ -152,7 +152,7 @@ fn test_hnsw_index_search_invalid_params_ef_zero() {
 #[test]
 fn test_hnsw_index_search_empty() {
     let params = HNSWParams::default();
-    let index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     let query = vec![1.0, 2.0, 3.0];
     let results = index.search(&query, 5, 100).unwrap();
@@ -163,7 +163,7 @@ fn test_hnsw_index_search_empty() {
 #[test]
 fn test_hnsw_index_search_single() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     let vec = vec![1.0, 2.0, 3.0];
     index.insert(&vec).unwrap();
@@ -178,7 +178,7 @@ fn test_hnsw_index_search_single() {
 #[test]
 fn test_random_level_distribution() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     let mut level_counts = [0; 8];
 
@@ -196,7 +196,7 @@ fn test_random_level_distribution() {
 #[test]
 fn test_memory_usage() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(128, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(128, params, Metric::L2, false).unwrap();
 
     // Insert 10 vectors
     for i in 0..10 {
@@ -217,7 +217,7 @@ fn test_memory_usage() {
 #[test]
 fn test_hnsw_index_search_multiple() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 5 vectors
     let vecs = vec![
@@ -252,7 +252,7 @@ fn test_hnsw_index_search_multiple() {
 #[test]
 fn test_hnsw_index_search_with_ef() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 10 vectors
     for i in 0..10 {
@@ -281,7 +281,7 @@ fn test_hnsw_levels() {
     let mut params = HNSWParams::default();
     params.seed = 12345; // Fixed seed for reproducibility
 
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 100 vectors
     for i in 0..100 {
@@ -315,7 +315,7 @@ fn test_neighbor_count_limits() {
     params.m = 4; // Small M for easier testing
     params.ef_construction = 10;
 
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 20 vectors (enough to test neighbor pruning)
     for i in 0..20 {
@@ -333,7 +333,7 @@ fn test_neighbor_count_limits() {
 #[test]
 fn test_search_recall_simple() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 10 vectors in a line
     for i in 0..10 {
@@ -360,7 +360,7 @@ fn test_save_load_empty() {
     use tempfile::NamedTempFile;
 
     let params = HNSWParams::default();
-    let index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Save empty index
     let temp_file = NamedTempFile::new().unwrap();
@@ -380,7 +380,7 @@ fn test_save_load_small() {
     use tempfile::NamedTempFile;
 
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 10 vectors
     for i in 0..10 {
@@ -428,7 +428,7 @@ fn test_save_load_preserves_graph() {
     use tempfile::NamedTempFile;
 
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert vectors
     for i in 0..20 {
@@ -494,7 +494,7 @@ fn test_load_unsupported_version() {
 #[test]
 fn test_index_stats_empty() {
     let params = HNSWParams::default();
-    let index = HNSWIndex::new(128, params, DistanceFunction::L2, false).unwrap();
+    let index = HNSWIndex::new(128, params, Metric::L2, false).unwrap();
 
     let stats = index.stats();
 
@@ -505,13 +505,13 @@ fn test_index_stats_empty() {
     assert_eq!(stats.avg_neighbors_l0, 0.0);
     assert_eq!(stats.max_neighbors_l0, 0);
     assert!(!stats.quantization_enabled);
-    assert!(matches!(stats.distance_function, DistanceFunction::L2));
+    assert!(matches!(stats.distance_function, Metric::L2));
 }
 
 #[test]
 fn test_index_stats_with_vectors() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 50 vectors
     for i in 0..50 {
@@ -535,7 +535,7 @@ fn test_index_stats_with_vectors() {
 #[test]
 fn test_index_stats_with_quantization() {
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(8, params, DistanceFunction::L2, true).unwrap();
+    let mut index = HNSWIndex::new(8, params, Metric::L2, true).unwrap();
 
     // Insert 10 vectors
     for i in 0..10 {
@@ -555,18 +555,18 @@ fn test_sq8_rejects_non_l2_metric() {
     let params = HNSWParams::default();
 
     // SQ8 + Cosine must fail
-    let result = HNSWIndex::new(8, params, DistanceFunction::Cosine, true);
+    let result = HNSWIndex::new(8, params, Metric::Cosine, true);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("L2"));
 
     // SQ8 + InnerProduct must fail
     let params = HNSWParams::default();
-    let result = HNSWIndex::new(8, params, DistanceFunction::NegativeDotProduct, true);
+    let result = HNSWIndex::new(8, params, Metric::InnerProduct, true);
     assert!(result.is_err());
 
     // SQ8 + L2 must succeed
     let params = HNSWParams::default();
-    let result = HNSWIndex::new(8, params, DistanceFunction::L2, true);
+    let result = HNSWIndex::new(8, params, Metric::L2, true);
     assert!(result.is_ok());
 }
 
@@ -575,7 +575,7 @@ fn test_index_stats_level_distribution() {
     let mut params = HNSWParams::default();
     params.seed = 42; // Fixed seed for reproducibility
 
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 100 vectors
     for i in 0..100 {
@@ -601,7 +601,7 @@ fn test_index_stats_neighbors() {
     let mut params = HNSWParams::default();
     params.m = 8; // Set M for testing
 
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert 30 vectors
     for i in 0..30 {
@@ -623,24 +623,21 @@ fn test_index_stats_neighbors() {
 fn test_index_stats_distance_functions() {
     // Test L2
     let params = HNSWParams::default();
-    let index_l2 = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let index_l2 = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
     let stats = index_l2.stats();
-    assert!(matches!(stats.distance_function, DistanceFunction::L2));
+    assert!(matches!(stats.distance_function, Metric::L2));
 
     // Test Cosine
     let params = HNSWParams::default();
-    let index_cos = HNSWIndex::new(3, params, DistanceFunction::Cosine, false).unwrap();
+    let index_cos = HNSWIndex::new(3, params, Metric::Cosine, false).unwrap();
     let stats = index_cos.stats();
-    assert!(matches!(stats.distance_function, DistanceFunction::Cosine));
+    assert!(matches!(stats.distance_function, Metric::Cosine));
 
     // Test NegativeDotProduct
     let params = HNSWParams::default();
-    let index_dot = HNSWIndex::new(3, params, DistanceFunction::NegativeDotProduct, false).unwrap();
+    let index_dot = HNSWIndex::new(3, params, Metric::InnerProduct, false).unwrap();
     let stats = index_dot.stats();
-    assert!(matches!(
-        stats.distance_function,
-        DistanceFunction::NegativeDotProduct
-    ));
+    assert!(matches!(stats.distance_function, Metric::InnerProduct));
 }
 
 #[test]
@@ -649,7 +646,7 @@ fn test_empty_index_serialization() {
     let path = dir.path().join("test_empty_index.hnsw");
 
     let params = HNSWParams::default();
-    let index = HNSWIndex::new(128, params, DistanceFunction::L2, false).unwrap();
+    let index = HNSWIndex::new(128, params, Metric::L2, false).unwrap();
 
     // Serialize empty index
     index.save(&path).unwrap();
@@ -667,7 +664,7 @@ fn test_thread_safety() {
     use std::thread;
 
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(3, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();
 
     // Insert some data
     for i in 0..10 {
@@ -723,7 +720,7 @@ fn bench_search_qps() {
 
     // Create index
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(dim, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(dim, params, Metric::L2, false).unwrap();
 
     // Batch insert (fair comparison with VectorStore)
     let start = Instant::now();
@@ -1157,7 +1154,7 @@ fn test_sq8_recall_regression() {
 
     // Create SQ8 index and insert vectors
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, Metric::L2).unwrap();
 
     for vec in &vectors {
         index.insert(vec).unwrap();
@@ -1233,7 +1230,7 @@ fn test_sq8_recall_10k() {
 
     // Create SQ8 index and insert vectors
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, Metric::L2).unwrap();
 
     for vec in &vectors {
         index.insert(vec).unwrap();
@@ -1299,7 +1296,7 @@ fn test_sq8_distance_consistency() {
 
     // Create SQ8 index and insert vectors
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, Metric::L2).unwrap();
 
     for vec in &vectors {
         index.insert(vec).unwrap();
@@ -1349,7 +1346,7 @@ fn test_sq8_distance_accuracy() {
 
     // Create SQ8 index
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, Metric::L2).unwrap();
 
     for vec in &vectors {
         index.insert(vec).unwrap();
@@ -1426,7 +1423,7 @@ fn test_optimize_maintains_recall() {
 
     // Create index and insert vectors
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(dim, params, DistanceFunction::L2, false).unwrap();
+    let mut index = HNSWIndex::new(dim, params, Metric::L2, false).unwrap();
 
     for vec in &vectors {
         index.insert(vec).unwrap();
@@ -1527,7 +1524,7 @@ fn test_optimize_maintains_recall_sq8() {
 
     // Create SQ8 index
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new_with_sq8(dim, params, DistanceFunction::L2).unwrap();
+    let mut index = HNSWIndex::new_with_sq8(dim, params, Metric::L2).unwrap();
 
     for vec in &vectors {
         index.insert(vec).unwrap();

@@ -23,7 +23,7 @@ use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::MergeStats;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
-use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
+use crate::vector::hnsw::types::{HNSWParams, Metric};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -35,7 +35,7 @@ pub struct SegmentConfig {
     /// HNSW parameters
     pub params: HNSWParams,
     /// Distance function
-    pub distance_fn: DistanceFunction,
+    pub distance_fn: Metric,
     /// Max vectors per segment before freezing
     pub segment_capacity: usize,
     /// SQ8 quantization enabled (true = 4x compression, false = full precision)
@@ -51,7 +51,7 @@ impl SegmentConfig {
         Self {
             dimensions,
             params: HNSWParams::default(),
-            distance_fn: DistanceFunction::L2,
+            distance_fn: Metric::L2,
             segment_capacity: Self::DEFAULT_CAPACITY,
             quantization: false,
         }
@@ -66,7 +66,7 @@ impl SegmentConfig {
 
     /// Set distance function
     #[must_use]
-    pub fn with_distance(mut self, distance_fn: DistanceFunction) -> Self {
+    pub fn with_distance(mut self, distance_fn: Metric) -> Self {
         self.distance_fn = distance_fn;
         self
     }
@@ -874,7 +874,7 @@ mod tests {
                 max_level: 10,
                 ..Default::default()
             })
-            .with_distance(DistanceFunction::Cosine)
+            .with_distance(Metric::Cosine)
             .with_capacity(50_000);
 
         let policy = MergePolicy {

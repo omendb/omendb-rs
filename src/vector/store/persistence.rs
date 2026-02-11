@@ -223,7 +223,7 @@ impl VectorStore {
                         ef_construction: hnsw_ef_construction,
                         ..Default::default()
                     })
-                    .with_distance(distance_metric.into())
+                    .with_distance(distance_metric)
                     .with_quantization(quantization);
 
                 Some(

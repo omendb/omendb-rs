@@ -9,7 +9,7 @@
 //! - Multiple distance functions (L2, cosine, dot product)
 //! - Optional SQ8 quantization (4x memory reduction)
 
-use super::hnsw::{DistanceFunction, HNSWIndex as CoreHNSW, HNSWParams as CoreParams};
+use super::hnsw::{HNSWIndex as CoreHNSW, HNSWParams as CoreParams, Metric};
 use anyhow::Result;
 use std::path::Path;
 
@@ -74,7 +74,7 @@ pub enum HNSWQuantization {
 ///     .dimensions(768)
 ///     .m(16)
 ///     .ef_construction(100)
-///     .metric(DistanceFunction::Cosine)
+///     .metric(Metric::Cosine)
 ///     .quantization(HNSWQuantization::SQ8)
 ///     .build()?;
 /// ```
@@ -85,7 +85,7 @@ pub struct HNSWIndexBuilder {
     m: usize,
     ef_construction: usize,
     ef_search: usize,
-    metric: DistanceFunction,
+    metric: Metric,
     quantization: HNSWQuantization,
 }
 
@@ -97,7 +97,7 @@ impl Default for HNSWIndexBuilder {
             m: DEFAULT_M,
             ef_construction: DEFAULT_EF_CONSTRUCTION,
             ef_search: DEFAULT_EF_SEARCH,
-            metric: DistanceFunction::L2,
+            metric: Metric::L2,
             quantization: HNSWQuantization::None,
         }
     }
@@ -156,7 +156,7 @@ impl HNSWIndexBuilder {
 
     /// Set the distance metric
     #[must_use]
-    pub fn metric(mut self, metric: DistanceFunction) -> Self {
+    pub fn metric(mut self, metric: Metric) -> Self {
         self.metric = metric;
         self
     }
@@ -224,7 +224,7 @@ impl HNSWIndex {
     /// let index = HNSWIndex::builder()
     ///     .dimensions(768)
     ///     .m(16)
-    ///     .metric(DistanceFunction::Cosine)
+    ///     .metric(Metric::Cosine)
     ///     .build()?;
     /// ```
     #[must_use]
@@ -248,15 +248,11 @@ impl HNSWIndex {
     /// ```ignore
     /// use omen::vector::HNSWIndex;
     ///
-    /// let mut index = HNSWIndex::new(1_000_000, 1536, DistanceFunction::L2)?;
+    /// let mut index = HNSWIndex::new(1_000_000, 1536, Metric::L2)?;
     /// index.insert(&vector)?;
     /// let results = index.search(&query, 10)?;
     /// ```
-    pub fn new(
-        max_elements: usize,
-        dimensions: usize,
-        distance_fn: DistanceFunction,
-    ) -> Result<Self> {
+    pub fn new(max_elements: usize, dimensions: usize, distance_fn: Metric) -> Result<Self> {
         // Industry standard defaults (ChromaDB, hnswlib, Milvus, pgvector)
         // Users can override via new_with_params() if needed
         let m = 16;
@@ -296,7 +292,7 @@ impl HNSWIndex {
     /// # Example
     /// ```ignore
     /// // Higher M for better recall at scale
-    /// let mut index = HNSWIndex::new_with_params(1_000_000, 128, 32, 400, 600, DistanceFunction::L2)?;
+    /// let mut index = HNSWIndex::new_with_params(1_000_000, 128, 32, 400, 600, Metric::L2)?;
     /// ```
     pub fn new_with_params(
         max_elements: usize,
@@ -304,7 +300,7 @@ impl HNSWIndex {
         m: usize,
         ef_construction: usize,
         ef_search: usize,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
     ) -> Result<Self> {
         let params = CoreParams {
             m,
@@ -331,7 +327,7 @@ impl HNSWIndex {
     pub fn new_with_sq8(
         dimensions: usize,
         params: CoreParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
     ) -> Result<Self> {
         let index = CoreHNSW::new_with_sq8(dimensions, params, distance_fn)
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -364,7 +360,7 @@ impl HNSWIndex {
     pub fn build_parallel(
         dimensions: usize,
         params: CoreParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
         use_quantization: bool,
         vectors: Vec<Vec<f32>>,
     ) -> Result<Self> {
@@ -847,7 +843,7 @@ mod tests {
             .ef_construction(200)
             .ef_search(300)
             .max_elements(50_000)
-            .metric(DistanceFunction::Cosine)
+            .metric(Metric::Cosine)
             .build()
             .unwrap();
 
@@ -901,7 +897,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_basic() {
-        let mut index = HNSWIndex::new(1000, 4, DistanceFunction::L2).unwrap();
+        let mut index = HNSWIndex::new(1000, 4, Metric::L2).unwrap();
 
         // Insert vectors
         let v1 = vec![1.0, 0.0, 0.0, 0.0];
@@ -924,7 +920,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_batch_insert() {
-        let mut index = HNSWIndex::new(1000, 3, DistanceFunction::L2).unwrap();
+        let mut index = HNSWIndex::new(1000, 3, Metric::L2).unwrap();
 
         let vectors = vec![
             vec![1.0, 0.0, 0.0],
@@ -940,7 +936,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_ef_search() {
-        let mut index = HNSWIndex::new(1000, 4, DistanceFunction::L2).unwrap();
+        let mut index = HNSWIndex::new(1000, 4, Metric::L2).unwrap();
 
         assert_eq!(index.get_ef_search(), 100); // Default for <10K: M=16, ef=100
 

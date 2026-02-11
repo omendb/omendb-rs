@@ -1,20 +1,96 @@
 //! Core types for `OmenDB` storage layer
 
+use crate::distance::{
+    cosine_distance, cosine_distance_precomputed, dot_product, l2_distance, l2_distance_squared,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Vector ID type (globally unique identifier)
 pub type VectorID = u64;
 
-/// Distance metric for vector comparison
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DistanceMetric {
-    /// L2 (Euclidean) distance
-    L2,
-    /// Cosine distance (1 - cosine similarity)
-    Cosine,
-    /// Inner product (dot product)
-    InnerProduct,
+/// Distance metric for similarity search.
+///
+/// Canonical enum used throughout the codebase for distance computation,
+/// file format headers, persistence (postcard), and public API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum Metric {
+    L2 = 0,
+    Cosine = 1,
+    InnerProduct = 2,
+}
+
+impl Metric {
+    /// Parse from string
+    pub fn parse(s: &str) -> std::result::Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "l2" | "euclidean" => Ok(Self::L2),
+            "cosine" | "cos" => Ok(Self::Cosine),
+            "ip" | "inner_product" | "dot" => Ok(Self::InnerProduct),
+            _ => Err(format!("Unknown metric: {s}")),
+        }
+    }
+
+    /// Compute distance between two vectors
+    #[must_use]
+    pub fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self {
+            Self::L2 => l2_distance(a, b),
+            Self::Cosine => cosine_distance(a, b),
+            Self::InnerProduct => -dot_product(a, b),
+        }
+    }
+
+    /// Compute distance for internal comparisons (optimized, may not be actual distance)
+    ///
+    /// For L2: returns squared distance (skips sqrt) since relative ordering is preserved.
+    /// For Cosine/InnerProduct: same as `distance()`.
+    #[inline(always)]
+    #[must_use]
+    pub fn distance_for_comparison(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self {
+            Self::L2 => l2_distance_squared(a, b),
+            Self::Cosine => cosine_distance(a, b),
+            Self::InnerProduct => -dot_product(a, b),
+        }
+    }
+
+    /// Compute distance for comparisons with precomputed query norm
+    ///
+    /// Like `distance_for_comparison` but avoids redundant query norm computation
+    /// for cosine distance. L2 and InnerProduct ignore the norm parameter.
+    #[inline(always)]
+    #[must_use]
+    pub fn distance_for_comparison_precomputed(&self, a: &[f32], b: &[f32], a_norm: f32) -> f32 {
+        match self {
+            Self::L2 => l2_distance_squared(a, b),
+            Self::Cosine => cosine_distance_precomputed(a, b, a_norm),
+            Self::InnerProduct => -dot_product(a, b),
+        }
+    }
+
+    /// Convert comparison distance back to actual distance
+    ///
+    /// For L2: applies sqrt. For others: identity.
+    #[inline]
+    #[must_use]
+    pub fn comparison_to_actual(&self, d: f32) -> f32 {
+        match self {
+            Self::L2 => d.sqrt(),
+            _ => d,
+        }
+    }
+}
+
+impl From<u8> for Metric {
+    fn from(v: u8) -> Self {
+        match v {
+            1 => Self::Cosine,
+            2 => Self::InnerProduct,
+            _ => Self::L2,
+        }
+    }
 }
 
 /// Statistics for compaction operation

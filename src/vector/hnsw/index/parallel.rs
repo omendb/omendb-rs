@@ -18,7 +18,7 @@ use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::NodeStorage;
 use crate::vector::hnsw::query_buffers::VisitedList;
 use crate::vector::hnsw::storage::NeighborStorage;
-use crate::vector::hnsw::types::{Candidate, DistanceFunction, HNSWParams};
+use crate::vector::hnsw::types::{Candidate, HNSWParams, Metric};
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::cell::RefCell;
@@ -82,7 +82,7 @@ pub struct ParallelBuilder {
     /// Construction parameters
     params: HNSWParams,
     /// Distance function
-    distance_fn: DistanceFunction,
+    distance_fn: Metric,
     /// Random number generator state (atomic for thread-safe level assignment)
     rng_state: AtomicU64,
     /// Whether to use SQ8 quantization for final index
@@ -97,7 +97,7 @@ impl ParallelBuilder {
     pub fn new(
         dimensions: usize,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
         use_quantization: bool,
     ) -> Result<Self> {
         if use_quantization {
@@ -720,7 +720,7 @@ impl ParallelBuilder {
 // 5. `needs_pruning` (AtomicBitVec) - uses atomics, safe to share
 // 6. `entry_point` (AtomicU32) - atomic, safe to share
 // 7. `params` (HNSWParams) - immutable, safe to share
-// 8. `distance_fn` (DistanceFunction) - immutable, safe to share
+// 8. `distance_fn` (Metric enum) - immutable, safe to share
 // 9. `rng_state` (AtomicU64) - atomic, safe to share
 // 10. `dimensions`, `use_quantization` - immutable primitives, safe to share
 unsafe impl Sync for ParallelBuilder {}
@@ -738,7 +738,7 @@ impl HNSWIndex {
     pub fn build_parallel(
         dimensions: usize,
         params: HNSWParams,
-        distance_fn: DistanceFunction,
+        distance_fn: Metric,
         use_quantization: bool,
         vectors: Vec<Vec<f32>>,
     ) -> Result<Self> {
@@ -750,7 +750,7 @@ impl HNSWIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::hnsw::types::DistanceFunction;
+    use crate::types::Metric;
 
     fn random_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
         use rand::Rng;
@@ -765,8 +765,7 @@ mod tests {
         let vectors = random_vectors(100, 32);
         let params = HNSWParams::default();
 
-        let index =
-            HNSWIndex::build_parallel(32, params, DistanceFunction::L2, false, vectors).unwrap();
+        let index = HNSWIndex::build_parallel(32, params, Metric::L2, false, vectors).unwrap();
 
         assert_eq!(index.len(), 100);
         assert!(index.entry_point().is_some());
@@ -777,8 +776,7 @@ mod tests {
         let vectors = random_vectors(1000, 64);
         let params = HNSWParams::default();
 
-        let index =
-            HNSWIndex::build_parallel(64, params, DistanceFunction::L2, false, vectors).unwrap();
+        let index = HNSWIndex::build_parallel(64, params, Metric::L2, false, vectors).unwrap();
 
         assert_eq!(index.len(), 1000);
 
@@ -807,18 +805,12 @@ mod tests {
         };
 
         // Build with parallel
-        let parallel_index = HNSWIndex::build_parallel(
-            64,
-            params.clone(),
-            DistanceFunction::L2,
-            false,
-            vectors.clone(),
-        )
-        .unwrap();
+        let parallel_index =
+            HNSWIndex::build_parallel(64, params.clone(), Metric::L2, false, vectors.clone())
+                .unwrap();
 
         // Build with sequential
-        let mut sequential_index =
-            HNSWIndex::new(64, params.clone(), DistanceFunction::L2, false).unwrap();
+        let mut sequential_index = HNSWIndex::new(64, params.clone(), Metric::L2, false).unwrap();
         for vec in &vectors {
             sequential_index.insert(vec).unwrap();
         }
@@ -867,8 +859,7 @@ mod tests {
         };
 
         let start = std::time::Instant::now();
-        let index =
-            HNSWIndex::build_parallel(128, params, DistanceFunction::L2, false, vectors).unwrap();
+        let index = HNSWIndex::build_parallel(128, params, Metric::L2, false, vectors).unwrap();
         let elapsed = start.elapsed();
 
         let rate = 10_000.0 / elapsed.as_secs_f64();
@@ -894,8 +885,7 @@ mod tests {
         let vectors = random_vectors(1000, 32);
         let params = HNSWParams::default();
 
-        let index =
-            HNSWIndex::build_parallel(32, params, DistanceFunction::L2, false, vectors).unwrap();
+        let index = HNSWIndex::build_parallel(32, params, Metric::L2, false, vectors).unwrap();
 
         let entry_point = index.entry_point().unwrap();
         let mut visited = HashSet::new();

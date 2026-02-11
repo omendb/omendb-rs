@@ -275,7 +275,7 @@ impl VectorStore {
                 ef_construction: self.hnsw_ef_construction,
                 ..Default::default()
             })
-            .with_distance(self.distance_metric.into())
+            .with_distance(self.distance_metric)
             .with_quantization(self.pending_quantization);
         if let Some(cap) = self.segment_capacity {
             config = config.with_capacity(cap);

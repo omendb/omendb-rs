@@ -60,56 +60,8 @@ impl QuantizationCode {
     }
 }
 
-/// Distance metric for similarity search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Metric {
-    L2 = 0,
-    Cosine = 1,
-    InnerProduct = 2,
-}
-
-impl Metric {
-    /// Parse from string
-    pub fn parse(s: &str) -> Result<Self, String> {
-        match s.to_lowercase().as_str() {
-            "l2" | "euclidean" => Ok(Self::L2),
-            "cosine" | "cos" => Ok(Self::Cosine),
-            "ip" | "inner_product" | "dot" => Ok(Self::InnerProduct),
-            _ => Err(format!("Unknown metric: {s}")),
-        }
-    }
-}
-
-impl From<u8> for Metric {
-    fn from(v: u8) -> Self {
-        match v {
-            1 => Self::Cosine,
-            2 => Self::InnerProduct,
-            _ => Self::L2,
-        }
-    }
-}
-
-impl From<crate::vector::hnsw::DistanceFunction> for Metric {
-    fn from(df: crate::vector::hnsw::DistanceFunction) -> Self {
-        match df {
-            crate::vector::hnsw::DistanceFunction::L2 => Self::L2,
-            crate::vector::hnsw::DistanceFunction::Cosine => Self::Cosine,
-            crate::vector::hnsw::DistanceFunction::NegativeDotProduct => Self::InnerProduct,
-        }
-    }
-}
-
-impl From<Metric> for crate::vector::hnsw::DistanceFunction {
-    fn from(m: Metric) -> Self {
-        match m {
-            Metric::L2 => Self::L2,
-            Metric::Cosine => Self::Cosine,
-            Metric::InnerProduct => Self::NegativeDotProduct,
-        }
-    }
-}
+// Metric is defined in crate::types and re-exported here for backward compatibility
+pub use crate::types::Metric;
 
 /// .omen file header (4KB)
 #[derive(Debug, Clone)]
