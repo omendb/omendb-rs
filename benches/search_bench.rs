@@ -191,6 +191,98 @@ fn bench_metadata_overhead(c: &mut Criterion) {
     group.finish();
 }
 
+/// Compute brute-force k-NN ground truth for recall measurement.
+fn brute_force_knn(vectors: &[Vector], query: &Vector, k: usize, metric: Metric) -> Vec<usize> {
+    let mut dists: Vec<(usize, f32)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let d = match metric {
+                Metric::L2 => v
+                    .data
+                    .iter()
+                    .zip(query.data.iter())
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum(),
+                Metric::Cosine => {
+                    let dot: f32 = v
+                        .data
+                        .iter()
+                        .zip(query.data.iter())
+                        .map(|(a, b)| a * b)
+                        .sum();
+                    let norm_v: f32 = v.data.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    let norm_q: f32 = query.data.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    1.0 - dot / (norm_v * norm_q + f32::EPSILON)
+                }
+                Metric::InnerProduct => {
+                    let dot: f32 = v
+                        .data
+                        .iter()
+                        .zip(query.data.iter())
+                        .map(|(a, b)| a * b)
+                        .sum();
+                    -dot
+                }
+            };
+            (i, d)
+        })
+        .collect();
+    dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    dists.iter().take(k).map(|(i, _)| *i).collect()
+}
+
+/// Measure recall@10 alongside search throughput.
+fn bench_recall(c: &mut Criterion) {
+    let mut group = c.benchmark_group("recall");
+    group.sample_size(10);
+
+    let k = 10;
+
+    for (n, dim, ef, metric) in [
+        (10_000, 128, 100, Metric::L2),
+        (10_000, 768, 100, Metric::L2),
+        (10_000, 768, 100, Metric::Cosine),
+    ] {
+        let vectors = generate_vectors(n, dim);
+        let queries = generate_vectors(50, dim);
+
+        let mut store = VectorStore::new_with_params(dim, 16, 100, ef, metric);
+        for (i, v) in vectors.iter().enumerate() {
+            store
+                .set(format!("v{i}"), v.clone(), json!({}))
+                .expect("set");
+        }
+        store.ensure_index_ready().expect("index ready");
+
+        // Compute recall once before timing loop
+        let mut total_recall = 0.0;
+        for q in &queries {
+            let truth: std::collections::HashSet<String> = brute_force_knn(&vectors, q, k, metric)
+                .into_iter()
+                .map(|i| format!("v{i}"))
+                .collect();
+            let results = store.search(q, k, None).expect("search");
+            let hits = results.iter().filter(|r| truth.contains(&r.id)).count();
+            total_recall += hits as f64 / k as f64;
+        }
+        let recall = total_recall / queries.len() as f64;
+
+        let label = format!("{}K_{dim}D_{metric:?}_ef{ef}", n / 1000);
+        eprintln!("recall@{k} {label}: {:.1}%", recall * 100.0);
+
+        group.bench_function(&label, |b| {
+            b.iter(|| {
+                for q in &queries {
+                    black_box(store.search(q, k, None).expect("search"));
+                }
+            })
+        });
+    }
+
+    group.finish();
+}
+
 /// Benchmark cosine distance search to isolate HNSW cosine hot path.
 fn bench_cosine_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("cosine_search");
@@ -236,6 +328,7 @@ criterion_group!(
     bench_search_ef_comparison,
     bench_search_with_metadata,
     bench_metadata_overhead,
-    bench_cosine_search
+    bench_cosine_search,
+    bench_recall
 );
 criterion_main!(benches);
