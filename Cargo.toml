@@ -111,3 +111,7 @@ harness = false
 [[bench]]
 name = "muvera_quality"
 harness = false
+
+[[bench]]
+name = "segment_bench"
+harness = false

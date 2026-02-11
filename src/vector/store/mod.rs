@@ -417,6 +417,25 @@ impl VectorStore {
             .collect()
     }
 
+    /// Parallel batch search with a pre-parsed filter.
+    ///
+    /// The filter is parsed once and shared across all queries in the batch,
+    /// avoiding redundant parsing per query.
+    #[must_use]
+    pub fn search_batch_with_filter(
+        &self,
+        queries: &[Vector],
+        k: usize,
+        filter: Option<&MetadataFilter>,
+        ef: Option<usize>,
+        max_distance: Option<f32>,
+    ) -> Vec<Result<Vec<SearchResult>>> {
+        queries
+            .par_iter()
+            .map(|q| self.search_with_options(q, k, filter, ef, max_distance))
+            .collect()
+    }
+
     /// Brute-force K-NN search (fallback, used in tests)
     #[allow(dead_code)]
     pub(crate) fn knn_search_brute_force(

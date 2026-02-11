@@ -291,16 +291,20 @@ impl VectorDatabase {
     ///     queries: 2D numpy array or list of query vectors
     ///     k (int): Number of nearest neighbors per query
     ///     ef (int, optional): Search width override
+    ///     filter (dict, optional): MongoDB-style metadata filter (parsed once, shared across batch)
+    ///     max_distance (float, optional): Filter out results beyond this distance
     ///
     /// Returns:
     ///     list[list[dict]]: Results for each query
-    #[pyo3(name = "search_batch", signature = (queries, k, ef=None))]
+    #[pyo3(name = "search_batch", signature = (queries, k, ef=None, filter=None, max_distance=None))]
     fn search_batch(
         &self,
         py: Python<'_>,
         queries: &Bound<'_, PyAny>,
         k: usize,
         ef: Option<usize>,
+        filter: Option<&Bound<'_, PyDict>>,
+        max_distance: Option<f32>,
     ) -> PyResult<Vec<Vec<Py<PyDict>>>> {
         if k == 0 {
             return Err(PyValueError::new_err("k must be greater than 0"));
@@ -313,11 +317,19 @@ impl VectorDatabase {
                 )));
             }
         }
+        if let Some(max_dist) = max_distance {
+            if max_dist < 0.0 {
+                return Err(PyValueError::new_err("max_distance must be non-negative"));
+            }
+        }
 
         let query_vecs: Vec<Vector> = extract_batch_queries(queries)?
             .into_iter()
             .map(Vector::new)
             .collect();
+
+        // Parse filter once before batch (avoids N re-parses)
+        let rust_filter = filter.map(parse_filter).transpose()?;
 
         // Ensure index and cache are ready
         {
@@ -329,7 +341,13 @@ impl VectorDatabase {
         let metric = self.inner.read().store.metric();
         let all_results: Vec<Result<Vec<SearchResult>, _>> = py.detach(|| {
             let inner = self.inner.read();
-            inner.store.search_batch_with_metadata(&query_vecs, k, ef)
+            inner.store.search_batch_with_filter(
+                &query_vecs,
+                k,
+                rust_filter.as_ref(),
+                ef,
+                max_distance,
+            )
         });
 
         // Convert to Python

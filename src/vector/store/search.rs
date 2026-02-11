@@ -6,26 +6,30 @@
 use super::helpers;
 use super::record_store::RecordStore;
 use super::{MetadataFilter, SearchResult};
-use crate::distance::{cosine_distance, dot_product, l2_distance};
+use crate::distance::{cosine_distance_precomputed, dot_product, l2_distance, norm_squared};
 use crate::omen::Metric;
 use crate::vector::hnsw::SegmentManager;
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
 
-/// Compute distance between two vectors using the given metric.
+/// Compute distance with precomputed query norm.
+///
+/// For cosine metric, the query norm is constant across all candidates in a search,
+/// so precomputing it avoids redundant `dot_product(query, query)` per candidate.
+/// For L2 and InnerProduct, the query_norm parameter is ignored.
 #[inline]
-fn compute_distance(metric: Metric, a: &[f32], b: &[f32]) -> f32 {
+fn compute_distance(metric: Metric, query: &[f32], candidate: &[f32], query_norm: f32) -> f32 {
     match metric {
-        Metric::L2 => l2_distance(a, b),
-        Metric::Cosine => cosine_distance(a, b),
-        Metric::InnerProduct => -dot_product(a, b),
+        Metric::L2 => l2_distance(query, candidate),
+        Metric::Cosine => cosine_distance_precomputed(query, candidate, query_norm),
+        Metric::InnerProduct => -dot_product(query, candidate),
     }
 }
 
 /// Brute-force K-NN search implementation.
 ///
 /// Scans all live records and returns k nearest neighbors.
-/// Used as fallback when HNSW index is empty or returns no results.
+/// Uses precomputed query norm for cosine metric and partial sort for large result sets.
 pub(crate) fn brute_force_search(
     records: &RecordStore,
     query: &[f32],
@@ -36,16 +40,27 @@ pub(crate) fn brute_force_search(
         return Vec::new();
     }
 
+    let query_norm = norm_squared(query).sqrt();
+
     let mut distances: Vec<(usize, f32)> = records
         .iter_live()
         .map(|(slot, record)| {
-            let dist = compute_distance(metric, query, &record.vector);
+            let dist = compute_distance(metric, query, &record.vector, query_norm);
             (slot as usize, dist)
         })
         .collect();
 
-    distances.sort_by(|a, b| a.1.total_cmp(&b.1));
-    distances.into_iter().take(k).collect()
+    // Use partial sort when result set is much larger than k
+    if distances.len() > k * 4 {
+        distances.select_nth_unstable_by(k, |a, b| a.1.total_cmp(&b.1));
+        distances.truncate(k);
+        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
+    } else {
+        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
+        distances.truncate(k);
+    }
+
+    distances
 }
 
 /// Convert slot-distance pairs to SearchResult with metadata.
@@ -151,34 +166,26 @@ pub(crate) fn knn_search_filtered_core(
                     |slot: u32| -> bool { records.is_live(slot) && bitmap.contains(slot) };
                 seg_mgr.search_with_filter(query, k, ef, filter_fn)?
             } else {
-                // Slow path: JSON-based filtering
+                // Slow path: JSON-based filtering (borrow metadata, no clone)
                 let filter_fn = |slot: u32| -> bool {
                     if !records.is_live(slot) {
                         return false;
                     }
                     let metadata = records
                         .get_by_slot(slot)
-                        .and_then(|r| r.metadata.clone())
-                        .unwrap_or_else(helpers::default_metadata);
-                    filter.matches(&metadata)
+                        .and_then(|r| r.metadata.as_ref())
+                        .unwrap_or(&helpers::DEFAULT_METADATA);
+                    filter.matches(metadata)
                 };
                 seg_mgr.search_with_filter(query, k, ef, filter_fn)?
             };
 
-            // Convert segment results to search results
-            let results: Vec<SearchResult> = segment_results
+            // Convert segment results to search results (metadata resolved only for final k)
+            let slot_distances: Vec<(usize, f32)> = segment_results
                 .into_iter()
-                .filter_map(|r| {
-                    records.get_by_slot(r.slot).map(|record| SearchResult {
-                        id: record.id.clone(),
-                        distance: r.distance,
-                        metadata: record
-                            .metadata
-                            .clone()
-                            .unwrap_or_else(helpers::default_metadata),
-                    })
-                })
+                .map(|r| (r.slot as usize, r.distance))
                 .collect();
+            let results = slots_to_search_results(records, slot_distances);
 
             if !results.is_empty() {
                 return Ok(results);
@@ -198,6 +205,10 @@ pub(crate) fn knn_search_filtered_core(
 }
 
 /// Brute-force search with metadata filtering.
+///
+/// Collects (slot, distance) pairs first, truncates to k, then resolves metadata
+/// only for the final results. This avoids cloning metadata for candidates that
+/// get sorted away.
 fn brute_force_filtered(
     records: &RecordStore,
     query: &[f32],
@@ -206,37 +217,49 @@ fn brute_force_filtered(
     filter_bitmap: Option<&roaring::RoaringBitmap>,
     metric: Metric,
 ) -> Vec<SearchResult> {
-    let mut all_results: Vec<SearchResult> = records
+    let query_norm = norm_squared(query).sqrt();
+
+    // Phase 1: Collect (slot, distance) for passing candidates — no metadata cloning
+    let mut candidates: Vec<(u32, f32)> = records
         .iter_live()
         .filter_map(|(slot, record)| {
-            // Use bitmap if available, otherwise JSON
             let passes_filter = if let Some(bitmap) = filter_bitmap {
                 bitmap.contains(slot)
             } else {
                 let metadata = record
                     .metadata
-                    .clone()
-                    .unwrap_or_else(helpers::default_metadata);
-                filter.matches(&metadata)
+                    .as_ref()
+                    .unwrap_or(&helpers::DEFAULT_METADATA);
+                filter.matches(metadata)
             };
 
             if !passes_filter {
                 return None;
             }
 
-            let metadata = record
-                .metadata
-                .clone()
-                .unwrap_or_else(helpers::default_metadata);
-            let distance = compute_distance(metric, query, &record.vector);
-            Some(SearchResult::new(record.id.clone(), distance, metadata))
+            let distance = compute_distance(metric, query, &record.vector, query_norm);
+            Some((slot, distance))
         })
         .collect();
 
-    all_results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-    all_results.truncate(k);
+    // Phase 2: Partial sort + truncate to k
+    if candidates.len() > k * 4 {
+        candidates.select_nth_unstable_by(k, |a, b| a.1.total_cmp(&b.1));
+        candidates.truncate(k);
+        candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+    } else {
+        candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+        candidates.truncate(k);
+    }
 
-    all_results
+    // Phase 3: Resolve metadata only for final k results
+    slots_to_search_results(
+        records,
+        candidates
+            .into_iter()
+            .map(|(s, d)| (s as usize, d))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

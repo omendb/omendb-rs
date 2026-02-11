@@ -312,9 +312,14 @@ impl SegmentManager {
         // Search mutable segment
         let mut results = self.mutable.search(query, k, ef)?;
 
-        // Search frozen segments (could parallelize with rayon)
-        for frozen in &self.frozen {
-            let frozen_results = frozen.search(query, k, ef);
+        // Search frozen segments in parallel
+        if !self.frozen.is_empty() {
+            use rayon::prelude::*;
+            let frozen_results: Vec<SegmentSearchResult> = self
+                .frozen
+                .par_iter()
+                .flat_map(|seg| seg.search(query, k, ef))
+                .collect();
             results.extend(frozen_results);
         }
 
@@ -346,9 +351,14 @@ impl SegmentManager {
         // Search mutable segment
         let mut results = self.mutable.search_with_filter(query, k, ef, &filter_fn)?;
 
-        // Search frozen segments
-        for frozen in &self.frozen {
-            let frozen_results = frozen.search_with_filter(query, k, ef, &filter_fn);
+        // Search frozen segments in parallel
+        if !self.frozen.is_empty() {
+            use rayon::prelude::*;
+            let frozen_results: Vec<SegmentSearchResult> = self
+                .frozen
+                .par_iter()
+                .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
+                .collect();
             results.extend(frozen_results);
         }
 

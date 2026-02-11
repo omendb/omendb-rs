@@ -303,26 +303,23 @@ pub fn weighted_reciprocal_rank_fusion(
 ) -> Vec<(String, f32)> {
     use std::collections::HashMap;
 
-    // Clamp alpha to valid range
     let alpha = alpha.clamp(0.0, 1.0);
 
-    let mut scores: HashMap<String, f32> = HashMap::new();
+    let capacity = vector_results.len() + text_results.len();
+    let mut scores: HashMap<String, f32> = HashMap::with_capacity(capacity);
 
-    // Add vector search contributions (lower distance = higher rank)
-    // Results are already sorted by distance ascending
-    for (rank, (id, _distance)) in vector_results.iter().enumerate() {
+    // Add vector search contributions — consume owned strings to avoid cloning
+    for (rank, (id, _distance)) in vector_results.into_iter().enumerate() {
         let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
-        *scores.entry(id.clone()).or_default() += alpha * rrf_score;
+        *scores.entry(id).or_default() += alpha * rrf_score;
     }
 
-    // Add text search contributions (higher BM25 = higher rank)
-    // Results are already sorted by score descending
-    for (rank, (id, _score)) in text_results.iter().enumerate() {
+    // Add text search contributions — consume owned strings to avoid cloning
+    for (rank, (id, _score)) in text_results.into_iter().enumerate() {
         let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
-        *scores.entry(id.clone()).or_default() += (1.0 - alpha) * rrf_score;
+        *scores.entry(id).or_default() += (1.0 - alpha) * rrf_score;
     }
 
-    // Sort by RRF score descending
     let mut results: Vec<_> = scores.into_iter().collect();
     results.sort_by(|a, b| b.1.total_cmp(&a.1));
     results.truncate(limit);
@@ -353,26 +350,24 @@ pub fn weighted_reciprocal_rank_fusion_with_subscores(
 
     let alpha = alpha.clamp(0.0, 1.0);
 
-    // Track RRF scores and raw scores separately
-    let mut rrf_scores: HashMap<String, f32> = HashMap::new();
-    let mut semantic_scores: HashMap<String, f32> = HashMap::new();
-    let mut keyword_scores: HashMap<String, f32> = HashMap::new();
+    let capacity = vector_results.len() + text_results.len();
+    let mut rrf_scores: HashMap<String, f32> = HashMap::with_capacity(capacity);
+    let mut semantic_scores: HashMap<String, f32> = HashMap::with_capacity(vector_results.len());
+    let mut keyword_scores: HashMap<String, f32> = HashMap::with_capacity(text_results.len());
 
-    // Vector results: store distance as semantic_score
-    for (rank, (id, distance)) in vector_results.iter().enumerate() {
+    // Consume owned strings to avoid cloning
+    for (rank, (id, distance)) in vector_results.into_iter().enumerate() {
         let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
-        *rrf_scores.entry(id.clone()).or_default() += alpha * rrf_score;
-        semantic_scores.insert(id.clone(), *distance);
+        semantic_scores.insert(id.clone(), distance);
+        *rrf_scores.entry(id).or_default() += alpha * rrf_score;
     }
 
-    // Text results: store BM25 as keyword_score
-    for (rank, (id, bm25_score)) in text_results.iter().enumerate() {
+    for (rank, (id, bm25_score)) in text_results.into_iter().enumerate() {
         let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
-        *rrf_scores.entry(id.clone()).or_default() += (1.0 - alpha) * rrf_score;
-        keyword_scores.insert(id.clone(), *bm25_score);
+        keyword_scores.insert(id.clone(), bm25_score);
+        *rrf_scores.entry(id).or_default() += (1.0 - alpha) * rrf_score;
     }
 
-    // Build results with subscores
     let mut results: Vec<HybridResult> = rrf_scores
         .into_iter()
         .map(|(id, score)| HybridResult {

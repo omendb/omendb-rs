@@ -133,6 +133,25 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     1.0 - (dot / (norm_a * norm_b))
 }
 
+/// Cosine distance with precomputed query norm.
+///
+/// When searching k candidates against the same query, the query norm is constant.
+/// Precomputing it avoids redundant `dot_product(query, query)` calls per candidate.
+#[inline]
+#[must_use]
+pub fn cosine_distance_precomputed(query: &[f32], candidate: &[f32], query_norm: f32) -> f32 {
+    debug_assert_eq!(query.len(), candidate.len());
+
+    let dot = dot_product(query, candidate);
+    let norm_b = dot_product(candidate, candidate).sqrt();
+
+    if query_norm == 0.0 || norm_b == 0.0 {
+        return f32::NAN;
+    }
+
+    1.0 - (dot / (query_norm * norm_b))
+}
+
 #[inline]
 fn l2_squared_simd<const N: usize>(a: &[f32], b: &[f32]) -> Option<f32>
 where

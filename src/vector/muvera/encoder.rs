@@ -121,6 +121,9 @@ impl MuveraEncoder {
     }
 
     /// Core encoding function with configurable aggregation mode.
+    ///
+    /// Pre-allocates partition buffers and reuses them across repetitions to avoid
+    /// repeated allocation (8 reps * 16 partitions * proj_dim per call).
     #[must_use]
     pub fn encode(&self, tokens: &[&[f32]], mode: AggMode) -> Vec<f32> {
         if tokens.is_empty() {
@@ -128,33 +131,51 @@ impl MuveraEncoder {
         }
 
         let num_partitions = self.config.partitions();
+        let k_sim = self.config.partition_bits as usize;
         let mut fde = vec![0.0; self.fde_dim];
 
+        // Pre-allocate buffers reused across repetitions
+        let mut partition_sums = vec![0.0f32; num_partitions * self.proj_dim];
+        let mut partition_counts = vec![0usize; num_partitions];
+        let mut projected = if self.projection.is_some() {
+            vec![0.0f32; self.proj_dim]
+        } else {
+            Vec::new()
+        };
+        let mut sketch = vec![0.0f32; k_sim];
+
         for (rep, hyperplanes) in self.hyperplanes.iter().enumerate() {
-            // Accumulate tokens per partition (using proj_dim)
-            let mut partition_sums = vec![vec![0.0; self.proj_dim]; num_partitions];
-            let mut partition_counts = vec![0usize; num_partitions];
+            // Zero buffers for this repetition
+            partition_sums.fill(0.0);
+            partition_counts.fill(0);
 
             for token in tokens {
                 debug_assert_eq!(token.len(), self.token_dim, "Token dimension mismatch");
 
-                // When projection is enabled, we allocate for projected values
-                // When disabled, we use the token slice directly (no allocation)
                 let partition = if let Some(proj) = &self.projection {
-                    // Project token, compute sketch, and accumulate projected values
-                    let projected: Vec<f32> = proj.iter().map(|row| dot(token, row)).collect();
-                    let sketch = matmul_vec(&projected, hyperplanes);
+                    // Project token into reusable buffer
+                    for (i, row) in proj.iter().enumerate() {
+                        projected[i] = dot(token, row);
+                    }
+                    // Compute sketch into reusable buffer
+                    for (i, hp) in hyperplanes.iter().enumerate() {
+                        sketch[i] = dot(&projected, hp);
+                    }
                     let p = simhash_gray_code(&sketch);
-                    for (sum, val) in partition_sums[p].iter_mut().zip(projected.iter()) {
-                        *sum += val;
+                    let base = p * self.proj_dim;
+                    for (i, &val) in projected.iter().enumerate() {
+                        partition_sums[base + i] += val;
                     }
                     p
                 } else {
-                    // No projection: use token directly for sketch and accumulation
-                    let sketch = matmul_vec(token, hyperplanes);
+                    // Compute sketch into reusable buffer
+                    for (i, hp) in hyperplanes.iter().enumerate() {
+                        sketch[i] = dot(token, hp);
+                    }
                     let p = simhash_gray_code(&sketch);
-                    for (sum, &val) in partition_sums[p].iter_mut().zip(token.iter()) {
-                        *sum += val;
+                    let base = p * self.proj_dim;
+                    for (i, &val) in token.iter().enumerate() {
+                        partition_sums[base + i] += val;
                     }
                     p
                 };
@@ -163,22 +184,21 @@ impl MuveraEncoder {
 
             // Apply aggregation mode
             if mode == AggMode::Average {
-                for p in 0..num_partitions {
-                    if partition_counts[p] > 0 {
-                        let scale = 1.0 / partition_counts[p] as f32;
-                        for val in &mut partition_sums[p] {
+                for (p, &count) in partition_counts.iter().enumerate().take(num_partitions) {
+                    if count > 0 {
+                        let scale = 1.0 / count as f32;
+                        let base = p * self.proj_dim;
+                        for val in &mut partition_sums[base..base + self.proj_dim] {
                             *val *= scale;
                         }
                     }
                 }
             }
 
-            // Copy to FDE output (using proj_dim)
+            // Copy to FDE output
             let rep_offset = rep * num_partitions * self.proj_dim;
-            for (p, partition_sum) in partition_sums.iter().enumerate().take(num_partitions) {
-                let start = rep_offset + p * self.proj_dim;
-                fde[start..start + self.proj_dim].copy_from_slice(partition_sum);
-            }
+            fde[rep_offset..rep_offset + num_partitions * self.proj_dim]
+                .copy_from_slice(&partition_sums);
         }
 
         fde
@@ -212,13 +232,6 @@ fn gaussian_matrix(dim: usize, k_sim: usize, seed: u64) -> Vec<Vec<f32>> {
                 .collect()
         })
         .collect()
-}
-
-/// Multiply a vector by a matrix (vector @ matrix).
-///
-/// Returns a vector of length k_sim (one dot product per hyperplane).
-fn matmul_vec(vec: &[f32], matrix: &[Vec<f32>]) -> Vec<f32> {
-    matrix.iter().map(|row| dot(vec, row)).collect()
 }
 
 /// Map a sketch to a partition index using SimHash with Gray code.

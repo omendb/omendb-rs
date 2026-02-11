@@ -29,3 +29,7 @@ pub fn quantization_to_id(enabled: bool) -> u64 {
 pub fn default_metadata() -> JsonValue {
     serde_json::json!({})
 }
+
+/// Static default metadata for borrowing without allocation.
+pub static DEFAULT_METADATA: std::sync::LazyLock<JsonValue> =
+    std::sync::LazyLock::new(|| serde_json::json!({}));
