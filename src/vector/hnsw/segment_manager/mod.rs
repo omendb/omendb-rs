@@ -5,7 +5,8 @@
 //! - Zero or more frozen segments for reads
 //!
 //! When the mutable segment reaches capacity, it's frozen and a new
-//! mutable segment is created. Searches query all segments in parallel.
+//! mutable segment is created. Searches query all segments, using parallel
+//! iteration for 4+ frozen segments and sequential iteration below that.
 //!
 //! ## Automatic Merging
 //!
@@ -307,19 +308,25 @@ impl SegmentManager {
     /// Search across all segments
     ///
     /// Searches mutable and all frozen segments, merging results.
-    /// Frozen segments are searched in parallel using rayon.
+    /// Frozen segments use sequential iteration for <4 segments, parallel for 4+.
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SegmentSearchResult>> {
         // Search mutable segment
         let mut results = self.mutable.search(query, k, ef)?;
 
-        // Search frozen segments in parallel
+        // Search frozen segments (parallel only when enough segments to offset overhead)
         if !self.frozen.is_empty() {
-            use rayon::prelude::*;
-            let frozen_results: Vec<SegmentSearchResult> = self
-                .frozen
-                .par_iter()
-                .flat_map(|seg| seg.search(query, k, ef))
-                .collect();
+            let frozen_results: Vec<SegmentSearchResult> = if self.frozen.len() >= 4 {
+                use rayon::prelude::*;
+                self.frozen
+                    .par_iter()
+                    .flat_map(|seg| seg.search(query, k, ef))
+                    .collect()
+            } else {
+                self.frozen
+                    .iter()
+                    .flat_map(|seg| seg.search(query, k, ef))
+                    .collect()
+            };
             results.extend(frozen_results);
         }
 
@@ -351,14 +358,20 @@ impl SegmentManager {
         // Search mutable segment
         let mut results = self.mutable.search_with_filter(query, k, ef, &filter_fn)?;
 
-        // Search frozen segments in parallel
+        // Search frozen segments (parallel only when enough segments to offset overhead)
         if !self.frozen.is_empty() {
-            use rayon::prelude::*;
-            let frozen_results: Vec<SegmentSearchResult> = self
-                .frozen
-                .par_iter()
-                .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
-                .collect();
+            let frozen_results: Vec<SegmentSearchResult> = if self.frozen.len() >= 4 {
+                use rayon::prelude::*;
+                self.frozen
+                    .par_iter()
+                    .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
+                    .collect()
+            } else {
+                self.frozen
+                    .iter()
+                    .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
+                    .collect()
+            };
             results.extend(frozen_results);
         }
 
