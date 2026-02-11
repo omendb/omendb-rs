@@ -10,22 +10,9 @@
 //! - Frozen segments can be mmap'd for memory efficiency
 //! - Incremental persistence (only save new segments)
 
-use crate::distance::dot_product;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::node_storage::NodeStorage;
-use crate::vector::hnsw::query_buffers::VisitedList;
 use crate::vector::hnsw::types::{DistanceFunction, HNSWParams};
-
-use ordered_float::OrderedFloat;
-use std::cell::RefCell;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-
-thread_local! {
-    /// Thread-local visited list for FrozenSegment search
-    /// Avoids Vec<bool> allocation per search, uses O(1) clear via generation counter
-    static FROZEN_VISITED: RefCell<VisitedList> = RefCell::new(VisitedList::new());
-}
 
 /// Search result from a segment
 #[derive(Debug, Clone)]
@@ -294,19 +281,13 @@ impl MutableSegment {
 
 /// Frozen segment for reads
 ///
-/// Uses unified colocated storage for cache-efficient search.
-/// Cannot be modified after creation.
+/// Delegates search to an internal HNSWIndex for a single implementation
+/// of the HNSW search algorithm. Cannot be modified after creation.
 pub struct FrozenSegment {
-    /// Unified storage (colocated vectors + neighbors)
-    storage: NodeStorage,
+    /// Underlying HNSW index (owns the colocated NodeStorage)
+    index: HNSWIndex,
     /// Segment ID
     id: u64,
-    /// Entry point for search
-    entry_point: Option<u32>,
-    /// HNSW parameters
-    params: HNSWParams,
-    /// Distance function
-    distance_fn: DistanceFunction,
 }
 
 impl FrozenSegment {
@@ -319,11 +300,14 @@ impl FrozenSegment {
         storage: NodeStorage,
     ) -> Self {
         Self {
-            storage,
+            index: HNSWIndex {
+                storage,
+                entry_point,
+                params,
+                distance_fn,
+                rng_state: params.seed,
+            },
             id,
-            entry_point,
-            params,
-            distance_fn,
         }
     }
 
@@ -371,13 +355,13 @@ impl FrozenSegment {
             storage.set_slot(id, slot);
         }
 
-        Self {
-            storage,
-            id: mutable.id,
-            entry_point: mutable.index.entry_point(),
+        Self::from_parts(
+            mutable.id,
+            mutable.index.entry_point(),
             params,
             distance_fn,
-        }
+            storage,
+        )
     }
 
     /// Get segment ID
@@ -389,171 +373,63 @@ impl FrozenSegment {
     /// Number of vectors
     #[inline]
     pub fn len(&self) -> usize {
-        self.storage.len()
+        self.index.len()
     }
 
     /// Check if empty
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.storage.is_empty()
+        self.index.is_empty()
     }
 
     /// Get entry point
     #[inline]
     pub fn entry_point(&self) -> Option<u32> {
-        self.entry_point
+        self.index.entry_point()
     }
 
     /// Get HNSW parameters
     #[inline]
     pub fn params(&self) -> &HNSWParams {
-        &self.params
+        self.index.params()
     }
 
     /// Get distance function
     #[inline]
     pub fn distance_function(&self) -> DistanceFunction {
-        self.distance_fn
+        self.index.distance_function()
     }
 
-    /// Search for k nearest neighbors using unified storage
+    /// Search for k nearest neighbors
     ///
-    /// This uses the colocated layout for cache-efficient search.
-    /// Uses thread-local VisitedList for O(1) clear between searches.
+    /// Delegates to HNSWIndex::search which uses the colocated layout,
+    /// SQ8 fast path, prefetch, and NeighborCollector for optimal search.
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Vec<SegmentSearchResult> {
-        let Some(entry_point) = self.entry_point else {
-            return Vec::new();
-        };
-
-        if self.storage.is_empty() {
-            return Vec::new();
-        }
-
-        let query_norm = dot_product(query, query).sqrt();
-
-        FROZEN_VISITED.with(|visited_cell| {
-            let mut visited = visited_cell.borrow_mut();
-            visited.clear(); // O(1) via generation counter
-
-            // Min-heap for candidates (closest first)
-            let mut candidates: BinaryHeap<Reverse<(OrderedFloat<f32>, u32)>> = BinaryHeap::new();
-
-            // Max-heap for results (furthest first, for trimming)
-            let mut results: BinaryHeap<(OrderedFloat<f32>, u32)> = BinaryHeap::new();
-
-            // Start from entry point
-            let ep_dist = self.compute_distance_precomputed(
-                query,
-                self.storage.get_vector_ref(entry_point),
-                query_norm,
-            );
-            visited.insert(entry_point);
-            candidates.push(Reverse((OrderedFloat(ep_dist), entry_point)));
-            results.push((OrderedFloat(ep_dist), entry_point));
-
-            // Greedy search on level 0
-            while let Some(Reverse((OrderedFloat(c_dist), c_id))) = candidates.pop() {
-                // Early termination: if current candidate is worse than worst result
-                if results.len() >= ef {
-                    if let Some(&(OrderedFloat(worst_dist), _)) = results.peek() {
-                        if c_dist > worst_dist {
-                            break;
-                        }
-                    }
-                }
-
-                // Get neighbors and prefetch
-                let neighbors = self.storage.neighbors(c_id);
-
-                // Prefetch first few neighbors
-                for &neighbor in neighbors.iter().take(4) {
-                    self.storage.prefetch(neighbor);
-                }
-
-                // Explore neighbors
-                for &neighbor in neighbors {
-                    if visited.contains(neighbor) {
-                        continue;
-                    }
-                    visited.insert(neighbor);
-
-                    let n_dist = self.compute_distance_precomputed(
-                        query,
-                        self.storage.get_vector_ref(neighbor),
-                        query_norm,
-                    );
-
-                    // Only add if better than worst result (or results not full)
-                    let dominated = results.len() >= ef && {
-                        let &(OrderedFloat(worst), _) = results.peek().unwrap();
-                        n_dist > worst
-                    };
-
-                    if !dominated {
-                        candidates.push(Reverse((OrderedFloat(n_dist), neighbor)));
-                        results.push((OrderedFloat(n_dist), neighbor));
-
-                        // Trim results if over ef
-                        while results.len() > ef {
-                            results.pop();
-                        }
-                    }
-                }
-            }
-
-            // Convert to output format, sorted by distance
-            // Apply comparison_to_actual to match HNSWIndex::search behavior
-            // (e.g., sqrt for L2 squared distances)
-            let mut output: Vec<_> = results
+        match self.index.search(query, k, ef) {
+            Ok(results) => results
                 .into_iter()
-                .map(|(OrderedFloat(dist), id)| {
-                    let actual_dist = self.distance_fn.comparison_to_actual(dist);
-                    SegmentSearchResult::new(id, actual_dist, self.storage.slot(id))
-                })
-                .collect();
-
-            output.sort_by(|a, b| {
-                a.distance
-                    .partial_cmp(&b.distance)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            output.truncate(k);
-            output
-        })
+                .map(|r| SegmentSearchResult::new(r.id, r.distance, r.id))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
-    /// Compute distance with precomputed query norm (avoids redundant norm for cosine)
-    #[inline]
-    fn compute_distance_precomputed(
-        &self,
-        query: &[f32],
-        candidate: &[f32],
-        query_norm: f32,
-    ) -> f32 {
-        self.distance_fn
-            .distance_for_comparison_precomputed(query, candidate, query_norm)
-    }
-
-    /// Access underlying storage (for advanced operations)
+    /// Access underlying storage (for persistence)
     pub fn storage(&self) -> &NodeStorage {
-        &self.storage
+        &self.index.storage
     }
 
     /// Search for k nearest neighbors that match a filter predicate
     ///
-    /// Uses ACORN-1 algorithm (arXiv:2403.04871) with adaptive 2-hop expansion
-    /// for efficient filtered search. Falls back to post-filtering for high
-    /// selectivity (>60% match) or small segments (<1000 vectors).
+    /// Delegates to HNSWIndex::search_with_filter which uses ACORN-1
+    /// (arXiv:2403.04871) with adaptive 2-hop expansion for selective filters
+    /// and post-filtering fallback for broad filters.
     ///
     /// # Arguments
     /// * `query` - Query vector
     /// * `k` - Number of nearest neighbors to return
     /// * `ef` - Search expansion factor (higher = better recall, slower)
     /// * `filter_fn` - Predicate that takes a slot and returns true if it matches
-    ///
-    /// # Performance
-    /// - Low selectivity (5-20% match): 3-6x faster than post-filtering
-    /// - High selectivity (>60% match): Falls back to post-filter
     pub fn search_with_filter<F>(
         &self,
         query: &[f32],
@@ -564,237 +440,13 @@ impl FrozenSegment {
     where
         F: Fn(u32) -> bool,
     {
-        let Some(entry_point) = self.entry_point else {
-            return Vec::new();
-        };
-
-        if self.storage.is_empty() {
-            return Vec::new();
-        }
-
-        // Wrap filter to work on internal IDs - filter expects slots
-        let slot_filter = |id: u32| filter_fn(self.storage.slot(id));
-
-        // Estimate selectivity by sampling
-        let selectivity = self.estimate_selectivity(&slot_filter);
-
-        // Adaptive thresholds
-        const SELECTIVITY_THRESHOLD: f32 = 0.6;
-        const SMALL_SEGMENT_SIZE: usize = 1000;
-
-        if selectivity > SELECTIVITY_THRESHOLD || self.len() <= SMALL_SEGMENT_SIZE {
-            // High selectivity or small segment: use post-filter
-            return self.search_with_postfilter(query, k, ef, &filter_fn);
-        }
-
-        let query_norm = dot_product(query, query).sqrt();
-
-        // Low selectivity: use ACORN-1
-        FROZEN_VISITED.with(|visited_cell| {
-            let mut visited = visited_cell.borrow_mut();
-            visited.clear();
-
-            // Start from entry point, descend to layer 0
-            let entry_level = self.storage.level(entry_point);
-            let mut nearest = vec![entry_point];
-
-            // Greedy search at upper layers (find nearest matching node)
-            for level in (1..=entry_level).rev() {
-                nearest = self.search_layer_filtered(
-                    query,
-                    &nearest,
-                    1,
-                    level,
-                    &slot_filter,
-                    &mut visited,
-                    query_norm,
-                );
-                if nearest.is_empty() {
-                    nearest = vec![entry_point];
-                }
-            }
-
-            // Beam search at layer 0
-            let candidates = self.search_layer_filtered(
-                query,
-                &nearest,
-                ef.max(k),
-                0,
-                &slot_filter,
-                &mut visited,
-                query_norm,
-            );
-
-            // Convert to results and sort
-            // Apply comparison_to_actual to match HNSWIndex::search behavior
-            let mut results: Vec<_> = candidates
+        match self.index.search_with_filter(query, k, ef, filter_fn) {
+            Ok(results) => results
                 .into_iter()
-                .map(|id| {
-                    let dist = self.compute_distance_precomputed(
-                        query,
-                        self.storage.get_vector_ref(id),
-                        query_norm,
-                    );
-                    let actual_dist = self.distance_fn.comparison_to_actual(dist);
-                    SegmentSearchResult::new(id, actual_dist, self.storage.slot(id))
-                })
-                .collect();
-
-            results.sort_by(|a, b| {
-                a.distance
-                    .partial_cmp(&b.distance)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            results.truncate(k);
-
-            // Fallback if ACORN-1 found too few results
-            if results.len() < k {
-                return self.search_with_postfilter(query, k, ef, &filter_fn);
-            }
-
-            results
-        })
-    }
-
-    /// Post-filter search: standard search followed by filtering
-    fn search_with_postfilter<F>(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef: usize,
-        filter_fn: &F,
-    ) -> Vec<SegmentSearchResult>
-    where
-        F: Fn(u32) -> bool,
-    {
-        // Oversample to account for filtered items
-        let oversample_k = (k * 10).min(self.len());
-        let search_ef = ef.max(oversample_k);
-
-        let mut results = self.search(query, oversample_k, search_ef);
-        results.retain(|r| filter_fn(r.slot));
-        results.truncate(k);
-        results
-    }
-
-    /// Estimate filter selectivity by sampling
-    fn estimate_selectivity<F>(&self, filter_fn: &F) -> f32
-    where
-        F: Fn(u32) -> bool,
-    {
-        const SAMPLE_SIZE: usize = 100;
-        let n = self.len();
-        if n == 0 {
-            return 0.0;
+                .map(|r| SegmentSearchResult::new(r.id, r.distance, r.id))
+                .collect(),
+            Err(_) => Vec::new(),
         }
-
-        let sample_count = SAMPLE_SIZE.min(n);
-        let step = n / sample_count;
-        let mut matches = 0;
-
-        for i in 0..sample_count {
-            let id = (i * step) as u32;
-            if filter_fn(id) {
-                matches += 1;
-            }
-        }
-
-        matches as f32 / sample_count as f32
-    }
-
-    /// ACORN-1 layer search with 2-hop expansion
-    #[allow(clippy::too_many_arguments)]
-    fn search_layer_filtered<F>(
-        &self,
-        query: &[f32],
-        entry_points: &[u32],
-        ef: usize,
-        level: u8,
-        filter_fn: &F,
-        visited: &mut VisitedList,
-        query_norm: f32,
-    ) -> Vec<u32>
-    where
-        F: Fn(u32) -> bool,
-    {
-        let m = self.params.m;
-
-        // Min-heap for candidates (closest first)
-        let mut candidates: BinaryHeap<Reverse<(OrderedFloat<f32>, u32)>> = BinaryHeap::new();
-        // Max-heap for results (furthest first, for trimming)
-        let mut results: BinaryHeap<(OrderedFloat<f32>, u32)> = BinaryHeap::new();
-        // Buffer for ACORN-1 neighbor collection
-        let mut neighbor_buffer = Vec::with_capacity(m * 2);
-
-        // Initialize with entry points
-        for &ep in entry_points {
-            if !visited.contains(ep) {
-                visited.insert(ep);
-                let dist = self.compute_distance_precomputed(
-                    query,
-                    self.storage.get_vector_ref(ep),
-                    query_norm,
-                );
-                candidates.push(Reverse((OrderedFloat(dist), ep)));
-                if filter_fn(ep) {
-                    results.push((OrderedFloat(dist), ep));
-                }
-            }
-        }
-
-        // Greedy search with ACORN-1 neighbor expansion
-        while let Some(Reverse((OrderedFloat(c_dist), c_id))) = candidates.pop() {
-            // Early termination
-            if results.len() >= ef {
-                if let Some(&(OrderedFloat(worst_dist), _)) = results.peek() {
-                    if c_dist > worst_dist {
-                        break;
-                    }
-                }
-            }
-
-            // ACORN-1: collect matching neighbors with 2-hop expansion (shared impl)
-            super::acorn::collect_matching_neighbors(
-                &self.storage,
-                c_id,
-                level,
-                visited,
-                filter_fn,
-                m,
-                &mut neighbor_buffer,
-            );
-
-            // Process collected neighbors
-            for &neighbor_id in &neighbor_buffer {
-                if visited.contains(neighbor_id) {
-                    continue;
-                }
-                visited.insert(neighbor_id);
-
-                let n_dist = self.compute_distance_precomputed(
-                    query,
-                    self.storage.get_vector_ref(neighbor_id),
-                    query_norm,
-                );
-
-                let dominated = results.len() >= ef && {
-                    let &(OrderedFloat(worst), _) = results.peek().unwrap();
-                    n_dist > worst
-                };
-
-                if !dominated {
-                    candidates.push(Reverse((OrderedFloat(n_dist), neighbor_id)));
-                    if filter_fn(neighbor_id) {
-                        results.push((OrderedFloat(n_dist), neighbor_id));
-                        while results.len() > ef {
-                            results.pop();
-                        }
-                    }
-                }
-            }
-        }
-
-        results.into_iter().map(|(_, id)| id).collect()
     }
 }
 
