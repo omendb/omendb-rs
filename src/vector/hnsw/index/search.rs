@@ -7,7 +7,6 @@ use crate::distance::dot_product;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::{NodeStorage, QueryPrep};
 use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
-use ordered_float::OrderedFloat;
 use tracing::{debug, error, instrument};
 
 /// Context for distance computation during search
@@ -464,20 +463,15 @@ impl HNSWIndex {
         let candidates = self.search_layer(query, &nearest, search_ef, 0)?;
 
         // Convert comparison distances to actual (e.g., sqrt for L2)
-        let mut results = Vec::with_capacity(candidates.len());
-        for &(id, dist) in &candidates {
-            let slot = self.storage.slot(id);
-            results.push(SearchResult::new(
-                slot,
-                self.distance_fn.comparison_to_actual(dist),
-            ));
-        }
-
-        // Sort by distance (closest first) - unstable is faster
-        results.sort_unstable_by_key(|r| OrderedFloat(r.distance));
-
-        // Return top k
-        results.truncate(k);
+        // Already sorted: comparison_to_actual() is monotonic for all distance functions
+        let results: Vec<SearchResult> = candidates
+            .iter()
+            .take(k)
+            .map(|&(id, dist)| {
+                let slot = self.storage.slot(id);
+                SearchResult::new(slot, self.distance_fn.comparison_to_actual(dist))
+            })
+            .collect();
 
         debug!(
             num_results = results.len(),
@@ -599,18 +593,15 @@ impl HNSWIndex {
         let candidates =
             self.search_layer_with_filter(query, &nearest, search_ef, 0, &slot_filter)?;
 
-        // Convert comparison distances to actual (e.g., sqrt for L2)
-        let mut results = Vec::with_capacity(candidates.len());
-        for &(id, dist) in &candidates {
-            let slot = self.storage.slot(id);
-            results.push(SearchResult::new(
-                slot,
-                self.distance_fn.comparison_to_actual(dist),
-            ));
-        }
-
-        results.sort_unstable_by_key(|r| OrderedFloat(r.distance));
-        results.truncate(k);
+        // Already sorted: comparison_to_actual() is monotonic
+        let results: Vec<SearchResult> = candidates
+            .iter()
+            .take(k)
+            .map(|&(id, dist)| {
+                let slot = self.storage.slot(id);
+                SearchResult::new(slot, self.distance_fn.comparison_to_actual(dist))
+            })
+            .collect();
 
         debug!(
             num_results = results.len(),
@@ -755,25 +746,8 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<(u32, f32)>> {
         dispatch_distance!(self.distance_fn, D => {
-            self.search_layer_mono::<D>(query, entry_points, ef, level)
+            self.search_layer_mono::<D>(query, entry_points, ef, level, false)
         })
-    }
-
-    /// Monomorphized search layer (static dispatch, no match in hot loop)
-    #[inline(never)]
-    pub(super) fn search_layer_mono<D: Distance>(
-        &self,
-        query: &[f32],
-        entry_points: &[u32],
-        ef: usize,
-        level: u8,
-    ) -> Result<Vec<(u32, f32)>> {
-        let ctx = DistanceContext::new(query, self, false);
-        let collector = StandardCollector {
-            storage: &self.storage,
-        };
-
-        self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
     }
 
     /// Search layer using full precision (f32) distances.
@@ -787,12 +761,24 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<(u32, f32)>> {
         dispatch_distance!(self.distance_fn, D => {
-            let ctx = DistanceContext::new(query, self, true);
-            let collector = StandardCollector {
-                storage: &self.storage,
-            };
-
-            self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
+            self.search_layer_mono::<D>(query, entry_points, ef, level, true)
         })
+    }
+
+    #[inline(never)]
+    fn search_layer_mono<D: Distance>(
+        &self,
+        query: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+        full_precision: bool,
+    ) -> Result<Vec<(u32, f32)>> {
+        let ctx = DistanceContext::new(query, self, full_precision);
+        let collector = StandardCollector {
+            storage: &self.storage,
+        };
+
+        self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
     }
 }
