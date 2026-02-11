@@ -261,6 +261,20 @@ impl DistanceFunction {
         }
     }
 
+    /// Compute distance for comparisons with precomputed query norm
+    ///
+    /// Like `distance_for_comparison` but avoids redundant query norm computation
+    /// for cosine distance. L2 and NegativeDotProduct ignore the norm parameter.
+    #[inline(always)]
+    #[must_use]
+    pub fn distance_for_comparison_precomputed(&self, a: &[f32], b: &[f32], a_norm: f32) -> f32 {
+        match self {
+            Self::L2 => l2_distance_squared(a, b),
+            Self::Cosine => cosine_distance_precomputed(a, b, a_norm),
+            Self::NegativeDotProduct => -dot_product(a, b),
+        }
+    }
+
     /// Convert comparison distance back to actual distance
     ///
     /// For L2: applies sqrt
@@ -276,7 +290,9 @@ impl DistanceFunction {
 }
 
 // Re-export SIMD distance functions (single source of truth)
-pub use crate::distance::{cosine_distance, dot_product, l2_distance, l2_distance_squared};
+pub use crate::distance::{
+    cosine_distance, cosine_distance_precomputed, dot_product, l2_distance, l2_distance_squared,
+};
 
 // Distance trait for monomorphization (~10-15% faster search via static dispatch)
 // Each implementation computes distance differently but all enable compile-time specialization.
@@ -285,6 +301,16 @@ pub use crate::distance::{cosine_distance, dot_product, l2_distance, l2_distance
 pub trait Distance: Copy + Clone + Send + Sync + 'static {
     /// Compute distance between two vectors (for comparisons, may skip sqrt for L2)
     fn distance(a: &[f32], b: &[f32]) -> f32;
+
+    /// Compute distance with precomputed query norm (avoids redundant norm computation for cosine)
+    ///
+    /// Default: ignores `a_norm` and falls through to `distance()`.
+    /// Cosine override uses `cosine_distance_precomputed()` to skip query norm recomputation.
+    #[inline(always)]
+    fn distance_precomputed(a: &[f32], b: &[f32], a_norm: f32) -> f32 {
+        let _ = a_norm;
+        Self::distance(a, b)
+    }
 
     /// Convert comparison distance to actual distance (applies sqrt for L2)
     fn to_actual(d: f32) -> f32;
@@ -322,6 +348,11 @@ impl Distance for Cosine {
     #[inline(always)]
     fn distance(a: &[f32], b: &[f32]) -> f32 {
         cosine_distance(a, b)
+    }
+
+    #[inline(always)]
+    fn distance_precomputed(a: &[f32], b: &[f32], a_norm: f32) -> f32 {
+        cosine_distance_precomputed(a, b, a_norm)
     }
 
     #[inline(always)]

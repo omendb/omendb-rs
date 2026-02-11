@@ -3,6 +3,7 @@
 //! Run: cargo bench --bench search_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use omendb::vector::store::Metric;
 use omendb::vector::{Vector, VectorStore};
 use rand::Rng;
 use serde_json::json;
@@ -190,11 +191,51 @@ fn bench_metadata_overhead(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark cosine distance search to isolate HNSW cosine hot path.
+fn bench_cosine_search(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cosine_search");
+    group.sample_size(20);
+
+    let dim = 768;
+    let n = 10_000;
+    let vectors = generate_vectors(n, dim);
+    let queries = generate_vectors(100, dim);
+
+    let mut store = VectorStore::new_with_params(dim, 16, 100, 100, Metric::Cosine);
+    for (i, v) in vectors.iter().enumerate() {
+        store
+            .set(format!("v{i}"), v.clone(), json!({}))
+            .expect("set");
+    }
+    store.ensure_index_ready().expect("index ready");
+
+    for ef in [64, 100, 200] {
+        group.bench_with_input(
+            BenchmarkId::new("768D", format!("ef={ef}")),
+            &ef,
+            |b, &ef| {
+                b.iter(|| {
+                    for q in &queries {
+                        black_box(
+                            store
+                                .search_with_options(q, 10, None, Some(ef), None)
+                                .expect("search"),
+                        );
+                    }
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_search,
     bench_search_ef_comparison,
     bench_search_with_metadata,
-    bench_metadata_overhead
+    bench_metadata_overhead,
+    bench_cosine_search
 );
 criterion_main!(benches);

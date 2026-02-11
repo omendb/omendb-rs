@@ -10,6 +10,7 @@
 //! - Frozen segments can be mmap'd for memory efficiency
 //! - Incremental persistence (only save new segments)
 
+use crate::distance::dot_product;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::node_storage::NodeStorage;
 use crate::vector::hnsw::query_buffers::VisitedList;
@@ -428,6 +429,8 @@ impl FrozenSegment {
             return Vec::new();
         }
 
+        let query_norm = dot_product(query, query).sqrt();
+
         FROZEN_VISITED.with(|visited_cell| {
             let mut visited = visited_cell.borrow_mut();
             visited.clear(); // O(1) via generation counter
@@ -439,7 +442,11 @@ impl FrozenSegment {
             let mut results: BinaryHeap<(OrderedFloat<f32>, u32)> = BinaryHeap::new();
 
             // Start from entry point
-            let ep_dist = self.compute_distance(query, self.storage.get_vector_ref(entry_point));
+            let ep_dist = self.compute_distance_precomputed(
+                query,
+                self.storage.get_vector_ref(entry_point),
+                query_norm,
+            );
             visited.insert(entry_point);
             candidates.push(Reverse((OrderedFloat(ep_dist), entry_point)));
             results.push((OrderedFloat(ep_dist), entry_point));
@@ -470,8 +477,11 @@ impl FrozenSegment {
                     }
                     visited.insert(neighbor);
 
-                    let n_dist =
-                        self.compute_distance(query, self.storage.get_vector_ref(neighbor));
+                    let n_dist = self.compute_distance_precomputed(
+                        query,
+                        self.storage.get_vector_ref(neighbor),
+                        query_norm,
+                    );
 
                     // Only add if better than worst result (or results not full)
                     let dominated = results.len() >= ef && {
@@ -512,12 +522,16 @@ impl FrozenSegment {
         })
     }
 
-    /// Compute distance between query and candidate vector (SIMD-accelerated)
+    /// Compute distance with precomputed query norm (avoids redundant norm for cosine)
     #[inline]
-    fn compute_distance(&self, query: &[f32], candidate: &[f32]) -> f32 {
-        // Use SIMD-accelerated distance from DistanceFunction
-        // For L2: returns squared distance (skips sqrt for faster comparisons)
-        self.distance_fn.distance_for_comparison(query, candidate)
+    fn compute_distance_precomputed(
+        &self,
+        query: &[f32],
+        candidate: &[f32],
+        query_norm: f32,
+    ) -> f32 {
+        self.distance_fn
+            .distance_for_comparison_precomputed(query, candidate, query_norm)
     }
 
     /// Access underlying storage (for advanced operations)
@@ -573,6 +587,8 @@ impl FrozenSegment {
             return self.search_with_postfilter(query, k, ef, &filter_fn);
         }
 
+        let query_norm = dot_product(query, query).sqrt();
+
         // Low selectivity: use ACORN-1
         FROZEN_VISITED.with(|visited_cell| {
             let mut visited = visited_cell.borrow_mut();
@@ -591,6 +607,7 @@ impl FrozenSegment {
                     level,
                     &slot_filter,
                     &mut visited,
+                    query_norm,
                 );
                 if nearest.is_empty() {
                     nearest = vec![entry_point];
@@ -605,6 +622,7 @@ impl FrozenSegment {
                 0,
                 &slot_filter,
                 &mut visited,
+                query_norm,
             );
 
             // Convert to results and sort
@@ -612,7 +630,11 @@ impl FrozenSegment {
             let mut results: Vec<_> = candidates
                 .into_iter()
                 .map(|id| {
-                    let dist = self.compute_distance(query, self.storage.get_vector_ref(id));
+                    let dist = self.compute_distance_precomputed(
+                        query,
+                        self.storage.get_vector_ref(id),
+                        query_norm,
+                    );
                     let actual_dist = self.distance_fn.comparison_to_actual(dist);
                     SegmentSearchResult::new(id, actual_dist, self.storage.slot(id))
                 })
@@ -681,6 +703,7 @@ impl FrozenSegment {
     }
 
     /// ACORN-1 layer search with 2-hop expansion
+    #[allow(clippy::too_many_arguments)]
     fn search_layer_filtered<F>(
         &self,
         query: &[f32],
@@ -689,6 +712,7 @@ impl FrozenSegment {
         level: u8,
         filter_fn: &F,
         visited: &mut VisitedList,
+        query_norm: f32,
     ) -> Vec<u32>
     where
         F: Fn(u32) -> bool,
@@ -706,7 +730,11 @@ impl FrozenSegment {
         for &ep in entry_points {
             if !visited.contains(ep) {
                 visited.insert(ep);
-                let dist = self.compute_distance(query, self.storage.get_vector_ref(ep));
+                let dist = self.compute_distance_precomputed(
+                    query,
+                    self.storage.get_vector_ref(ep),
+                    query_norm,
+                );
                 candidates.push(Reverse((OrderedFloat(dist), ep)));
                 if filter_fn(ep) {
                     results.push((OrderedFloat(dist), ep));
@@ -743,7 +771,11 @@ impl FrozenSegment {
                 }
                 visited.insert(neighbor_id);
 
-                let n_dist = self.compute_distance(query, self.storage.get_vector_ref(neighbor_id));
+                let n_dist = self.compute_distance_precomputed(
+                    query,
+                    self.storage.get_vector_ref(neighbor_id),
+                    query_norm,
+                );
 
                 let dominated = results.len() >= ef && {
                     let &(OrderedFloat(worst), _) = results.peek().unwrap();

@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::VectorStore;
-use super::{HNSWParams, MetadataIndex, SegmentConfig, SegmentManager, Vector};
+use super::{MetadataIndex, SegmentManager, Vector};
 
 impl VectorStore {
     /// Insert batch of vectors in parallel
@@ -41,14 +41,7 @@ impl VectorStore {
 
         if self.segments.is_none() {
             // Build new segment with parallel construction
-            let config = SegmentConfig::new(dimensions)
-                .with_params(HNSWParams {
-                    m: self.hnsw_m,
-                    ef_construction: self.hnsw_ef_construction,
-                    ..Default::default()
-                })
-                .with_distance(self.distance_metric.into())
-                .with_quantization(self.pending_quantization);
+            let config = self.segment_config(dimensions);
 
             self.segments = Some(
                 SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
@@ -82,14 +75,7 @@ impl VectorStore {
 
         // Build segment config
         let dims = self.dimensions();
-        let config = SegmentConfig::new(dims)
-            .with_params(HNSWParams {
-                m: self.hnsw_m,
-                ef_construction: self.hnsw_ef_construction,
-                ..Default::default()
-            })
-            .with_distance(self.distance_metric.into())
-            .with_quantization(self.pending_quantization);
+        let config = self.segment_config(dims);
 
         // Rebuild with parallel construction
         self.segments = Some(

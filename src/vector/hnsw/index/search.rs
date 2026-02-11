@@ -3,6 +3,7 @@
 //! Implements k-NN search, filtered search (ACORN-1), and layer-level search.
 
 use super::HNSWIndex;
+use crate::distance::dot_product;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::{NodeStorage, QueryPrep};
 use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
@@ -20,6 +21,7 @@ use tracing::{debug, error, instrument};
 /// to `new()`, which prevents `sq8_prep` from being populated.
 struct DistanceContext<'a> {
     query: &'a [f32],
+    query_norm: f32,
     sq8_prep: Option<QueryPrep>,
     storage: &'a NodeStorage,
 }
@@ -31,6 +33,7 @@ impl<'a> DistanceContext<'a> {
     /// of storage mode. This is used during graph construction where quantization
     /// noise would hurt graph quality.
     fn new(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
+        let query_norm = dot_product(query, query).sqrt();
         let sq8_prep = if force_full_precision {
             None
         } else {
@@ -39,6 +42,7 @@ impl<'a> DistanceContext<'a> {
 
         Self {
             query,
+            query_norm,
             sq8_prep,
             storage: &index.storage,
         }
@@ -60,10 +64,10 @@ impl<'a> DistanceContext<'a> {
                 .storage
                 .get_dequantized(node_id)
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
-            Ok(D::distance(self.query, &vec))
+            Ok(D::distance_precomputed(self.query, &vec, self.query_norm))
         } else {
             let vec = self.storage.vector(node_id);
-            Ok(D::distance(self.query, vec))
+            Ok(D::distance_precomputed(self.query, vec, self.query_norm))
         }
     }
 

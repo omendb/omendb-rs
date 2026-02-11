@@ -332,6 +332,7 @@ impl VectorStore {
             muvera_encoder,
             multivec_storage,
             max_tokens: DEFAULT_MAX_TOKENS,
+            segment_capacity: None,
         })
     }
 
@@ -425,6 +426,7 @@ impl VectorStore {
             muvera_encoder: None,
             multivec_storage: None,
             max_tokens: DEFAULT_MAX_TOKENS,
+            segment_capacity: None,
         })
     }
 
@@ -462,6 +464,7 @@ impl VectorStore {
             muvera_encoder: None,
             multivec_storage: None,
             max_tokens: DEFAULT_MAX_TOKENS,
+            segment_capacity: None,
         })
     }
 

@@ -1,7 +1,7 @@
 //! Multi-segment search benchmark.
 //!
-//! Tests search performance across multiple frozen segments (200K+ vectors).
-//! Verifies that frozen segment parallelization works correctly.
+//! Tests search performance across multiple frozen segments.
+//! Uses reduced segment capacity (25K) so 50K/100K vectors create 2-4 frozen segments.
 //!
 //! Run: cargo bench --bench segment_bench
 
@@ -27,7 +27,8 @@ fn bench_multi_segment_search(c: &mut Criterion) {
     for n_vectors in [50_000, 100_000] {
         let vectors = generate_vectors(n_vectors, dim);
 
-        let mut store = VectorStore::new(dim);
+        // Use 25K segment capacity so 50K = 2 frozen, 100K = 4 frozen
+        let mut store = VectorStore::new(dim).with_segment_capacity(25_000);
         for (i, v) in vectors.iter().enumerate() {
             store
                 .set(format!("v{i}"), v.clone(), json!({"cat": i % 10}))
@@ -51,5 +52,56 @@ fn bench_multi_segment_search(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_multi_segment_search);
+/// Compare single-segment vs multi-segment for the same vector count.
+fn bench_single_vs_multi_segment(c: &mut Criterion) {
+    let mut group = c.benchmark_group("segment_comparison");
+    group.sample_size(10);
+
+    let dim = 128;
+    let n_vectors = 50_000;
+    let vectors = generate_vectors(n_vectors, dim);
+    let queries = generate_vectors(50, dim);
+
+    // Single segment (capacity > n_vectors)
+    let mut single = VectorStore::new(dim).with_segment_capacity(200_000);
+    for (i, v) in vectors.iter().enumerate() {
+        single
+            .set(format!("v{i}"), v.clone(), json!({}))
+            .expect("set");
+    }
+    single.ensure_index_ready().expect("index ready");
+
+    // Multi segment (capacity = 25K, so 2 frozen segments)
+    let mut multi = VectorStore::new(dim).with_segment_capacity(25_000);
+    for (i, v) in vectors.iter().enumerate() {
+        multi
+            .set(format!("v{i}"), v.clone(), json!({}))
+            .expect("set");
+    }
+    multi.ensure_index_ready().expect("index ready");
+
+    group.bench_function("single_segment_50K", |b| {
+        b.iter(|| {
+            for q in &queries {
+                black_box(single.search(q, 10, None).expect("search"));
+            }
+        })
+    });
+
+    group.bench_function("multi_segment_50K", |b| {
+        b.iter(|| {
+            for q in &queries {
+                black_box(multi.search(q, 10, None).expect("search"));
+            }
+        })
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_multi_segment_search,
+    bench_single_vs_multi_segment
+);
 criterion_main!(benches);

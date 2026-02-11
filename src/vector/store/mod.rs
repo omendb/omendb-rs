@@ -120,6 +120,10 @@ pub struct VectorStore {
 
     /// Maximum tokens per document (default: 512, matches ColBERT).
     max_tokens: usize,
+
+    /// Override for segment capacity (vectors per segment before freezing).
+    /// None = use SegmentConfig::DEFAULT_CAPACITY (100K).
+    segment_capacity: Option<usize>,
 }
 
 /// Default maximum tokens per multi-vector document.
@@ -147,6 +151,7 @@ impl VectorStore {
             muvera_encoder: None,
             multivec_storage: None,
             max_tokens: DEFAULT_MAX_TOKENS,
+            segment_capacity: None,
         }
     }
 
@@ -253,6 +258,29 @@ impl VectorStore {
         store.hnsw_ef_construction = ef_construction;
         store.hnsw_ef_search = ef_search;
         store
+    }
+
+    /// Set segment capacity (vectors per segment before freezing)
+    #[must_use]
+    pub fn with_segment_capacity(mut self, capacity: usize) -> Self {
+        self.segment_capacity = Some(capacity);
+        self
+    }
+
+    /// Build a SegmentConfig from current store settings
+    fn segment_config(&self, dimensions: usize) -> SegmentConfig {
+        let mut config = SegmentConfig::new(dimensions)
+            .with_params(HNSWParams {
+                m: self.hnsw_m,
+                ef_construction: self.hnsw_ef_construction,
+                ..Default::default()
+            })
+            .with_distance(self.distance_metric.into())
+            .with_quantization(self.pending_quantization);
+        if let Some(cap) = self.segment_capacity {
+            config = config.with_capacity(cap);
+        }
+        config
     }
 
     /// Resolve dimensions from vector or existing store config.

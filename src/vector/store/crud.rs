@@ -3,7 +3,7 @@ use serde_json::Value as JsonValue;
 
 use super::helpers;
 use super::VectorStore;
-use super::{HNSWParams, MetadataFilter, SegmentConfig, SegmentManager, Vector};
+use super::{MetadataFilter, SegmentManager, Vector};
 
 impl VectorStore {
     /// Insert vector and return its slot ID (used in tests)
@@ -54,14 +54,7 @@ impl VectorStore {
             self.records.set_dimensions(dimensions as u32);
 
             // Create segment manager with initial config
-            let config = SegmentConfig::new(dimensions)
-                .with_params(HNSWParams {
-                    m: self.hnsw_m,
-                    ef_construction: self.hnsw_ef_construction,
-                    ..Default::default()
-                })
-                .with_distance(self.distance_metric.into())
-                .with_quantization(self.pending_quantization);
+            let config = self.segment_config(dimensions);
 
             self.segments = Some(
                 SegmentManager::new(config)
@@ -190,14 +183,7 @@ impl VectorStore {
                 }
 
                 // Build segment config
-                let config = SegmentConfig::new(dimensions)
-                    .with_params(HNSWParams {
-                        m: self.hnsw_m,
-                        ef_construction: self.hnsw_ef_construction,
-                        ..Default::default()
-                    })
-                    .with_distance(self.distance_metric.into())
-                    .with_quantization(self.pending_quantization);
+                let config = self.segment_config(dimensions);
 
                 // Use parallel build with slot mapping
                 self.segments = Some(
