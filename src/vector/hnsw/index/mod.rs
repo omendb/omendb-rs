@@ -493,26 +493,4 @@ impl HNSWIndex {
             Ok(self.distance_fn.distance_for_comparison(query, vec))
         }
     }
-
-    /// Exact distance using full-precision vectors (with sqrt for L2).
-    ///
-    /// For SQ8: uses the SQ8 distance which is already high-accuracy (98-99% recall).
-    #[inline]
-    pub(super) fn distance_exact(&self, query: &[f32], id: u32) -> Result<f32> {
-        if self.storage.is_sq8() {
-            if let Some(prep) = self.storage.prepare_query(query) {
-                if let Some(dist) = self.storage.distance_sq8(&prep, id) {
-                    return Ok(dist.sqrt());
-                }
-            }
-            let vec = self
-                .storage
-                .get_dequantized(id)
-                .ok_or(HNSWError::VectorNotFound(id))?;
-            Ok(self.distance_fn.distance(query, &vec))
-        } else {
-            let vec = self.storage.vector(id);
-            Ok(self.distance_fn.distance(query, vec))
-        }
-    }
 }

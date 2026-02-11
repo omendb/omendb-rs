@@ -455,22 +455,22 @@ impl HNSWIndex {
 
         // Greedy search at each layer (find 1 nearest)
         for level in (1..=entry_level).rev() {
-            nearest = self.search_layer(query, &nearest, 1, level)?;
+            let pairs = self.search_layer(query, &nearest, 1, level)?;
+            nearest = pairs.into_iter().map(|(id, _)| id).collect();
         }
 
         // Beam search at layer 0 (find ef nearest)
         let search_ef = ef.max(k);
         let candidates = self.search_layer(query, &nearest, search_ef, 0)?;
 
-        // Convert to SearchResult and return k nearest
-        // Pre-allocate with exact capacity to avoid reallocations
+        // Convert comparison distances to actual (e.g., sqrt for L2)
         let mut results = Vec::with_capacity(candidates.len());
-        for &id in &candidates {
-            let distance = self.distance_exact(query, id)?;
-            // Return slot (original RecordStore index) not internal node id
-            // After optimize(), id may differ from slot
+        for &(id, dist) in &candidates {
             let slot = self.storage.slot(id);
-            results.push(SearchResult::new(slot, distance));
+            results.push(SearchResult::new(
+                slot,
+                self.distance_fn.comparison_to_actual(dist),
+            ));
         }
 
         // Sort by distance (closest first) - unstable is faster
@@ -586,9 +586,9 @@ impl HNSWIndex {
 
         // Greedy search at each layer (find 1 nearest that matches filter)
         for level in (1..=entry_level).rev() {
-            nearest = self.search_layer_with_filter(query, &nearest, 1, level, &slot_filter)?;
+            let pairs = self.search_layer_with_filter(query, &nearest, 1, level, &slot_filter)?;
+            nearest = pairs.into_iter().map(|(id, _)| id).collect();
             if nearest.is_empty() {
-                // No matching nodes found at this level, try standard search
                 debug!(level, "No matches at this level, falling back");
                 nearest = vec![entry_point];
             }
@@ -599,14 +599,14 @@ impl HNSWIndex {
         let candidates =
             self.search_layer_with_filter(query, &nearest, search_ef, 0, &slot_filter)?;
 
-        // Convert to SearchResult and return k nearest
-        // Pre-allocate with exact capacity to avoid reallocations
+        // Convert comparison distances to actual (e.g., sqrt for L2)
         let mut results = Vec::with_capacity(candidates.len());
-        for &id in &candidates {
-            let distance = self.distance_exact(query, id)?;
-            // Return slot (original RecordStore index) not internal node id
+        for &(id, dist) in &candidates {
             let slot = self.storage.slot(id);
-            results.push(SearchResult::new(slot, distance));
+            results.push(SearchResult::new(
+                slot,
+                self.distance_fn.comparison_to_actual(dist),
+            ));
         }
 
         results.sort_unstable_by_key(|r| OrderedFloat(r.distance));
@@ -694,11 +694,10 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
         filter_fn: &F,
-    ) -> Result<Vec<u32>>
+    ) -> Result<Vec<(u32, f32)>>
     where
         F: Fn(u32) -> bool,
     {
-        // Dispatch once at the top level to get full monomorphization benefits
         dispatch_distance!(self.distance_fn, D => {
             self.search_layer_with_filter_mono::<D, F>(
                 query,
@@ -725,7 +724,7 @@ impl HNSWIndex {
         ef: usize,
         level: u8,
         filter_fn: &F,
-    ) -> Result<Vec<u32>>
+    ) -> Result<Vec<(u32, f32)>>
     where
         F: Fn(u32) -> bool,
     {
@@ -737,79 +736,50 @@ impl HNSWIndex {
         };
 
         self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
-            .map(|pairs| pairs.into_iter().map(|(id, _)| id).collect())
     }
 
     /// Search for nearest neighbors at a specific level
     ///
-    /// Returns node IDs of up to ef nearest neighbors.
+    /// Search layer returning (node_id, comparison_distance) pairs.
     ///
-    /// Optimized (Nov 25, 2025):
-    /// - Uses `VisitedList` with O(1) clear (generation-based, like hnswlib)
-    /// - Reuses pre-allocated unvisited buffer to avoid per-iteration allocation
+    /// Returns up to `ef` nearest neighbors sorted by distance (closest first).
+    /// Distances are comparison distances (L2 squared, raw cosine/dot) — callers
+    /// use `distance_fn.comparison_to_actual()` to convert for user-facing results.
+    ///
+    /// Uses SQ8 quantized distances when available, full precision otherwise.
     pub(super) fn search_layer(
         &self,
         query: &[f32],
         entry_points: &[u32],
         ef: usize,
         level: u8,
-    ) -> Result<Vec<u32>> {
-        // Dispatch once at the top level to get full monomorphization benefits
-        // inside the hot loop. Critical for x86/ARM servers.
+    ) -> Result<Vec<(u32, f32)>> {
         dispatch_distance!(self.distance_fn, D => {
             self.search_layer_mono::<D>(query, entry_points, ef, level)
         })
     }
 
     /// Monomorphized search layer (static dispatch, no match in hot loop)
-    ///
-    /// The Distance trait enables compile-time specialization. The compiler
-    /// generates separate versions for L2, Cosine, and NegDot with the
-    /// distance function fully inlined.
-    #[inline(never)] // Prevent inlining dispatcher - we want separate code paths
+    #[inline(never)]
     pub(super) fn search_layer_mono<D: Distance>(
         &self,
         query: &[f32],
         entry_points: &[u32],
         ef: usize,
         level: u8,
-    ) -> Result<Vec<u32>> {
+    ) -> Result<Vec<(u32, f32)>> {
         let ctx = DistanceContext::new(query, self, false);
         let collector = StandardCollector {
             storage: &self.storage,
         };
 
         self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
-            .map(|pairs| pairs.into_iter().map(|(id, _)| id).collect())
     }
 
-    /// Search layer using full precision (f32) distances
+    /// Search layer using full precision (f32) distances.
     ///
     /// Used during graph construction where quantization noise hurts graph quality.
-    /// Same algorithm as search_layer but uses distance_cmp_full_precision.
     pub(super) fn search_layer_full_precision(
-        &self,
-        query: &[f32],
-        entry_points: &[u32],
-        ef: usize,
-        level: u8,
-    ) -> Result<Vec<u32>> {
-        dispatch_distance!(self.distance_fn, D => {
-            let ctx = DistanceContext::new(query, self, true);
-            let collector = StandardCollector {
-                storage: &self.storage,
-            };
-
-            self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
-                .map(|pairs| pairs.into_iter().map(|(id, _)| id).collect())
-        })
-    }
-
-    /// Search layer returning (node_id, distance) pairs
-    ///
-    /// Used during graph construction to avoid recomputing distances in select_neighbors_heuristic.
-    /// Returns candidates sorted by distance (closest first).
-    pub(super) fn search_layer_with_distances(
         &self,
         query: &[f32],
         entry_points: &[u32],

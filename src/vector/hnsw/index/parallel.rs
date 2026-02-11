@@ -277,9 +277,13 @@ impl ParallelBuilder {
         // Search for nearest neighbors
         let mut nearest = vec![entry_point];
 
-        // Descend from top level to target level (just need IDs here)
+        // Descend from top level to target level
         for lc in ((level + 1)..=entry_level).rev() {
-            nearest = self.search_layer(vector, &nearest, 1, lc, use_ready_filter);
+            nearest = self
+                .search_layer(vector, &nearest, 1, lc, use_ready_filter)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
         }
 
         // Insert at each level from target down to 0
@@ -416,7 +420,7 @@ impl ParallelBuilder {
         })
     }
 
-    /// Search layer returning only node IDs (for upper level traversal)
+    /// Search layer returning (node_id, distance) pairs.
     fn search_layer(
         &self,
         query: &[f32],
@@ -424,11 +428,8 @@ impl ParallelBuilder {
         ef: usize,
         level: u8,
         use_ready_filter: bool,
-    ) -> Vec<u32> {
+    ) -> Vec<(u32, f32)> {
         self.search_layer_with_distances(query, entry_points, ef, level, use_ready_filter)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect()
     }
 
     /// Connect node to neighbors with fine-grained locking

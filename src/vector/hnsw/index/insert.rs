@@ -220,7 +220,7 @@ impl HNSWIndex {
             // Find ef nearest neighbors at this level using reduced ef
             // Use distance-aware search to avoid recomputing in heuristic
             let candidates_with_distances =
-                self.search_layer_with_distances(vector, &nearest, ef, lc)?;
+                self.search_layer_full_precision(vector, &nearest, ef, lc)?;
 
             // Select M best neighbors using heuristic (distances already computed)
             let m = self.params.m_for_level(lc);
@@ -390,14 +390,18 @@ impl HNSWIndex {
             // Search for nearest neighbors at each level above target level
             let mut nearest = vec![entry_point];
             for lc in ((*level + 1)..=entry_level).rev() {
-                nearest = self.search_layer_full_precision(&vector, &nearest, 1, lc)?;
+                nearest = self
+                    .search_layer_full_precision(&vector, &nearest, 1, lc)?
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect();
             }
 
             // Insert at levels 0..=level
             for lc in (0..=*level).rev() {
                 // Find ef_construction nearest neighbors at this level
                 // Use distance-aware search to avoid recomputing in heuristic
-                let candidates_with_distances = self.search_layer_with_distances(
+                let candidates_with_distances = self.search_layer_full_precision(
                     &vector,
                     &nearest,
                     self.params.ef_construction,
@@ -502,14 +506,18 @@ impl HNSWIndex {
         // Use full precision distances during graph construction for better quality
         let mut nearest = vec![entry_point];
         for lc in ((level + 1)..=entry_level).rev() {
-            nearest = self.search_layer_full_precision(vector, &nearest, 1, lc)?;
+            nearest = self
+                .search_layer_full_precision(vector, &nearest, 1, lc)?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
         }
 
         // Insert at levels 0..=level (iterate from top to bottom)
         for lc in (0..=level).rev() {
             // Find ef_construction nearest neighbors at this level
             // Use distance-aware search to avoid recomputing in heuristic
-            let candidates_with_distances = self.search_layer_with_distances(
+            let candidates_with_distances = self.search_layer_full_precision(
                 vector,
                 &nearest,
                 self.params.ef_construction,
