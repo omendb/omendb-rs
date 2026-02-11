@@ -18,7 +18,7 @@ use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::NodeStorage;
 use crate::vector::hnsw::query_buffers::VisitedList;
 use crate::vector::hnsw::storage::NeighborStorage;
-use crate::vector::hnsw::types::{Candidate, HNSWParams, Metric};
+use crate::vector::hnsw::types::{dot_product, Candidate, HNSWParams, Metric};
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::cell::RefCell;
@@ -273,6 +273,7 @@ impl ParallelBuilder {
 
         let entry_level = self.levels[entry_point as usize];
         let vector = &self.vectors[node_id as usize];
+        let query_norm = dot_product(vector, vector).sqrt();
 
         // Search for nearest neighbors
         let mut nearest = vec![entry_point];
@@ -280,7 +281,7 @@ impl ParallelBuilder {
         // Descend from top level to target level
         for lc in ((level + 1)..=entry_level).rev() {
             nearest = self
-                .search_layer(vector, &nearest, 1, lc, use_ready_filter)
+                .search_layer(vector, query_norm, &nearest, 1, lc, use_ready_filter)
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect();
@@ -291,6 +292,7 @@ impl ParallelBuilder {
             // Use distance-aware search to avoid recomputing in heuristic
             let candidates_with_distances = self.search_layer_with_distances(
                 vector,
+                query_norm,
                 &nearest,
                 self.params.ef_construction,
                 lc,
@@ -323,6 +325,7 @@ impl ParallelBuilder {
     fn search_layer_with_distances(
         &self,
         query: &[f32],
+        query_norm: f32,
         entry_points: &[u32],
         ef: usize,
         level: u8,
@@ -348,7 +351,7 @@ impl ParallelBuilder {
                 }
                 buffers.visited.insert(ep);
 
-                let dist = self.distance_cmp(query, ep);
+                let dist = self.distance_cmp_precomputed(query, query_norm, ep);
                 let candidate = Candidate::new(ep, dist);
                 buffers.candidates.push(Reverse(candidate));
                 buffers.working.push(candidate);
@@ -381,7 +384,8 @@ impl ParallelBuilder {
                                 continue;
                             }
 
-                            let dist = self.distance_cmp(query, neighbor_id);
+                            let dist =
+                                self.distance_cmp_precomputed(query, query_norm, neighbor_id);
                             let neighbor = Candidate::new(neighbor_id, dist);
 
                             if let Some(&farthest) = buffers.working.peek() {
@@ -424,12 +428,20 @@ impl ParallelBuilder {
     fn search_layer(
         &self,
         query: &[f32],
+        query_norm: f32,
         entry_points: &[u32],
         ef: usize,
         level: u8,
         use_ready_filter: bool,
     ) -> Vec<(u32, f32)> {
-        self.search_layer_with_distances(query, entry_points, ef, level, use_ready_filter)
+        self.search_layer_with_distances(
+            query,
+            query_norm,
+            entry_points,
+            ef,
+            level,
+            use_ready_filter,
+        )
     }
 
     /// Connect node to neighbors with fine-grained locking
@@ -465,7 +477,13 @@ impl ParallelBuilder {
                 let mut neighbor_neighbors = self.neighbors.get_neighbors(neighbor_id, level);
                 neighbor_neighbors.push(node_id);
                 let neighbor_vec = &self.vectors[neighbor_id as usize];
-                let pruned = self.select_neighbors_heuristic(&neighbor_neighbors, m, neighbor_vec);
+                let neighbor_norm = dot_product(neighbor_vec, neighbor_vec).sqrt();
+                let pruned = self.select_neighbors_heuristic(
+                    &neighbor_neighbors,
+                    m,
+                    neighbor_vec,
+                    neighbor_norm,
+                );
                 self.neighbors.set_neighbors(neighbor_id, level, pruned);
             }
         }
@@ -495,6 +513,7 @@ impl ParallelBuilder {
         overflow_nodes.into_par_iter().for_each(|node_id| {
             let level = self.levels[node_id as usize];
             let node_vec = &self.vectors[node_id as usize];
+            let node_norm = dot_product(node_vec, node_vec).sqrt();
 
             // Check and prune each level
             for l in 0..=level {
@@ -502,7 +521,8 @@ impl ParallelBuilder {
                 let neighbors = self.neighbors.get_neighbors(node_id, l);
 
                 if neighbors.len() > m {
-                    let pruned = self.select_neighbors_heuristic(&neighbors, m, node_vec);
+                    let pruned =
+                        self.select_neighbors_heuristic(&neighbors, m, node_vec, node_norm);
                     self.neighbors.set_neighbors(node_id, l, pruned);
                 }
             }
@@ -570,6 +590,7 @@ impl ParallelBuilder {
         candidates: &[u32],
         m: usize,
         query_vector: &[f32],
+        query_norm: f32,
     ) -> Vec<u32> {
         if candidates.len() <= m {
             return candidates.to_vec();
@@ -578,7 +599,12 @@ impl ParallelBuilder {
         // Sort candidates by distance
         let mut sorted: Vec<_> = candidates
             .iter()
-            .map(|&id| (id, self.distance_cmp(query_vector, id)))
+            .map(|&id| {
+                (
+                    id,
+                    self.distance_cmp_precomputed(query_vector, query_norm, id),
+                )
+            })
             .collect();
         sorted.sort_unstable_by_key(|c| OrderedFloat(c.1));
 
@@ -616,9 +642,12 @@ impl ParallelBuilder {
         }
     }
 
-    /// Lock-free distance from query to node (uses cached vectors)
+    /// Lock-free distance from query to node with precomputed query norm
+    ///
+    /// Avoids redundant query norm computation for cosine distance.
+    /// For L2 and InnerProduct, the norm parameter is ignored.
     #[inline]
-    fn distance_cmp(&self, query: &[f32], id: u32) -> f32 {
+    fn distance_cmp_precomputed(&self, query: &[f32], query_norm: f32, id: u32) -> f32 {
         debug_assert!(
             (id as usize) < self.vectors.len(),
             "id {} out of bounds (len={})",
@@ -626,7 +655,8 @@ impl ParallelBuilder {
             self.vectors.len()
         );
         let vec = &self.vectors[id as usize];
-        self.distance_fn.distance_for_comparison(query, vec)
+        self.distance_fn
+            .distance_for_comparison_precomputed(query, vec, query_norm)
     }
 
     /// Lock-free distance between two nodes (uses cached vectors)

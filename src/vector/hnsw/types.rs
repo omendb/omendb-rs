@@ -362,6 +362,7 @@ impl SearchResult {
 #[allow(clippy::float_cmp, clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+    use crate::distance::l2_distance;
 
     #[test]
     fn test_hnsw_node_size() {
