@@ -29,7 +29,7 @@ mod general {
                 for i in 0..10 {
                     let v = Vector::new((0..dimensions).map(|j| (i * j) as f32 * 0.1).collect());
                     let id = format!("vec_{i}");
-                    store.set(id, v, serde_json::json!({})).unwrap();
+                    store.set(&id, v, serde_json::json!({})).unwrap();
                 }
 
                 store.flush().unwrap();
@@ -55,7 +55,7 @@ mod general {
             for i in 0..num_inserts {
                 let id = format!("vec_{i}");
                 let v = Vector::new((0..8).map(|j| (i * j) as f32 * 0.1).collect());
-                store.set(id.clone(), v, serde_json::json!({})).unwrap();
+                store.set(&id, v, serde_json::json!({})).unwrap();
                 ids.push(id);
             }
 
@@ -93,7 +93,7 @@ mod general {
                 for i in 0..num_vectors {
                     let v = Vector::new((0..64).map(|j| (i * j) as f32 * 0.01).collect());
                     let id = format!("vec_{i}");
-                    store.set(id, v, serde_json::json!({})).unwrap();
+                    store.set(&id, v, serde_json::json!({})).unwrap();
                 }
 
                 store.flush().unwrap();
@@ -183,7 +183,7 @@ mod persistence {
                 for i in 0..num_vectors {
                     let data: Vec<f32> = (0..dim).map(|j| (i * 100 + j) as f32 * 0.01).collect();
                     let id = format!("v{}", i);
-                    store.set(id.clone(), Vector::new(data.clone()), serde_json::json!({"i": i})).unwrap();
+                    store.set(&id, Vector::new(data.clone()), serde_json::json!({"i": i})).unwrap();
                     expected_vectors.push((id, data, i));
                 }
                 // NO flush - data should survive via WAL
@@ -220,7 +220,7 @@ mod persistence {
 
                 for i in 0..num_inserts {
                     let data: Vec<f32> = (0..dim).map(|j| (i + j) as f32).collect();
-                    store.set(format!("v{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                    store.set(&format!("v{}", i), Vector::new(data), serde_json::json!({})).unwrap();
                 }
 
                 // Delete first N vectors
@@ -266,14 +266,14 @@ mod persistence {
                 // First batch - will be checkpointed
                 for i in 0..checkpoint_count {
                     let data: Vec<f32> = (0..dim).map(|j| (i + j) as f32).collect();
-                    store.set(format!("cp{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                    store.set(&format!("cp{}", i), Vector::new(data), serde_json::json!({})).unwrap();
                 }
                 store.flush().unwrap();
 
                 // Second batch - only in WAL
                 for i in 0..wal_count {
                     let data: Vec<f32> = (0..dim).map(|j| (i + j + 1000) as f32).collect();
-                    store.set(format!("wal{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                    store.set(&format!("wal{}", i), Vector::new(data), serde_json::json!({})).unwrap();
                 }
                 // NO flush for second batch
             }
@@ -304,7 +304,7 @@ mod persistence {
             // Store exact values
             {
                 let mut store = VectorStore::open_with_dimensions(&path, 16).unwrap();
-                store.set("test".to_string(), Vector::new(values.clone()), serde_json::json!({})).unwrap();
+                store.set("test", Vector::new(values.clone()), serde_json::json!({})).unwrap();
                 store.flush().unwrap();
             }
 
@@ -347,7 +347,7 @@ mod persistence {
             // Store
             {
                 let mut store = VectorStore::open_with_dimensions(&path, 4).unwrap();
-                store.set("test".to_string(), Vector::new(vec![1.0, 2.0, 3.0, 4.0]), metadata.clone()).unwrap();
+                store.set("test", Vector::new(vec![1.0, 2.0, 3.0, 4.0]), metadata.clone()).unwrap();
                 store.flush().unwrap();
             }
 
@@ -383,7 +383,7 @@ mod persistence {
 
                 for update in 0..num_updates {
                     let data: Vec<f32> = (0..dim).map(|i| (update * 100 + i) as f32).collect();
-                    store.set("same_id".to_string(), Vector::new(data), serde_json::json!({"version": update})).unwrap();
+                    store.set("same_id", Vector::new(data), serde_json::json!({"version": update})).unwrap();
                 }
                 store.flush().unwrap();
             }

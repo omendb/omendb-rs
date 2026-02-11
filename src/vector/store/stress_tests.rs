@@ -42,7 +42,7 @@ fn stress_concurrent_writers() {
                     let id = format!("w{writer_id}_v{i}");
                     let vec = Vector::new(random_vector(writer_id * 10000 + i, 128));
                     store
-                        .set(id, vec, serde_json::json!({"writer": writer_id, "idx": i}))
+                        .set(&id, vec, serde_json::json!({"writer": writer_id, "idx": i}))
                         .unwrap();
                 }
             })
@@ -77,7 +77,7 @@ fn stress_mixed_read_write() {
     for i in 0..100 {
         store
             .set(
-                format!("seed{i}"),
+                &format!("seed{i}"),
                 Vector::new(random_vector(i, 128)),
                 serde_json::json!({}),
             )
@@ -95,7 +95,7 @@ fn stress_mixed_read_write() {
                 while running.load(Ordering::Relaxed) {
                     let id = format!("live_w{writer_id}_v{i}");
                     let vec = Vector::new(random_vector(writer_id * 100000 + i, 128));
-                    if store.set(id, vec, serde_json::json!({})).is_ok() {
+                    if store.set(&id, vec, serde_json::json!({})).is_ok() {
                         write_count.fetch_add(1, Ordering::Relaxed);
                     }
                     i += 1;
@@ -153,7 +153,7 @@ fn stress_delete_reinsert_cycle() {
     for i in 0..num_ids {
         store
             .set(
-                format!("cycle{i}"),
+                &format!("cycle{i}"),
                 Vector::new(random_vector(i, 64)),
                 serde_json::json!({"cycle": 0}),
             )
@@ -170,7 +170,7 @@ fn stress_delete_reinsert_cycle() {
         for i in 0..num_ids {
             store
                 .set(
-                    format!("cycle{i}"),
+                    &format!("cycle{i}"),
                     Vector::new(random_vector(cycle * 1000 + i, 64)),
                     serde_json::json!({"cycle": cycle}),
                 )
@@ -196,7 +196,7 @@ fn stress_concurrent_deletes() {
     for i in 0..num_vectors {
         store
             .set(
-                format!("del{i}"),
+                &format!("del{i}"),
                 Vector::new(random_vector(i, 64)),
                 serde_json::json!({}),
             )
@@ -324,7 +324,7 @@ fn stress_crash_mid_batch() {
         for i in 0..checkpoint_count {
             store
                 .set(
-                    format!("cp{i}"),
+                    &format!("cp{i}"),
                     Vector::new(random_vector(i, 64)),
                     serde_json::json!({}),
                 )
@@ -336,7 +336,7 @@ fn stress_crash_mid_batch() {
         for i in 0..wal_count {
             store
                 .set(
-                    format!("wal{i}"),
+                    &format!("wal{i}"),
                     Vector::new(random_vector(i + 10000, 64)),
                     serde_json::json!({}),
                 )
@@ -385,7 +385,7 @@ fn stress_crash_after_deletes() {
         for i in 0..initial_count {
             store
                 .set(
-                    format!("d{i}"),
+                    &format!("d{i}"),
                     Vector::new(random_vector(i, 64)),
                     serde_json::json!({}),
                 )
@@ -451,7 +451,7 @@ fn stress_repeated_crash_recovery() {
                 let id = format!("c{cycle}_v{i}");
                 store
                     .set(
-                        id,
+                        &id,
                         Vector::new(random_vector(cycle * 1000 + i, 64)),
                         serde_json::json!({}),
                     )
@@ -488,7 +488,7 @@ fn stress_large_metadata() {
 
     store
         .set(
-            "large".to_string(),
+            "large",
             Vector::new(random_vector(0, 64)),
             large_meta.clone(),
         )
@@ -515,7 +515,7 @@ fn stress_edge_cases() {
     // Single element
     store
         .set(
-            "single".to_string(),
+            "single",
             Vector::new(random_vector(1, 64)),
             serde_json::json!({}),
         )
@@ -542,7 +542,7 @@ fn stress_id_collision() {
     for i in 0..100 {
         store
             .set(
-                "collision".to_string(),
+                "collision",
                 Vector::new(random_vector(i, 64)),
                 serde_json::json!({"version": i}),
             )

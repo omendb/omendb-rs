@@ -69,7 +69,7 @@ impl VectorStore {
     /// * `metadata` - Optional metadata
     pub fn set_with_text(
         &mut self,
-        id: String,
+        id: &str,
         vector: Vector,
         text: &str,
         metadata: JsonValue,
@@ -78,7 +78,7 @@ impl VectorStore {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
 
-        text_index.index_document(&id, text)?;
+        text_index.index_document(id, text)?;
         self.set(id, vector, metadata)
     }
 

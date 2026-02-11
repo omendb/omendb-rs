@@ -341,19 +341,16 @@ impl Candidate {
     }
 }
 
-/// Search result (node ID + distance)
+/// HNSW-internal search result (node ID + distance)
 #[derive(Clone, Debug)]
-pub struct SearchResult {
-    /// Node ID
-    pub id: u32,
-
-    /// Distance to query
-    pub distance: f32,
+pub(crate) struct SearchResult {
+    pub(crate) id: u32,
+    pub(crate) distance: f32,
 }
 
 impl SearchResult {
     #[must_use]
-    pub fn new(id: u32, distance: f32) -> Self {
+    pub(crate) fn new(id: u32, distance: f32) -> Self {
         Self { id, distance }
     }
 }

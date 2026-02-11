@@ -165,12 +165,12 @@ impl VectorDatabase {
                         }
                         inner
                             .store
-                            .set_with_text(item.id, Vector::new(vector.to_vec()), text, metadata)
+                            .set_with_text(&item.id, Vector::new(vector.to_vec()), text, metadata)
                             .map_err(convert_error)?;
                     } else {
                         inner
                             .store
-                            .set(item.id, Vector::new(vector.to_vec()), metadata)
+                            .set(&item.id, Vector::new(vector.to_vec()), metadata)
                             .map_err(convert_error)?;
                     }
                     count += 1;
@@ -389,12 +389,12 @@ impl VectorDatabase {
             if inner.store.has_text_search() {
                 inner
                     .store
-                    .set_with_text(id, final_vec, new_text, final_meta)
+                    .set_with_text(&id, final_vec, new_text, final_meta)
                     .map_err(convert_error)?;
             } else {
                 inner
                     .store
-                    .set(id, final_vec, final_meta)
+                    .set(&id, final_vec, final_meta)
                     .map_err(convert_error)?;
             }
         } else {

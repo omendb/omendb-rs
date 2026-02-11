@@ -83,7 +83,7 @@ pub struct VectorStore {
     records: RecordStore,
 
     /// Segment manager for HNSW index (mutable + frozen segments)
-    pub segments: Option<SegmentManager>,
+    pub(crate) segments: Option<SegmentManager>,
 
     /// Roaring bitmap index for fast filtered search
     metadata_index: MetadataIndex,

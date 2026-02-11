@@ -220,7 +220,7 @@ impl VectorDatabase {
                 let mut inner = self.inner.write();
                 inner
                     .store
-                    .set(id_str, Vector::new(vec_data), meta)
+                    .set(&id_str, Vector::new(vec_data), meta)
                     .map_err(convert_error)?;
                 return Ok(1);
             }
@@ -292,12 +292,12 @@ impl VectorDatabase {
                             let result = if let Some(text) = item.text {
                                 inner
                                     .store
-                                    .set_with_text(item.id, item.vector, &text, item.metadata)
+                                    .set_with_text(&item.id, item.vector, &text, item.metadata)
                                     .map_err(convert_error)?
                             } else {
                                 inner
                                     .store
-                                    .set(item.id, item.vector, item.metadata)
+                                    .set(&item.id, item.vector, item.metadata)
                                     .map_err(convert_error)?
                             };
                             results.push(result);
@@ -504,13 +504,13 @@ impl VectorDatabase {
             if inner.store.has_text_search() {
                 inner
                     .store
-                    .set_with_text(id, final_vec, new_text, final_meta)
+                    .set_with_text(&id, final_vec, new_text, final_meta)
                     .map_err(convert_error)?;
             } else {
                 // Text search not enabled, just update metadata
                 inner
                     .store
-                    .set(id, final_vec, final_meta)
+                    .set(&id, final_vec, final_meta)
                     .map_err(convert_error)?;
             }
             return Ok(());

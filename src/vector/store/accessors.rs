@@ -109,6 +109,12 @@ impl VectorStore {
         self.records.deleted_count() as usize
     }
 
+    /// Get the segment manager (for benchmarking/diagnostics)
+    #[must_use]
+    pub fn segments(&self) -> Option<&crate::vector::hnsw::SegmentManager> {
+        self.segments.as_ref()
+    }
+
     /// Get index-to-ID mapping (for FFI bindings)
     ///
     /// Returns a HashMap mapping internal slot indices to string IDs.

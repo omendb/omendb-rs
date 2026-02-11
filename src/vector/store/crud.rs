@@ -13,7 +13,7 @@ impl VectorStore {
         let slot = self.records.slot_count();
         let id = format!("__auto_{slot}");
 
-        self.set(id, vector, helpers::default_metadata())
+        self.set(&id, vector, helpers::default_metadata())
     }
 
     /// Insert vector with string ID and metadata
@@ -23,11 +23,11 @@ impl VectorStore {
     #[allow(dead_code)]
     pub(crate) fn insert_with_metadata(
         &mut self,
-        id: String,
+        id: &str,
         vector: Vector,
         metadata: JsonValue,
     ) -> Result<usize> {
-        if self.records.get_slot(&id).is_some() {
+        if self.records.get_slot(id).is_some() {
             anyhow::bail!("Vector with ID '{id}' already exists. Use set() to update.");
         }
 
@@ -47,7 +47,7 @@ impl VectorStore {
     /// Without explicit flush:
     /// - Data is recoverable after normal shutdown
     /// - Data may be lost on crash/power failure between set() and next flush/batch
-    pub fn set(&mut self, id: String, vector: Vector, metadata: JsonValue) -> Result<usize> {
+    pub fn set(&mut self, id: &str, vector: Vector, metadata: JsonValue) -> Result<usize> {
         // Initialize segments if needed
         if self.segments.is_none() {
             let dimensions = self.resolve_dimensions(vector.dim())?;
@@ -69,14 +69,14 @@ impl VectorStore {
         }
 
         // Check if this is an update
-        let old_slot = self.records.get_slot(&id);
+        let old_slot = self.records.get_slot(id);
 
         // Upsert into RecordStore - creates new slot (both for insert and update)
         // RecordStore marks old slot deleted internally to maintain slot == HNSW node ID
-        let slot = self
-            .records
-            .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?
-            as usize;
+        let slot =
+            self.records
+                .upsert(id.to_string(), vector.data.clone(), Some(metadata.clone()))?
+                as usize;
 
         // Insert into segments
         if let Some(ref mut segments) = self.segments {
@@ -292,7 +292,7 @@ impl VectorStore {
                     .and_then(|r| r.metadata.clone())
                     .unwrap_or_else(|| serde_json::json!({})),
             };
-            self.set(id.to_string(), new_vector, merged_metadata)?;
+            self.set(id, new_vector, merged_metadata)?;
         } else if let Some(ref new_metadata) = metadata {
             // Metadata-only update: no HNSW re-indexing needed
             self.metadata_index.remove(slot);

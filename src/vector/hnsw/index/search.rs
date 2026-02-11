@@ -438,7 +438,7 @@ impl HNSWIndex {
     ///
     /// Returns up to k nearest neighbors sorted by distance (closest first).
     #[instrument(skip(self, query), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
-    pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
+    pub(crate) fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
         if matches!(
             self.validate_search_params(query, k, ef)?,
             SearchValidation::Empty
@@ -505,7 +505,7 @@ impl HNSWIndex {
     /// # Reference
     /// ACORN: SIGMOD 2024, arXiv:2403.04871
     #[instrument(skip(self, query, filter_fn), fields(k, ef, dimensions = query.len(), index_size = self.len()))]
-    pub fn search_with_filter<F>(
+    pub(crate) fn search_with_filter<F>(
         &self,
         query: &[f32],
         k: usize,

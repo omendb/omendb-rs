@@ -23,10 +23,7 @@ pub struct HNSWIndex {
     /// Core HNSW implementation
     index: CoreHNSW,
 
-    /// Index parameters
-    max_elements: usize,
-    max_nb_connection: usize, // M parameter
-    ef_construction: usize,
+    /// Vector dimensionality
     dimensions: usize,
 
     /// Runtime search parameter (tunable, not persisted)
@@ -34,16 +31,6 @@ pub struct HNSWIndex {
 
     /// Number of vectors inserted
     num_vectors: usize,
-}
-
-/// HNSW construction and search parameters
-#[derive(Debug, Clone)]
-pub struct HNSWParams {
-    pub max_elements: usize,
-    pub max_nb_connection: usize,
-    pub ef_construction: usize,
-    pub ef_search: usize,
-    pub dimensions: usize,
 }
 
 /// Default HNSW M parameter (neighbors per node)
@@ -193,9 +180,6 @@ impl HNSWIndexBuilder {
 
         Ok(HNSWIndex {
             index,
-            max_elements: self.max_elements,
-            max_nb_connection: self.m,
-            ef_construction: self.ef_construction,
             ef_search: self.ef_search,
             dimensions,
             num_vectors: 0,
@@ -232,27 +216,23 @@ impl HNSWIndex {
         HNSWIndexBuilder::new()
     }
 
-    /// Create new HNSW index with adaptive parameters
+    /// Create new HNSW index with default parameters
     ///
     /// # Arguments
-    /// * `max_elements` - Maximum number of vectors (e.g., `1_000_000`)
     /// * `dimensions` - Vector dimensionality (e.g., 1536 for `OpenAI` embeddings)
+    /// * `distance_fn` - Distance metric (L2, Cosine, InnerProduct)
     ///
-    /// # Adaptive Parameters
-    /// Parameters automatically adjust based on expected dataset size:
-    /// - <10K vectors: M=16, `ef_construction=100` (fast builds, 95%+ recall)
-    /// - 10K-100K: M=24, `ef_construction=200` (balanced)
-    /// - 100K+: M=32, `ef_construction=400` (maximum recall, 98%+)
+    /// Uses M=16, ef_construction=100 (industry standard defaults).
     ///
     /// # Example
     /// ```ignore
     /// use omen::vector::HNSWIndex;
     ///
-    /// let mut index = HNSWIndex::new(1_000_000, 1536, Metric::L2)?;
+    /// let mut index = HNSWIndex::new(1536, Metric::L2)?;
     /// index.insert(&vector)?;
     /// let results = index.search(&query, 10)?;
     /// ```
-    pub fn new(max_elements: usize, dimensions: usize, distance_fn: Metric) -> Result<Self> {
+    pub fn new(dimensions: usize, distance_fn: Metric) -> Result<Self> {
         // Industry standard defaults (ChromaDB, hnswlib, Milvus, pgvector)
         // Users can override via new_with_params() if needed
         let m = 16;
@@ -270,9 +250,6 @@ impl HNSWIndex {
 
         Ok(Self {
             index,
-            max_elements,
-            max_nb_connection: m,
-            ef_construction,
             ef_search: ef_construction,
             dimensions,
             num_vectors: 0,
@@ -282,20 +259,17 @@ impl HNSWIndex {
     /// Create new HNSW index with custom parameters
     ///
     /// # Arguments
-    /// * `max_elements` - Maximum number of vectors
     /// * `dimensions` - Vector dimensionality
     /// * `m` - Number of bidirectional links per node (typical: 16-48)
     /// * `ef_construction` - Candidate list size during construction (typical: 200-800)
     /// * `ef_search` - Candidate list size during search (typical: 200-1000)
-    /// * `distance_fn` - Distance function (L2, Cosine, NegDot)
+    /// * `distance_fn` - Distance function (L2, Cosine, InnerProduct)
     ///
     /// # Example
     /// ```ignore
-    /// // Higher M for better recall at scale
-    /// let mut index = HNSWIndex::new_with_params(1_000_000, 128, 32, 400, 600, Metric::L2)?;
+    /// let mut index = HNSWIndex::new_with_params(128, 32, 400, 600, Metric::L2)?;
     /// ```
     pub fn new_with_params(
-        max_elements: usize,
         dimensions: usize,
         m: usize,
         ef_construction: usize,
@@ -314,9 +288,6 @@ impl HNSWIndex {
 
         Ok(Self {
             index,
-            max_elements,
-            max_nb_connection: m,
-            ef_construction,
             ef_search,
             dimensions,
             num_vectors: 0,
@@ -334,9 +305,6 @@ impl HNSWIndex {
 
         Ok(Self {
             index,
-            max_elements: 1_000_000,
-            max_nb_connection: params.m,
-            ef_construction: params.ef_construction,
             ef_search: params.ef_construction,
             dimensions,
             num_vectors: 0,
@@ -371,9 +339,6 @@ impl HNSWIndex {
 
         Ok(Self {
             index,
-            max_elements: num_vectors.max(1_000_000),
-            max_nb_connection: params.m,
-            ef_construction: params.ef_construction,
             ef_search: params.ef_construction,
             dimensions,
             num_vectors,
@@ -630,18 +595,6 @@ impl HNSWIndex {
         self.num_vectors == 0
     }
 
-    /// Get index parameters
-    #[must_use]
-    pub fn params(&self) -> HNSWParams {
-        HNSWParams {
-            max_elements: self.max_elements,
-            max_nb_connection: self.max_nb_connection,
-            ef_construction: self.ef_construction,
-            ef_search: self.ef_search,
-            dimensions: self.dimensions,
-        }
-    }
-
     /// Save index to disk
     ///
     /// Uses fast binary serialization format. Saves both graph structure
@@ -673,19 +626,13 @@ impl HNSWIndex {
 
     /// Create wrapper from core index (used by load and from_bytes)
     fn from_core(index: CoreHNSW) -> Self {
-        // Extract parameters from loaded index
         let dimensions = index.dimensions();
         let num_vectors = index.len();
-        let params = index.params();
-        let m = params.m;
-        let ef_construction = params.ef_construction;
+        let ef_construction = index.params().ef_construction;
 
         Self {
             index,
-            max_elements: num_vectors.max(1_000_000),
-            max_nb_connection: m,
-            ef_construction,
-            ef_search: ef_construction, // Default ef_search to ef_construction
+            ef_search: ef_construction,
             dimensions,
             num_vectors,
         }
@@ -831,8 +778,7 @@ mod tests {
         let index = HNSWIndex::builder().dimensions(128).build().unwrap();
 
         assert_eq!(index.dimensions(), 128);
-        assert_eq!(index.params().max_nb_connection, DEFAULT_M);
-        assert_eq!(index.params().ef_construction, DEFAULT_EF_CONSTRUCTION);
+        assert_eq!(index.len(), 0);
     }
 
     #[test]
@@ -847,12 +793,8 @@ mod tests {
             .build()
             .unwrap();
 
-        let params = index.params();
-        assert_eq!(params.dimensions, 64);
-        assert_eq!(params.max_nb_connection, 32);
-        assert_eq!(params.ef_construction, 200);
-        assert_eq!(params.ef_search, 300);
-        assert_eq!(params.max_elements, 50_000);
+        assert_eq!(index.dimensions(), 64);
+        assert!(index.is_empty());
     }
 
     #[test]
@@ -897,7 +839,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_basic() {
-        let mut index = HNSWIndex::new(1000, 4, Metric::L2).unwrap();
+        let mut index = HNSWIndex::new(4, Metric::L2).unwrap();
 
         // Insert vectors
         let v1 = vec![1.0, 0.0, 0.0, 0.0];
@@ -920,7 +862,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_batch_insert() {
-        let mut index = HNSWIndex::new(1000, 3, Metric::L2).unwrap();
+        let mut index = HNSWIndex::new(3, Metric::L2).unwrap();
 
         let vectors = vec![
             vec![1.0, 0.0, 0.0],
@@ -936,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_hnsw_ef_search() {
-        let mut index = HNSWIndex::new(1000, 4, Metric::L2).unwrap();
+        let mut index = HNSWIndex::new(4, Metric::L2).unwrap();
 
         assert_eq!(index.get_ef_search(), 100); // Default for <10K: M=16, ef=100
 

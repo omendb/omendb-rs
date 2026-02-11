@@ -50,7 +50,7 @@ fn test_search_with_filter() {
     // Insert vectors with metadata
     store
         .set(
-            "doc1".to_string(),
+            "doc1",
             random_vector(128, 0),
             serde_json::json!({"author": "Alice", "year": 2024}),
         )
@@ -58,7 +58,7 @@ fn test_search_with_filter() {
 
     store
         .set(
-            "doc2".to_string(),
+            "doc2",
             random_vector(128, 1),
             serde_json::json!({"author": "Bob", "year": 2023}),
         )
@@ -66,7 +66,7 @@ fn test_search_with_filter() {
 
     store
         .set(
-            "doc3".to_string(),
+            "doc3",
             random_vector(128, 2),
             serde_json::json!({"author": "Alice", "year": 2022}),
         )

@@ -77,7 +77,7 @@ fn test_compact_basic() {
     for i in 0..100 {
         store
             .set(
-                format!("vec{i}"),
+                &format!("vec{i}"),
                 random_vector(128, i),
                 serde_json::json!({"idx": i}),
             )
@@ -135,7 +135,7 @@ fn test_compact_all_deleted() {
     for i in 0..10 {
         store
             .set(
-                format!("vec{i}"),
+                &format!("vec{i}"),
                 random_vector(128, i),
                 serde_json::json!({}),
             )
@@ -185,7 +185,7 @@ fn test_insert_with_metadata() {
     });
 
     let index = store
-        .insert_with_metadata("doc1".to_string(), random_vector(128, 0), metadata.clone())
+        .insert_with_metadata("doc1", random_vector(128, 0), metadata.clone())
         .unwrap();
 
     assert_eq!(index, 0);
@@ -201,7 +201,7 @@ fn test_set_insert() {
 
     // First set should insert
     let index = store
-        .set("doc1".to_string(), random_vector(128, 0), metadata.clone())
+        .set("doc1", random_vector(128, 0), metadata.clone())
         .unwrap();
 
     assert_eq!(index, 0);
@@ -215,7 +215,7 @@ fn test_set_update() {
     // Insert initial document
     store
         .set(
-            "doc1".to_string(),
+            "doc1",
             random_vector(128, 0),
             serde_json::json!({"title": "Original"}),
         )
@@ -224,7 +224,7 @@ fn test_set_update() {
     // Upsert with same ID - creates new slot (to maintain slot == HNSW node ID)
     let index = store
         .set(
-            "doc1".to_string(),
+            "doc1",
             random_vector(128, 1),
             serde_json::json!({"title": "Updated"}),
         )
@@ -248,7 +248,7 @@ fn test_delete() {
 
     store
         .insert_with_metadata(
-            "doc1".to_string(),
+            "doc1",
             random_vector(128, 0),
             serde_json::json!({"title": "Doc 1"}),
         )
@@ -270,7 +270,7 @@ fn test_update() {
 
     store
         .insert_with_metadata(
-            "doc1".to_string(),
+            "doc1",
             random_vector(128, 0),
             serde_json::json!({"title": "Original"}),
         )
@@ -298,14 +298,14 @@ fn test_update_vector_reindexes_hnsw() {
     for i in 0..50 {
         let v = Vector::new(vec![i as f32, 0.0, 0.0, 0.0]);
         store
-            .insert_with_metadata(format!("v{i}"), v, serde_json::json!({}))
+            .insert_with_metadata(&format!("v{i}"), v, serde_json::json!({}))
             .unwrap();
     }
 
     // Insert a target vector far from the query point
     let far_vec = Vector::new(vec![100.0, 100.0, 100.0, 100.0]);
     store
-        .insert_with_metadata("target".to_string(), far_vec, serde_json::json!({}))
+        .insert_with_metadata("target", far_vec, serde_json::json!({}))
         .unwrap();
 
     // Search near origin -- "target" should NOT be in top 5
@@ -336,7 +336,7 @@ fn test_get() {
     let metadata = serde_json::json!({"title": "Test"});
 
     store
-        .insert_with_metadata("doc1".to_string(), vector.clone(), metadata.clone())
+        .insert_with_metadata("doc1", vector.clone(), metadata.clone())
         .unwrap();
 
     // Get by ID

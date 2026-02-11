@@ -16,7 +16,7 @@ fn test_open_new_database() {
     // Insert some vectors
     store
         .set(
-            "doc1".to_string(),
+            "doc1",
             random_vector(128, 0),
             serde_json::json!({"title": "Doc 1"}),
         )
@@ -24,7 +24,7 @@ fn test_open_new_database() {
 
     store
         .set(
-            "doc2".to_string(),
+            "doc2",
             random_vector(128, 1),
             serde_json::json!({"title": "Doc 2"}),
         )
@@ -47,7 +47,7 @@ fn test_persistent_roundtrip() {
 
         store
             .set(
-                "vec1".to_string(),
+                "vec1",
                 random_vector(128, 10),
                 serde_json::json!({"category": "A", "score": 0.95}),
             )
@@ -55,7 +55,7 @@ fn test_persistent_roundtrip() {
 
         store
             .set(
-                "vec2".to_string(),
+                "vec2",
                 random_vector(128, 20),
                 serde_json::json!({"category": "B", "score": 0.85}),
             )
@@ -63,7 +63,7 @@ fn test_persistent_roundtrip() {
 
         store
             .set(
-                "vec3".to_string(),
+                "vec3",
                 random_vector(128, 30),
                 serde_json::json!({"category": "A", "score": 0.75}),
             )
@@ -107,18 +107,10 @@ fn test_persistent_delete() {
         let mut store = VectorStore::open(&db_path).unwrap();
 
         store
-            .set(
-                "keep".to_string(),
-                random_vector(128, 1),
-                serde_json::json!({}),
-            )
+            .set("keep", random_vector(128, 1), serde_json::json!({}))
             .unwrap();
         store
-            .set(
-                "delete_me".to_string(),
-                random_vector(128, 2),
-                serde_json::json!({}),
-            )
+            .set("delete_me", random_vector(128, 2), serde_json::json!({}))
             .unwrap();
 
         assert_eq!(store.len(), 2);
@@ -154,7 +146,7 @@ fn test_persistent_search() {
         for i in 0..100 {
             store
                 .set(
-                    format!("vec{i}"),
+                    &format!("vec{i}"),
                     random_vector(128, i),
                     serde_json::json!({"index": i}),
                 )
@@ -398,7 +390,7 @@ fn test_set_writes_to_wal() {
         let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
         store
             .set(
-                "vec1".to_string(),
+                "vec1",
                 Vector::new(vec![1.0, 2.0, 3.0, 4.0]),
                 serde_json::json!({"key": "value"}),
             )

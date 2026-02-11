@@ -48,7 +48,7 @@ impl VectorStore {
     /// # Example
     /// ```ignore
     /// let mut store = VectorStore::open("mydb.oadb")?;
-    /// store.set("doc1".to_string(), vector, metadata)?;
+    /// store.set("doc1", vector, metadata)?;
     /// // Data is automatically persisted
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {

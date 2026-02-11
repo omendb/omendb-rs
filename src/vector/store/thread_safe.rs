@@ -19,7 +19,7 @@
 //! });
 //!
 //! // Writes are exclusive
-//! store.write().set("id1".to_string(), vec, metadata).unwrap();
+//! store.write().set("id1", vec, metadata).unwrap();
 //! ```
 
 use super::{SearchResult, VectorStore, VectorStoreOptions};
@@ -46,7 +46,7 @@ use std::sync::Arc;
 /// let store = ThreadSafeVectorStore::new(128);
 ///
 /// // Basic write
-/// store.set("id1".to_string(), vec, metadata)?;
+/// store.set("id1", vec, metadata)?;
 ///
 /// // Basic search
 /// let results = store.search(&query, 10)?;
@@ -91,7 +91,7 @@ impl ThreadSafeVectorStore {
     }
 
     /// Insert vector with ID and metadata
-    pub fn set(&self, id: String, vector: Vector, metadata: JsonValue) -> Result<usize> {
+    pub fn set(&self, id: &str, vector: Vector, metadata: JsonValue) -> Result<usize> {
         self.inner.write().set(id, vector, metadata)
     }
 
@@ -173,7 +173,7 @@ mod tests {
         for i in 0..100 {
             store
                 .set(
-                    format!("vec{i}"),
+                    &format!("vec{i}"),
                     Vector::new(vec![i as f32, 0.0, 0.0]),
                     serde_json::json!({"i": i}),
                 )
@@ -209,7 +209,7 @@ mod tests {
             for i in 0..50 {
                 writer_store
                     .set(
-                        format!("vec{i}"),
+                        &format!("vec{i}"),
                         Vector::new(vec![i as f32, 0.0, 0.0]),
                         serde_json::json!({"i": i}),
                     )
@@ -241,7 +241,7 @@ mod tests {
 
         store1
             .set(
-                "vec1".to_string(),
+                "vec1",
                 Vector::new(vec![1.0, 0.0, 0.0]),
                 serde_json::json!({}),
             )
@@ -258,7 +258,7 @@ mod tests {
 
         store
             .set(
-                "vec1".to_string(),
+                "vec1",
                 Vector::new(vec![1.0, 0.0, 0.0]),
                 serde_json::json!({"category": "a"}),
             )

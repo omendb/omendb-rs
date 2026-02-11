@@ -439,7 +439,7 @@ impl VectorStore {
         match (&self.muvera_encoder, data) {
             // Regular store, single vector
             (None, VectorData::Single(vec)) => {
-                self.set(id.to_string(), Vector::new(vec), metadata)?;
+                self.set(id, Vector::new(vec), metadata)?;
                 Ok(())
             }
             // Multi-vector store, multi-vector data
@@ -516,7 +516,7 @@ impl VectorStore {
         let fde = encoder.encode_document(&final_refs);
 
         // Store FDE first (can fail without corrupting multivec_storage)
-        let slot = self.set(id.to_string(), Vector::new(fde), metadata)?;
+        let slot = self.set(id, Vector::new(fde), metadata)?;
 
         // Then add tokens - slot already committed (store pooled tokens for reranking)
         let multivec_storage = self

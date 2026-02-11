@@ -22,7 +22,7 @@ fn test_set_with_text() {
 
     let idx = store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "machine learning is awesome",
             serde_json::json!({"type": "article"}),
@@ -47,7 +47,7 @@ fn test_set_with_text_requires_enabled() {
 
     // Should fail without enabling text search
     let result = store.set_with_text(
-        "doc1".to_string(),
+        "doc1",
         Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
         "test text",
         serde_json::json!({}),
@@ -64,7 +64,7 @@ fn test_text_search_bm25() {
     // Add documents with different term frequencies
     store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "rust programming language",
             serde_json::json!({}),
@@ -73,7 +73,7 @@ fn test_text_search_bm25() {
 
     store
         .set_with_text(
-            "doc2".to_string(),
+            "doc2",
             Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
             "rust rust systems programming",
             serde_json::json!({}),
@@ -98,7 +98,7 @@ fn test_hybrid_search() {
     // doc1: similar vector, relevant text
     store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "machine learning algorithms",
             serde_json::json!({}),
@@ -108,7 +108,7 @@ fn test_hybrid_search() {
     // doc2: different vector, relevant text
     store
         .set_with_text(
-            "doc2".to_string(),
+            "doc2",
             Vector::new(vec![0.0, 0.0, 0.0, 1.0]),
             "machine learning models",
             serde_json::json!({}),
@@ -118,7 +118,7 @@ fn test_hybrid_search() {
     // doc3: similar vector, irrelevant text
     store
         .set_with_text(
-            "doc3".to_string(),
+            "doc3",
             Vector::new(vec![0.9, 0.1, 0.0, 0.0]),
             "cooking recipes",
             serde_json::json!({}),
@@ -147,7 +147,7 @@ fn test_hybrid_search_with_filter() {
 
     store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "machine learning",
             serde_json::json!({"year": 2024}),
@@ -156,7 +156,7 @@ fn test_hybrid_search_with_filter() {
 
     store
         .set_with_text(
-            "doc2".to_string(),
+            "doc2",
             Vector::new(vec![0.9, 0.1, 0.0, 0.0]),
             "machine learning",
             serde_json::json!({"year": 2023}),
@@ -196,7 +196,7 @@ fn test_hybrid_search_empty_text() {
 
     store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "test content",
             serde_json::json!({}),
@@ -223,7 +223,7 @@ fn test_hybrid_search_alpha_weighting() {
     // doc1: closest vector, weak text match
     store
         .set_with_text(
-            "vec_winner".to_string(),
+            "vec_winner",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "unrelated words here",
             serde_json::json!({}),
@@ -233,7 +233,7 @@ fn test_hybrid_search_alpha_weighting() {
     // doc2: far vector, strong text match
     store
         .set_with_text(
-            "text_winner".to_string(),
+            "text_winner",
             Vector::new(vec![0.0, 0.0, 0.0, 1.0]),
             "machine learning algorithms",
             serde_json::json!({}),
@@ -264,7 +264,7 @@ fn test_hybrid_search_k_zero() {
 
     store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "test document",
             serde_json::json!({}),
@@ -286,7 +286,7 @@ fn test_hybrid_search_dimension_mismatch() {
 
     store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "test document",
             serde_json::json!({}),
@@ -313,7 +313,7 @@ fn test_hybrid_search_large_k() {
     for i in 0..3 {
         store
             .set_with_text(
-                format!("doc{i}"),
+                &format!("doc{i}"),
                 Vector::new(vec![1.0, 0.0, 0.0, i as f32]),
                 &format!("document {i}"),
                 serde_json::json!({}),
@@ -338,7 +338,7 @@ fn test_hybrid_search_without_text_enabled() {
 
     store
         .set(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             serde_json::json!({}),
         )
@@ -361,7 +361,7 @@ fn test_hybrid_search_with_subscores() {
     // doc1: matches both vector and text
     store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "machine learning algorithms",
             serde_json::json!({}),
@@ -371,7 +371,7 @@ fn test_hybrid_search_with_subscores() {
     // doc2: matches text only (very different vector)
     store
         .set_with_text(
-            "doc2".to_string(),
+            "doc2",
             Vector::new(vec![0.0, 0.0, 0.0, 1.0]),
             "machine learning models",
             serde_json::json!({}),
@@ -381,7 +381,7 @@ fn test_hybrid_search_with_subscores() {
     // doc3: matches vector only (no matching text)
     store
         .set_with_text(
-            "doc3".to_string(),
+            "doc3",
             Vector::new(vec![0.9, 0.1, 0.0, 0.0]),
             "cooking recipes",
             serde_json::json!({}),
@@ -437,7 +437,7 @@ fn test_hybrid_search_with_filter_subscores() {
 
     store
         .set_with_text(
-            "doc1".to_string(),
+            "doc1",
             Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
             "machine learning",
             serde_json::json!({"year": 2024}),
@@ -446,7 +446,7 @@ fn test_hybrid_search_with_filter_subscores() {
 
     store
         .set_with_text(
-            "doc2".to_string(),
+            "doc2",
             Vector::new(vec![0.9, 0.1, 0.0, 0.0]),
             "machine learning",
             serde_json::json!({"year": 2023}),
