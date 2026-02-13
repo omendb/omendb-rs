@@ -45,8 +45,8 @@
 //! let mut store = VectorStore::new(128);
 //!
 //! // Insert vectors with metadata
-//! store.set("doc1".into(), Vector::new(vec![1.0; 128]), json!({"type": "article"})).unwrap();
-//! store.set("doc2".into(), Vector::new(vec![0.9; 128]), json!({"type": "note"})).unwrap();
+//! store.set("doc1", Vector::new(vec![1.0; 128]), json!({"type": "article"})).unwrap();
+//! store.set("doc2", Vector::new(vec![0.9; 128]), json!({"type": "note"})).unwrap();
 //!
 //! // Search
 //! let query = Vector::new(vec![1.0; 128]);
@@ -64,8 +64,8 @@
 //! use serde_json::json;
 //!
 //! let mut store = VectorStore::new(64);
-//! store.set("a".into(), Vector::new(vec![0.1; 64]), json!({"year": 2024})).unwrap();
-//! store.set("b".into(), Vector::new(vec![0.2; 64]), json!({"year": 2023})).unwrap();
+//! store.set("a", Vector::new(vec![0.1; 64]), json!({"year": 2024})).unwrap();
+//! store.set("b", Vector::new(vec![0.2; 64]), json!({"year": 2023})).unwrap();
 //!
 //! let query = Vector::new(vec![0.1; 64]);
 //! let filter = MetadataFilter::Gte("year".into(), 2024.0);
