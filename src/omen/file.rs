@@ -529,6 +529,8 @@ pub struct OmenSnapshot {
     pub multivec_offsets: Option<Vec<u8>>,
     /// MUVERA config
     pub multivec_config: Option<PersistedMuveraConfig>,
+    /// Serialized SparseIndex (if persisted)
+    pub sparse_index_bytes: Option<Vec<u8>>,
 }
 
 /// Options for checkpoint_from_snapshot
@@ -544,6 +546,8 @@ pub struct CheckpointOptions<'a> {
     pub multivec_offsets: Option<&'a [u8]>,
     /// MUVERA config
     pub multivec_config: Option<PersistedMuveraConfig>,
+    /// Serialized SparseIndex bytes
+    pub sparse_index_bytes: Option<&'a [u8]>,
 }
 
 impl OmenFile {
@@ -673,6 +677,11 @@ impl OmenFile {
         snapshot
             .multivec_offsets
             .clone_from(&self.manifest.multivec_offsets);
+
+        // Load sparse index from manifest
+        snapshot
+            .sparse_index_bytes
+            .clone_from(&self.manifest.sparse_index_bytes);
 
         // Extract MUVERA config from manifest.config if present
         let reps = self.manifest.config.get("muvera_repetitions").copied();
@@ -823,6 +832,9 @@ impl OmenFile {
 
         // Store multi-vector offsets in manifest (small, atomic with manifest)
         manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
+
+        // Store sparse index in manifest
+        manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);
 
         let live_count = vectors.len().saturating_sub(deleted.len());
         for (key, val) in [

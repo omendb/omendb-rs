@@ -169,6 +169,8 @@ pub enum SegmentType {
     Manifest = 6,
     /// Multi-vector token storage (for MaxSim reranking)
     MultiVectors = 7,
+    /// Sparse vector inverted index
+    SparseVectors = 8,
 }
 
 /// Location of a node's data in the file
@@ -208,6 +210,9 @@ pub struct OmenManifest {
     /// Multi-vector token offsets (serialized as bytes for efficiency)
     #[serde(default)]
     pub multivec_offsets: Option<Vec<u8>>,
+    /// Serialized SparseIndex (postcard format)
+    #[serde(default)]
+    pub sparse_index_bytes: Option<Vec<u8>>,
 }
 
 impl OmenManifest {
@@ -224,6 +229,7 @@ impl OmenManifest {
             metadata_index: None,
             config: std::collections::HashMap::new(),
             multivec_offsets: None,
+            sparse_index_bytes: None,
         }
     }
 

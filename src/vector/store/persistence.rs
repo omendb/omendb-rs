@@ -17,6 +17,7 @@ use crate::text::TextIndex;
 use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use crate::vector::metadata::MetadataIndex;
 use crate::vector::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
+use crate::vector::sparse::SparseIndex;
 use crate::vector::store::options::VectorStoreOptions;
 use anyhow::Result;
 use roaring::RoaringBitmap;
@@ -308,6 +309,20 @@ impl VectorStore {
                 (None, None, distance_metric)
             };
 
+        // Reconstruct sparse index if persisted
+        let sparse_index = snapshot.sparse_index_bytes.as_deref().and_then(|bytes| {
+            match crate::vector::sparse::SparseIndex::from_bytes(bytes) {
+                Ok(index) => {
+                    tracing::info!(vectors = index.len(), "Loaded SparseIndex from disk");
+                    Some(index)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to deserialize SparseIndex: {e}");
+                    None
+                }
+            }
+        });
+
         Ok(Self {
             records,
             segments,
@@ -331,7 +346,7 @@ impl VectorStore {
             distance_metric,
             muvera_encoder,
             multivec_storage,
-            sparse_index: None,
+            sparse_index,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
         })
@@ -522,6 +537,13 @@ impl VectorStore {
                     (None, None, None)
                 };
 
+            // Export sparse index if present
+            let sparse_index_bytes = self
+                .sparse_index
+                .as_ref()
+                .map(SparseIndex::to_bytes)
+                .transpose()?;
+
             // Checkpoint from RecordStore data (not OmenFile's internal state)
             storage.checkpoint_from_snapshot(
                 &vectors,
@@ -534,6 +556,7 @@ impl VectorStore {
                     multivec_bytes: multivec_bytes.as_deref(),
                     multivec_offsets: multivec_offsets.as_deref(),
                     multivec_config,
+                    sparse_index_bytes: sparse_index_bytes.as_deref(),
                 },
             )?;
         }
