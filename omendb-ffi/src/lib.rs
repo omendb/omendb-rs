@@ -1272,3 +1272,6 @@ pub unsafe extern "C" fn omendb_stats(db: *const OmenDB, result: *mut *mut c_cha
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
