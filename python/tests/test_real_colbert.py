@@ -16,7 +16,7 @@ import omendb
 
 # Skip if fastembed not available
 fastembed = pytest.importorskip("fastembed")
-from fastembed import LateInteractionTextEmbedding
+from fastembed import LateInteractionTextEmbedding  # noqa: E402
 
 
 def maxsim_score(query_tokens: np.ndarray, doc_tokens: np.ndarray) -> float:

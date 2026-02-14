@@ -1,7 +1,9 @@
 """PGO profiling workload"""
 
-import numpy as np
 import tempfile
+
+import numpy as np
+
 import omendb
 
 N, D, K = 10000, 128, 10

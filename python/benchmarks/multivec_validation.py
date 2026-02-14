@@ -45,7 +45,7 @@ def generate_clustered_tokens(
     centers /= np.linalg.norm(centers, axis=1, keepdims=True)
 
     docs = []
-    for i in range(n_docs):
+    for _i in range(n_docs):
         n_tokens = rng.integers(tokens_range[0], tokens_range[1] + 1)
         # Each doc draws from 1-3 clusters (topic coherence)
         doc_clusters = rng.choice(n_clusters, size=min(3, n_clusters), replace=False)

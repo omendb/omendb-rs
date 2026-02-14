@@ -81,7 +81,7 @@ class TestGILDeadlock:
                         elif op == 2:
                             len(db)
                         elif op == 3:
-                            db.ef_search
+                            _ = db.ef_search
                         with lock:
                             operations_completed[0] += 1
                 except Exception as e:
