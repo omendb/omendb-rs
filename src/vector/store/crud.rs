@@ -86,9 +86,12 @@ impl VectorStore {
                 .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
         }
 
-        // Update metadata index
+        // Update metadata index and migrate sparse entry to new slot
         if let Some(old) = old_slot {
             self.metadata_index.remove(old);
+            if let Some(ref mut sparse_index) = self.sparse_index {
+                sparse_index.remap_slot(old, slot as u32);
+            }
         }
         self.metadata_index.index_json(slot as u32, &metadata);
 
@@ -154,8 +157,11 @@ impl VectorStore {
                     .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
             }
 
-            // Update metadata index (remove old, add new)
+            // Update metadata index and migrate sparse entry
             self.metadata_index.remove(old_slot);
+            if let Some(ref mut sparse_index) = self.sparse_index {
+                sparse_index.remap_slot(old_slot, new_slot);
+            }
             self.metadata_index.index_json(new_slot, &metadata);
 
             // WAL for crash durability

@@ -298,6 +298,74 @@ fn test_sparse_empty_search() {
 }
 
 #[test]
+fn test_set_after_hybrid_sparse_preserves_sparse() {
+    let mut store = VectorStore::new(3);
+    store.enable_sparse();
+
+    // Insert hybrid (dense + sparse)
+    store
+        .set_hybrid_sparse(
+            "doc1",
+            Vector::new(vec![1.0, 0.0, 0.0]),
+            SparseVector::from_pairs(vec![(42, 1.0)]),
+            serde_json::json!({"v": 1}),
+        )
+        .unwrap();
+
+    // Update dense vector via set() — should preserve sparse entry
+    store
+        .set(
+            "doc1",
+            Vector::new(vec![0.0, 1.0, 0.0]),
+            serde_json::json!({"v": 2}),
+        )
+        .unwrap();
+
+    // Sparse search should still find doc1
+    let sq = SparseVector::from_pairs(vec![(42, 1.0)]);
+    let sr = store.sparse_search(&sq, 1, None).unwrap();
+    assert_eq!(sr.len(), 1);
+    assert_eq!(sr[0].id, "doc1");
+
+    // Dense search should find it with new vector
+    let dq = Vector::new(vec![0.0, 1.0, 0.0]);
+    let dr = store.search_with_options(&dq, 1, None, None, None).unwrap();
+    assert_eq!(dr.len(), 1);
+    assert_eq!(dr[0].id, "doc1");
+}
+
+#[test]
+fn test_set_batch_preserves_sparse() {
+    let mut store = VectorStore::new(3);
+    store.enable_sparse();
+
+    // Insert hybrid
+    store
+        .set_hybrid_sparse(
+            "doc1",
+            Vector::new(vec![1.0, 0.0, 0.0]),
+            SparseVector::from_pairs(vec![(42, 1.0)]),
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // Batch-update dense vector
+    store
+        .set_batch(vec![(
+            "doc1",
+            Vector::new(vec![0.0, 1.0, 0.0]),
+            serde_json::json!({}),
+        )])
+        .unwrap();
+
+    // Sparse search should still find doc1
+    let sq = SparseVector::from_pairs(vec![(42, 1.0)]);
+    let sr = store.sparse_search(&sq, 1, None).unwrap();
+    assert_eq!(sr.len(), 1);
+    assert_eq!(sr[0].id, "doc1");
+}
+
+#[test]
 fn test_sparse_score_convention() {
     let mut store = VectorStore::new(0);
     store.enable_sparse();

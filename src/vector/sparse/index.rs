@@ -33,7 +33,7 @@ impl PostingList {
     fn new() -> Self {
         Self {
             elements: Vec::new(),
-            max_weight: 0.0,
+            max_weight: f32::NEG_INFINITY,
         }
     }
 
@@ -51,7 +51,7 @@ impl PostingList {
             .elements
             .iter()
             .map(|e| e.weight)
-            .fold(0.0f32, f32::max);
+            .fold(f32::NEG_INFINITY, f32::max);
     }
 }
 
@@ -190,6 +190,32 @@ impl SparseIndex {
         top_k_from_scores(scores, k)
     }
 
+    /// Move a sparse vector entry from one slot to another.
+    ///
+    /// Used when `RecordStore::upsert` creates a new slot for an existing ID.
+    /// Returns true if the entry was found and remapped.
+    pub fn remap_slot(&mut self, old_slot: u32, new_slot: u32) -> bool {
+        let vector = match self.vectors.remove(&old_slot) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        // Update slot IDs in posting lists
+        for &dim in &vector.indices {
+            if let Some(posting) = self.postings.get_mut(&dim) {
+                for entry in &mut posting.elements {
+                    if entry.id == old_slot {
+                        entry.id = new_slot;
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.vectors.insert(new_slot, vector);
+        true
+    }
+
     /// Remap slot IDs after compaction.
     ///
     /// Used when RecordStore compacts and old slots are renumbered.
@@ -227,7 +253,18 @@ impl SparseIndex {
 
     /// Deserialize from bytes (postcard format).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        postcard::from_bytes(bytes).map_err(|e| anyhow::anyhow!("SparseIndex deserialize: {e}"))
+        let index: Self = postcard::from_bytes(bytes)
+            .map_err(|e| anyhow::anyhow!("SparseIndex deserialize: {e}"))?;
+
+        if index.len != index.vectors.len() {
+            anyhow::bail!(
+                "SparseIndex integrity error: len={} but vectors.len()={}",
+                index.len,
+                index.vectors.len()
+            );
+        }
+
+        Ok(index)
     }
 }
 

@@ -55,16 +55,26 @@ impl VectorStore {
             // Existing ID: update in-place to preserve HNSW slot
             self.metadata_index.remove(slot);
             self.metadata_index.index_json(slot, &metadata);
-            self.records.update_metadata(slot, metadata)?;
+            self.records.update_metadata(slot, metadata.clone())?;
+
+            if let Some(ref mut storage) = self.storage {
+                storage.put_metadata(slot as usize, &metadata)?;
+            }
             slot
         } else {
             // New ID: create record slot
             let dims = self.dimensions();
-            let vec = if dims > 0 { vec![0.0; dims] } else { vec![] };
-            let slot = self
-                .records
-                .upsert(id.to_string(), vec, Some(metadata.clone()))?;
+            let zero_vec: Vec<f32> = if dims > 0 { vec![0.0; dims] } else { vec![] };
+            let slot =
+                self.records
+                    .upsert(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
             self.metadata_index.index_json(slot, &metadata);
+
+            if let Some(ref mut storage) = self.storage {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                storage.wal_append_insert(id, &zero_vec, Some(&metadata_bytes))?;
+                storage.wal_sync()?;
+            }
             slot
         };
 
@@ -88,7 +98,8 @@ impl VectorStore {
         }
 
         // Insert dense vector via normal path
-        let slot = self.set(id, dense, metadata.clone())? as u32;
+        let slot = u32::try_from(self.set(id, dense, metadata.clone())?)
+            .map_err(|_| anyhow::anyhow!("slot index exceeds u32::MAX"))?;
 
         // Index sparse vector
         self.sparse_index.as_mut().unwrap().insert(slot, &sparse);
