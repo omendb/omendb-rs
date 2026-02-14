@@ -433,6 +433,26 @@ impl VectorStore {
     /// let tokens = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
     /// store.store("doc1", tokens, json!({})).unwrap();
     /// ```
+    /// Store vector or token embeddings with text content for hybrid search.
+    ///
+    /// Indexes the text for BM25 search and stores the vector/tokens.
+    /// Works for both regular and multi-vector stores.
+    ///
+    /// Requires text search to be enabled (`enable_text_search()`).
+    pub fn store_with_text<V: VectorInput>(
+        &mut self,
+        id: &str,
+        data: V,
+        text: &str,
+        metadata: JsonValue,
+    ) -> Result<()> {
+        let Some(ref mut text_index) = self.text_index else {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        };
+        text_index.index_document(id, text)?;
+        self.store(id, data, metadata)
+    }
+
     pub fn store<V: VectorInput>(&mut self, id: &str, data: V, metadata: JsonValue) -> Result<()> {
         let data = data.into_vector_data();
 

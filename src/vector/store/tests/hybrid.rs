@@ -468,3 +468,102 @@ fn test_hybrid_search_with_filter_subscores() {
     assert!(results[0].0.keyword_score.is_some());
     assert!(results[0].0.semantic_score.is_some());
 }
+
+#[test]
+fn test_store_with_text_single_vector() {
+    let mut store = VectorStore::new(3);
+    store.enable_text_search().unwrap();
+
+    store
+        .store_with_text(
+            "doc1",
+            vec![1.0f32, 0.0, 0.0],
+            "machine learning algorithms",
+            serde_json::json!({"type": "article"}),
+        )
+        .unwrap();
+
+    store.flush().unwrap();
+
+    // Text search should find it
+    let text_results = store.search_text("machine", 10).unwrap();
+    assert_eq!(text_results.len(), 1);
+    assert_eq!(text_results[0].0, "doc1");
+
+    // Vector search should also work
+    let query = Vector::new(vec![1.0, 0.0, 0.0]);
+    let vec_results = store.search(&query, 1, None).unwrap();
+    assert_eq!(vec_results.len(), 1);
+    assert_eq!(vec_results[0].id, "doc1");
+}
+
+#[test]
+fn test_store_with_text_multi_vector() {
+    let mut store = VectorStore::multi_vector(32);
+    store.enable_text_search().unwrap();
+
+    let tokens = vec![vec![1.0f32; 32], vec![0.5f32; 32]];
+    store
+        .store_with_text(
+            "doc1",
+            tokens,
+            "machine learning for search",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    store.flush().unwrap();
+
+    // BM25 should find the document
+    let text_results = store.search_text("machine", 10).unwrap();
+    assert_eq!(text_results.len(), 1);
+    assert_eq!(text_results[0].0, "doc1");
+}
+
+#[test]
+fn test_store_with_text_requires_enabled() {
+    let mut store = VectorStore::new(3);
+
+    let result = store.store_with_text(
+        "doc1",
+        vec![1.0f32, 0.0, 0.0],
+        "some text",
+        serde_json::json!({}),
+    );
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Text search not enabled"));
+}
+
+#[test]
+fn test_index_text_standalone() {
+    let mut store = VectorStore::new(3);
+    store.enable_text_search().unwrap();
+
+    // Insert vector first
+    store
+        .set(
+            "doc1",
+            Vector::new(vec![1.0, 0.0, 0.0]),
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+    // Index text separately
+    store.index_text("doc1", "machine learning").unwrap();
+    store.flush().unwrap();
+
+    let results = store.search_text("machine", 10).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "doc1");
+}
+
+#[test]
+fn test_index_text_requires_enabled() {
+    let mut store = VectorStore::new(3);
+
+    let result = store.index_text("doc1", "some text");
+    assert!(result.is_err());
+}

@@ -112,6 +112,21 @@ impl VectorStore {
         self.set_batch(vector_batch)
     }
 
+    /// Index text content for BM25 search without storing a vector.
+    ///
+    /// Use this with `store()` for multi-vector stores where `set_with_text()`
+    /// is not applicable. Call after `store()` with the same id.
+    ///
+    /// # Arguments
+    /// * `id` - Document identifier (must match the id used in `store()`)
+    /// * `text` - Text content to index for keyword search
+    pub fn index_text(&mut self, id: &str, text: &str) -> Result<()> {
+        let Some(ref mut text_index) = self.text_index else {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        };
+        text_index.index_document(id, text)
+    }
+
     /// Search text index only (BM25 scoring).
     ///
     /// Returns documents ranked by keyword relevance without considering
