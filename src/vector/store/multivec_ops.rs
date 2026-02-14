@@ -921,4 +921,88 @@ impl VectorStore {
 
         self.set_multi_batch(batch)
     }
+
+    /// Search multi-vector store using sparse retrieval + MaxSim reranking.
+    ///
+    /// Uses SPLADE-style sparse vectors for fast candidate generation, then
+    /// reranks using exact MaxSim scoring on stored ColBERT token embeddings.
+    /// This is the 24x-faster-than-PLAID pipeline.
+    ///
+    /// Requires both sparse index and multi-vector storage to be enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `sparse_query` - Sparse query vector for candidate retrieval
+    /// * `query_tokens` - Token embeddings for MaxSim reranking
+    /// * `k` - Number of results to return
+    /// * `num_candidates` - Number of sparse candidates to fetch before reranking (default: 10x k)
+    pub fn search_multi_with_sparse(
+        &self,
+        sparse_query: &crate::vector::sparse::SparseVector,
+        query_tokens: &[&[f32]],
+        k: usize,
+        num_candidates: Option<usize>,
+    ) -> Result<Vec<SearchResult>> {
+        let multivec_storage = self
+            .multivec_storage
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
+        let sparse_index = self.sparse_index.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Sparse index not enabled. Call enable_sparse() first")
+        })?;
+
+        if query_tokens.is_empty() {
+            anyhow::bail!("Cannot rerank with empty query tokens");
+        }
+
+        // Get sparse candidates (default: 10x k)
+        let n_candidates = num_candidates.unwrap_or(k * 10);
+        let sparse_hits = sparse_index.search(sparse_query, n_candidates);
+
+        if sparse_hits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Look up token embeddings for each sparse candidate
+        let mut candidate_data: Vec<(String, JsonValue, Vec<&[f32]>)> = Vec::new();
+
+        for (slot, _score) in &sparse_hits {
+            if !self.records.is_live(*slot) {
+                continue;
+            }
+            if let Some(doc_tokens) = multivec_storage.get_tokens(*slot) {
+                let record = self.records.get_by_slot(*slot);
+                let id = record.map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
+                let metadata = record
+                    .and_then(|r| r.metadata.clone())
+                    .unwrap_or(JsonValue::Null);
+                candidate_data.push((id, metadata, doc_tokens));
+            }
+        }
+
+        if candidate_data.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // MaxSim rerank
+        let doc_tokens_refs: Vec<&Vec<&[f32]>> =
+            candidate_data.iter().map(|(_, _, tokens)| tokens).collect();
+
+        let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
+
+        // Sort descending by MaxSim score, take top-k
+        let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let results = scored
+            .into_iter()
+            .take(k)
+            .map(|(idx, score)| {
+                let (ref id, ref metadata, _) = candidate_data[idx];
+                SearchResult::new(id.clone(), score, metadata.clone())
+            })
+            .collect();
+
+        Ok(results)
+    }
 }
