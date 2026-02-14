@@ -12,4 +12,5 @@ mod filters;
 mod hybrid;
 mod open;
 mod search;
+mod sparse;
 mod types;
