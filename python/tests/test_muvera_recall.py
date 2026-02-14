@@ -255,6 +255,7 @@ class TestMuveraRecall:
             print(f"  recall@{k}: {avg:.1%}")
 
 
+@pytest.mark.slow
 class TestMuveraScaleRecall:
     """Recall tests at larger scale."""
 
