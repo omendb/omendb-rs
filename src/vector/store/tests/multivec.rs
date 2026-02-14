@@ -1081,4 +1081,27 @@ mod persistence_tests {
             assert_eq!(stored_tokens[0].len(), token_dim);
         }
     }
+
+    #[test]
+    fn test_query_dimension_mismatch_returns_error() {
+        let token_dim = 32;
+        let mut store = VectorStore::multi_vector(token_dim);
+
+        // Insert a document
+        let tokens: Vec<Vec<f32>> = vec![vec![0.1; token_dim]; 3];
+        store
+            .store("doc1", tokens, serde_json::json!({}))
+            .unwrap();
+
+        // Query with wrong dimension should return error, not panic
+        let wrong_dim_query: Vec<Vec<f32>> = vec![vec![0.1; token_dim * 2]];
+        let refs: Vec<&[f32]> = wrong_dim_query.iter().map(|t| t.as_slice()).collect();
+        let result = store.query(&refs, 1);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("dimension"),
+            "Error should mention dimension: {err_msg}"
+        );
+    }
 }

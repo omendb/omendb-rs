@@ -634,11 +634,30 @@ impl VectorStore {
         k: usize,
         options: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
+        if query_tokens.is_empty() {
+            anyhow::bail!("Cannot search with empty query tokens");
+        }
         if options.filter.is_some() {
             anyhow::bail!("Metadata filters are not yet supported for multi-vector search");
         }
         if options.max_distance.is_some() {
             anyhow::bail!("max_distance is not yet supported for multi-vector search");
+        }
+
+        // Validate token dimensions before dispatching to any search path
+        let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Store not configured for multi-vector")
+        })?;
+        let token_dim = encoder.token_dimension();
+        for (i, token) in query_tokens.iter().enumerate() {
+            if token.len() != token_dim {
+                anyhow::bail!(
+                    "Query token {} has dimension {} but expected {}",
+                    i,
+                    token.len(),
+                    token_dim
+                );
+            }
         }
 
         // For small collections, skip FDE approximation and use brute-force MaxSim
