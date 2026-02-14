@@ -4,6 +4,7 @@ pub mod hnsw;
 pub mod hnsw_index;
 pub mod metadata;
 pub mod muvera;
+pub mod sparse;
 pub mod store;
 pub mod types;
 
