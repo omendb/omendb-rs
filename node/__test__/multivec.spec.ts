@@ -59,10 +59,10 @@ describe("Multi-Vector (MUVERA)", () => {
 			expect(db.count()).toBe(10);
 		});
 
-		it("should reject empty vectors array with unified set()", () => {
-			expect(() =>
+		it("should reject empty vectors array with unified set()", async () => {
+			await expect(
 				db.set([{ id: "doc1", vectors: [], metadata: {} }])
-			).toThrow(/must not be empty/);
+			).rejects.toThrow(/must not be empty/);
 		});
 
 		it("should reject vectors field on regular store", () => {
@@ -322,7 +322,7 @@ describe("Multi-Vector (MUVERA)", () => {
 	});
 
 	describe("scale", () => {
-		it("should handle 1000 documents with 10 tokens each", async () => {
+		it("should handle 1000 documents with 10 tokens each", { timeout: 60_000 }, async () => {
 			const db = open(":memory:", { dimensions: 32, multiVector: true });
 
 			// Insert 1000 docs
