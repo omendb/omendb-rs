@@ -9,6 +9,8 @@ import pytest
 
 import omendb
 
+pytestmark = pytest.mark.slow
+
 
 def maxsim_score(query_tokens: np.ndarray, doc_tokens: np.ndarray) -> float:
     """Compute MaxSim score between query and document token sets.
@@ -255,7 +257,6 @@ class TestMuveraRecall:
             print(f"  recall@{k}: {avg:.1%}")
 
 
-@pytest.mark.slow
 class TestMuveraScaleRecall:
     """Recall tests at larger scale."""
 
