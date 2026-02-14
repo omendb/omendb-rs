@@ -592,7 +592,7 @@ fn hybrid_search_dimension_mismatch() {
 // ─── Maintenance ─────────────────────────────────────────────────────────────
 
 #[test]
-fn save_and_reopen() {
+fn flush_and_reopen() {
     let dir = TempDir::new().unwrap();
     let path_str = dir.path().to_str().unwrap();
 
@@ -606,7 +606,7 @@ fn save_and_reopen() {
             &[1.0, 2.0, 3.0, 4.0],
             serde_json::json!({"saved": true}),
         );
-        assert_eq!(unsafe { omendb_save(db) }, 0);
+        assert_eq!(unsafe { omendb_flush(db) }, 0);
         unsafe { omendb_close(db) };
     }
 
@@ -733,6 +733,58 @@ fn delete_by_filter_invalid_json() {
     let filter = c_str("not json");
     assert_eq!(unsafe { omendb_delete_by_filter(db, filter.as_ptr()) }, -1);
     assert!(last_error().unwrap().contains("Invalid filter JSON"));
+    unsafe { omendb_close(db) };
+}
+
+// ─── Update (both) ───────────────────────────────────────────────────────────
+
+#[test]
+fn update_vector_and_metadata() {
+    let (db, _dir) = open_db(4);
+    insert(
+        db,
+        "doc1",
+        &[1.0, 2.0, 3.0, 4.0],
+        serde_json::json!({"v": 1}),
+    );
+
+    let id = c_str("doc1");
+    let new_vec: Vec<f32> = vec![5.0, 6.0, 7.0, 8.0];
+    let meta = c_str(r#"{"v": 2}"#);
+    let rc = unsafe { omendb_update(db, id.as_ptr(), new_vec.as_ptr(), 4, meta.as_ptr()) };
+    assert_eq!(rc, 0);
+
+    let ids = c_str(r#"["doc1"]"#);
+    let mut result: *mut c_char = ptr::null_mut();
+    unsafe { omendb_get(db, ids.as_ptr(), &mut result) };
+    let json_str = unsafe { read_and_free(result) };
+    let results: Vec<Value> = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(results[0]["metadata"]["v"], 2);
+    let vec_data: Vec<f64> = results[0]["vector"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    assert_eq!(vec_data, vec![5.0, 6.0, 7.0, 8.0]);
+
+    unsafe { omendb_close(db) };
+}
+
+// ─── Partial batch failure ───────────────────────────────────────────────────
+
+#[test]
+fn set_partial_failure_inserts_preceding_items() {
+    let (db, _dir) = open_db(4);
+    // Item 1 is valid, item 2 has missing id -> should fail after inserting item 1
+    let items =
+        c_str(r#"[{"id": "good", "vector": [1,0,0,0], "metadata": {}}, {"vector": [0,1,0,0]}]"#);
+    let rc = unsafe { omendb_set(db, items.as_ptr()) };
+    assert_eq!(rc, -1);
+    // First item was already inserted before the error
+    assert_eq!(unsafe { omendb_count(db) }, 1);
+    assert_eq!(unsafe { omendb_exists(db, c_str("good").as_ptr()) }, 1);
+
     unsafe { omendb_close(db) };
 }
 

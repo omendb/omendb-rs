@@ -241,14 +241,6 @@ int64_t omendb_optimize(omendb_db_t* db);
 int64_t omendb_count(const omendb_db_t* db);
 
 /**
- * Save database to disk.
- *
- * @param db Database handle
- * @return 0 on success, -1 on error
- */
-int32_t omendb_save(omendb_db_t* db);
-
-/**
  * Get database statistics as JSON.
  *
  * @param db     Database handle
