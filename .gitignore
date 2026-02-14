@@ -46,3 +46,4 @@ __pycache__/
 *.pyc
 *.pyo
 *.json.gz
+.worktrees/
