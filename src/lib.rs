@@ -105,7 +105,7 @@ pub use distance::{cosine_distance, dot_product, l2_distance, l2_distance_square
 pub use types::{CompactionStats, Metric, OmenDBError, Result, VectorID};
 pub use vector::{
     muvera::MultiVectorConfig,
-    sparse::{SparseIndex, SparseVector},
+    sparse::SparseVector,
     store::{
         BatchItem, QueryInput, Rerank, SearchOptions, VectorData, VectorInput, VectorStoreOptions,
     },

@@ -57,7 +57,7 @@ fn parse_sparse_from_json(input: &JsonValue) -> Result<SparseVector> {
             )));
         }
         let pairs: Vec<(u32, f32)> = indices.into_iter().zip(values).collect();
-        return Ok(SparseVector::from_pairs(pairs));
+        return SparseVector::from_pairs(pairs).map_err(|e| Error::from_reason(e.to_string()));
     }
 
     // Try {dim: weight, ...} dict format
@@ -72,7 +72,7 @@ fn parse_sparse_from_json(input: &JsonValue) -> Result<SparseVector> {
             })? as f32;
             pairs.push((dim, weight));
         }
-        return Ok(SparseVector::from_pairs(pairs));
+        return SparseVector::from_pairs(pairs).map_err(|e| Error::from_reason(e.to_string()));
     }
 
     Err(Error::from_reason(

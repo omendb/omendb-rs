@@ -24,53 +24,55 @@ use std::collections::HashMap;
 /// at construction and enables efficient merge-intersection for dot product.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SparseVector {
-    /// Dimension indices (sorted ascending, unique)
-    pub indices: Vec<u32>,
-    /// Corresponding weights
-    pub values: Vec<f32>,
+    indices: Vec<u32>,
+    values: Vec<f32>,
 }
 
 impl SparseVector {
-    /// Create from parallel arrays. Validates sorted + unique indices.
+    /// Create from parallel arrays. Validates sorted + unique indices and finite weights.
     pub fn new(indices: Vec<u32>, values: Vec<f32>) -> Result<Self> {
-        if indices.len() != values.len() {
-            anyhow::bail!(
-                "indices and values must have same length: {} vs {}",
-                indices.len(),
-                values.len()
-            );
-        }
-
-        // Validate sorted ascending and unique
-        for window in indices.windows(2) {
-            if window[0] >= window[1] {
-                anyhow::bail!(
-                    "indices must be sorted ascending and unique: found {} before {}",
-                    window[0],
-                    window[1]
-                );
-            }
-        }
-
-        Ok(Self { indices, values })
+        let sv = Self { indices, values };
+        sv.validate()?;
+        Ok(sv)
     }
 
     /// Create from (index, value) pairs. Sorts internally.
-    pub fn from_pairs(mut pairs: Vec<(u32, f32)>) -> Self {
+    ///
+    /// If duplicate indices exist, the first occurrence is kept.
+    /// Returns an error if any weight is NaN or infinity.
+    pub fn from_pairs(mut pairs: Vec<(u32, f32)>) -> Result<Self> {
         pairs.sort_by_key(|(idx, _)| *idx);
         pairs.dedup_by_key(|(idx, _)| *idx);
 
         let (indices, values): (Vec<u32>, Vec<f32>) = pairs.into_iter().unzip();
-        Self { indices, values }
+        let sv = Self { indices, values };
+        sv.validate_finite()?;
+        Ok(sv)
     }
 
     /// Create from a map of dimension -> weight. Sorts internally.
-    pub fn from_map(map: HashMap<u32, f32>) -> Self {
+    ///
+    /// Returns an error if any weight is NaN or infinity.
+    pub fn from_map(map: HashMap<u32, f32>) -> Result<Self> {
         let mut pairs: Vec<(u32, f32)> = map.into_iter().collect();
         pairs.sort_by_key(|(idx, _)| *idx);
 
         let (indices, values): (Vec<u32>, Vec<f32>) = pairs.into_iter().unzip();
-        Self { indices, values }
+        let sv = Self { indices, values };
+        sv.validate_finite()?;
+        Ok(sv)
+    }
+
+    /// Dimension indices (sorted ascending, unique).
+    #[must_use]
+    pub fn indices(&self) -> &[u32] {
+        &self.indices
+    }
+
+    /// Corresponding weights.
+    #[must_use]
+    pub fn values(&self) -> &[f32] {
+        &self.values
     }
 
     /// Number of non-zero entries.
@@ -116,29 +118,43 @@ impl SparseVector {
 
     /// Deserialize from bytes (postcard format).
     ///
-    /// Validates the sorted-unique invariant after deserialization to guard
-    /// against corrupted data.
+    /// Validates all invariants after deserialization to guard against
+    /// corrupted data.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let sv: Self = postcard::from_bytes(bytes)
             .map_err(|e| anyhow::anyhow!("SparseVector deserialize: {e}"))?;
+        sv.validate()?;
+        Ok(sv)
+    }
 
-        if sv.indices.len() != sv.values.len() {
+    /// Validate all invariants: length match, sorted-unique indices, finite weights.
+    fn validate(&self) -> Result<()> {
+        if self.indices.len() != self.values.len() {
             anyhow::bail!(
-                "Corrupted SparseVector: indices len {} != values len {}",
-                sv.indices.len(),
-                sv.values.len()
+                "indices and values must have same length: {} vs {}",
+                self.indices.len(),
+                self.values.len()
             );
         }
-        for window in sv.indices.windows(2) {
+        for window in self.indices.windows(2) {
             if window[0] >= window[1] {
                 anyhow::bail!(
-                    "Corrupted SparseVector: indices not sorted/unique: {} >= {}",
+                    "indices must be sorted ascending and unique: found {} before {}",
                     window[0],
                     window[1]
                 );
             }
         }
+        self.validate_finite()
+    }
 
-        Ok(sv)
+    /// Validate all weights are finite (not NaN or infinity).
+    fn validate_finite(&self) -> Result<()> {
+        for &v in &self.values {
+            if !v.is_finite() {
+                anyhow::bail!("sparse vector weights must be finite, found {v}");
+            }
+        }
+        Ok(())
     }
 }

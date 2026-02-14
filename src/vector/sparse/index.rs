@@ -65,7 +65,8 @@ pub struct SparseIndex {
     postings: HashMap<u32, PostingList>,
     /// slot -> original sparse vector (for delete/update)
     vectors: HashMap<u32, SparseVector>,
-    /// Number of indexed vectors.
+    /// Legacy field kept for serialization compatibility. Derived from vectors.len().
+    #[serde(default)]
     len: usize,
 }
 
@@ -83,13 +84,13 @@ impl SparseIndex {
     /// Number of indexed vectors.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.len
+        self.vectors.len()
     }
 
     /// Check if index is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.vectors.is_empty()
     }
 
     /// Insert a sparse vector at the given slot.
@@ -102,7 +103,7 @@ impl SparseIndex {
         }
 
         // Add to posting lists
-        for (&dim, &weight) in vector.indices.iter().zip(vector.values.iter()) {
+        for (&dim, &weight) in vector.indices().iter().zip(vector.values().iter()) {
             self.postings
                 .entry(dim)
                 .or_insert_with(PostingList::new)
@@ -111,7 +112,6 @@ impl SparseIndex {
 
         // Store original vector for future removal
         self.vectors.insert(slot, vector.clone());
-        self.len += 1;
     }
 
     /// Remove a vector by slot ID.
@@ -123,18 +123,20 @@ impl SparseIndex {
             None => return false,
         };
 
-        // Remove from each posting list
-        for &dim in &vector.indices {
+        // Collect empty dims to remove in a second pass
+        let mut empty_dims: Vec<u32> = Vec::new();
+        for &dim in vector.indices() {
             if let Some(posting) = self.postings.get_mut(&dim) {
                 posting.remove(slot);
-                // Clean up empty posting lists
                 if posting.elements.is_empty() {
-                    self.postings.remove(&dim);
+                    empty_dims.push(dim);
                 }
             }
         }
+        for dim in empty_dims {
+            self.postings.remove(&dim);
+        }
 
-        self.len -= 1;
         true
     }
 
@@ -152,7 +154,7 @@ impl SparseIndex {
         // Accumulate scores per document
         let mut scores: HashMap<u32, f32> = HashMap::new();
 
-        for (&dim, &q_weight) in query.indices.iter().zip(query.values.iter()) {
+        for (&dim, &q_weight) in query.indices().iter().zip(query.values().iter()) {
             if let Some(posting) = self.postings.get(&dim) {
                 for entry in &posting.elements {
                     *scores.entry(entry.id).or_default() += q_weight * entry.weight;
@@ -177,7 +179,7 @@ impl SparseIndex {
 
         let mut scores: HashMap<u32, f32> = HashMap::new();
 
-        for (&dim, &q_weight) in query.indices.iter().zip(query.values.iter()) {
+        for (&dim, &q_weight) in query.indices().iter().zip(query.values().iter()) {
             if let Some(posting) = self.postings.get(&dim) {
                 for entry in &posting.elements {
                     if allowed.contains(entry.id) {
@@ -201,7 +203,7 @@ impl SparseIndex {
         };
 
         // Update slot IDs in posting lists
-        for &dim in &vector.indices {
+        for &dim in vector.indices() {
             if let Some(posting) = self.postings.get_mut(&dim) {
                 for entry in &mut posting.elements {
                     if entry.id == old_slot {
@@ -220,9 +222,10 @@ impl SparseIndex {
     ///
     /// Used when RecordStore compacts and old slots are renumbered.
     pub fn compact<S: BuildHasher>(&mut self, old_to_new: &HashMap<u32, u32, S>) {
-        // Rebuild postings with new slot IDs
+        // Rebuild postings with new slot IDs, consuming old data
+        let old_postings = std::mem::take(&mut self.postings);
         let mut new_postings: HashMap<u32, PostingList> = HashMap::new();
-        for (dim, posting) in &self.postings {
+        for (dim, posting) in old_postings {
             let mut new_posting = PostingList::new();
             for entry in &posting.elements {
                 if let Some(&new_id) = old_to_new.get(&entry.id) {
@@ -230,39 +233,64 @@ impl SparseIndex {
                 }
             }
             if !new_posting.elements.is_empty() {
-                new_postings.insert(*dim, new_posting);
+                new_postings.insert(dim, new_posting);
             }
         }
         self.postings = new_postings;
 
-        // Rebuild vectors map with new slot IDs
+        // Rebuild vectors map with new slot IDs, consuming old data
+        let old_vectors = std::mem::take(&mut self.vectors);
         let mut new_vectors: HashMap<u32, SparseVector> = HashMap::new();
-        for (old_slot, vector) in &self.vectors {
-            if let Some(&new_slot) = old_to_new.get(old_slot) {
-                new_vectors.insert(new_slot, vector.clone());
+        for (old_slot, vector) in old_vectors {
+            if let Some(&new_slot) = old_to_new.get(&old_slot) {
+                new_vectors.insert(new_slot, vector);
             }
         }
         self.vectors = new_vectors;
-        self.len = self.vectors.len();
     }
 
     /// Serialize to bytes (postcard format).
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        postcard::to_allocvec(self).map_err(|e| anyhow::anyhow!("SparseIndex serialize: {e}"))
+        // Sync len for serialization compatibility
+        let serializable = SparseIndex {
+            postings: self.postings.clone(),
+            vectors: self.vectors.clone(),
+            len: self.vectors.len(),
+        };
+        postcard::to_allocvec(&serializable)
+            .map_err(|e| anyhow::anyhow!("SparseIndex serialize: {e}"))
     }
 
     /// Deserialize from bytes (postcard format).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let index: Self = postcard::from_bytes(bytes)
+        let mut index: Self = postcard::from_bytes(bytes)
             .map_err(|e| anyhow::anyhow!("SparseIndex deserialize: {e}"))?;
 
-        if index.len != index.vectors.len() {
-            anyhow::bail!(
-                "SparseIndex integrity error: len={} but vectors.len()={}",
-                index.len,
-                index.vectors.len()
-            );
+        // Validate embedded vectors
+        for (slot, sv) in &index.vectors {
+            if sv.indices().len() != sv.values().len() {
+                anyhow::bail!(
+                    "Corrupted SparseIndex: vector at slot {slot} has mismatched lengths"
+                );
+            }
+            for window in sv.indices().windows(2) {
+                if window[0] >= window[1] {
+                    anyhow::bail!(
+                        "Corrupted SparseIndex: vector at slot {slot} has unsorted indices"
+                    );
+                }
+            }
+            for &v in sv.values() {
+                if !v.is_finite() {
+                    anyhow::bail!(
+                        "Corrupted SparseIndex: vector at slot {slot} has non-finite weight"
+                    );
+                }
+            }
         }
+
+        // Sync len from vectors (len field is legacy)
+        index.len = index.vectors.len();
 
         Ok(index)
     }

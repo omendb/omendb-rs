@@ -6,7 +6,7 @@
 
 use super::helpers;
 use super::{MetadataFilter, SearchResult, VectorStore};
-use crate::vector::sparse::{SparseIndex, SparseVector};
+use crate::vector::sparse::SparseVector;
 use crate::vector::types::Vector;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
@@ -27,7 +27,7 @@ impl VectorStore {
     /// or before calling `sparse_search()` on an empty index.
     pub fn enable_sparse(&mut self) {
         if self.sparse_index.is_none() {
-            self.sparse_index = Some(SparseIndex::new());
+            self.sparse_index = Some(crate::vector::sparse::SparseIndex::new());
         }
     }
 
@@ -47,9 +47,7 @@ impl VectorStore {
         sparse: SparseVector,
         metadata: JsonValue,
     ) -> Result<()> {
-        if self.sparse_index.is_none() {
-            self.sparse_index = Some(SparseIndex::new());
-        }
+        self.enable_sparse();
 
         let slot = if let Some(slot) = self.records.get_slot(id) {
             // Existing ID: update in-place to preserve HNSW slot
@@ -57,14 +55,26 @@ impl VectorStore {
             self.metadata_index.index_json(slot, &metadata);
             self.records.update_metadata(slot, metadata.clone())?;
 
+            // WAL write for metadata update
             if let Some(ref mut storage) = self.storage {
-                storage.put_metadata(slot as usize, &metadata)?;
+                if let Some(record) = self.records.get_by_slot(slot) {
+                    let metadata_bytes = serde_json::to_vec(&metadata)?;
+                    storage.wal_append_insert(id, &record.vector, Some(&metadata_bytes))?;
+                    storage.wal_sync()?;
+                }
             }
             slot
         } else {
             // New ID: create record slot
             let dims = self.dimensions();
-            let zero_vec: Vec<f32> = if dims > 0 { vec![0.0; dims] } else { vec![] };
+            if dims > 0 {
+                anyhow::bail!(
+                    "Cannot call set_sparse for new ID on a store with dims={dims}. \
+                     Use set_hybrid_sparse() to provide both dense and sparse vectors, \
+                     or use set() first to create the dense vector."
+                );
+            }
+            let zero_vec: Vec<f32> = vec![];
             let slot =
                 self.records
                     .upsert(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
@@ -92,10 +102,7 @@ impl VectorStore {
         sparse: SparseVector,
         metadata: JsonValue,
     ) -> Result<()> {
-        // Ensure sparse index exists
-        if self.sparse_index.is_none() {
-            self.sparse_index = Some(SparseIndex::new());
-        }
+        self.enable_sparse();
 
         // Insert dense vector via normal path
         let slot = u32::try_from(self.set(id, dense, metadata.clone())?)

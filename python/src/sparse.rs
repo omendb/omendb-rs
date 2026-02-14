@@ -26,7 +26,7 @@ fn parse_sparse_vector(
             let weight: f32 = v.extract()?;
             pairs.push((dim, weight));
         }
-        return Ok(SparseVector::from_pairs(pairs));
+        return SparseVector::from_pairs(pairs).map_err(convert_error);
     }
 
     // Otherwise: (indices, values) as two lists
@@ -45,9 +45,7 @@ fn parse_sparse_vector(
         )));
     }
 
-    Ok(SparseVector::from_pairs(
-        indices.into_iter().zip(values).collect(),
-    ))
+    SparseVector::from_pairs(indices.into_iter().zip(values).collect()).map_err(convert_error)
 }
 
 #[pymethods]
