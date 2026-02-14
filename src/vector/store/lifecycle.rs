@@ -88,6 +88,18 @@ impl VectorStore {
 
     /// Merge another `VectorStore` into this one using IGTM algorithm
     pub fn merge_from(&mut self, other: &VectorStore) -> Result<usize> {
+        self.merge_from_with_prefix(other, None)
+    }
+
+    /// Merge vectors from another store with optional key prefix.
+    ///
+    /// When `key_prefix` is provided, all IDs from the source store are
+    /// prefixed with it (e.g., `"subdir/"` turns `"foo.py"` into `"subdir/foo.py"`).
+    pub fn merge_from_with_prefix(
+        &mut self,
+        other: &VectorStore,
+        key_prefix: Option<&str>,
+    ) -> Result<usize> {
         if other.dimensions() != self.dimensions() {
             anyhow::bail!(
                 "Dimension mismatch: self={}, other={}",
@@ -104,14 +116,20 @@ impl VectorStore {
 
         // Merge records, skipping conflicts
         for (_, record) in other.records.iter_live() {
+            let id = if let Some(prefix) = key_prefix {
+                format!("{prefix}{}", record.id)
+            } else {
+                record.id.clone()
+            };
+
             // Skip if ID already exists in self
-            if self.records.get_slot(&record.id).is_some() {
+            if self.records.get_slot(&id).is_some() {
                 continue;
             }
 
             // Insert into our RecordStore
             self.records.upsert(
-                record.id.clone(),
+                id,
                 record.vector.clone(),
                 record.metadata.clone(),
             )?;

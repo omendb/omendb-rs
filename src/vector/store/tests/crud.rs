@@ -348,3 +348,52 @@ fn test_get() {
     // Non-existent ID should return None
     assert!(store.get("nonexistent").is_none());
 }
+
+#[test]
+fn test_merge_from_with_key_prefix() {
+    let dim = 3;
+    let mut main = VectorStore::new(dim);
+    let mut sub = VectorStore::new(dim);
+
+    sub.set("foo.py", random_vector(dim, 1), serde_json::json!({"file": "foo.py"}))
+        .unwrap();
+    sub.set("bar.py", random_vector(dim, 2), serde_json::json!({"file": "bar.py"}))
+        .unwrap();
+
+    let merged = main
+        .merge_from_with_prefix(&sub, Some("subdir/"))
+        .unwrap();
+    assert_eq!(merged, 2);
+
+    // IDs should be prefixed
+    assert!(main.get("subdir/foo.py").is_some());
+    assert!(main.get("subdir/bar.py").is_some());
+    assert!(main.get("foo.py").is_none());
+
+    // Vectors should be searchable
+    let results = main.search(&random_vector(dim, 1), 2, None).unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].id, "subdir/foo.py");
+}
+
+#[test]
+fn test_merge_from_prefix_skips_conflicts() {
+    let dim = 3;
+    let mut main = VectorStore::new(dim);
+    let mut sub = VectorStore::new(dim);
+
+    // Pre-existing item in main with the prefixed name
+    main.set("subdir/foo.py", random_vector(dim, 10), serde_json::json!({}))
+        .unwrap();
+
+    sub.set("foo.py", random_vector(dim, 1), serde_json::json!({}))
+        .unwrap();
+    sub.set("bar.py", random_vector(dim, 2), serde_json::json!({}))
+        .unwrap();
+
+    let merged = main
+        .merge_from_with_prefix(&sub, Some("subdir/"))
+        .unwrap();
+    assert_eq!(merged, 1); // Only bar.py merged, foo.py conflicted
+    assert_eq!(main.len(), 2);
+}

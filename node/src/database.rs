@@ -520,14 +520,22 @@ impl VectorDatabase {
     }
 
     /// Merge another database into this one.
+    ///
+    /// @param other - Source database to merge from
+    /// @param keyPrefix - Optional prefix for all source IDs (e.g., "subdir/")
+    /// @returns Number of vectors merged
     #[napi]
-    pub fn merge_from(&self, other: &VectorDatabase) -> Result<u32> {
+    pub fn merge_from(
+        &self,
+        other: &VectorDatabase,
+        key_prefix: Option<String>,
+    ) -> Result<u32> {
         let mut inner = self.inner.write();
         let other_inner = other.inner.read();
 
         let count = inner
             .store
-            .merge_from(&other_inner.store)
+            .merge_from_with_prefix(&other_inner.store, key_prefix.as_deref())
             .map_err(convert_error)?;
 
         Ok(count as u32)

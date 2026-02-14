@@ -90,20 +90,28 @@ impl VectorDatabase {
     ///
     /// Args:
     ///     other (VectorDatabase): Source database to merge from
+    ///     key_prefix (str, optional): Prefix to prepend to all IDs from the source.
+    ///         Useful when merging subdirectory indexes into a parent.
+    ///         Example: key_prefix="subdir/" turns "foo.py" into "subdir/foo.py"
     ///
     /// Returns:
     ///     int: Number of vectors merged
     ///
     /// Note:
-    ///     - IDs are preserved; conflicting IDs are skipped (existing wins)
+    ///     - Conflicting IDs are skipped (existing wins)
     ///     - Source database is not modified
     ///     - Both databases must have the same dimensions
-    fn merge_from(&self, other: &VectorDatabase) -> PyResult<usize> {
+    ///
+    /// Examples:
+    ///     >>> db.merge_from(other_db)
+    ///     >>> db.merge_from(other_db, key_prefix="subdir/")
+    #[pyo3(signature = (other, key_prefix=None))]
+    fn merge_from(&self, other: &VectorDatabase, key_prefix: Option<&str>) -> PyResult<usize> {
         let mut inner = self.inner.write();
         let other_inner = other.inner.read();
         inner
             .store
-            .merge_from(&other_inner.store)
+            .merge_from_with_prefix(&other_inner.store, key_prefix)
             .map_err(convert_error)
     }
 

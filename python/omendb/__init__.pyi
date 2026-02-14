@@ -470,14 +470,19 @@ class VectorDatabase:
         """Flush pending changes to disk."""
         ...
 
-    def merge_from(self, other: VectorDatabase) -> int:
+    def merge_from(self, other: VectorDatabase, key_prefix: str | None = None) -> int:
         """Merge vectors from another database.
 
         Args:
             other: Source database to merge from.
+            key_prefix: Optional prefix for all source IDs (e.g., "subdir/").
 
         Returns:
             Number of vectors merged.
+
+        Examples:
+            >>> db.merge_from(other_db)
+            >>> db.merge_from(other_db, key_prefix="subdir/")
         """
         ...
 
@@ -634,6 +639,33 @@ class VectorDatabase:
             >>> results = db.search_hybrid(vec, "query", k=10, subscores=True)
             >>> for r in results:
             ...     print(f"{r['id']}: keyword={r['keyword_score']}, semantic={r['semantic_score']}")
+        """
+        ...
+
+    def close(self) -> None:
+        """Close the database and release file locks.
+
+        Flushes pending changes to disk, then releases file handles.
+        After calling close(), the database is no longer usable.
+
+        For most use cases, prefer the context manager (`with` statement)
+        which automatically flushes on exit.
+
+        Examples:
+            >>> db = omendb.open("./mydb", dimensions=128)
+            >>> db.set([{"id": "1", "vector": [0.1] * 128}])
+            >>> db.close()
+            >>> db = omendb.open("./mydb", dimensions=128)  # Can reopen
+        """
+        ...
+
+    def compact(self) -> int:
+        """Remove deleted records and reclaim space.
+
+        Rebuilds the HNSW index. Call after bulk deletes.
+
+        Returns:
+            Number of deleted records removed.
         """
         ...
 
