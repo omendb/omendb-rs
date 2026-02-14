@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::vector::sparse::{SparseIndex, SparseVector};
+use crate::vector::sparse::SparseVector;
 
 #[test]
 fn test_enable_sparse() {
@@ -15,12 +15,17 @@ fn test_enable_sparse() {
 }
 
 #[test]
-fn test_set_sparse_requires_enabled() {
+fn test_set_sparse_auto_enables() {
     let mut store = VectorStore::new(0);
-    let sparse = SparseVector::from_pairs(vec![(10, 0.5), (42, 1.2)]);
+    assert!(!store.has_sparse());
 
-    let result = store.set_sparse("doc1", sparse, serde_json::json!({}));
-    assert!(result.is_err());
+    let sparse = SparseVector::from_pairs(vec![(10, 0.5), (42, 1.2)]);
+    store
+        .set_sparse("doc1", sparse, serde_json::json!({}))
+        .unwrap();
+
+    // set_sparse auto-enables the sparse index
+    assert!(store.has_sparse());
 }
 
 #[test]

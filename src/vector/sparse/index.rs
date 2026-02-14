@@ -9,6 +9,7 @@ use anyhow::Result;
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BinaryHeap, HashMap};
+use std::hash::BuildHasher;
 
 /// Single entry in a posting list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,7 +193,7 @@ impl SparseIndex {
     /// Remap slot IDs after compaction.
     ///
     /// Used when RecordStore compacts and old slots are renumbered.
-    pub fn compact(&mut self, old_to_new: &HashMap<u32, u32>) {
+    pub fn compact<S: BuildHasher>(&mut self, old_to_new: &HashMap<u32, u32, S>) {
         // Rebuild postings with new slot IDs
         let mut new_postings: HashMap<u32, PostingList> = HashMap::new();
         for (dim, posting) in &self.postings {

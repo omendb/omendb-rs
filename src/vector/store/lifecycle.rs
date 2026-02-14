@@ -216,6 +216,11 @@ impl VectorStore {
             multivec_storage.compact(&old_to_new);
         }
 
+        // Compact sparse index if present
+        if let Some(ref mut sparse_index) = self.sparse_index {
+            sparse_index.compact(&old_to_new);
+        }
+
         // Rebuild segments with new contiguous slots
         if self.records.is_empty() {
             self.segments = None;

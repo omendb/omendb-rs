@@ -22,7 +22,9 @@ impl VectorStore {
 
     /// Enable sparse vector indexing.
     ///
-    /// Must be called before `set_sparse()` or `sparse_search()`.
+    /// Called automatically by `set_sparse()` and `set_hybrid_sparse()`.
+    /// Call explicitly if you need `has_sparse()` to return true before inserting,
+    /// or before calling `sparse_search()` on an empty index.
     pub fn enable_sparse(&mut self) {
         if self.sparse_index.is_none() {
             self.sparse_index = Some(SparseIndex::new());
@@ -32,7 +34,10 @@ impl VectorStore {
     /// Insert or update a sparse vector with metadata.
     ///
     /// The sparse vector is indexed for dot-product search. If the ID already
-    /// exists, the old sparse vector is replaced.
+    /// exists, the old sparse vector is replaced while preserving the existing
+    /// dense vector and HNSW slot.
+    ///
+    /// Automatically enables sparse indexing if not already enabled.
     ///
     /// Note: This only sets the sparse vector. Dense vectors are independent.
     /// Use `set_hybrid_sparse()` to set both dense and sparse at once.
@@ -43,33 +48,27 @@ impl VectorStore {
         metadata: JsonValue,
     ) -> Result<()> {
         if self.sparse_index.is_none() {
-            anyhow::bail!("Sparse index not enabled. Call enable_sparse() first");
+            self.sparse_index = Some(SparseIndex::new());
         }
 
-        // Upsert into RecordStore (preserve existing dense vector if present)
-        let old_slot = self.records.get_slot(id);
-        let dims = self.dimensions();
-        let slot = if dims > 0 {
-            let dense_vec = self
-                .records
-                .get(id)
-                .map_or_else(|| vec![0.0; dims], |r| r.vector.clone());
-            self.records
-                .upsert(id.to_string(), dense_vec, Some(metadata.clone()))?
+        let slot = if let Some(slot) = self.records.get_slot(id) {
+            // Existing ID: update in-place to preserve HNSW slot
+            self.metadata_index.remove(slot);
+            self.metadata_index.index_json(slot, &metadata);
+            self.records.update_metadata(slot, metadata)?;
+            slot
         } else {
-            self.records
-                .upsert(id.to_string(), vec![], Some(metadata.clone()))?
+            // New ID: create record slot
+            let dims = self.dimensions();
+            let vec = if dims > 0 { vec![0.0; dims] } else { vec![] };
+            let slot = self
+                .records
+                .upsert(id.to_string(), vec, Some(metadata.clone()))?;
+            self.metadata_index.index_json(slot, &metadata);
+            slot
         };
 
-        // Update metadata index
-        if let Some(old) = old_slot {
-            self.metadata_index.remove(old);
-        }
-        self.metadata_index.index_json(slot, &metadata);
-
-        // Index sparse vector
         self.sparse_index.as_mut().unwrap().insert(slot, &sparse);
-
         Ok(())
     }
 

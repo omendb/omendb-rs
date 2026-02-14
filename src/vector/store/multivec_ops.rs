@@ -677,7 +677,7 @@ impl VectorStore {
 
         // Sort descending by MaxSim score, take top-k
         let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         let results = scored
             .into_iter()
@@ -764,7 +764,7 @@ impl VectorStore {
 
         // Sort descending by MaxSim score, take top-k
         let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         let results = scored
             .into_iter()
@@ -992,7 +992,7 @@ impl VectorStore {
 
         // Sort descending by MaxSim score, take top-k
         let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         let results = scored
             .into_iter()

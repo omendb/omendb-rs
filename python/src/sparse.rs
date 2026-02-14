@@ -37,6 +37,14 @@ fn parse_sparse_vector(
         )
     })?;
 
+    if indices.len() != values.len() {
+        return Err(PyValueError::new_err(format!(
+            "indices and values must have the same length: {} vs {}",
+            indices.len(),
+            values.len()
+        )));
+    }
+
     Ok(SparseVector::from_pairs(
         indices.into_iter().zip(values).collect(),
     ))
@@ -46,7 +54,8 @@ fn parse_sparse_vector(
 impl VectorDatabase {
     /// Enable sparse vector indexing for SPLADE-style retrieval.
     ///
-    /// Must be called before set_sparse() or sparse_search().
+    /// Called automatically by set_sparse() and set_hybrid_sparse().
+    /// Call explicitly before sparse_search() on an empty index.
     ///
     /// Examples:
     ///     >>> db.enable_sparse()

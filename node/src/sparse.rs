@@ -32,9 +32,11 @@ fn parse_sparse_from_json(input: &JsonValue) -> Result<SparseVector> {
             .ok_or_else(|| Error::from_reason("indices must be an array"))?
             .iter()
             .map(|v| {
-                v.as_u64()
-                    .map(|n| n as u32)
-                    .ok_or_else(|| Error::from_reason("indices must be unsigned integers"))
+                let n = v
+                    .as_u64()
+                    .ok_or_else(|| Error::from_reason("indices must be unsigned integers"))?;
+                u32::try_from(n)
+                    .map_err(|_| Error::from_reason(format!("index {n} exceeds u32::MAX")))
             })
             .collect::<Result<Vec<_>>>()?;
         let values: Vec<f32> = values
@@ -47,6 +49,13 @@ fn parse_sparse_from_json(input: &JsonValue) -> Result<SparseVector> {
                     .ok_or_else(|| Error::from_reason("values must be numbers"))
             })
             .collect::<Result<Vec<_>>>()?;
+        if indices.len() != values.len() {
+            return Err(Error::from_reason(format!(
+                "indices and values must have the same length: {} vs {}",
+                indices.len(),
+                values.len()
+            )));
+        }
         let pairs: Vec<(u32, f32)> = indices.into_iter().zip(values).collect();
         return Ok(SparseVector::from_pairs(pairs));
     }
@@ -75,7 +84,8 @@ fn parse_sparse_from_json(input: &JsonValue) -> Result<SparseVector> {
 impl VectorDatabase {
     /// Enable sparse vector indexing for SPLADE-style retrieval.
     ///
-    /// Must be called before setSparse() or sparseSearch().
+    /// Called automatically by setSparse() and setHybridSparse().
+    /// Call explicitly before sparseSearch() on an empty index.
     #[napi(js_name = "enableSparse")]
     pub fn enable_sparse(&self) {
         let mut inner = self.inner.write();

@@ -334,6 +334,10 @@ impl VectorStore {
 
         self.metadata_index.remove(slot);
 
+        if let Some(ref mut sparse_index) = self.sparse_index {
+            sparse_index.remove(slot);
+        }
+
         // Use OmenFile::delete for WAL-backed persistence
         if let Some(ref mut storage) = self.storage {
             storage.delete(id)?;
@@ -359,6 +363,9 @@ impl VectorStore {
             let id = id.as_ref();
             if let Some(slot) = self.records.delete(id) {
                 self.metadata_index.remove(slot);
+                if let Some(ref mut sparse_index) = self.sparse_index {
+                    sparse_index.remove(slot);
+                }
                 slots.push(slot);
                 valid_ids.push(id.to_string());
             }

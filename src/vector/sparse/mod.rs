@@ -115,7 +115,30 @@ impl SparseVector {
     }
 
     /// Deserialize from bytes (postcard format).
+    ///
+    /// Validates the sorted-unique invariant after deserialization to guard
+    /// against corrupted data.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        postcard::from_bytes(bytes).map_err(|e| anyhow::anyhow!("SparseVector deserialize: {e}"))
+        let sv: Self = postcard::from_bytes(bytes)
+            .map_err(|e| anyhow::anyhow!("SparseVector deserialize: {e}"))?;
+
+        if sv.indices.len() != sv.values.len() {
+            anyhow::bail!(
+                "Corrupted SparseVector: indices len {} != values len {}",
+                sv.indices.len(),
+                sv.values.len()
+            );
+        }
+        for window in sv.indices.windows(2) {
+            if window[0] >= window[1] {
+                anyhow::bail!(
+                    "Corrupted SparseVector: indices not sorted/unique: {} >= {}",
+                    window[0],
+                    window[1]
+                );
+            }
+        }
+
+        Ok(sv)
     }
 }

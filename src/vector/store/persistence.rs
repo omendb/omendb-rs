@@ -310,18 +310,16 @@ impl VectorStore {
             };
 
         // Reconstruct sparse index if persisted
-        let sparse_index = snapshot.sparse_index_bytes.as_deref().and_then(|bytes| {
-            match crate::vector::sparse::SparseIndex::from_bytes(bytes) {
-                Ok(index) => {
-                    tracing::info!(vectors = index.len(), "Loaded SparseIndex from disk");
-                    Some(index)
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to deserialize SparseIndex: {e}");
-                    None
-                }
-            }
-        });
+        let sparse_index = snapshot
+            .sparse_index_bytes
+            .as_deref()
+            .map(|bytes| {
+                let index = crate::vector::sparse::SparseIndex::from_bytes(bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize SparseIndex: {e}"))?;
+                tracing::info!(vectors = index.len(), "Loaded SparseIndex from disk");
+                Ok::<_, anyhow::Error>(index)
+            })
+            .transpose()?;
 
         Ok(Self {
             records,
