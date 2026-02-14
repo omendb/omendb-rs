@@ -779,7 +779,7 @@ mod tests {
         idx.insert(1, 1.5);
         idx.insert(2, 2.7);
         idx.insert(3, 2.7); // duplicate value
-        idx.insert(4, 3.14);
+        idx.insert(4, 3.25);
 
         assert!(idx.matches_eq(1, 1.5));
         assert!(idx.matches_eq(2, 2.7));

@@ -17,7 +17,10 @@ feature-depth = 1
 # Advisories - check for known security vulnerabilities
 # =============================================================================
 [advisories]
-ignore = []
+ignore = [
+    # lru 0.12.5 via tantivy - transitive dep, our direct dep is 0.16.3 (patched)
+    "RUSTSEC-2026-0002",
+]
 
 # =============================================================================
 # Licenses - ensure all dependencies use acceptable licenses
