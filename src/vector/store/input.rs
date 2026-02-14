@@ -11,7 +11,7 @@ use serde_json::Value as JsonValue;
 pub enum Rerank {
     /// No reranking - fast approximate search.
     Off,
-    /// Rerank with default factor (32x candidates).
+    /// Rerank with default factor (20x candidates).
     #[default]
     On,
     /// Rerank with custom factor.

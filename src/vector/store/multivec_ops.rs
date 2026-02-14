@@ -230,8 +230,8 @@ impl VectorStore {
         query_tokens: &[&[f32]],
         k: usize,
     ) -> Result<Vec<SearchResult>> {
-        // Default rerank factor of 32 (fetch 32x candidates, rerank to k)
-        self.search_multi_rerank(query_tokens, k, 32)
+        // Default rerank factor of 20 (fetch 20x candidates, rerank to k)
+        self.search_multi_rerank(query_tokens, k, 20)
     }
 
     /// Fast approximate search without MaxSim reranking.
@@ -603,6 +603,10 @@ impl VectorStore {
         )
     }
 
+    /// Threshold below which brute-force MaxSim is used instead of FDE+HNSW.
+    /// At 5K docs with ~100 tokens each, brute-force MaxSim takes ~16ms and gives 100% recall.
+    const BRUTE_FORCE_MAXSIM_THRESHOLD: u32 = 5000;
+
     /// Internal: search with multi-vector tokens.
     fn search_multi_internal(
         &self,
@@ -616,11 +620,162 @@ impl VectorStore {
         if options.max_distance.is_some() {
             anyhow::bail!("max_distance is not yet supported for multi-vector search");
         }
+
+        // For small collections, skip FDE approximation and use brute-force MaxSim
+        // for perfect recall (unless user explicitly disabled reranking)
+        if !matches!(options.rerank, Rerank::Off)
+            && self.records.len() <= Self::BRUTE_FORCE_MAXSIM_THRESHOLD
+            && !self.records.is_empty()
+        {
+            return self.search_multi_bruteforce(query_tokens, k);
+        }
+
         match options.rerank {
             Rerank::Off => self.search_multi_approx(query_tokens, k),
-            Rerank::On => self.search_multi_rerank(query_tokens, k, 32),
+            Rerank::On => self.search_multi_rerank(query_tokens, k, 20),
             Rerank::Factor(f) => self.search_multi_rerank(query_tokens, k, f),
         }
+    }
+
+    /// Brute-force MaxSim search over all live documents.
+    /// Used for small collections where perfect recall is cheap.
+    fn search_multi_bruteforce(
+        &self,
+        query_tokens: &[&[f32]],
+        k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let multivec_storage = self
+            .multivec_storage
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
+
+        // Collect all live documents' tokens
+        let mut candidate_data: Vec<(u32, String, JsonValue, Vec<&[f32]>)> = Vec::new();
+
+        for (slot, record) in self.records.iter_live() {
+            if let Some(doc_tokens) = multivec_storage.get_tokens(slot) {
+                candidate_data.push((
+                    slot,
+                    record.id.clone(),
+                    record.metadata.clone().unwrap_or(JsonValue::Null),
+                    doc_tokens,
+                ));
+            }
+        }
+
+        if candidate_data.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Compute MaxSim scores in parallel
+        let doc_tokens_refs: Vec<&Vec<&[f32]>> = candidate_data
+            .iter()
+            .map(|(_, _, _, tokens)| tokens)
+            .collect();
+
+        let maxsim_scores = super::super::muvera::maxsim_batch_par(query_tokens, &doc_tokens_refs);
+
+        // Sort descending by MaxSim score, take top-k
+        let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let results = scored
+            .into_iter()
+            .take(k)
+            .map(|(idx, score)| {
+                let (_, ref id, ref metadata, _) = candidate_data[idx];
+                SearchResult::new(id.clone(), score, metadata.clone())
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Search multi-vector store using BM25 text candidates + MaxSim reranking.
+    ///
+    /// Uses BM25 keyword search to find candidate documents, then reranks
+    /// them using exact MaxSim scoring on stored token embeddings. This
+    /// bypasses the FDE approximation entirely, using text relevance for
+    /// candidate generation instead.
+    ///
+    /// Requires text search to be enabled (`enable_text_search()`).
+    ///
+    /// # Arguments
+    ///
+    /// * `query_text` - Text query for BM25 candidate generation
+    /// * `query_tokens` - Token embeddings for MaxSim reranking
+    /// * `k` - Number of results to return
+    /// * `num_candidates` - Number of BM25 candidates to fetch before reranking
+    pub fn search_multi_with_text(
+        &self,
+        query_text: &str,
+        query_tokens: &[&[f32]],
+        k: usize,
+        num_candidates: Option<usize>,
+    ) -> Result<Vec<SearchResult>> {
+        let multivec_storage = self
+            .multivec_storage
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
+
+        if !self.has_text_search() {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        }
+
+        if query_tokens.is_empty() {
+            anyhow::bail!("Cannot rerank with empty query tokens");
+        }
+
+        // Get BM25 candidates (default: 10x k)
+        let n_candidates = num_candidates.unwrap_or(k * 10);
+        let text_hits = self.search_text(query_text, n_candidates)?;
+
+        if text_hits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Look up token embeddings for each BM25 candidate
+        let mut candidate_data: Vec<(String, JsonValue, Vec<&[f32]>)> = Vec::new();
+
+        for (id, _bm25_score) in &text_hits {
+            let slot = match self.records.get_slot(id) {
+                Some(s) => s,
+                None => continue,
+            };
+            if let Some(doc_tokens) = multivec_storage.get_tokens(slot) {
+                let metadata = self
+                    .records
+                    .get(id)
+                    .and_then(|r| r.metadata.clone())
+                    .unwrap_or(JsonValue::Null);
+                candidate_data.push((id.clone(), metadata, doc_tokens));
+            }
+        }
+
+        if candidate_data.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // MaxSim rerank
+        let doc_tokens_refs: Vec<&Vec<&[f32]>> =
+            candidate_data.iter().map(|(_, _, tokens)| tokens).collect();
+
+        let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
+
+        // Sort descending by MaxSim score, take top-k
+        let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let results = scored
+            .into_iter()
+            .take(k)
+            .map(|(idx, score)| {
+                let (ref id, ref metadata, _) = candidate_data[idx];
+                SearchResult::new(id.clone(), score, metadata.clone())
+            })
+            .collect();
+
+        Ok(results)
     }
 
     /// Get stored data by ID.
