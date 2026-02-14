@@ -11,6 +11,7 @@ mod lifecycle;
 mod open;
 mod parsing;
 mod search;
+mod sparse;
 
 use pyo3::prelude::*;
 
