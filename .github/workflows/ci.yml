@@ -30,6 +30,9 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --check
+      - name: Format (FFI)
+        working-directory: omendb-ffi
+        run: cargo fmt --check
 
   security:
     name: Security
@@ -68,6 +71,13 @@ jobs:
           cargo clippy --tests -- \
             -D clippy::correctness \
             -W clippy::suspicious
+      - name: Clippy (FFI)
+        working-directory: omendb-ffi
+        run: |
+          cargo clippy --tests -- \
+            -D warnings \
+            -D clippy::correctness \
+            -W clippy::suspicious
 
   # ==========================================================================
   # Stage 2: Rust tests (after lint passes)
@@ -90,6 +100,25 @@ jobs:
       - name: Unit tests
         run: cargo test --lib -- --skip stress_
         timeout-minutes: 15
+
+  ffi:
+    name: Test (FFI)
+    runs-on: ${{ matrix.os }}
+    needs: [fmt, clippy]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
+      - uses: Swatinem/rust-cache@v2
+      - name: FFI tests
+        working-directory: omendb-ffi
+        run: cargo test
+        timeout-minutes: 10
 
   proptest:
     name: Property Tests
