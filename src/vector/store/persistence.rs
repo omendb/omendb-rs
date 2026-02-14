@@ -562,12 +562,6 @@ impl VectorStore {
         self.storage.is_some()
     }
 
-    /// Get reference to the .omen storage backend (if persistent)
-    #[must_use]
-    pub fn storage(&self) -> Option<&OmenFile> {
-        self.storage.as_ref()
-    }
-
     /// Enable persistence for this store (builder pattern).
     ///
     /// Creates or opens an .omen file at the given path. Use `flush()` to persist data.

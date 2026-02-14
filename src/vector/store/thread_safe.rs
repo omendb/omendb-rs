@@ -96,7 +96,10 @@ impl ThreadSafeVectorStore {
     }
 
     /// Batch insert
-    pub fn set_batch(&self, batch: Vec<(String, Vector, JsonValue)>) -> Result<Vec<usize>> {
+    pub fn set_batch<S: Into<String>>(
+        &self,
+        batch: Vec<(S, Vector, JsonValue)>,
+    ) -> Result<Vec<usize>> {
         self.inner.write().set_batch(batch)
     }
 

@@ -25,8 +25,19 @@
 
 - Rename `text_search` → `search_text`, `hybrid_search` → `search_hybrid` (verb-first consistency)
 - Remove `get_ef_search()` — use `ef_search` property instead (Python: `db.ef_search`, Node: `db.efSearch`)
-- Reduce ~16 internal methods from `pub` to `pub(crate)`
+- Unify distance metric enums: single `Metric` enum replaces `DistanceFunction` + `DistanceMetric`
+- `set()` takes `&str` instead of `String` for document IDs
+- `set_batch()` accepts generic `Into<String>` IDs (works with both `String` and `&str`)
+- `delete_batch()` accepts `&[impl AsRef<str>]` (works with both `&[String]` and `&[&str]`)
+- Rename `search_batch_with_metadata` → `search_batch`
+- Remove `SearchParams` type alias (use `SearchOptions` directly)
 - Remove `MuveraConfig` type alias (use `MultiVectorConfig` directly)
+- Tighten visibility: `Record`, `RecordStore`, helpers, internal accessors now `pub(crate)`
+- Remove dead code: `storage()`, `index_to_id_mapping()`, `id_to_index_mapping()`, unused `RecordStore` methods
+
+### Performance
+
+- Precompute query norm in parallel HNSW builder for cosine metric (eliminates redundant sqrt per distance call)
 
 ### FFI
 

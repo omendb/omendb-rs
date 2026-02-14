@@ -236,7 +236,7 @@ impl VectorDatabase {
             let all_results =
                 inner
                     .store
-                    .search_batch_with_metadata(&query_vecs, k_usize, ef_usize);
+                    .search_batch(&query_vecs, k_usize, ef_usize);
 
             let mut output = Vec::with_capacity(all_results.len());
             for result in all_results {

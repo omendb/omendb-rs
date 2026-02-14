@@ -24,11 +24,10 @@ mod thread_safe;
 pub use crate::omen::Metric;
 pub use filter::MetadataFilter;
 pub use input::{
-    BatchItem, HybridParams, QueryData, QueryInput, Rerank, SearchOptions, SearchParams,
-    VectorData, VectorInput,
+    BatchItem, HybridParams, QueryData, QueryInput, Rerank, SearchOptions, VectorData, VectorInput,
 };
 pub use options::VectorStoreOptions;
-pub use record_store::{Record, RecordStore};
+pub(crate) use record_store::RecordStore;
 pub use thread_safe::ThreadSafeVectorStore;
 
 use super::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
@@ -431,9 +430,9 @@ impl VectorStore {
         )
     }
 
-    /// Parallel batch search with metadata
+    /// Parallel batch search
     #[must_use]
-    pub fn search_batch_with_metadata(
+    pub fn search_batch(
         &self,
         queries: &[Vector],
         k: usize,

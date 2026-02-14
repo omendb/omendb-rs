@@ -86,13 +86,19 @@ impl VectorStore {
     ///
     /// # Arguments
     /// * `batch` - Vector of (id, vector, text, metadata) tuples
-    pub fn set_batch_with_text(
+    pub fn set_batch_with_text<S: Into<String>>(
         &mut self,
-        batch: Vec<(String, Vector, String, JsonValue)>,
+        batch: Vec<(S, Vector, S, JsonValue)>,
     ) -> Result<Vec<usize>> {
         let Some(ref mut text_index) = self.text_index else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
+
+        // Convert IDs and text to String up front
+        let batch: Vec<(String, Vector, String, JsonValue)> = batch
+            .into_iter()
+            .map(|(id, vector, text, metadata)| (id.into(), vector, text.into(), metadata))
+            .collect();
 
         for (id, _, text, _) in &batch {
             text_index.index_document(id, text)?;

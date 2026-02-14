@@ -5,7 +5,7 @@
 //! OmenFile: pure I/O (no state duplication).
 
 use roaring::RoaringBitmap;
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -58,17 +58,6 @@ impl RecordStore {
             slots: Vec::new(),
             deleted: RoaringBitmap::new(),
             id_to_slot: FxHashMap::default(),
-            live_count: 0,
-            dimensions,
-        }
-    }
-
-    /// Create RecordStore with pre-allocated capacity
-    pub fn with_capacity(dimensions: u32, capacity: usize) -> Self {
-        Self {
-            slots: Vec::with_capacity(capacity),
-            deleted: RoaringBitmap::new(),
-            id_to_slot: FxHashMap::with_capacity_and_hasher(capacity, FxBuildHasher),
             live_count: 0,
             dimensions,
         }
@@ -186,15 +175,6 @@ impl RecordStore {
         self.slots.get(slot as usize).and_then(|r| r.as_ref())
     }
 
-    /// Get a vector by slot index (for HNSW distance calculations)
-    #[inline]
-    pub fn get_vector(&self, slot: u32) -> Option<&[f32]> {
-        self.slots
-            .get(slot as usize)
-            .and_then(|r| r.as_ref())
-            .map(|r| r.vector.as_slice())
-    }
-
     /// Check if a slot is live (not deleted)
     #[inline]
     pub fn is_live(&self, slot: u32) -> bool {
@@ -252,15 +232,6 @@ impl RecordStore {
         self.deleted.len() as u32
     }
 
-    /// Get delete ratio
-    pub fn delete_ratio(&self) -> f64 {
-        let total = self.slots.len();
-        if total == 0 {
-            return 0.0;
-        }
-        self.deleted.len() as f64 / total as f64
-    }
-
     /// Iterate over live records with their slot indices
     pub fn iter_live(&self) -> impl Iterator<Item = (u32, &Record)> {
         self.slots
@@ -275,37 +246,10 @@ impl RecordStore {
             })
     }
 
-    /// Iterate over all slots (including deleted) with their records
-    pub fn iter_all(&self) -> impl Iterator<Item = (u32, Option<&Record>)> {
-        self.slots
-            .iter()
-            .enumerate()
-            .map(|(slot, record_opt)| (slot as u32, record_opt.as_ref()))
-    }
-
-    /// Get all live vectors as Vec<Vec<f32>> (for batch HNSW operations)
-    pub fn collect_vectors(&self) -> Vec<Vec<f32>> {
-        self.iter_live()
-            .map(|(_, record)| record.vector.clone())
-            .collect()
-    }
-
     /// Get reference to the deleted bitmap
     #[inline]
     pub fn deleted_bitmap(&self) -> &RoaringBitmap {
         &self.deleted
-    }
-
-    /// Get reference to the slots
-    #[inline]
-    pub fn slots(&self) -> &[Option<Record>] {
-        &self.slots
-    }
-
-    /// Get reference to id_to_slot mapping
-    #[inline]
-    pub fn id_to_slot(&self) -> &FxHashMap<String, u32> {
-        &self.id_to_slot
     }
 
     /// Update metadata for a record by slot
@@ -318,31 +262,6 @@ impl RecordStore {
 
         record.metadata = Some(metadata);
         Ok(())
-    }
-
-    /// Update vector for a record by slot
-    pub fn update_vector(&mut self, slot: u32, vector: Vec<f32>) -> anyhow::Result<()> {
-        if vector.len() != self.dimensions as usize {
-            anyhow::bail!(
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimensions,
-                vector.len()
-            );
-        }
-
-        let record = self
-            .slots
-            .get_mut(slot as usize)
-            .and_then(|r| r.as_mut())
-            .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
-
-        record.vector = vector;
-        Ok(())
-    }
-
-    /// Check if needs compaction (delete ratio > 20%)
-    pub fn needs_compaction(&self) -> bool {
-        self.delete_ratio() > 0.20
     }
 
     /// Export vectors for checkpoint (slot-indexed)
@@ -460,8 +379,8 @@ mod tests {
         assert_eq!(store.len(), 1); // Still 1 live record
 
         // Check updated vector at new slot
-        let vec = store.get_vector(1).unwrap();
-        assert_eq!(vec, &[7.0, 8.0, 9.0]);
+        let record = store.get_by_slot(1).unwrap();
+        assert_eq!(record.vector, &[7.0, 8.0, 9.0]);
 
         // Old slot is deleted (get_by_slot respects deleted bitmap)
         assert!(store.get_by_slot(0).is_none());
@@ -628,28 +547,5 @@ mod tests {
         assert_eq!(store.get_slot("vec1"), Some(0));
         assert_eq!(store.get_slot("vec2"), None); // deleted
         assert_eq!(store.get_slot("vec3"), Some(2));
-    }
-
-    #[test]
-    fn test_delete_ratio() {
-        let mut store = RecordStore::new(3);
-
-        // Empty store
-        assert_eq!(store.delete_ratio(), 0.0);
-
-        // Add 10 records
-        for i in 0..10 {
-            store
-                .upsert(format!("vec{i}"), vec![i as f32, 0.0, 0.0], None)
-                .unwrap();
-        }
-        assert_eq!(store.delete_ratio(), 0.0);
-
-        // Delete 3 records (30%)
-        store.delete("vec0");
-        store.delete("vec1");
-        store.delete("vec2");
-        assert!((store.delete_ratio() - 0.3).abs() < 0.01);
-        assert!(store.needs_compaction());
     }
 }

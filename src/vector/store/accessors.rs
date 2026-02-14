@@ -114,26 +114,4 @@ impl VectorStore {
     pub fn segments(&self) -> Option<&crate::vector::hnsw::SegmentManager> {
         self.segments.as_ref()
     }
-
-    /// Get index-to-ID mapping (for FFI bindings)
-    ///
-    /// Returns a HashMap mapping internal slot indices to string IDs.
-    #[must_use]
-    pub fn index_to_id_mapping(&self) -> std::collections::HashMap<usize, String> {
-        self.records
-            .iter_live()
-            .map(|(slot, record)| (slot as usize, record.id.clone()))
-            .collect()
-    }
-
-    /// Get ID-to-index mapping (for FFI bindings)
-    ///
-    /// Returns a HashMap mapping string IDs to internal slot indices.
-    #[must_use]
-    pub fn id_to_index_mapping(&self) -> std::collections::HashMap<String, usize> {
-        self.records
-            .iter_live()
-            .map(|(slot, record)| (record.id.clone(), slot as usize))
-            .collect()
-    }
 }

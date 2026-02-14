@@ -31,9 +31,6 @@ pub struct SearchOptions {
     pub rerank: Rerank,
 }
 
-/// Alias for `SearchOptions` - parameters for vector search.
-pub type SearchParams = SearchOptions;
-
 impl SearchOptions {
     /// Create a new SearchOptions with defaults.
     #[must_use]

@@ -112,10 +112,19 @@ impl VectorStore {
     /// This method processes updates before inserts to ensure slot ordering is predictable.
     /// **WARNING:** `set_multi_batch` in `multivec_ops.rs` depends on this ordering to
     /// correctly align tokens with FDEs. Do not change without updating that code.
-    pub fn set_batch(&mut self, batch: Vec<(String, Vector, JsonValue)>) -> Result<Vec<usize>> {
+    pub fn set_batch<S: Into<String>>(
+        &mut self,
+        batch: Vec<(S, Vector, JsonValue)>,
+    ) -> Result<Vec<usize>> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
+
+        // Convert IDs to String up front
+        let batch: Vec<(String, Vector, JsonValue)> = batch
+            .into_iter()
+            .map(|(id, vector, metadata)| (id.into(), vector, metadata))
+            .collect();
 
         // Separate batch into updates and inserts (updates processed first - see docstring)
         let mut updates: Vec<(u32, String, Vector, JsonValue)> = Vec::new();
@@ -341,16 +350,17 @@ impl VectorStore {
     ///
     /// Marks vectors as deleted in bitmap. Deleted vectors are filtered during search.
     /// Call `compact()` to reclaim space after bulk deletes.
-    pub fn delete_batch(&mut self, ids: &[String]) -> Result<usize> {
+    pub fn delete_batch(&mut self, ids: &[impl AsRef<str>]) -> Result<usize> {
         // Delete from RecordStore and collect slots
         let mut slots: Vec<u32> = Vec::with_capacity(ids.len());
         let mut valid_ids: Vec<String> = Vec::with_capacity(ids.len());
 
         for id in ids {
+            let id = id.as_ref();
             if let Some(slot) = self.records.delete(id) {
                 self.metadata_index.remove(slot);
                 slots.push(slot);
-                valid_ids.push(id.clone());
+                valid_ids.push(id.to_string());
             }
         }
 
