@@ -229,7 +229,7 @@ pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) 
     let mut count = 0i64;
     for item in items {
         let id = if let Some(s) = item.get("id").and_then(|v| v.as_str()) {
-            s.to_string()
+            s
         } else {
             set_last_error("Item missing 'id' field".to_string());
             return -1;
@@ -687,7 +687,7 @@ pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *cons
     let mut count = 0i64;
     for item in items {
         let id = if let Some(s) = item.get("id").and_then(|v| v.as_str()) {
-            s.to_string()
+            s
         } else {
             set_last_error("Item missing 'id' field".to_string());
             return -1;
