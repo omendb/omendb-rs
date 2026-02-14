@@ -331,6 +331,7 @@ impl VectorStore {
             distance_metric,
             muvera_encoder,
             multivec_storage,
+            sparse_index: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
         })
@@ -425,6 +426,7 @@ impl VectorStore {
             distance_metric,
             muvera_encoder: None,
             multivec_storage: None,
+            sparse_index: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
         })
@@ -463,6 +465,7 @@ impl VectorStore {
             distance_metric,
             muvera_encoder: None,
             multivec_storage: None,
+            sparse_index: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
         })

@@ -18,6 +18,7 @@ mod options;
 mod persistence;
 mod record_store;
 mod search;
+mod sparse_ops;
 mod text_search;
 mod thread_safe;
 
@@ -32,6 +33,7 @@ pub use thread_safe::ThreadSafeVectorStore;
 
 use super::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
+use super::sparse::SparseIndex;
 use super::types::Vector;
 use crate::omen::OmenFile;
 use crate::text::{TextIndex, TextSearchConfig};
@@ -117,6 +119,9 @@ pub struct VectorStore {
     /// Storage for original multi-vector tokens (for MaxSim reranking).
     multivec_storage: Option<MultiVecStorage>,
 
+    /// Inverted index for sparse vector search (SPLADE, etc.)
+    sparse_index: Option<SparseIndex>,
+
     /// Maximum tokens per document (default: 512, matches ColBERT).
     max_tokens: usize,
 
@@ -149,6 +154,7 @@ impl VectorStore {
             distance_metric,
             muvera_encoder: None,
             multivec_storage: None,
+            sparse_index: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
         }

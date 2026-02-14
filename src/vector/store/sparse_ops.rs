@@ -1,0 +1,227 @@
+//! Sparse vector operations for VectorStore.
+//!
+//! Provides methods for inserting, searching, and hybrid-searching sparse vectors
+//! using an inverted index. Sparse vectors are used for learned sparse retrieval
+//! models like SPLADE.
+
+use super::helpers;
+use super::{MetadataFilter, SearchResult, VectorStore};
+use crate::vector::sparse::{SparseIndex, SparseVector};
+use crate::vector::types::Vector;
+use anyhow::Result;
+use serde_json::Value as JsonValue;
+
+use std::collections::HashMap;
+
+impl VectorStore {
+    /// Check if sparse index is enabled.
+    #[must_use]
+    pub fn has_sparse(&self) -> bool {
+        self.sparse_index.is_some()
+    }
+
+    /// Enable sparse vector indexing.
+    ///
+    /// Must be called before `set_sparse()` or `sparse_search()`.
+    pub fn enable_sparse(&mut self) {
+        if self.sparse_index.is_none() {
+            self.sparse_index = Some(SparseIndex::new());
+        }
+    }
+
+    /// Insert or update a sparse vector with metadata.
+    ///
+    /// The sparse vector is indexed for dot-product search. If the ID already
+    /// exists, the old sparse vector is replaced.
+    ///
+    /// Note: This only sets the sparse vector. Dense vectors are independent.
+    /// Use `set_hybrid_sparse()` to set both dense and sparse at once.
+    pub fn set_sparse(
+        &mut self,
+        id: &str,
+        sparse: SparseVector,
+        metadata: JsonValue,
+    ) -> Result<()> {
+        if self.sparse_index.is_none() {
+            anyhow::bail!("Sparse index not enabled. Call enable_sparse() first");
+        }
+
+        // Upsert into RecordStore (preserve existing dense vector if present)
+        let old_slot = self.records.get_slot(id);
+        let dims = self.dimensions();
+        let slot = if dims > 0 {
+            let dense_vec = self
+                .records
+                .get(id)
+                .map_or_else(|| vec![0.0; dims], |r| r.vector.clone());
+            self.records
+                .upsert(id.to_string(), dense_vec, Some(metadata.clone()))?
+        } else {
+            self.records
+                .upsert(id.to_string(), vec![], Some(metadata.clone()))?
+        };
+
+        // Update metadata index
+        if let Some(old) = old_slot {
+            self.metadata_index.remove(old);
+        }
+        self.metadata_index.index_json(slot, &metadata);
+
+        // Index sparse vector
+        self.sparse_index.as_mut().unwrap().insert(slot, &sparse);
+
+        Ok(())
+    }
+
+    /// Insert or update both dense and sparse vectors together.
+    ///
+    /// This is the recommended method when documents have both representations.
+    pub fn set_hybrid_sparse(
+        &mut self,
+        id: &str,
+        dense: Vector,
+        sparse: SparseVector,
+        metadata: JsonValue,
+    ) -> Result<()> {
+        // Ensure sparse index exists
+        if self.sparse_index.is_none() {
+            self.sparse_index = Some(SparseIndex::new());
+        }
+
+        // Insert dense vector via normal path
+        let slot = self.set(id, dense, metadata.clone())? as u32;
+
+        // Index sparse vector
+        self.sparse_index.as_mut().unwrap().insert(slot, &sparse);
+
+        Ok(())
+    }
+
+    /// Search sparse vectors by dot product similarity.
+    ///
+    /// Returns results sorted by dot product score (higher = more similar).
+    /// The `distance` field contains `-dot_product` to maintain the
+    /// lower-is-better convention.
+    pub fn sparse_search(
+        &self,
+        query: &SparseVector,
+        k: usize,
+        filter: Option<&MetadataFilter>,
+    ) -> Result<Vec<SearchResult>> {
+        let sparse_index = self.sparse_index.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Sparse index not enabled. Call enable_sparse() first")
+        })?;
+
+        let results = if let Some(f) = filter {
+            // Try bitmap filter first
+            if let Some(bitmap) = f.evaluate_bitmap(&self.metadata_index) {
+                sparse_index.search_with_bitmap(query, k, &bitmap)
+            } else {
+                // Fall back to post-filtering: over-fetch then filter
+                let candidates = sparse_index.search(query, k * 4);
+                candidates
+                    .into_iter()
+                    .filter(|(slot, _)| {
+                        self.records.is_live(*slot) && {
+                            let meta = self
+                                .records
+                                .get_by_slot(*slot)
+                                .and_then(|r| r.metadata.as_ref())
+                                .unwrap_or(&helpers::DEFAULT_METADATA);
+                            f.matches(meta)
+                        }
+                    })
+                    .take(k)
+                    .collect()
+            }
+        } else {
+            sparse_index.search(query, k)
+        };
+
+        // Convert to SearchResult with -dot_product as distance
+        Ok(results
+            .into_iter()
+            .filter_map(|(slot, score)| {
+                let record = self.records.get_by_slot(slot)?;
+                let metadata = record
+                    .metadata
+                    .clone()
+                    .unwrap_or_else(helpers::default_metadata);
+                Some(SearchResult::new(record.id.clone(), -score, metadata))
+            })
+            .collect())
+    }
+
+    /// Hybrid dense + sparse search with Reciprocal Rank Fusion (RRF).
+    ///
+    /// Performs both dense and sparse searches, then fuses results using RRF:
+    ///   `score(d) = sum(1 / (k + rank_i(d)))` across result lists.
+    ///
+    /// # Arguments
+    ///
+    /// * `dense_query` - Dense query vector for HNSW search
+    /// * `sparse_query` - Sparse query vector for inverted index search
+    /// * `k` - Number of results to return
+    /// * `alpha` - Blending factor: 1.0 = pure dense, 0.0 = pure sparse.
+    ///   At 0.5, both sources contribute equally.
+    /// * `filter` - Optional metadata filter
+    pub fn hybrid_sparse_search(
+        &self,
+        dense_query: &Vector,
+        sparse_query: &SparseVector,
+        k: usize,
+        alpha: f32,
+        filter: Option<&MetadataFilter>,
+    ) -> Result<Vec<SearchResult>> {
+        let alpha = alpha.clamp(0.0, 1.0);
+        let rrf_k = 60.0f32; // standard RRF constant
+
+        // Fetch more candidates from each source for better fusion
+        let fetch_k = k * 4;
+
+        // Dense search
+        let dense_results = if alpha > 0.0 {
+            self.search_with_options(dense_query, fetch_k, filter, None, None)?
+        } else {
+            Vec::new()
+        };
+
+        // Sparse search
+        let sparse_results = if alpha < 1.0 {
+            self.sparse_search(sparse_query, fetch_k, filter)?
+        } else {
+            Vec::new()
+        };
+
+        // RRF fusion
+        let mut rrf_scores: HashMap<String, (f32, JsonValue)> = HashMap::new();
+
+        // Add dense contributions (weighted by alpha)
+        for (rank, result) in dense_results.iter().enumerate() {
+            let rrf_score = alpha / (rrf_k + rank as f32 + 1.0);
+            rrf_scores
+                .entry(result.id.clone())
+                .and_modify(|(score, _)| *score += rrf_score)
+                .or_insert((rrf_score, result.metadata.clone()));
+        }
+
+        // Add sparse contributions (weighted by 1 - alpha)
+        for (rank, result) in sparse_results.iter().enumerate() {
+            let rrf_score = (1.0 - alpha) / (rrf_k + rank as f32 + 1.0);
+            rrf_scores
+                .entry(result.id.clone())
+                .and_modify(|(score, _)| *score += rrf_score)
+                .or_insert((rrf_score, result.metadata.clone()));
+        }
+
+        // Sort by RRF score (descending) and return top-k
+        let mut fused: Vec<SearchResult> = rrf_scores
+            .into_iter()
+            .map(|(id, (score, metadata))| SearchResult::new(id, -score, metadata))
+            .collect();
+        fused.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+        fused.truncate(k);
+
+        Ok(fused)
+    }
+}
