@@ -434,9 +434,7 @@ fn test_delete_batch_removes_sparse() {
     }
 
     // Delete docs 0, 2, 4
-    store
-        .delete_batch(&["doc0", "doc2", "doc4"])
-        .unwrap();
+    store.delete_batch(&["doc0", "doc2", "doc4"]).unwrap();
 
     let sq = SparseVector::from_pairs(vec![(42, 1.0)]).unwrap();
     let sr = store.sparse_search(&sq, 10, None).unwrap();
@@ -454,7 +452,10 @@ fn test_set_sparse_rejects_new_id_with_dims() {
     let sparse = SparseVector::from_pairs(vec![(10, 0.5)]).unwrap();
     let result = store.set_sparse("new_doc", sparse, serde_json::json!({}));
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("set_hybrid_sparse"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("set_hybrid_sparse"));
 }
 
 #[test]

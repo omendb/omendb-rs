@@ -43,6 +43,12 @@ class HybridSearchResultWithSubscores(TypedDict):
     keyword_score: float | None  # BM25 score (None if only matched vector search)
     semantic_score: float | None  # Vector distance (None if only matched text search)
 
+class SparseSearchResult(TypedDict):
+    """Single sparse search result."""
+    id: str
+    score: float
+    metadata: dict[str, Any]
+
 class VectorRecord(TypedDict, total=False):
     """Input record for set().
 
@@ -666,6 +672,95 @@ class VectorDatabase:
 
         Returns:
             Number of deleted records removed.
+        """
+        ...
+
+    # Sparse vector methods
+    def enable_sparse(self) -> None:
+        """Enable sparse vector indexing for SPLADE-style retrieval."""
+        ...
+
+    def has_sparse(self) -> bool:
+        """Check if sparse indexing is enabled."""
+        ...
+
+    def set_sparse(
+        self,
+        id: str,
+        indices_or_dict: list[int] | dict[int, float],
+        values: list[float] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Insert or update a sparse vector.
+
+        Args:
+            id: Unique identifier.
+            indices_or_dict: Dimension indices (list) or {dim: weight} dict.
+            values: Weights (required when indices_or_dict is a list).
+            metadata: Optional metadata dict.
+        """
+        ...
+
+    def set_hybrid_sparse(
+        self,
+        id: str,
+        vector: Vector,
+        indices_or_dict: list[int] | dict[int, float],
+        values: list[float] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Insert or update both dense and sparse vectors together.
+
+        Args:
+            id: Unique identifier.
+            vector: Dense vector.
+            indices_or_dict: Sparse dimension indices (list) or {dim: weight} dict.
+            values: Sparse weights (required when indices_or_dict is a list).
+            metadata: Optional metadata dict.
+        """
+        ...
+
+    def sparse_search(
+        self,
+        indices_or_dict: list[int] | dict[int, float],
+        values: list[float] | None = None,
+        k: int = 10,
+        filter: MetadataFilter | None = None,
+    ) -> list[SparseSearchResult]:
+        """Search sparse vectors by dot product similarity.
+
+        Args:
+            indices_or_dict: Query sparse vector as indices list or dict.
+            values: Query weights (required when indices_or_dict is a list).
+            k: Number of results (default: 10).
+            filter: Optional metadata filter.
+
+        Returns:
+            Results with id, score, metadata sorted by score descending.
+        """
+        ...
+
+    def hybrid_sparse_search(
+        self,
+        query_vector: Vector,
+        sparse_indices_or_dict: list[int] | dict[int, float],
+        sparse_values: list[float] | None = None,
+        k: int = 10,
+        alpha: float = 0.5,
+        filter: MetadataFilter | None = None,
+    ) -> list[SparseSearchResult]:
+        """Hybrid dense + sparse search with RRF fusion.
+
+        Args:
+            query_vector: Dense query vector.
+            sparse_indices_or_dict: Sparse query as indices list or dict.
+            sparse_values: Sparse weights (required when indices is a list).
+            k: Number of results (default: 10).
+            alpha: Dense vs sparse weight (0=sparse, 1=dense, default: 0.5).
+            filter: Optional metadata filter.
+
+        Returns:
+            Results with id, score, metadata sorted by RRF score descending.
         """
         ...
 

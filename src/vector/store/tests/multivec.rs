@@ -1089,9 +1089,7 @@ mod persistence_tests {
 
         // Insert a document
         let tokens: Vec<Vec<f32>> = vec![vec![0.1; token_dim]; 3];
-        store
-            .store("doc1", tokens, serde_json::json!({}))
-            .unwrap();
+        store.store("doc1", tokens, serde_json::json!({})).unwrap();
 
         // Query with wrong dimension should return error, not panic
         let wrong_dim_query: Vec<Vec<f32>> = vec![vec![0.1; token_dim * 2]];
