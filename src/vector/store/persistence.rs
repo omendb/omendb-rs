@@ -347,6 +347,8 @@ impl VectorStore {
             sparse_index,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
+            rescore: quantization,
+            oversample: 3.0,
         })
     }
 
@@ -388,6 +390,14 @@ impl VectorStore {
                 store.set_ef_search(ef);
             }
 
+            // Apply rescore/oversample options
+            if let Some(rescore) = options.rescore {
+                store.rescore = rescore;
+            }
+            if let Some(oversample) = options.oversample {
+                store.oversample = oversample;
+            }
+
             return Ok(store);
         }
 
@@ -424,6 +434,13 @@ impl VectorStore {
             None
         };
 
+        let rescore = if let Some(r) = options.rescore {
+            r
+        } else {
+            options.quantization
+        };
+        let oversample = options.oversample.unwrap_or(3.0);
+
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
             segments: None,
@@ -442,6 +459,8 @@ impl VectorStore {
             sparse_index: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
+            rescore,
+            oversample,
         })
     }
 
@@ -463,6 +482,13 @@ impl VectorStore {
             None
         };
 
+        let rescore = if let Some(r) = options.rescore {
+            r
+        } else {
+            options.quantization
+        };
+        let oversample = options.oversample.unwrap_or(3.0);
+
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
             segments: None,
@@ -481,6 +507,8 @@ impl VectorStore {
             sparse_index: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
+            rescore,
+            oversample,
         })
     }
 

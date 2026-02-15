@@ -262,6 +262,33 @@ fn brute_force_filtered(
     )
 }
 
+/// Rescore quantized search candidates with original fp32 vectors.
+///
+/// Takes candidates from SQ8 search, recomputes distances using the original
+/// fp32 vectors stored in RecordStore, sorts by true distance, and returns top-k.
+pub(crate) fn rescore_results(
+    records: &RecordStore,
+    candidates: Vec<(usize, f32)>,
+    query: &[f32],
+    k: usize,
+    metric: Metric,
+) -> Vec<(usize, f32)> {
+    let query_norm = norm_squared(query).sqrt();
+
+    let mut rescored: Vec<(usize, f32)> = candidates
+        .into_iter()
+        .filter_map(|(slot, _sq8_dist)| {
+            let record = records.get_by_slot(slot as u32)?;
+            let dist = compute_distance(metric, query, &record.vector, query_norm);
+            Some((slot, dist))
+        })
+        .collect();
+
+    rescored.sort_by(|a, b| a.1.total_cmp(&b.1));
+    rescored.truncate(k);
+    rescored
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +342,38 @@ mod tests {
         // InnerProduct uses -dot_product, so higher dot = lower (more negative) distance
         // "a" has dot=1.0 -> distance=-1.0, "b" has dot=0.5 -> distance=-0.5
         assert!(results[0].1 < results[1].1); // "a" first (lower distance)
+    }
+
+    #[test]
+    fn test_rescore_results_basic() {
+        let mut records = RecordStore::new(3);
+        records
+            .upsert("a".to_string(), vec![1.0, 0.0, 0.0], None)
+            .unwrap();
+        records
+            .upsert("b".to_string(), vec![0.0, 1.0, 0.0], None)
+            .unwrap();
+        records
+            .upsert("c".to_string(), vec![0.5, 0.5, 0.0], None)
+            .unwrap();
+
+        // Simulate SQ8 candidates with wrong ordering
+        let candidates = vec![(2, 0.1), (0, 0.2), (1, 0.3)];
+        let query = vec![1.0, 0.0, 0.0];
+
+        let rescored = rescore_results(&records, candidates, &query, 2, Metric::L2);
+
+        assert_eq!(rescored.len(), 2);
+        // "a" at slot 0 should be nearest to [1,0,0]
+        assert_eq!(rescored[0].0, 0);
+    }
+
+    #[test]
+    fn test_rescore_empty() {
+        let records = RecordStore::new(3);
+        let candidates: Vec<(usize, f32)> = vec![];
+        let query = vec![1.0, 0.0, 0.0];
+        let rescored = rescore_results(&records, candidates, &query, 5, Metric::L2);
+        assert!(rescored.is_empty());
     }
 }

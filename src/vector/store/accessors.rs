@@ -103,6 +103,28 @@ impl VectorStore {
         self.pending_quantization
     }
 
+    /// Enable or disable SQ8 rescoring
+    pub fn set_rescore(&mut self, rescore: bool) {
+        self.rescore = rescore;
+    }
+
+    /// Set oversample factor for SQ8 rescoring
+    pub fn set_oversample(&mut self, oversample: f32) {
+        self.oversample = oversample;
+    }
+
+    /// Check if SQ8 rescoring is enabled
+    #[must_use]
+    pub fn rescore(&self) -> bool {
+        self.rescore
+    }
+
+    /// Get oversample factor for SQ8 rescoring
+    #[must_use]
+    pub fn oversample(&self) -> f32 {
+        self.oversample
+    }
+
     /// Number of deleted (tombstoned) records
     #[must_use]
     pub fn deleted_count(&self) -> usize {

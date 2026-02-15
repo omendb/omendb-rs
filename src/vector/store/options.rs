@@ -58,6 +58,11 @@ pub struct VectorStoreOptions {
 
     /// Text search configuration (None = disabled)
     pub(super) text_search_config: Option<TextSearchConfig>,
+
+    /// SQ8 refiner: rescore with fp32 after quantized search (default: true when quantized)
+    pub(super) rescore: Option<bool>,
+    /// SQ8 refiner: candidate multiplier for rescoring (default: 3.0)
+    pub(super) oversample: Option<f32>,
 }
 
 impl VectorStoreOptions {
@@ -185,6 +190,28 @@ impl VectorStoreOptions {
     #[must_use]
     pub fn text_search_config(mut self, config: TextSearchConfig) -> Self {
         self.text_search_config = Some(config);
+        self
+    }
+
+    /// Enable or disable SQ8 rescoring.
+    ///
+    /// When enabled (default for quantized stores), search fetches extra candidates
+    /// using the quantized index, then rescores them with original fp32 vectors.
+    /// Improves recall from ~97% to ~99%+ with minimal speed impact.
+    #[must_use]
+    pub fn rescore(mut self, enabled: bool) -> Self {
+        self.rescore = Some(enabled);
+        self
+    }
+
+    /// Set candidate oversample multiplier for rescoring.
+    ///
+    /// During rescoring, `k * oversample` candidates are fetched from the
+    /// quantized index, then the top k are selected after fp32 recomputation.
+    /// Default: 3.0 (fetch 3x candidates).
+    #[must_use]
+    pub fn oversample(mut self, factor: f32) -> Self {
+        self.oversample = Some(factor);
         self
     }
 

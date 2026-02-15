@@ -43,6 +43,10 @@ pub struct OpenOptions {
         ts_type = "boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null } | null | undefined"
     )]
     pub multi_vector: Option<serde_json::Value>,
+    /// SQ8 refiner: rescore with full precision (default: true when quantized)
+    pub rescore: Option<bool>,
+    /// Candidate multiplier for rescoring (default: 3.0)
+    pub oversample: Option<f64>,
 }
 
 /// Open or create a vector database.
@@ -87,6 +91,8 @@ pub fn open(
         quantization: None,
         metric: None,
         multi_vector: None,
+        rescore: None,
+        oversample: None,
     });
 
     let embedding_tsfn = embedding_fn.map(Arc::new);
@@ -187,6 +193,12 @@ pub fn open(
         store_options = store_options
             .metric(metric_str)
             .map_err(|e| Error::new(Status::InvalidArg, e))?;
+    }
+    if let Some(rescore) = opts.rescore {
+        store_options = store_options.rescore(rescore);
+    }
+    if let Some(oversample) = opts.oversample {
+        store_options = store_options.oversample(oversample as f32);
     }
 
     if path == ":memory:" {

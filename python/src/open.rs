@@ -18,6 +18,8 @@ pub(crate) fn build_store_options(
     ef_search: Option<usize>,
     quantization: bool,
     metric: Option<&str>,
+    rescore: Option<bool>,
+    oversample: Option<f32>,
 ) -> PyResult<VectorStoreOptions> {
     let mut options = VectorStoreOptions::default().dimensions(dimensions);
 
@@ -35,6 +37,12 @@ pub(crate) fn build_store_options(
     }
     if let Some(metric_str) = metric {
         options = options.metric(metric_str).map_err(PyValueError::new_err)?;
+    }
+    if let Some(r) = rescore {
+        options = options.rescore(r);
+    }
+    if let Some(o) = oversample {
+        options = options.oversample(o);
     }
 
     Ok(options)
@@ -89,7 +97,7 @@ pub(crate) fn build_store_options(
 ///     # With cosine distance metric
 ///     >>> db = omendb.open("./vectors", dimensions=768, metric="cosine")
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, config=None, embedding_fn=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, config=None, embedding_fn=None, rescore=None, oversample=None))]
 pub(crate) fn open(
     py: Python<'_>,
     path: String,
@@ -102,6 +110,8 @@ pub(crate) fn open(
     multi_vector: Option<&Bound<'_, PyAny>>,
     config: Option<&Bound<'_, PyDict>>,
     embedding_fn: Option<Py<PyAny>>,
+    rescore: Option<bool>,
+    oversample: Option<f32>,
 ) -> PyResult<VectorDatabase> {
     // Validate optional params
     if let Some(m_val) = m {
@@ -187,6 +197,8 @@ pub(crate) fn open(
             ef_search,
             quant_mode,
             metric.as_deref(),
+            rescore,
+            oversample,
         )?;
 
         let store = options
@@ -270,6 +282,8 @@ pub(crate) fn open(
             ef_search,
             quant_mode,
             metric.as_deref(),
+            rescore,
+            oversample,
         )?;
 
         // Handle config dict for backward compatibility
@@ -329,6 +343,8 @@ pub(crate) fn open(
         ef_search,
         quant_mode,
         metric.as_deref(),
+        rescore,
+        oversample,
     )?;
 
     let store = options

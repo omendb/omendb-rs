@@ -128,6 +128,11 @@ pub struct VectorStore {
     /// Override for segment capacity (vectors per segment before freezing).
     /// None = use SegmentConfig::DEFAULT_CAPACITY (100K).
     segment_capacity: Option<usize>,
+
+    /// SQ8 refiner: rescore candidates with original fp32 vectors (default: true when quantized)
+    rescore: bool,
+    /// SQ8 refiner: candidate oversample multiplier (default: 3.0)
+    oversample: f32,
 }
 
 /// Default maximum tokens per multi-vector document.
@@ -157,6 +162,8 @@ impl VectorStore {
             sparse_index: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
+            rescore: false,
+            oversample: 3.0,
         }
     }
 
@@ -336,14 +343,33 @@ impl VectorStore {
             );
         }
 
-        search::knn_search_core(
+        let (search_k, needs_rescore) = if self.rescore && self.pending_quantization {
+            let oversampled = (k as f32 * self.oversample).ceil() as usize;
+            (oversampled.max(k), true)
+        } else {
+            (k, false)
+        };
+
+        let results = search::knn_search_core(
             &self.records,
             self.segments.as_ref(),
             &query.data,
-            k,
+            search_k,
             ef,
             self.distance_metric,
-        )
+        )?;
+
+        if needs_rescore {
+            Ok(search::rescore_results(
+                &self.records,
+                results,
+                &query.data,
+                k,
+                self.distance_metric,
+            ))
+        } else {
+            Ok(results)
+        }
     }
 
     /// K-nearest neighbors search with metadata filtering
