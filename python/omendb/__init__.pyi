@@ -780,17 +780,17 @@ class VectorDatabase:
 
 def open(
     path: str,
-    dimensions: int,
+    dimensions: int = 0,
     m: int | None = None,
     ef_construction: int | None = None,
     ef_search: int | None = None,
     quantization: bool | Literal["sq8", "scalar"] | None = None,
-    rescore: bool | None = None,
-    oversample: float | None = None,
     metric: Literal["l2", "euclidean", "cosine", "dot", "ip"] | None = None,
     multi_vector: bool | MultiVectorConfig | None = None,
     config: dict[str, Any] | None = None,
     embedding_fn: Callable[[list[str]], list[list[float]]] | None = None,
+    rescore: bool | None = None,
+    oversample: float | None = None,
 ) -> VectorDatabase:
     """Open or create a vector database.
 
