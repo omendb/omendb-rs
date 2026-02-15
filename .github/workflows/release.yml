@@ -745,12 +745,10 @@ jobs:
   tag-release:
     needs:
       [verify, publish-crates, publish-crates-ffi, publish-pypi, publish-npm]
-    if: >
-      ${{ !inputs.dry-run &&
-          needs.publish-crates.result == 'success' &&
-          needs.publish-crates-ffi.result == 'success' &&
-          (needs.publish-pypi.result == 'success' || needs.publish-pypi.result == 'skipped') &&
-          (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') }}
+    if: >-
+      !inputs.dry-run &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -778,4 +776,7 @@ jobs:
         run: |
           VERSION="v${{ needs.verify.outputs.version }}"
           echo "Creating release $VERSION"
-          gh release create "$VERSION"             --title "$VERSION"             --generate-notes             --latest
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            --latest
