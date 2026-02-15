@@ -113,9 +113,10 @@ impl VectorStore {
         }
 
         let mut merged_count = 0;
+        let mut merged_slots: Vec<(u32, String)> = Vec::new();
 
         // Merge records, skipping conflicts
-        for (_, record) in other.records.iter_live() {
+        for (slot, record) in other.records.iter_live() {
             let id = if let Some(prefix) = key_prefix {
                 format!("{prefix}{}", record.id)
             } else {
@@ -128,12 +129,27 @@ impl VectorStore {
             }
 
             // Insert into our RecordStore
-            self.records.upsert(
-                id,
-                record.vector.clone(),
-                record.metadata.clone(),
-            )?;
+            self.records
+                .upsert(id.clone(), record.vector.clone(), record.metadata.clone())?;
+            merged_slots.push((slot, id));
             merged_count += 1;
+        }
+
+        // Copy sparse vectors for merged IDs
+        if let Some(ref other_sparse) = other.sparse_index {
+            if !other_sparse.is_empty() {
+                if self.sparse_index.is_none() {
+                    self.sparse_index = Some(crate::vector::sparse::SparseIndex::new());
+                }
+                let self_sparse = self.sparse_index.as_mut().unwrap();
+                for (other_slot, id) in &merged_slots {
+                    if let Some(sv) = other_sparse.get(*other_slot) {
+                        if let Some(new_slot) = self.records.get_slot(id) {
+                            self_sparse.insert(new_slot, sv);
+                        }
+                    }
+                }
+            }
         }
 
         // Rebuild index after merge to ensure consistency

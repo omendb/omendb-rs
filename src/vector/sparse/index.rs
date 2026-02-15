@@ -93,6 +93,17 @@ impl SparseIndex {
         self.vectors.is_empty()
     }
 
+    /// Get the sparse vector for a given slot, if it exists.
+    #[must_use]
+    pub fn get(&self, slot: u32) -> Option<&SparseVector> {
+        self.vectors.get(&slot)
+    }
+
+    /// Iterate over all (slot, sparse_vector) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (u32, &SparseVector)> {
+        self.vectors.iter().map(|(&slot, vec)| (slot, vec))
+    }
+
     /// Insert a sparse vector at the given slot.
     ///
     /// If the slot already exists, the old vector is removed first (upsert).
@@ -112,6 +123,7 @@ impl SparseIndex {
 
         // Store original vector for future removal
         self.vectors.insert(slot, vector.clone());
+        self.len = self.vectors.len();
     }
 
     /// Remove a vector by slot ID.
@@ -137,6 +149,7 @@ impl SparseIndex {
             self.postings.remove(&dim);
         }
 
+        self.len = self.vectors.len();
         true
     }
 
@@ -247,18 +260,12 @@ impl SparseIndex {
             }
         }
         self.vectors = new_vectors;
+        self.len = self.vectors.len();
     }
 
     /// Serialize to bytes (postcard format).
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        // Sync len for serialization compatibility
-        let serializable = SparseIndex {
-            postings: self.postings.clone(),
-            vectors: self.vectors.clone(),
-            len: self.vectors.len(),
-        };
-        postcard::to_allocvec(&serializable)
-            .map_err(|e| anyhow::anyhow!("SparseIndex serialize: {e}"))
+        postcard::to_allocvec(self).map_err(|e| anyhow::anyhow!("SparseIndex serialize: {e}"))
     }
 
     /// Deserialize from bytes (postcard format).

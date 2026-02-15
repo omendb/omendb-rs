@@ -75,14 +75,14 @@ impl VectorStore {
                 );
             }
             let zero_vec: Vec<f32> = vec![];
-            let slot =
-                self.records
-                    .upsert(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
+            let slot = self
+                .records
+                .upsert(id.to_string(), zero_vec, Some(metadata.clone()))?;
             self.metadata_index.index_json(slot, &metadata);
 
             if let Some(ref mut storage) = self.storage {
                 let metadata_bytes = serde_json::to_vec(&metadata)?;
-                storage.wal_append_insert(id, &zero_vec, Some(&metadata_bytes))?;
+                storage.wal_append_insert(id, &[], Some(&metadata_bytes))?;
                 storage.wal_sync()?;
             }
             slot

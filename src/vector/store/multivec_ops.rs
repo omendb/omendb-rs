@@ -433,26 +433,6 @@ impl VectorStore {
     /// let tokens = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
     /// store.store("doc1", tokens, json!({})).unwrap();
     /// ```
-    /// Store vector or token embeddings with text content for hybrid search.
-    ///
-    /// Indexes the text for BM25 search and stores the vector/tokens.
-    /// Works for both regular and multi-vector stores.
-    ///
-    /// Requires text search to be enabled (`enable_text_search()`).
-    pub fn store_with_text<V: VectorInput>(
-        &mut self,
-        id: &str,
-        data: V,
-        text: &str,
-        metadata: JsonValue,
-    ) -> Result<()> {
-        let Some(ref mut text_index) = self.text_index else {
-            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
-        };
-        text_index.index_document(id, text)?;
-        self.store(id, data, metadata)
-    }
-
     pub fn store<V: VectorInput>(&mut self, id: &str, data: V, metadata: JsonValue) -> Result<()> {
         let data = data.into_vector_data();
 
@@ -481,6 +461,26 @@ impl VectorStore {
                 );
             }
         }
+    }
+
+    /// Store vector or token embeddings with text content for hybrid search.
+    ///
+    /// Indexes the text for BM25 search and stores the vector/tokens.
+    /// Works for both regular and multi-vector stores.
+    ///
+    /// Requires text search to be enabled (`enable_text_search()`).
+    pub fn store_with_text<V: VectorInput>(
+        &mut self,
+        id: &str,
+        data: V,
+        text: &str,
+        metadata: JsonValue,
+    ) -> Result<()> {
+        let Some(ref mut text_index) = self.text_index else {
+            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+        };
+        text_index.index_document(id, text)?;
+        self.store(id, data, metadata)
     }
 
     /// Internal helper for store() with multi-vector tokens.
@@ -645,9 +645,10 @@ impl VectorStore {
         }
 
         // Validate token dimensions before dispatching to any search path
-        let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Store not configured for multi-vector")
-        })?;
+        let encoder = self
+            .muvera_encoder
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Store not configured for multi-vector"))?;
         let token_dim = encoder.token_dimension();
         for (i, token) in query_tokens.iter().enumerate() {
             if token.len() != token_dim {
@@ -688,42 +689,38 @@ impl VectorStore {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
 
-        // Collect all live documents' tokens
-        let mut candidate_data: Vec<(u32, String, JsonValue, Vec<&[f32]>)> = Vec::new();
+        // Collect slot + tokens only (no id/metadata cloning)
+        let mut candidate_slots: Vec<u32> = Vec::new();
+        let mut candidate_tokens: Vec<Vec<&[f32]>> = Vec::new();
 
-        for (slot, record) in self.records.iter_live() {
+        for (slot, _record) in self.records.iter_live() {
             if let Some(doc_tokens) = multivec_storage.get_tokens(slot) {
-                candidate_data.push((
-                    slot,
-                    record.id.clone(),
-                    record.metadata.clone().unwrap_or(JsonValue::Null),
-                    doc_tokens,
-                ));
+                candidate_slots.push(slot);
+                candidate_tokens.push(doc_tokens);
             }
         }
 
-        if candidate_data.is_empty() {
+        if candidate_slots.is_empty() {
             return Ok(Vec::new());
         }
 
         // Compute MaxSim scores in parallel
-        let doc_tokens_refs: Vec<&Vec<&[f32]>> = candidate_data
-            .iter()
-            .map(|(_, _, _, tokens)| tokens)
-            .collect();
-
+        let doc_tokens_refs: Vec<&Vec<&[f32]>> = candidate_tokens.iter().collect();
         let maxsim_scores = super::super::muvera::maxsim_batch_par(query_tokens, &doc_tokens_refs);
 
         // Sort descending by MaxSim score, take top-k
         let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
+        // Resolve id/metadata only for final top-k results
         let results = scored
             .into_iter()
             .take(k)
-            .map(|(idx, score)| {
-                let (_, ref id, ref metadata, _) = candidate_data[idx];
-                SearchResult::new(id.clone(), score, metadata.clone())
+            .filter_map(|(idx, score)| {
+                let slot = candidate_slots[idx];
+                let record = self.records.get_by_slot(slot)?;
+                let metadata = record.metadata.clone().unwrap_or(JsonValue::Null);
+                Some(SearchResult::new(record.id.clone(), score, metadata))
             })
             .collect();
 
