@@ -216,16 +216,12 @@ impl MultiVecStorage {
         })
     }
 
-    /// Remap slots after RecordStore compaction.
+    /// Remap slots after RecordStore compaction, reclaiming orphaned token data.
     ///
     /// `old_to_new` maps old_slot -> new_slot for live records only.
-    /// Deleted slots (not in the map) have their offsets cleared.
-    ///
-    /// Note: This remaps the offset table but does not reclaim vector memory.
-    /// Orphaned vectors remain in storage until the next full rebuild.
+    /// Deleted slots are removed and their token vectors are freed.
     pub fn compact<S: BuildHasher>(&mut self, old_to_new: &std::collections::HashMap<u32, u32, S>) {
         if old_to_new.is_empty() {
-            // No live records - clear everything
             self.offsets.clear();
             self.vectors.clear();
             return;
@@ -233,15 +229,30 @@ impl MultiVecStorage {
 
         let max_new_slot = old_to_new.values().copied().max().unwrap_or(0) as usize;
         let old_offsets = std::mem::take(&mut self.offsets);
+        let old_vectors = std::mem::take(&mut self.vectors);
         let mut new_offsets = vec![(0u32, 0u16); max_new_slot + 1];
+        let mut new_vectors = Vec::new();
 
+        // Collect live slots sorted by new slot ID for sequential writes
+        let mut live: Vec<(u32, u32, u16)> = Vec::with_capacity(old_to_new.len());
         for (old_slot, &(start, count)) in old_offsets.iter().enumerate() {
             if let Some(&new_slot) = old_to_new.get(&(old_slot as u32)) {
-                new_offsets[new_slot as usize] = (start, count);
+                live.push((new_slot, start, count));
             }
+        }
+        live.sort_unstable_by_key(|&(new_slot, _, _)| new_slot);
+
+        // Copy live token data into compacted buffer
+        for (new_slot, old_start, count) in live {
+            let new_start = (new_vectors.len() / self.dim) as u32;
+            let src_begin = old_start as usize * self.dim;
+            let src_end = src_begin + count as usize * self.dim;
+            new_vectors.extend_from_slice(&old_vectors[src_begin..src_end]);
+            new_offsets[new_slot as usize] = (new_start, count);
         }
 
         self.offsets = new_offsets;
+        self.vectors = new_vectors;
     }
 }
 
@@ -342,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_remaps_slots() {
+    fn test_compact_remaps_slots_and_reclaims_memory() {
         let mut storage = MultiVecStorage::new(4);
 
         // Add 5 documents
@@ -358,6 +369,8 @@ mod tests {
         storage.add(&doc3).unwrap(); // slot 3
         storage.add(&doc4).unwrap(); // slot 4
 
+        assert_eq!(storage.total_tokens(), 5);
+
         // Simulate deleting slots 1 and 3 (keep 0, 2, 4)
         // After compaction: 0->0, 2->1, 4->2
         let mut old_to_new = std::collections::HashMap::new();
@@ -369,6 +382,9 @@ mod tests {
 
         // Verify remapped slots
         assert_eq!(storage.len(), 3);
+
+        // Verify orphaned token data was reclaimed
+        assert_eq!(storage.total_tokens(), 3);
 
         // New slot 0 should have doc0's tokens
         let tokens0: Vec<&[f32]> = storage.get(0).unwrap().collect();

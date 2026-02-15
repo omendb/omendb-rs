@@ -171,6 +171,11 @@ impl VectorStore {
     /// For segment-based storage, this merges all frozen segments into one
     /// for better search locality. Returns the number of vectors in the merged segment.
     pub fn optimize(&mut self) -> Result<usize> {
+        // Compact first if there are pending deletes to ensure consistent slot state
+        if self.records.deleted_count() > 0 {
+            self.compact()?;
+        }
+
         if let Some(ref mut segments) = self.segments {
             // Flush mutable segment first
             segments.flush().map_err(|e| anyhow::anyhow!("{e}"))?;
