@@ -599,4 +599,5 @@ impl VectorDatabase {
             })
             .collect()
     }
+
 }

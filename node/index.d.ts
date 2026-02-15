@@ -166,8 +166,14 @@ export declare class VectorDatabase {
    * @returns Number of nodes reordered
    */
   optimize(): number
-  /** Merge another database into this one. */
-  mergeFrom(other: VectorDatabase): number
+  /**
+   * Merge another database into this one.
+   *
+   * @param other - Source database to merge from
+   * @param keyPrefix - Optional prefix for all source IDs (e.g., "subdir/")
+   * @returns Number of vectors merged
+   */
+  mergeFrom(other: VectorDatabase, keyPrefix?: string | undefined | null): number
   /**
    * List all vector IDs (without loading vector data).
    *
@@ -282,6 +288,73 @@ export declare class VectorDatabase {
    * keeping the Node.js event loop free.
    */
   searchBatch(queries: Array<Array<number> | Float32Array>, k: number, ef?: number | undefined | null): Promise<Array<Array<SearchResult>>>
+  /**
+   * Enable sparse vector indexing for SPLADE-style retrieval.
+   *
+   * Called automatically by setSparse() and setHybridSparse().
+   * Call explicitly before sparseSearch() on an empty index.
+   */
+  enableSparse(): void
+  /** Check if sparse indexing is enabled. */
+  get hasSparse(): boolean
+  /**
+   * Insert or update a sparse vector.
+   *
+   * @param id - Unique identifier
+   * @param sparse - Sparse vector as {indices: number[], values: number[]} or {dim: weight}
+   * @param metadata - Optional metadata
+   *
+   * @example
+   * ```javascript
+   * db.setSparse("doc1", {indices: [10, 42], values: [0.5, 1.2]}, {title: "Hello"});
+   * db.setSparse("doc2", {"10": 0.5, "42": 1.2}, {title: "World"});
+   * ```
+   */
+  setSparse(id: string, sparse: { indices: number[]; values: number[] } | Record<string, number>, metadata?: Record<string, unknown> | undefined): void
+  /**
+   * Insert or update both dense and sparse vectors together.
+   *
+   * @param id - Unique identifier
+   * @param vector - Dense vector
+   * @param sparse - Sparse vector
+   * @param metadata - Optional metadata
+   */
+  setHybridSparse(id: string, vector: Array<number> | Float32Array, sparse: { indices: number[]; values: number[] } | Record<string, number>, metadata?: Record<string, unknown> | undefined): void
+  /**
+   * Search sparse vectors by dot product similarity.
+   *
+   * @param query - Sparse query vector
+   * @param k - Number of results
+   * @param options - Optional: {filter?}
+   * @returns Array of {id, score, metadata} sorted by score descending
+   *
+   * @example
+   * ```javascript
+   * const results = db.sparseSearch({indices: [10, 42], values: [1.0, 0.5]}, 5);
+   * const results = db.sparseSearch({"10": 1.0, "42": 0.5}, 5);
+   * ```
+   */
+  sparseSearch(query: { indices: number[]; values: number[] } | Record<string, number>, k: number, options?: { filter?: Record<string, unknown> } | undefined): Array<SparseSearchResult>
+  /**
+   * Hybrid dense + sparse search with Reciprocal Rank Fusion (RRF).
+   *
+   * @param queryVector - Dense query vector
+   * @param sparseQuery - Sparse query vector
+   * @param k - Number of results
+   * @param options - Optional: {alpha?, filter?}
+   * @returns Array of {id, score, metadata}
+   *
+   * @example
+   * ```javascript
+   * const results = db.hybridSparseSearch(
+   *   [1, 0, 0],
+   *   {indices: [10, 42], values: [1.0, 0.5]},
+   *   10,
+   *   { alpha: 0.5 }
+   * );
+   * ```
+   */
+  hybridSparseSearch(queryVector: Array<number> | Float32Array, sparseQuery: { indices: number[]; values: number[] } | Record<string, number>, k: number, options?: { alpha?: number; filter?: Record<string, unknown> } | undefined): Array<SparseSearchResult>
 }
 
 export interface GetResult {
@@ -366,6 +439,10 @@ export interface OpenOptions {
    * - false/null: Disabled (default, single-vector mode)
    */
   multiVector?: boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null } | null | undefined
+  /** SQ8 refiner: rescore with full precision (default: true when quantized) */
+  rescore?: boolean
+  /** Candidate multiplier for rescoring (default: 3.0) */
+  oversample?: number
 }
 
 export interface SearchResult {
@@ -389,6 +466,14 @@ export interface SetItem {
   text?: string
   /** Optional document for auto-embedding via embeddingFn */
   document?: string
+}
+
+/** Sparse search result returned from sparseSearch / hybridSparseSearch. */
+export interface SparseSearchResult {
+  id: string
+  /** Dot product score (higher = more similar) */
+  score: number
+  metadata: Record<string, unknown>
 }
 
 export interface StatsResult {

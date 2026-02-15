@@ -445,17 +445,23 @@ fn test_delete_batch_removes_sparse() {
 }
 
 #[test]
-fn test_set_sparse_rejects_new_id_with_dims() {
+fn test_set_sparse_new_id_with_dims_creates_placeholder() {
     let mut store = VectorStore::new(3);
 
-    // Trying to set_sparse for a new ID on a store with dims > 0 should fail
+    // set_sparse for a new ID on a store with dims > 0 creates a zero-filled placeholder
     let sparse = SparseVector::from_pairs(vec![(10, 0.5)]).unwrap();
-    let result = store.set_sparse("new_doc", sparse, serde_json::json!({}));
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("set_hybrid_sparse"));
+    store
+        .set_sparse("new_doc", sparse, serde_json::json!({}))
+        .unwrap();
+
+    assert!(store.has_sparse());
+    assert!(store.contains("new_doc"));
+
+    // Sparse search should find the doc
+    let query = SparseVector::from_pairs(vec![(10, 1.0)]).unwrap();
+    let results = store.sparse_search(&query, 10, None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "new_doc");
 }
 
 #[test]

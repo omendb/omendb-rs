@@ -65,24 +65,17 @@ impl VectorStore {
             }
             slot
         } else {
-            // New ID: create record slot
+            // New ID: create record slot with zero-filled placeholder vector
             let dims = self.dimensions();
-            if dims > 0 {
-                anyhow::bail!(
-                    "Cannot call set_sparse for new ID on a store with dims={dims}. \
-                     Use set_hybrid_sparse() to provide both dense and sparse vectors, \
-                     or use set() first to create the dense vector."
-                );
-            }
-            let zero_vec: Vec<f32> = vec![];
-            let slot = self
-                .records
-                .upsert(id.to_string(), zero_vec, Some(metadata.clone()))?;
+            let zero_vec = vec![0.0f32; dims];
+            let slot =
+                self.records
+                    .upsert(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
             self.metadata_index.index_json(slot, &metadata);
 
             if let Some(ref mut storage) = self.storage {
                 let metadata_bytes = serde_json::to_vec(&metadata)?;
-                storage.wal_append_insert(id, &[], Some(&metadata_bytes))?;
+                storage.wal_append_insert(id, &zero_vec, Some(&metadata_bytes))?;
                 storage.wal_sync()?;
             }
             slot

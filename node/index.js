@@ -337,6 +337,30 @@ class VectorDatabase {
 	compact() {
 		return this._native.compact();
 	}
+
+	enableSparse() {
+		return this._native.enableSparse();
+	}
+
+	get hasSparse() {
+		return this._native.hasSparse;
+	}
+
+	setSparse(id, sparse, metadata) {
+		return this._native.setSparse(id, sparse, metadata);
+	}
+
+	setHybridSparse(id, vector, sparse, metadata) {
+		return this._native.setHybridSparse(id, vector, sparse, metadata);
+	}
+
+	sparseSearch(query, k, options) {
+		return this._native.sparseSearch(query, k, options);
+	}
+
+	hybridSparseSearch(queryVector, sparseQuery, k, options) {
+		return this._native.hybridSparseSearch(queryVector, sparseQuery, k, options);
+	}
 }
 
 function open(path, options, embeddingFn) {
