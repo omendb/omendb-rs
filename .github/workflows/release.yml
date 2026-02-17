@@ -730,7 +730,6 @@ jobs:
         working-directory: node/wrapper
 
   # ============================================================================
-  # ============================================================================
   # STAGE 4: Tag and release
   # ============================================================================
 
@@ -745,13 +744,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Create git tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           VERSION="v${{ needs.verify.outputs.version }}"
-          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+          if git tag -l "$VERSION" | grep -q "$VERSION"; then
             echo "Tag $VERSION already exists"
             exit 0
           fi
@@ -773,6 +774,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="v${{ needs.verify.outputs.version }}"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists"
+            exit 0
+          fi
           echo "Creating release $VERSION"
           gh release create "$VERSION" \
             --title "$VERSION" \
