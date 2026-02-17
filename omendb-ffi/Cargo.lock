@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "omendb"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "omendb-ffi"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "omendb",
  "serde_json",
