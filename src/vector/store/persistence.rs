@@ -532,8 +532,8 @@ impl VectorStore {
             );
             storage.set_metric(self.distance_metric);
 
-            // Export data from RecordStore (single source of truth)
-            let vectors = self.records.export_vectors();
+            // Export data from RecordStore (single source of truth, zero-copy)
+            let vectors = self.records.export_vector_refs();
             let id_to_slot = self.records.export_id_to_slot();
             let deleted = self.records.export_deleted();
             let metadata = self.records.export_metadata();

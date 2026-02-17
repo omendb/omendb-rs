@@ -17,7 +17,10 @@ use memmap2::MmapMut;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+
+#[cfg(not(target_endian = "little"))]
+compile_error!("OmenFile raw vector I/O requires little-endian targets");
 use std::path::{Path, PathBuf};
 
 /// Configure OpenOptions for cross-platform compatibility.
@@ -605,6 +608,10 @@ impl OmenFile {
                     while snapshot.vectors.len() <= idx {
                         snapshot.vectors.push(None);
                     }
+                    // Skip deleted sentinels (length=0 + in deleted bitmap)
+                    if location.length == 0 && self.manifest.deleted.contains(idx as u32) {
+                        continue;
+                    }
                     let start = location.offset as usize;
                     let end = start + location.length as usize;
                     if end <= mmap.len() {
@@ -719,7 +726,7 @@ impl OmenFile {
     /// old file or the new file intact -- never a half-written file.
     pub fn checkpoint_from_snapshot(
         &mut self,
-        vectors: &[Option<Vec<f32>>],
+        vectors: &[Option<&[f32]>],
         id_to_slot: &HashMap<String, u32>,
         deleted: &[u32],
         metadata: &HashMap<u32, serde_json::Value>,
@@ -763,33 +770,48 @@ impl OmenFile {
         // Write header
         temp_file.write_all(&self.header.to_bytes())?;
 
-        // Write ALL vectors to temp file
-        let mut writer = SegmentWriter::new(&mut temp_file, HEADER_SIZE as u64);
-        let mut new_nodes: Vec<NodeLocation> = Vec::new();
+        // Write vectors to temp file (packed contiguously, skip deleted)
+        let vec_block_start = align_to_page(HEADER_SIZE) as u64;
+        let mut buf_writer = BufWriter::new(&mut temp_file);
+        buf_writer.seek(SeekFrom::Start(vec_block_start))?;
+        let mut current_offset = vec_block_start;
+        let mut new_nodes: Vec<NodeLocation> = Vec::with_capacity(vectors.len());
 
         for (idx, vec_opt) in vectors.iter().enumerate() {
-            let to_write = if deleted_set.contains(&(idx as u32)) {
-                vec![0.0f32; dim]
-            } else {
-                vec_opt.clone().unwrap_or_else(|| vec![0.0f32; dim])
-            };
-
-            writer.current_offset = align_to_page(writer.current_offset as usize) as u64;
-            writer.file.seek(SeekFrom::Start(writer.current_offset))?;
-            for &val in &to_write {
-                writer.file.write_all(&val.to_le_bytes())?;
+            if deleted_set.contains(&(idx as u32)) {
+                new_nodes.push(NodeLocation {
+                    offset: 0,
+                    length: 0,
+                    segment_type: SegmentType::Vectors,
+                });
+                continue;
             }
-
-            new_nodes.push(NodeLocation {
-                offset: writer.current_offset,
-                length: vec_size,
-                segment_type: SegmentType::Vectors,
-            });
-
-            writer.current_offset += vec_size as u64;
+            if let Some(data) = vec_opt {
+                // SAFETY: &[f32] → &[u8] is sound: f32 alignment ≥ u8,
+                // all targets are little-endian (matching f32::from_le_bytes on read).
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
+                };
+                buf_writer.write_all(bytes)?;
+                new_nodes.push(NodeLocation {
+                    offset: current_offset,
+                    length: vec_size,
+                    segment_type: SegmentType::Vectors,
+                });
+                current_offset += vec_size as u64;
+            } else {
+                new_nodes.push(NodeLocation {
+                    offset: 0,
+                    length: 0,
+                    segment_type: SegmentType::Vectors,
+                });
+            }
         }
+        buf_writer.flush()?;
+        drop(buf_writer);
 
         // Write HNSW index if provided
+        let mut writer = SegmentWriter::new(&mut temp_file, current_offset);
         if let Some(hnsw_data) = options.hnsw_bytes {
             let location = writer.write_aligned(hnsw_data, SegmentType::IndexMetadata)?;
             new_nodes.push(location);
@@ -1067,11 +1089,10 @@ mod tests {
         let mut db = OmenFile::create(&db_path, 3).unwrap();
 
         // Build snapshot data externally (simulating RecordStore)
-        let vectors: Vec<Option<Vec<f32>>> = vec![
-            Some(vec![1.0, 2.0, 3.0]),
-            Some(vec![4.0, 5.0, 6.0]),
-            Some(vec![7.0, 8.0, 9.0]),
-        ];
+        let v1 = vec![1.0f32, 2.0, 3.0];
+        let v2 = vec![4.0f32, 5.0, 6.0];
+        let v3 = vec![7.0f32, 8.0, 9.0];
+        let vectors: Vec<Option<&[f32]>> = vec![Some(&v1), Some(&v2), Some(&v3)];
         let mut id_to_slot: HashMap<String, u32> = HashMap::new();
         id_to_slot.insert("vec1".to_string(), 0);
         id_to_slot.insert("vec2".to_string(), 1);
@@ -1114,11 +1135,9 @@ mod tests {
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
 
-            let vectors: Vec<Option<Vec<f32>>> = vec![
-                Some(vec![1.0, 2.0, 3.0]),
-                Some(vec![4.0, 5.0, 6.0]),
-                None, // Slot 2 deleted
-            ];
+            let v1 = vec![1.0f32, 2.0, 3.0];
+            let v2 = vec![4.0f32, 5.0, 6.0];
+            let vectors: Vec<Option<&[f32]>> = vec![Some(v1.as_slice()), Some(v2.as_slice()), None];
             let mut id_to_slot: HashMap<String, u32> = HashMap::new();
             id_to_slot.insert("vec1".to_string(), 0);
             id_to_slot.insert("vec2".to_string(), 1);
@@ -1183,7 +1202,8 @@ mod tests {
             assert!(db.wal_len() > 0);
 
             // Checkpoint should clear WAL (leaves 1 checkpoint marker)
-            let vectors: Vec<Option<Vec<f32>>> = vec![Some(vec![1.0, 2.0, 3.0])];
+            let v1 = vec![1.0f32, 2.0, 3.0];
+            let vectors: Vec<Option<&[f32]>> = vec![Some(&v1)];
             let mut id_to_slot: HashMap<String, u32> = HashMap::new();
             id_to_slot.insert("vec1".to_string(), 0);
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
@@ -1219,7 +1239,8 @@ mod tests {
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
 
-            let vectors: Vec<Option<Vec<f32>>> = vec![Some(vec![1.0, 2.0, 3.0])];
+            let v1 = vec![1.0f32, 2.0, 3.0];
+            let vectors: Vec<Option<&[f32]>> = vec![Some(&v1)];
             let mut id_to_slot: HashMap<String, u32> = HashMap::new();
             id_to_slot.insert("vec1".to_string(), 0);
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
@@ -1263,7 +1284,7 @@ mod tests {
             assert_eq!(db.dimensions(), 128);
 
             // Checkpoint to persist header changes
-            let vectors: Vec<Option<Vec<f32>>> = vec![];
+            let vectors: Vec<Option<&[f32]>> = vec![];
             let id_to_slot: HashMap<String, u32> = HashMap::new();
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
 
@@ -1295,7 +1316,8 @@ mod tests {
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
 
-            let vectors: Vec<Option<Vec<f32>>> = vec![Some(vec![1.0, 2.0, 3.0])];
+            let v1 = vec![1.0f32, 2.0, 3.0];
+            let vectors: Vec<Option<&[f32]>> = vec![Some(&v1)];
             let mut id_to_slot: HashMap<String, u32> = HashMap::new();
             id_to_slot.insert("vec1".to_string(), 0);
             let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
@@ -1353,6 +1375,84 @@ mod tests {
                         "Expected CRC error, got: {e}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_skips_deleted_compact_file() {
+        use std::collections::HashMap;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_deleted_skip.omen");
+
+        let vecs: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32; 3]).collect();
+
+        // Checkpoint with all 10 vectors live
+        {
+            let mut db = OmenFile::create(&db_path, 3).unwrap();
+            let vectors: Vec<Option<&[f32]>> = vecs.iter().map(|v| Some(v.as_slice())).collect();
+            let mut id_to_slot: HashMap<String, u32> = HashMap::new();
+            for i in 0..10u32 {
+                id_to_slot.insert(format!("vec{i}"), i);
+            }
+            let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
+            db.checkpoint_from_snapshot(
+                &vectors,
+                &id_to_slot,
+                &[],
+                &metadata,
+                CheckpointOptions::default(),
+            )
+            .unwrap();
+        }
+        let file_size_all = std::fs::metadata(&db_path).unwrap().len();
+
+        // Checkpoint with 50% deleted
+        {
+            let mut db = OmenFile::open(&db_path).unwrap();
+            let vectors: Vec<Option<&[f32]>> = vecs.iter().map(|v| Some(v.as_slice())).collect();
+            let mut id_to_slot: HashMap<String, u32> = HashMap::new();
+            for i in (0..10u32).step_by(2) {
+                id_to_slot.insert(format!("vec{i}"), i);
+            }
+            let deleted: Vec<u32> = (0..10u32).filter(|i| i % 2 != 0).collect();
+            let metadata: HashMap<u32, serde_json::Value> = HashMap::new();
+            db.checkpoint_from_snapshot(
+                &vectors,
+                &id_to_slot,
+                &deleted,
+                &metadata,
+                CheckpointOptions::default(),
+            )
+            .unwrap();
+        }
+        let file_size_half_deleted = std::fs::metadata(&db_path).unwrap().len();
+
+        // 50% deleted should produce smaller file
+        assert!(
+            file_size_half_deleted < file_size_all,
+            "File with 50% deleted ({file_size_half_deleted}) should be smaller \
+             than all live ({file_size_all})"
+        );
+
+        // Verify roundtrip: deleted slots are None, live slots correct
+        {
+            let db = OmenFile::open(&db_path).unwrap();
+            assert_eq!(db.len(), 5);
+            let snapshot = db.load_persisted_snapshot().unwrap();
+
+            // Live (even) slots have correct vectors
+            for i in (0..10u32).step_by(2) {
+                let vec_data = snapshot.vectors.get(i as usize).and_then(|v| v.as_ref());
+                assert!(vec_data.is_some(), "Live slot {i} should have a vector");
+                assert_eq!(vec_data.unwrap(), &vec![i as f32; 3]);
+            }
+
+            // Deleted (odd) slots have no vector data
+            for i in (1..10u32).step_by(2) {
+                let vec_data = snapshot.vectors.get(i as usize).and_then(|v| v.as_ref());
+                assert!(vec_data.is_none(), "Deleted slot {i} should be None");
             }
         }
     }

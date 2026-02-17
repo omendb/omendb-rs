@@ -264,11 +264,11 @@ impl RecordStore {
         Ok(())
     }
 
-    /// Export vectors for checkpoint (slot-indexed)
-    pub fn export_vectors(&self) -> Vec<Option<Vec<f32>>> {
+    /// Export vector references for checkpoint (zero-copy)
+    pub fn export_vector_refs(&self) -> Vec<Option<&[f32]>> {
         self.slots
             .iter()
-            .map(|opt| opt.as_ref().map(|r| r.vector.clone()))
+            .map(|opt| opt.as_ref().map(|r| r.vector.as_slice()))
             .collect()
     }
 
