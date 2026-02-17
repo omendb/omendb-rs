@@ -107,7 +107,9 @@ impl VectorStore {
             RecordStore::from_snapshot(slots, deleted_bitmap.clone(), dimensions as u32);
 
         // Replay WAL entries directly into RecordStore (Phase 5 architecture)
+        // Track slots modified by WAL replay for partial segment rebuild
         let wal_entries = storage.pending_wal_entries()?;
+        let mut wal_modified_slots: Vec<u32> = Vec::new();
         for entry in wal_entries {
             if !entry.verify() {
                 tracing::warn!(
@@ -147,7 +149,8 @@ impl VectorStore {
                             });
 
                         // Upsert into RecordStore
-                        records.upsert(insert_data.id, insert_data.vector, metadata)?;
+                        let slot = records.upsert(insert_data.id, insert_data.vector, metadata)?;
+                        wal_modified_slots.push(slot);
                     }
                 }
                 WalEntryType::DeleteNode => {
@@ -189,6 +192,33 @@ impl VectorStore {
                             total_vectors = active_count,
                             generation = stored_generation,
                             "Loaded persisted segments (skipped rebuild)"
+                        );
+                        Some(loaded)
+                    }
+                    Ok(mut loaded)
+                        if loaded.generation() == stored_generation
+                            && loaded.len() < active_count
+                            && !wal_modified_slots.is_empty() =>
+                    {
+                        // Partial rebuild: keep frozen segments, insert WAL delta
+                        let delta = active_count - loaded.len();
+                        let mut inserted = 0;
+                        for &slot in &wal_modified_slots {
+                            if let Some(record) = records.get_by_slot(slot) {
+                                if !records.deleted_bitmap().contains(slot) {
+                                    loaded.insert_with_slot(&record.vector, slot).map_err(|e| {
+                                        anyhow::anyhow!("Failed to insert WAL delta vector: {e}")
+                                    })?;
+                                    inserted += 1;
+                                }
+                            }
+                        }
+                        tracing::info!(
+                            frozen_segments = loaded.frozen_count(),
+                            frozen_vectors = loaded.len() - inserted,
+                            wal_delta = delta,
+                            inserted,
+                            "Partial rebuild: kept frozen segments, added WAL delta"
                         );
                         Some(loaded)
                     }
