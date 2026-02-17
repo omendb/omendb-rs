@@ -176,6 +176,9 @@ impl NodeStorage {
     }
 
     /// Construct storage from memory-mapped file (for mmap loading)
+    ///
+    /// # Panics
+    /// Panics if parameters are inconsistent with mmap size.
     #[cfg(feature = "mmap")]
     #[allow(clippy::too_many_arguments)]
     pub fn from_mmap(
@@ -188,6 +191,24 @@ impl NodeStorage {
         dimensions: usize,
         max_neighbors: usize,
     ) -> Self {
+        // Same validation as from_bytes — prevents SIGBUS from corrupted files
+        let expected_size = len.checked_mul(node_size);
+        assert!(
+            expected_size.is_some() && expected_size.unwrap() <= mmap.len(),
+            "Invalid segment: len={} * node_size={} exceeds mmap.len()={}",
+            len,
+            node_size,
+            mmap.len()
+        );
+        assert!(
+            node_size == 0 || neighbors_offset < node_size,
+            "Invalid segment: neighbors_offset {neighbors_offset} >= node_size {node_size}",
+        );
+        assert!(
+            node_size == 0 || vector_offset < node_size,
+            "Invalid segment: vector_offset {vector_offset} >= node_size {node_size}",
+        );
+
         let max_neighbors_upper = max_neighbors / 2;
 
         Self {

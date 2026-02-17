@@ -356,6 +356,13 @@ impl FrozenSegment {
             HNSWError::Storage(format!("Failed to rename segment file: {e}"))
         })?;
 
+        // Fsync parent directory to ensure rename is durable (required on Linux ext4/btrfs)
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+
         let elapsed = start.elapsed();
         info!(
             duration_ms = elapsed.as_millis(),
@@ -380,13 +387,20 @@ impl FrozenSegment {
 
         let header = parse_header(&mut reader)?;
 
-        // Read storage data (with overflow check)
+        // Read storage data (with overflow and upper-bound checks)
         let data_size = header.len.checked_mul(header.node_size).ok_or_else(|| {
             HNSWError::Storage(format!(
                 "Segment data size overflow: len={} * node_size={}",
                 header.len, header.node_size
             ))
         })?;
+        // Prevent OOM from corrupted files declaring unreasonable sizes
+        const MAX_SEGMENT_DATA_SIZE: usize = 4 << 30; // 4GB
+        if data_size > MAX_SEGMENT_DATA_SIZE {
+            return Err(HNSWError::Storage(format!(
+                "Segment data too large: {data_size} bytes (max {MAX_SEGMENT_DATA_SIZE})"
+            )));
+        }
         let mut data = vec![0u8; data_size];
         if data_size > 0 {
             reader.read_exact(&mut data)?;

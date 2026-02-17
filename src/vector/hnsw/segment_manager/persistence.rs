@@ -115,20 +115,31 @@ impl SegmentManager {
         let segment_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
         let manifest = self.build_manifest(&segment_ids);
 
-        // Write manifest
+        // Write manifest atomically (tmp + fsync + rename)
         let manifest_path = dir.join("manifest.json");
+        let manifest_tmp = dir.join("manifest.json.tmp");
         let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| {
             crate::vector::hnsw::error::HNSWError::Storage(format!(
                 "Failed to serialize manifest: {e}"
             ))
         })?;
-        let mut file = std::fs::File::create(&manifest_path).map_err(|e| {
+        let mut file = std::fs::File::create(&manifest_tmp).map_err(|e| {
             crate::vector::hnsw::error::HNSWError::Storage(format!(
-                "Failed to create manifest file: {e}"
+                "Failed to create manifest temp file: {e}"
             ))
         })?;
         file.write_all(&manifest_bytes)?;
-        file.sync_all()?; // Ensure manifest is durably written before segments
+        file.sync_all()?;
+        fs::rename(&manifest_tmp, &manifest_path).map_err(|e| {
+            let _ = fs::remove_file(&manifest_tmp);
+            crate::vector::hnsw::error::HNSWError::Storage(format!(
+                "Failed to rename manifest file: {e}"
+            ))
+        })?;
+        // Fsync parent directory to ensure rename is durable
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
 
         // Save each frozen segment (skip if file already exists — frozen segments are immutable)
         for segment in &self.frozen {
@@ -147,7 +158,7 @@ impl SegmentManager {
                 let name_str = name.to_string_lossy();
 
                 // Clean stale temp files from interrupted saves
-                if name_str.ends_with(".bin.tmp") {
+                if name_str.ends_with(".bin.tmp") || name_str.ends_with(".json.tmp") {
                     let _ = fs::remove_file(entry.path());
                     tracing::debug!(file = %name_str, "Removed stale temp file");
                     continue;

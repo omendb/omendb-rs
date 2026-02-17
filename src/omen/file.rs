@@ -787,6 +787,12 @@ impl OmenFile {
                 continue;
             }
             if let Some(data) = vec_opt {
+                if data.len() != dim {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Vector {} has {} dims, expected {dim}", idx, data.len()),
+                    ));
+                }
                 // SAFETY: &[f32] → &[u8] is sound: f32 alignment ≥ u8,
                 // all targets are little-endian (matching f32::from_le_bytes on read).
                 let bytes = unsafe {
