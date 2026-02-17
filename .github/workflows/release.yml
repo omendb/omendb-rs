@@ -519,19 +519,7 @@ jobs:
           exit $status
 
   publish-crates-ffi:
-    needs:
-      [
-        verify,
-        validate,
-        test-python,
-        test-node,
-        examples,
-        build-python-linux,
-        build-python-macos,
-        build-python-windows,
-        build-python-sdist,
-        build-node,
-      ]
+    needs: [publish-crates]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
@@ -541,6 +529,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Wait for crates.io index propagation
+        run: |
+          echo "Waiting 30s for crates.io index to propagate..."
+          sleep 30
       - name: Get crates.io token via OIDC
         uses: rust-lang/crates-io-auth-action@v1
         id: crates-io-auth

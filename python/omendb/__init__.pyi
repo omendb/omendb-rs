@@ -45,6 +45,7 @@ class HybridSearchResultWithSubscores(TypedDict):
 
 class SparseSearchResult(TypedDict):
     """Single sparse search result."""
+
     id: str
     score: float
     metadata: dict[str, Any]
