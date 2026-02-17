@@ -130,11 +130,13 @@ impl SegmentManager {
         file.write_all(&manifest_bytes)?;
         file.sync_all()?; // Ensure manifest is durably written before segments
 
-        // Save each frozen segment
+        // Save each frozen segment (skip if file already exists — frozen segments are immutable)
         for segment in &self.frozen {
             let segment_path = dir.join(format!("segment_{}.bin", segment.id()));
-            segment.save(&segment_path)?;
-            debug!(segment_id = segment.id(), path = %segment_path.display(), "Saved segment");
+            if !segment_path.exists() {
+                segment.save(&segment_path)?;
+                debug!(segment_id = segment.id(), path = %segment_path.display(), "Saved segment");
+            }
         }
 
         // Clean orphan segment files from previous saves
@@ -173,6 +175,71 @@ impl SegmentManager {
             "Segment manager saved"
         );
         Ok(())
+    }
+
+    /// Load segment manager with memory-mapped frozen segments
+    ///
+    /// Like `load()`, but uses `FrozenSegment::load_mmap()` for zero-copy access.
+    /// Segment data stays on disk and is paged in on demand by the OS.
+    #[cfg(feature = "mmap")]
+    pub fn load_mmap<P: AsRef<std::path::Path>>(dir: P) -> Result<Self> {
+        use std::fs;
+
+        let dir = dir.as_ref();
+        info!(path = %dir.display(), "Loading segment manager (mmap)");
+
+        let manifest_path = dir.join("manifest.json");
+        let manifest_bytes = fs::read(&manifest_path).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!("Failed to read manifest: {e}"))
+        })?;
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).map_err(|e| {
+            crate::vector::hnsw::error::HNSWError::Storage(format!("Failed to parse manifest: {e}"))
+        })?;
+
+        let config = Self::parse_config(&manifest);
+        let merge_policy = Self::parse_merge_policy(&manifest);
+        let next_segment_id = manifest["next_segment_id"].as_u64().unwrap_or(0);
+        let generation = manifest["generation"].as_u64().unwrap_or(0);
+
+        let segment_ids: Vec<u64> = manifest["segment_ids"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(serde_json::Value::as_u64).collect())
+            .unwrap_or_default();
+
+        let mut frozen = Vec::with_capacity(segment_ids.len());
+        for seg_id in segment_ids {
+            let segment_path = dir.join(format!("segment_{seg_id}.bin"));
+            let segment = FrozenSegment::load_mmap(&segment_path)?;
+            frozen.push(Arc::new(segment));
+            debug!(segment_id = seg_id, "Loaded segment (mmap)");
+        }
+
+        let mutable = if config.quantization {
+            MutableSegment::new_quantized(config.dimensions, config.params, config.distance_fn)?
+        } else {
+            MutableSegment::with_capacity(
+                config.dimensions,
+                config.params,
+                config.distance_fn,
+                config.segment_capacity,
+            )?
+        };
+
+        let total_vectors: usize = frozen.iter().map(|s| s.len()).sum();
+        info!(
+            segments = frozen.len(),
+            total_vectors, "Segment manager loaded (mmap)"
+        );
+
+        Ok(Self {
+            config,
+            mutable,
+            frozen,
+            next_segment_id,
+            merge_policy,
+            last_merge_stats: None,
+            generation,
+        })
     }
 
     /// Load segment manager from a directory

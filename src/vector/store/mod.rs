@@ -138,6 +138,10 @@ pub struct VectorStore {
 /// Default maximum tokens per multi-vector document.
 const DEFAULT_MAX_TOKENS: usize = 512;
 
+/// WAL auto-checkpoint threshold (entries). Triggers flush when exceeded to prevent
+/// unbounded WAL growth. 10K entries ≈ 50-100MB depending on vector dimensions.
+const WAL_AUTO_CHECKPOINT_ENTRIES: u64 = 10_000;
+
 impl VectorStore {
     /// Create base VectorStore with default field values.
     ///

@@ -298,7 +298,7 @@ impl HNSWIndex {
                     continue;
                 }
 
-                if use_batch && num_neighbors > 1 {
+                if use_batch {
                     // Batch path: compute all distances at once (SQ8 mode)
                     // Ensure buffer is large enough
                     if batch_distances.len() < num_neighbors {
@@ -532,11 +532,11 @@ impl HNSWIndex {
         // Adaptive threshold: bypass ACORN-1 if filter is too permissive
         // Or for small/medium graphs where brute force is fast enough
         // ACORN-1 becomes effective at larger scales (1000+ vectors)
-        const SELECTIVITY_THRESHOLD: f32 = 0.6;
+        const SELECTIVITY_THRESHOLD: f32 = 0.4;
         const SMALL_GRAPH_SIZE: usize = 1000;
 
         if selectivity > SELECTIVITY_THRESHOLD || self.len() <= SMALL_GRAPH_SIZE {
-            // Filter is broad (>60% match) or graph is small: use standard search + post-filter
+            // Filter is broad (>40% match) or graph is small: use standard search + post-filter
             debug!(selectivity, "Using post-filter path");
 
             // For very selective filters, we may need to search the entire graph
@@ -569,7 +569,7 @@ impl HNSWIndex {
             return Ok(all_results);
         }
 
-        // Filter is selective (<60% match): use ACORN-1
+        // Filter is selective (<40% match): use ACORN-1
         debug!(selectivity, "Using ACORN-1 filtered search");
 
         let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;

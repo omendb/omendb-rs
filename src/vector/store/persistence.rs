@@ -175,7 +175,11 @@ impl VectorStore {
 
             // Fast path: load persisted segments if available and up-to-date
             let loaded = if segments_dir.exists() {
-                match SegmentManager::load(&segments_dir) {
+                #[cfg(feature = "mmap")]
+                let load_result = SegmentManager::load_mmap(&segments_dir);
+                #[cfg(not(feature = "mmap"))]
+                let load_result = SegmentManager::load(&segments_dir);
+                match load_result {
                     Ok(loaded)
                         if loaded.len() == active_count
                             && loaded.generation() == stored_generation =>

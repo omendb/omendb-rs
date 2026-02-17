@@ -96,10 +96,17 @@ impl VectorStore {
         self.metadata_index.index_json(slot as u32, &metadata);
 
         // WAL for crash durability
-        if let Some(ref mut storage) = self.storage {
+        let needs_checkpoint = if let Some(ref mut storage) = self.storage {
             let metadata_bytes = serde_json::to_vec(&metadata)?;
             storage.wal_append_insert(&id, &vector.data, Some(&metadata_bytes))?;
             storage.wal_sync()?;
+            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
+        } else {
+            false
+        };
+
+        if needs_checkpoint {
+            self.flush()?;
         }
 
         Ok(slot)
@@ -268,8 +275,15 @@ impl VectorStore {
         }
 
         // Sync WAL once at end of batch for durability
-        if let Some(ref mut storage) = self.storage {
+        let needs_checkpoint = if let Some(ref mut storage) = self.storage {
             storage.wal_sync()?;
+            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
+        } else {
+            false
+        };
+
+        if needs_checkpoint {
+            self.flush()?;
         }
 
         Ok(result_indices)
