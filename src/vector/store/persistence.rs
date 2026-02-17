@@ -551,6 +551,19 @@ impl VectorStore {
     /// Commits vector/metadata changes and HNSW index to `.omen` storage.
     /// Uses RecordStore as single source of truth (no duplicated state in OmenFile).
     pub fn flush(&mut self) -> Result<()> {
+        self.flush_internal(false)
+    }
+
+    /// Checkpoint WAL without persisting segments.
+    ///
+    /// Used by auto-checkpoint to bound WAL size without the cost of segment
+    /// persistence (4 fewer fsyncs). On unclean shutdown, segments are rebuilt
+    /// from the checkpointed .omen data on next open.
+    pub(crate) fn checkpoint_wal(&mut self) -> Result<()> {
+        self.flush_internal(true)
+    }
+
+    fn flush_internal(&mut self, skip_segments: bool) -> Result<()> {
         if let Some(ref mut storage) = self.storage {
             // Ensure dimensions are set in storage header
             let dims = self.records.dimensions();
@@ -621,16 +634,18 @@ impl VectorStore {
             )?;
         }
 
-        // Persist HNSW segments alongside OmenFile checkpoint
-        if let Some(ref mut segments) = self.segments {
-            if let Some(ref path) = self.storage_path {
-                let segments_dir = segments_dir_for(path);
-                segments
-                    .save(&segments_dir)
-                    .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
-                // Store generation for staleness detection on next open
-                if let Some(ref mut storage) = self.storage {
-                    storage.put_config("segments_generation", segments.generation())?;
+        if !skip_segments {
+            // Persist HNSW segments alongside OmenFile checkpoint
+            if let Some(ref mut segments) = self.segments {
+                if let Some(ref path) = self.storage_path {
+                    let segments_dir = segments_dir_for(path);
+                    segments
+                        .save(&segments_dir)
+                        .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
+                    // Store generation for staleness detection on next open
+                    if let Some(ref mut storage) = self.storage {
+                        storage.put_config("segments_generation", segments.generation())?;
+                    }
                 }
             }
         }

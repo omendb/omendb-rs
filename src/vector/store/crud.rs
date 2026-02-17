@@ -106,7 +106,7 @@ impl VectorStore {
         };
 
         if needs_checkpoint {
-            self.flush()?;
+            self.checkpoint_wal()?;
         }
 
         Ok(slot)
@@ -283,7 +283,7 @@ impl VectorStore {
         };
 
         if needs_checkpoint {
-            self.flush()?;
+            self.checkpoint_wal()?;
         }
 
         Ok(result_indices)
