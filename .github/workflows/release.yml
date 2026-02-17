@@ -738,6 +738,7 @@ jobs:
     needs:
       [verify, publish-crates, publish-crates-ffi, publish-pypi, publish-npm]
     if: >-
+      always() &&
       !inputs.dry-run &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled')
@@ -757,7 +758,10 @@ jobs:
 
   create-release:
     needs: [verify, tag-release]
-    if: ${{ !inputs.dry-run }}
+    if: >-
+      always() &&
+      !inputs.dry-run &&
+      needs.tag-release.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
