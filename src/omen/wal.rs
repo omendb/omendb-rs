@@ -217,10 +217,39 @@ impl WalEntry {
     }
 }
 
+/// WAL metadata for O(1) open (stored in .wal.meta file)
+///
+/// 24 bytes: [checkpoint_offset: u64] [max_timestamp: u64] [entry_count: u64]
+const WAL_META_SIZE: usize = 24;
+
+fn meta_path(wal_path: &std::path::Path) -> std::path::PathBuf {
+    let mut p = wal_path.as_os_str().to_os_string();
+    p.push(".meta");
+    std::path::PathBuf::from(p)
+}
+
+fn read_wal_meta(path: &std::path::Path) -> Option<(u64, u64, u64)> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() != WAL_META_SIZE {
+        return None;
+    }
+    let checkpoint_offset = u64::from_le_bytes(data[0..8].try_into().ok()?);
+    let max_timestamp = u64::from_le_bytes(data[8..16].try_into().ok()?);
+    let entry_count = u64::from_le_bytes(data[16..24].try_into().ok()?);
+    Some((checkpoint_offset, max_timestamp, entry_count))
+}
+
+fn write_wal_meta(path: &std::path::Path, max_timestamp: u64, entry_count: u64) {
+    let mut buf = [0u8; WAL_META_SIZE];
+    buf[0..8].copy_from_slice(&0u64.to_le_bytes()); // checkpoint always at 0 after truncate
+    buf[8..16].copy_from_slice(&max_timestamp.to_le_bytes());
+    buf[16..24].copy_from_slice(&entry_count.to_le_bytes());
+    let _ = std::fs::write(path, buf);
+}
+
 /// Write-Ahead Log
 pub struct Wal {
     file: BufWriter<File>,
-    #[allow(dead_code)]
     path: std::path::PathBuf,
     next_timestamp: u64,
     entry_count: u64,
@@ -252,9 +281,14 @@ impl Wal {
             entry_count: 0,
         };
 
-        // Scan to find last timestamp
         if file_len > 0 {
-            wal.scan_for_timestamp()?;
+            // Try O(1) open via meta file, fall back to full scan
+            if let Some((_cp_offset, max_ts, count)) = read_wal_meta(&meta_path(&wal.path)) {
+                wal.next_timestamp = max_ts + 1;
+                wal.entry_count = count;
+            } else {
+                wal.scan_for_timestamp()?;
+            }
         }
 
         Ok(wal)
@@ -327,7 +361,15 @@ impl Wal {
     /// Flush WAL to disk
     pub fn sync(&mut self) -> io::Result<()> {
         self.file.flush()?;
-        self.file.get_mut().sync_all()
+        self.file.get_mut().sync_all()?;
+        // Update meta file for O(1) open on next restart
+        let ts = if self.next_timestamp > 0 {
+            self.next_timestamp - 1
+        } else {
+            0
+        };
+        write_wal_meta(&meta_path(&self.path), ts, self.entry_count);
+        Ok(())
     }
 
     /// Read all entries after last checkpoint
@@ -417,6 +459,7 @@ impl Wal {
         self.file.get_mut().seek(SeekFrom::Start(0))?;
         self.next_timestamp = 0;
         self.entry_count = 0;
+        write_wal_meta(&meta_path(&self.path), 0, 0);
         Ok(())
     }
 }
