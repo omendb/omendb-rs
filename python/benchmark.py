@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """OmenDB Performance Benchmark
 
-Uses SIFT-10K (real embeddings) for the default 128D benchmark.
-Falls back to random vectors for non-standard dimensions/scales.
+Uses real SIFT embeddings for all benchmarks. Skips scales with no dataset.
 
 Usage:
     python benchmark.py              # SIFT-10K benchmark (10K, 128D)
     python benchmark.py --full       # Multi-dimension (random vectors)
-    python benchmark.py --scale      # Scale tests (random vectors)
+    python benchmark.py --scale      # Scale tests (SIFT data only, skips missing sizes)
     python benchmark.py --output results.json  # Save to JSON
 """
 
@@ -24,14 +23,25 @@ import numpy as np
 
 import omendb
 
-SIFT_10K_PATH = Path(__file__).parent.parent / "benchmarks" / "data" / "sift-10k.npz"
+SIFT_DATA_DIR = Path(__file__).parent.parent / "benchmarks" / "data"
+
+# Map vector count → dataset filename. Add sift-100k.npz / sift-1m.npz when available.
+SIFT_DATASETS: dict[int, str] = {
+    10_000: "sift-10k.npz",
+    100_000: "sift-100k.npz",
+    1_000_000: "sift-1m.npz",
+}
 
 
-def load_sift_10k() -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """Load SIFT-10K dataset. Returns (vectors, queries, ground_truth) or None."""
-    if not SIFT_10K_PATH.exists():
+def load_sift(n_vectors: int) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load SIFT dataset for given size. Returns (vectors, queries, ground_truth) or None."""
+    filename = SIFT_DATASETS.get(n_vectors)
+    if filename is None:
         return None
-    data = np.load(SIFT_10K_PATH)
+    path = SIFT_DATA_DIR / filename
+    if not path.exists():
+        return None
+    data = np.load(path)
     return data["vectors"], data["queries"], data["ground_truth"]
 
 
@@ -610,12 +620,19 @@ def main():
         result = run_hybrid_benchmark(args.vectors, args.dimension)
         all_results.append(result)
     elif args.scale:
-        # Scale tests at 128D (quick way to test large datasets)
+        # Scale tests at 128D using real SIFT embeddings
         print("\n" + "=" * 60)
-        print("Scale Test (128D)")
+        print("Scale Test (128D, SIFT)")
         print("=" * 60)
-        for n in [10000, 50000, 100000]:
-            result = run_benchmark(n, 128)
+        for n in [10_000, 100_000, 1_000_000]:
+            sift_data = load_sift(n)
+            if sift_data is None:
+                filename = SIFT_DATASETS.get(n, f"sift-{n // 1000}k.npz")
+                print(
+                    f"\nSkipping {n:,} vectors — no SIFT dataset found (add benchmarks/data/{filename})"
+                )
+                continue
+            result = run_benchmark(n, 128, sift_data=sift_data)
             all_results.append(result)
     elif args.full:
         # Multiple dimensions
@@ -638,12 +655,9 @@ def main():
         result = run_hybrid_benchmark(10000, 384)
         all_results.append(result)
     else:
-        # Use SIFT-10K for default 128D/10K benchmark
         sift_data = None
-        if args.dimension == 128 and args.vectors == 10000 and args.quantize == 0:
-            sift_data = load_sift_10k()
-            if sift_data is None:
-                print("SIFT-10K not found, falling back to random vectors")
+        if args.dimension == 128 and args.quantize == 0:
+            sift_data = load_sift(args.vectors)
 
         result = run_benchmark(
             args.vectors,
