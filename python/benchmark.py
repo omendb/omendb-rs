@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """OmenDB Performance Benchmark
 
-Measures build throughput, search QPS, and filtered search performance
-at multiple embedding dimensions and dataset sizes.
+Uses SIFT-10K (real embeddings) for the default 128D benchmark.
+Falls back to random vectors for non-standard dimensions/scales.
 
 Usage:
-    python benchmark.py              # Quick benchmark (10K vectors)
-    python benchmark.py --full       # Full benchmark (10K, 50K, 100K)
-    python benchmark.py --dimension 1536  # Specific dimension
+    python benchmark.py              # SIFT-10K benchmark (10K, 128D)
+    python benchmark.py --full       # Multi-dimension (random vectors)
+    python benchmark.py --scale      # Scale tests (random vectors)
     python benchmark.py --output results.json  # Save to JSON
 """
 
@@ -23,6 +23,16 @@ from pathlib import Path
 import numpy as np
 
 import omendb
+
+SIFT_10K_PATH = Path(__file__).parent.parent / "benchmarks" / "data" / "sift-10k.npz"
+
+
+def load_sift_10k() -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load SIFT-10K dataset. Returns (vectors, queries, ground_truth) or None."""
+    if not SIFT_10K_PATH.exists():
+        return None
+    data = np.load(SIFT_10K_PATH)
+    return data["vectors"], data["queries"], data["ground_truth"]
 
 
 def get_benchmark_metadata() -> dict:
@@ -292,17 +302,26 @@ def compute_ground_truth(vectors: np.ndarray, queries: np.ndarray, k: int = 10) 
     return ground_truth
 
 
-def benchmark_recall(db, vectors: np.ndarray, queries: np.ndarray, k: int = 10) -> dict:
-    """Measure recall@k against brute-force ground truth."""
-    n_queries = min(100, len(queries))  # Limit for speed
+def benchmark_recall(
+    db,
+    vectors: np.ndarray,
+    queries: np.ndarray,
+    k: int = 10,
+    ground_truth: np.ndarray | None = None,
+) -> dict:
+    """Measure recall@k against ground truth (pre-computed or brute-force)."""
+    n_queries = min(100, len(queries))
     queries_subset = queries[:n_queries]
-    ground_truth = compute_ground_truth(vectors, queries_subset, k)
+    if ground_truth is None:
+        ground_truth = compute_ground_truth(vectors, queries_subset, k)
+    else:
+        ground_truth = ground_truth[:n_queries]
 
     total_recall = 0.0
     for i, q in enumerate(queries_subset):
         results = db.search(q.tolist(), k=k)
         returned_ids = {int(r["id"][1:]) for r in results}  # "d123" -> 123
-        true_ids = set(ground_truth[i])
+        true_ids = set(ground_truth[i][:k].tolist())
         recall = len(returned_ids & true_ids) / k
         total_recall += recall
 
@@ -310,15 +329,27 @@ def benchmark_recall(db, vectors: np.ndarray, queries: np.ndarray, k: int = 10) 
     return {"recall_at_k": avg_recall, "k": k, "n_queries": n_queries}
 
 
-def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits: int = 0):
+def run_benchmark(
+    n_vectors: int,
+    dim: int,
+    n_queries: int = 1000,
+    quantize_bits: int = 0,
+    sift_data: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+):
     """Run full benchmark suite for given parameters."""
     mode = f"SQ{quantize_bits}" if quantize_bits > 0 else "f32"
+    dataset = "SIFT" if sift_data else "random"
     print(f"\n{'=' * 60}")
-    print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode})")
+    print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode}, {dataset})")
     print(f"{'=' * 60}")
 
-    vectors = generate_vectors(n_vectors, dim)
-    queries = generate_vectors(n_queries, dim, seed=999)
+    if sift_data:
+        vectors, queries, ground_truth = sift_data
+        n_queries = len(queries)
+    else:
+        vectors = generate_vectors(n_vectors, dim)
+        queries = generate_vectors(n_queries, dim, seed=999)
+        ground_truth = None
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Build
@@ -334,7 +365,7 @@ def run_benchmark(n_vectors: int, dim: int, n_queries: int = 1000, quantize_bits
         )
 
         # Recall measurement (graph quality indicator)
-        recall = benchmark_recall(db, vectors, queries)
+        recall = benchmark_recall(db, vectors, queries, ground_truth=ground_truth)
         print(f"Recall:   {recall['recall_at_k']:>10.1%} @{recall['k']}")
 
         # Filtered search (10% selectivity)
@@ -607,8 +638,19 @@ def main():
         result = run_hybrid_benchmark(10000, 384)
         all_results.append(result)
     else:
+        # Use SIFT-10K for default 128D/10K benchmark
+        sift_data = None
+        if args.dimension == 128 and args.vectors == 10000 and args.quantize == 0:
+            sift_data = load_sift_10k()
+            if sift_data is None:
+                print("SIFT-10K not found, falling back to random vectors")
+
         result = run_benchmark(
-            args.vectors, args.dimension, n_queries=args.queries, quantize_bits=args.quantize
+            args.vectors,
+            args.dimension,
+            n_queries=args.queries,
+            quantize_bits=args.quantize,
+            sift_data=sift_data,
         )
         all_results.append(result)
 
