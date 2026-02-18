@@ -119,7 +119,7 @@ impl VectorStore {
     /// Batch set vectors (insert or update multiple vectors at once)
     ///
     /// This is the recommended method for bulk operations.
-    /// Uses parallel HNSW construction for new indexes.
+    /// Uses parallel HNSW construction for both new and existing indexes.
     ///
     /// # Ordering Guarantee
     ///
