@@ -277,13 +277,6 @@ impl VectorStore {
                     segments.next_segment_id += 1;
                     let frozen = Arc::new(batch_segment.freeze());
                     segments.frozen.push(frozen);
-
-                    // Auto-merge if policy triggers
-                    if segments.should_merge() {
-                        segments
-                            .merge_all_frozen()
-                            .map_err(|e| anyhow::anyhow!("Segment merge failed: {e}"))?;
-                    }
                 }
 
                 // WAL for crash durability
