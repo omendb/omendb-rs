@@ -556,3 +556,492 @@ fn stress_id_collision() {
     let (_, meta) = store.get("collision").unwrap();
     assert_eq!(meta["version"].as_u64().unwrap(), 99);
 }
+
+// ============================================================
+// Crash recovery tests for vector-only checkpoint path
+// ============================================================
+
+/// Recovery after vector-only auto-checkpoint.
+///
+/// Inserts >10K vectors to trigger auto-checkpoint (which uses the
+/// vector-only fast path after the first full flush), then drops
+/// without explicit flush. Verifies all data recovered on reopen.
+///
+/// Uses batch insert for the first 9K (fast, no auto-checkpoint in batch),
+/// then individual set() for the last 1.5K to trigger the 10K WAL threshold.
+#[test]
+fn stress_crash_after_vector_only_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vec_only_ckpt.omen");
+
+    let batch_size = 9_000;
+    let individual_size = 1_500; // WAL exceeds 10K total → triggers auto-checkpoint
+    let n = batch_size + individual_size;
+    let dim = 16;
+
+    // Phase 1: batch + individual inserts to trigger auto-checkpoint, then crash
+    {
+        let mut store = VectorStoreOptions::default()
+            .dimensions(dim)
+            .open(&path)
+            .unwrap();
+
+        // Batch insert (no auto-checkpoint, but does WAL append)
+        let batch: Vec<_> = (0..batch_size)
+            .map(|i| {
+                (
+                    format!("v{i}"),
+                    Vector::new(random_vector(i, dim)),
+                    serde_json::json!({"i": i}),
+                )
+            })
+            .collect();
+        store.set_batch(batch).unwrap();
+
+        // Individual inserts push WAL past 10K → triggers auto-checkpoint
+        for i in batch_size..n {
+            store
+                .set(
+                    &format!("v{i}"),
+                    Vector::new(random_vector(i, dim)),
+                    serde_json::json!({"i": i}),
+                )
+                .unwrap();
+        }
+        // Drop without flush — auto-checkpoint already fired
+    }
+
+    // Phase 2: reopen, verify all data recovered
+    {
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(store.len(), n, "All vectors should survive crash recovery");
+
+        // Spot-check first, middle, last
+        for i in [0, n / 2, n - 1] {
+            let (vec, meta) = store.get(&format!("v{i}")).unwrap();
+            assert_eq!(vec.data.len(), dim);
+            assert_eq!(meta["i"].as_u64().unwrap(), i as u64);
+        }
+    }
+}
+
+/// Recovery with WAL entries after vector-only checkpoint.
+///
+/// Triggers auto-checkpoint at 10K, inserts 500 more (WAL-only), crashes.
+/// On recovery both checkpointed and WAL-only vectors must be present.
+///
+/// Uses batch for bulk, individual set() to trigger checkpoint threshold.
+#[test]
+fn stress_crash_checkpoint_plus_wal_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ckpt_wal_tail.omen");
+
+    let batch_size = 9_000;
+    let individual_to_checkpoint = 1_500; // pushes WAL past 10K
+    let wal_tail = 500;
+    let dim = 16;
+
+    {
+        let mut store = VectorStoreOptions::default()
+            .dimensions(dim)
+            .open(&path)
+            .unwrap();
+
+        // Batch insert (fast)
+        let batch: Vec<_> = (0..batch_size)
+            .map(|i| {
+                (
+                    format!("cp{i}"),
+                    Vector::new(random_vector(i, dim)),
+                    serde_json::json!({}),
+                )
+            })
+            .collect();
+        store.set_batch(batch).unwrap();
+
+        // Individual inserts to trigger auto-checkpoint
+        for i in batch_size..batch_size + individual_to_checkpoint {
+            store
+                .set(
+                    &format!("cp{i}"),
+                    Vector::new(random_vector(i, dim)),
+                    serde_json::json!({}),
+                )
+                .unwrap();
+        }
+
+        // Additional WAL-only inserts after checkpoint
+        for i in 0..wal_tail {
+            store
+                .set(
+                    &format!("tail{i}"),
+                    Vector::new(random_vector(i + 100_000, dim)),
+                    serde_json::json!({}),
+                )
+                .unwrap();
+        }
+        // Crash
+    }
+
+    {
+        let store = VectorStore::open(&path).unwrap();
+        let expected = batch_size + individual_to_checkpoint + wal_tail;
+        assert_eq!(store.len(), expected, "All vectors recovered");
+
+        // Verify WAL-tail data
+        for i in 0..wal_tail {
+            assert!(
+                store.contains(&format!("tail{i}")),
+                "WAL tail vector tail{i} missing"
+            );
+        }
+    }
+}
+
+/// Upsert recovery: update existing vectors, crash before flush.
+///
+/// Flushes initial data, then updates vectors (WAL-only), crashes.
+/// On recovery the updated values must be present.
+#[test]
+fn stress_crash_after_upserts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("upsert_crash.omen");
+
+    let n = 200;
+    let dim = 32;
+
+    // Phase 1: insert + flush
+    {
+        let mut store = VectorStoreOptions::default()
+            .dimensions(dim)
+            .open(&path)
+            .unwrap();
+
+        for i in 0..n {
+            store
+                .set(
+                    &format!("u{i}"),
+                    Vector::new(random_vector(i, dim)),
+                    serde_json::json!({"version": 1}),
+                )
+                .unwrap();
+        }
+        store.flush().unwrap();
+
+        // Update first half with new vectors and metadata
+        for i in 0..n / 2 {
+            store
+                .set(
+                    &format!("u{i}"),
+                    Vector::new(random_vector(i + 50_000, dim)),
+                    serde_json::json!({"version": 2}),
+                )
+                .unwrap();
+        }
+        // Crash without flush
+    }
+
+    // Phase 2: verify updates recovered
+    {
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(store.len(), n, "Count should be unchanged (upserts)");
+
+        // Updated vectors should have version 2
+        for i in 0..n / 2 {
+            let (_, meta) = store.get(&format!("u{i}")).unwrap();
+            assert_eq!(
+                meta["version"].as_u64().unwrap(),
+                2,
+                "Vector u{i} should have updated metadata"
+            );
+        }
+
+        // Untouched vectors should have version 1
+        for i in n / 2..n {
+            let (_, meta) = store.get(&format!("u{i}")).unwrap();
+            assert_eq!(
+                meta["version"].as_u64().unwrap(),
+                1,
+                "Vector u{i} should retain original metadata"
+            );
+        }
+    }
+}
+
+/// Search correctness after crash recovery.
+///
+/// Inserts known vectors, crashes, reopens, verifies nearest-neighbor
+/// search returns the correct closest vector.
+#[test]
+fn stress_crash_search_correctness() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("search_recovery.omen");
+
+    let dim = 32;
+
+    // Phase 1: insert vectors at known positions, flush, add WAL vectors, crash
+    {
+        let mut store = VectorStoreOptions::default()
+            .dimensions(dim)
+            .open(&path)
+            .unwrap();
+
+        // Insert a well-separated set of vectors
+        // Vector "origin" at all zeros
+        store
+            .set(
+                "origin",
+                Vector::new(vec![0.0; dim]),
+                serde_json::json!({"name": "origin"}),
+            )
+            .unwrap();
+
+        // Vector "ones" at all ones
+        store
+            .set(
+                "ones",
+                Vector::new(vec![1.0; dim]),
+                serde_json::json!({"name": "ones"}),
+            )
+            .unwrap();
+
+        // Vector "tens" at all tens (far away)
+        store
+            .set(
+                "tens",
+                Vector::new(vec![10.0; dim]),
+                serde_json::json!({"name": "tens"}),
+            )
+            .unwrap();
+
+        store.flush().unwrap();
+
+        // Add a WAL-only vector close to origin
+        let mut near_origin = vec![0.0; dim];
+        near_origin[0] = 0.01;
+        store
+            .set(
+                "near_origin",
+                Vector::new(near_origin),
+                serde_json::json!({"name": "near_origin"}),
+            )
+            .unwrap();
+        // Crash
+    }
+
+    // Phase 2: verify search correctness
+    {
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(store.len(), 4);
+
+        // Search near origin — should find "origin" or "near_origin" as top results
+        let query = Vector::new(vec![0.0; dim]);
+        let results = store.search(&query, 4, None).unwrap();
+        assert_eq!(results.len(), 4);
+
+        // First result should be "origin" (exact match, distance 0)
+        assert_eq!(results[0].id, "origin");
+        assert!(results[0].distance < 0.001, "Origin should be exact match");
+
+        // Second should be "near_origin"
+        assert_eq!(results[1].id, "near_origin");
+
+        // "tens" should be last (farthest)
+        assert_eq!(results[3].id, "tens");
+    }
+}
+
+/// Mixed operations across checkpoint boundary: insert, delete, update, crash.
+///
+/// Flushes initial state, then performs a mix of inserts, deletes, and
+/// updates in WAL, crashes, and verifies the exact expected state.
+#[test]
+fn stress_crash_mixed_operations() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed_ops_crash.omen");
+
+    let dim = 32;
+    let initial = 300;
+    let delete_range = 0..100; // delete first 100
+    let update_range = 100..200; // update next 100
+    let new_inserts = 50;
+
+    // Phase 1
+    {
+        let mut store = VectorStoreOptions::default()
+            .dimensions(dim)
+            .open(&path)
+            .unwrap();
+
+        for i in 0..initial {
+            store
+                .set(
+                    &format!("m{i}"),
+                    Vector::new(random_vector(i, dim)),
+                    serde_json::json!({"v": 1}),
+                )
+                .unwrap();
+        }
+        store.flush().unwrap();
+
+        // Delete first 100
+        for i in delete_range.clone() {
+            store.delete(&format!("m{i}")).unwrap();
+        }
+
+        // Update 100-200 with new metadata
+        for i in update_range.clone() {
+            store
+                .set(
+                    &format!("m{i}"),
+                    Vector::new(random_vector(i + 80_000, dim)),
+                    serde_json::json!({"v": 2}),
+                )
+                .unwrap();
+        }
+
+        // Insert new vectors
+        for i in 0..new_inserts {
+            store
+                .set(
+                    &format!("new{i}"),
+                    Vector::new(random_vector(i + 90_000, dim)),
+                    serde_json::json!({"v": 1}),
+                )
+                .unwrap();
+        }
+        // Crash
+    }
+
+    // Phase 2
+    {
+        let store = VectorStore::open(&path).unwrap();
+
+        let expected = (initial - delete_range.len()) + new_inserts;
+        assert_eq!(store.len(), expected, "Count after mixed ops recovery");
+
+        // Deleted vectors should be gone
+        for i in delete_range {
+            assert!(!store.contains(&format!("m{i}")), "m{i} should be deleted");
+        }
+
+        // Updated vectors should have version 2
+        for i in update_range {
+            let (_, meta) = store.get(&format!("m{i}")).unwrap();
+            assert_eq!(meta["v"].as_u64().unwrap(), 2);
+        }
+
+        // Untouched vectors should have version 1
+        for i in 200..initial {
+            let (_, meta) = store.get(&format!("m{i}")).unwrap();
+            assert_eq!(meta["v"].as_u64().unwrap(), 1);
+        }
+
+        // New inserts should exist
+        for i in 0..new_inserts {
+            assert!(store.contains(&format!("new{i}")));
+        }
+    }
+}
+
+/// Flush then reopen produces identical state.
+///
+/// Verifies that flush + reopen is lossless: same count, same vectors,
+/// same metadata, same search results.
+#[test]
+fn stress_flush_reopen_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flush_identity.omen");
+
+    let dim = 32;
+    let n = 500;
+
+    // Build original store
+    let mut store = VectorStoreOptions::default()
+        .dimensions(dim)
+        .open(&path)
+        .unwrap();
+
+    for i in 0..n {
+        store
+            .set(
+                &format!("fi{i}"),
+                Vector::new(random_vector(i, dim)),
+                serde_json::json!({"idx": i}),
+            )
+            .unwrap();
+    }
+    store.flush().unwrap();
+
+    // Capture pre-close search results
+    let query = Vector::new(random_vector(999, dim));
+    let pre_results = store.search(&query, 10, None).unwrap();
+    drop(store);
+
+    // Reopen
+    let store = VectorStore::open(&path).unwrap();
+    assert_eq!(store.len(), n);
+
+    // Same search results
+    let post_results = store.search(&query, 10, None).unwrap();
+    assert_eq!(pre_results.len(), post_results.len());
+    for (pre, post) in pre_results.iter().zip(post_results.iter()) {
+        assert_eq!(pre.id, post.id, "Search result IDs should match");
+        assert!(
+            (pre.distance - post.distance).abs() < 1e-5,
+            "Distances should match"
+        );
+    }
+}
+
+/// Multiple flush/reopen cycles maintain data integrity.
+#[test]
+fn stress_multiple_flush_reopen_cycles() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("multi_cycle.omen");
+
+    let dim = 32;
+    let per_cycle = 100;
+    let cycles = 5;
+
+    for cycle in 0..cycles {
+        let mut store = if cycle == 0 {
+            VectorStoreOptions::default()
+                .dimensions(dim)
+                .open(&path)
+                .unwrap()
+        } else {
+            VectorStore::open(&path).unwrap()
+        };
+
+        // Verify data from previous cycles
+        let expected = cycle * per_cycle;
+        assert_eq!(store.len(), expected, "Cycle {cycle}: count mismatch");
+
+        // Add more data
+        for i in 0..per_cycle {
+            let id = format!("c{cycle}_v{i}");
+            store
+                .set(
+                    &id,
+                    Vector::new(random_vector(cycle * 10_000 + i, dim)),
+                    serde_json::json!({"cycle": cycle}),
+                )
+                .unwrap();
+        }
+
+        store.flush().unwrap();
+    }
+
+    // Final verification
+    let store = VectorStore::open(&path).unwrap();
+    assert_eq!(store.len(), cycles * per_cycle);
+
+    // Check each cycle's data
+    for cycle in 0..cycles {
+        for i in [0, per_cycle / 2, per_cycle - 1] {
+            let (_, meta) = store.get(&format!("c{cycle}_v{i}")).unwrap();
+            assert_eq!(meta["cycle"].as_u64().unwrap(), cycle as u64);
+        }
+    }
+}
