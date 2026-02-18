@@ -1,5 +1,9 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::Value as JsonValue;
+
+use crate::vector::hnsw::{HNSWIndex, MutableSegment};
 
 use super::helpers;
 use super::VectorStore;
@@ -230,7 +234,7 @@ impl VectorStore {
 
                 result_indices.extend(slots.iter().map(|&s| s as usize));
             } else {
-                // Existing index - validate dimensions and insert one by one
+                // Existing index - validate dimensions
                 let expected_dims = self.dimensions();
                 for (i, (_, vector, _)) in inserts.iter().enumerate() {
                     if vector.dim() != expected_dims {
@@ -243,7 +247,7 @@ impl VectorStore {
                     }
                 }
 
-                // Insert into RecordStore and index
+                // Insert into RecordStore to get slots
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in &inserts {
                     let slot = self.records.set(
@@ -253,12 +257,32 @@ impl VectorStore {
                     )?;
                     slots.push(slot);
                     self.metadata_index.index_json(slot, metadata);
+                }
 
-                    // Insert into segments
-                    if let Some(ref mut segments) = self.segments {
+                // Build HNSW index in parallel for this batch
+                let config = self.segment_config(expected_dims);
+                let batch_index = HNSWIndex::build_parallel(
+                    config.dimensions,
+                    config.params,
+                    config.distance_fn,
+                    config.quantization,
+                    vectors_data,
+                )
+                .map_err(|e| anyhow::anyhow!("Batch parallel build failed: {e}"))?;
+
+                // Wrap as segment with global slot mapping, freeze, add to manager
+                if let Some(ref mut segments) = self.segments {
+                    let mut batch_segment = MutableSegment::from_index(batch_index, &slots);
+                    batch_segment.set_id(segments.next_segment_id);
+                    segments.next_segment_id += 1;
+                    let frozen = Arc::new(batch_segment.freeze());
+                    segments.frozen.push(frozen);
+
+                    // Auto-merge if policy triggers
+                    if segments.should_merge() {
                         segments
-                            .insert_with_slot(&vector.data, slot)
-                            .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+                            .merge_all_frozen()
+                            .map_err(|e| anyhow::anyhow!("Segment merge failed: {e}"))?;
                     }
                 }
 
