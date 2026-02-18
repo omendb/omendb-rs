@@ -3,11 +3,11 @@
 //! Provides automatic and manual merging of frozen segments using
 //! the IGTM (Iterative Greedy Tree Merging) algorithm.
 
-use super::SegmentManager;
+use super::{SegmentConfig, SegmentManager};
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::{MergeConfig, MergeStats};
-use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment};
+use crate::vector::hnsw::segment::FrozenSegment;
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -155,12 +155,11 @@ impl SegmentManager {
         false
     }
 
-    /// Collect all (vector, slot) pairs from frozen segments
-    pub(super) fn collect_vectors_and_slots(
-        segments: &[Arc<FrozenSegment>],
-    ) -> Vec<(Vec<f32>, u32)> {
+    /// Collect vectors and slots from frozen segments into separate vecs
+    fn collect_from_segments(segments: &[Arc<FrozenSegment>]) -> (Vec<Vec<f32>>, Vec<u32>) {
         let total_len: usize = segments.iter().map(|s| s.len()).sum();
-        let mut all_vectors = Vec::with_capacity(total_len);
+        let mut vectors = Vec::with_capacity(total_len);
+        let mut slots = Vec::with_capacity(total_len);
 
         for frozen_arc in segments {
             let frozen = frozen_arc.as_ref();
@@ -170,63 +169,83 @@ impl SegmentManager {
 
             let storage = frozen.storage();
             for id in 0..frozen.len() as u32 {
-                let vector = storage.get_vector_ref(id).to_vec();
-                let slot = storage.slot(id);
-                all_vectors.push((vector, slot));
+                vectors.push(storage.get_vector_ref(id).to_vec());
+                slots.push(storage.slot(id));
             }
         }
 
-        all_vectors
+        (vectors, slots)
     }
 
-    /// Insert vectors into index, tracking slots. Returns (slots, duration) on success.
-    pub(super) fn insert_vectors_with_slots(
-        index: &mut HNSWIndex,
-        vectors: &[(Vec<f32>, u32)],
-    ) -> Result<(Vec<u32>, std::time::Duration)> {
-        let mut collected_slots = Vec::with_capacity(vectors.len());
-        let insert_start = std::time::Instant::now();
+    /// Build a merged HNSWIndex via parallel construction, then remap slots
+    fn build_merged_index(
+        config: &SegmentConfig,
+        vectors: Vec<Vec<f32>>,
+        slots: &[u32],
+    ) -> Result<(HNSWIndex, std::time::Duration)> {
+        let start = std::time::Instant::now();
 
-        for (vector, slot) in vectors {
-            index.insert(vector)?;
-            collected_slots.push(*slot);
-        }
+        let mut index = HNSWIndex::build_parallel(
+            config.dimensions,
+            config.params,
+            config.distance_fn,
+            config.quantization,
+            vectors,
+        )?;
+        index.remap_slots(slots);
 
-        Ok((collected_slots, insert_start.elapsed()))
+        Ok((index, start.elapsed()))
     }
 
-    /// Create a frozen segment from merged index with slots
-    pub(super) fn create_merged_segment(
+    /// Create a frozen segment directly from an HNSWIndex (no MutableSegment roundtrip)
+    pub(super) fn create_merged_segment(&mut self, index: HNSWIndex) -> Arc<FrozenSegment> {
+        let segment = FrozenSegment::from_parts(
+            self.next_segment_id,
+            index.entry_point,
+            *index.params(),
+            index.distance_fn,
+            index.storage,
+        );
+        self.next_segment_id += 1;
+        Arc::new(segment)
+    }
+
+    /// Finish a merge: add merged segment, record stats, log
+    fn finish_merge(
         &mut self,
         index: HNSWIndex,
-        slots: &[u32],
-    ) -> Arc<FrozenSegment> {
-        let mut mutable = MutableSegment::from_index(index, slots);
-        mutable.set_id(self.next_segment_id);
-        self.next_segment_id += 1;
-        Arc::new(mutable.freeze())
-    }
-
-    /// Build MergeStats from merge operation
-    pub(super) fn build_merge_stats(
         vectors_merged: usize,
-        insert_duration: std::time::Duration,
+        build_duration: std::time::Duration,
     ) -> MergeStats {
-        MergeStats {
+        if !index.is_empty() {
+            let frozen = self.create_merged_segment(index);
+            self.frozen.push(frozen);
+        }
+
+        let stats = MergeStats {
             vectors_merged,
             join_set_size: 0,
             join_set_duration: std::time::Duration::ZERO,
-            join_set_insert_duration: insert_duration,
+            join_set_insert_duration: build_duration,
             remaining_insert_duration: std::time::Duration::ZERO,
-            total_duration: insert_duration,
+            total_duration: build_duration,
             fast_path_inserts: vectors_merged,
             fallback_inserts: 0,
-        }
+        };
+
+        info!(
+            total_vectors = stats.vectors_merged,
+            total_duration_ms = stats.total_duration.as_millis(),
+            "Segment merge complete"
+        );
+
+        self.last_merge_stats = Some(stats.clone());
+        stats
     }
 
     /// Merge all frozen segments into a single new frozen segment
     ///
-    /// The result is a single frozen segment replacing all previous frozen segments.
+    /// Uses parallel HNSW construction for the merged index.
     /// Returns merge statistics if any segments were merged.
     pub fn merge_all_frozen(&mut self) -> Result<Option<MergeStats>> {
         if self.frozen.len() < 2 {
@@ -239,55 +258,30 @@ impl SegmentManager {
             "Starting segment merge"
         );
 
-        // Take ownership of segments (will restore on failure)
         let segments_to_merge = std::mem::take(&mut self.frozen);
-
-        // Collect vectors and slots from all segments
-        let all_vectors = Self::collect_vectors_and_slots(&segments_to_merge);
-        if all_vectors.is_empty() {
+        let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
+        if vectors.is_empty() {
             self.frozen = segments_to_merge;
             return Ok(None);
         }
 
-        // Build merged index
-        let mut merged_index = HNSWIndex::new(
-            self.config.dimensions,
-            self.config.params,
-            self.config.distance_fn,
-            self.config.quantization,
-        )?;
+        let vectors_merged = vectors.len();
+        let (index, build_duration) = match Self::build_merged_index(&self.config, vectors, &slots)
+        {
+            Ok(result) => result,
+            Err(e) => {
+                self.frozen = segments_to_merge;
+                return Err(e);
+            }
+        };
 
-        // Insert all vectors with slot tracking
-        let (collected_slots, insert_duration) =
-            match Self::insert_vectors_with_slots(&mut merged_index, &all_vectors) {
-                Ok(result) => result,
-                Err(e) => {
-                    self.frozen = segments_to_merge;
-                    return Err(e);
-                }
-            };
-
-        let vectors_merged = all_vectors.len();
         debug!(
             vectors_merged,
-            duration_ms = insert_duration.as_millis(),
+            duration_ms = build_duration.as_millis(),
             "Merged frozen segments"
         );
 
-        // Create merged segment and stats
-        if !merged_index.is_empty() {
-            let frozen = self.create_merged_segment(merged_index, &collected_slots);
-            self.frozen.push(frozen);
-        }
-
-        let stats = Self::build_merge_stats(vectors_merged, insert_duration);
-        info!(
-            total_vectors = stats.vectors_merged,
-            total_duration_ms = stats.total_duration.as_millis(),
-            "Segment merge complete"
-        );
-
-        self.last_merge_stats = Some(stats.clone());
+        let stats = self.finish_merge(index, vectors_merged, build_duration);
         Ok(Some(stats))
     }
 
@@ -344,42 +338,26 @@ impl SegmentManager {
         }
         segments_to_merge.reverse();
 
-        // Collect vectors and slots from selected segments
-        let all_vectors = Self::collect_vectors_and_slots(&segments_to_merge);
-        if all_vectors.is_empty() {
+        let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
+        if vectors.is_empty() {
             return Ok(None);
         }
 
-        // Build merged index
-        let mut merged_index = HNSWIndex::new(
-            self.config.dimensions,
-            self.config.params,
-            self.config.distance_fn,
-            self.config.quantization,
-        )?;
-
-        // Insert all vectors with slot tracking
-        let (collected_slots, insert_duration) =
-            match Self::insert_vectors_with_slots(&mut merged_index, &all_vectors) {
-                Ok(result) => result,
-                Err(e) => {
-                    // Restore segments on failure (best-effort)
-                    for (i, seg) in segments_to_merge.into_iter().enumerate() {
-                        let insert_idx = indices[i].min(self.frozen.len());
-                        self.frozen.insert(insert_idx, seg);
-                    }
-                    return Err(e);
+        let vectors_merged = vectors.len();
+        let (index, build_duration) = match Self::build_merged_index(&self.config, vectors, &slots)
+        {
+            Ok(result) => result,
+            Err(e) => {
+                // Restore segments on failure (best-effort)
+                for (i, seg) in segments_to_merge.into_iter().enumerate() {
+                    let insert_idx = indices[i].min(self.frozen.len());
+                    self.frozen.insert(insert_idx, seg);
                 }
-            };
+                return Err(e);
+            }
+        };
 
-        // Create merged segment and stats
-        if !merged_index.is_empty() {
-            let frozen = self.create_merged_segment(merged_index, &collected_slots);
-            self.frozen.push(frozen);
-        }
-
-        let stats = Self::build_merge_stats(all_vectors.len(), insert_duration);
-        self.last_merge_stats = Some(stats.clone());
+        let stats = self.finish_merge(index, vectors_merged, build_duration);
         Ok(Some(stats))
     }
 }
