@@ -570,13 +570,28 @@ impl VectorStore {
         self.flush_internal(false)
     }
 
-    /// Checkpoint WAL without persisting segments.
+    /// Auto-checkpoint: persist dirty vectors without full manifest rewrite.
     ///
-    /// Used by auto-checkpoint to bound WAL size without the cost of segment
-    /// persistence (4 fewer fsyncs). On unclean shutdown, segments are rebuilt
-    /// from the checkpointed .omen data on next open.
+    /// When .vecs exists, writes only dirty vector slots and syncs WAL — skipping
+    /// the expensive manifest rewrite. On crash, WAL replay recovers IDs/metadata.
+    /// Falls back to full flush on the first checkpoint (creates .vecs + manifest).
     pub(crate) fn checkpoint_wal(&mut self) -> Result<()> {
-        self.flush_internal(true)
+        let has_vec = self.storage.as_ref().is_some_and(OmenFile::has_vec_file);
+
+        if has_vec {
+            // Fast path: write dirty .vecs slots, sync WAL, skip manifest
+            let dirty = self.records.take_dirty_slots();
+            if dirty.is_empty() {
+                return Ok(());
+            }
+            if let Some(ref mut storage) = self.storage {
+                storage.checkpoint_vectors_only(&self.records, &dirty)?;
+            }
+            Ok(())
+        } else {
+            // First checkpoint: full flush to create .vecs + manifest
+            self.flush_internal(true)
+        }
     }
 
     fn flush_internal(&mut self, skip_segments: bool) -> Result<()> {

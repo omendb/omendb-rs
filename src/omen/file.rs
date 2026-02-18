@@ -876,6 +876,99 @@ impl OmenFile {
         Ok(())
     }
 
+    /// Vector-only checkpoint: write dirty slots to .vecs without manifest rewrite.
+    ///
+    /// Used by auto-checkpoint to persist vector data cheaply. Skips the expensive
+    /// manifest rewrite (~40MB at 1M vectors) and WAL truncation. On crash, WAL
+    /// replay recovers IDs/metadata not yet in the manifest.
+    ///
+    /// Requires .vecs to already exist (call `checkpoint_full()` first).
+    pub fn checkpoint_vectors_only(
+        &mut self,
+        records: &RecordStore,
+        dirty: &RoaringBitmap,
+    ) -> io::Result<()> {
+        let dim = self.header.dimensions as usize;
+        let slot_count = records.slot_count() as usize;
+        let slot_bytes = dim * 4;
+
+        if dim == 0 || slot_count == 0 || dirty.is_empty() {
+            return Ok(());
+        }
+
+        let required_size = (slot_count * slot_bytes) as u64;
+
+        // Grow .vecs if needed
+        let vf = self
+            .vec_file
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, ".vecs file not open"))?;
+        let current_size = vf.metadata()?.len();
+
+        if required_size > current_size {
+            self.vec_mmap = None;
+            let vf = self.vec_file.as_ref().unwrap();
+            vf.set_len(required_size)?;
+            self.vec_mmap = Some(unsafe { MmapMut::map_mut(vf)? });
+        }
+
+        // Write dirty slots
+        let vm = self
+            .vec_mmap
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, ".vecs mmap not available"))?;
+
+        let dirty_count = dirty.len() as usize;
+        let total_slots = slot_count;
+
+        for slot in dirty {
+            let offset = slot as usize * slot_bytes;
+            let end = offset + slot_bytes;
+            if end > vm.len() {
+                continue;
+            }
+
+            if records.deleted_bitmap().contains(slot) {
+                vm[offset..end].fill(0);
+            } else if let Some(vec_data) = records.get_vector(slot) {
+                if vec_data.len() == dim {
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            vec_data.as_ptr() as *const u8,
+                            vec_data.len() * 4,
+                        )
+                    };
+                    vm[offset..end].copy_from_slice(bytes);
+                } else {
+                    vm[offset..end].fill(0);
+                }
+            } else {
+                vm[offset..end].fill(0);
+            }
+        }
+
+        // Flush: batch flush if >25% dirty, otherwise range flush
+        if dirty_count * 4 > total_slots {
+            vm.flush()?;
+        } else {
+            for slot in dirty {
+                let offset = slot as usize * slot_bytes;
+                let end = offset + slot_bytes;
+                if end <= vm.len() {
+                    vm.flush_range(offset, slot_bytes)?;
+                }
+            }
+        }
+
+        // fsync .vecs
+        self.vec_file.as_ref().unwrap().sync_all()?;
+
+        // Sync WAL for durability but do NOT truncate — manifest unchanged
+        self.wal.sync()?;
+
+        Ok(())
+    }
+
     /// Incremental checkpoint: write only dirty slots to .vecs mmap.
     ///
     /// Much faster than full checkpoint for large databases with small updates.
