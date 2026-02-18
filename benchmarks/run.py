@@ -72,7 +72,7 @@ def load_sift_10k() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if not SIFT_10K_PATH.exists():
         print(
             f"SIFT-10K not found at {SIFT_10K_PATH}. "
-            "Run: python benchmarks/create_subsets.py",
+            "Download sift-10k.npz and place it in benchmarks/data/",
             file=sys.stderr,
         )
         sys.exit(1)
