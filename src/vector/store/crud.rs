@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use serde_json::Value as JsonValue;
 
-use crate::vector::hnsw::{HNSWIndex, MutableSegment};
+use crate::vector::hnsw::HNSWIndex;
 
 use super::helpers;
 use super::VectorStore;
@@ -270,13 +268,9 @@ impl VectorStore {
                 )
                 .map_err(|e| anyhow::anyhow!("Batch parallel build failed: {e}"))?;
 
-                // Wrap as segment with global slot mapping, freeze, add to manager
+                // Add parallel-built index as frozen segment with slot mapping
                 if let Some(ref mut segments) = self.segments {
-                    let mut batch_segment = MutableSegment::from_index(batch_index, &slots);
-                    batch_segment.set_id(segments.next_segment_id);
-                    segments.next_segment_id += 1;
-                    let frozen = Arc::new(batch_segment.freeze());
-                    segments.frozen.push(frozen);
+                    segments.add_frozen_from_index(batch_index, &slots);
                 }
 
                 // WAL for crash durability

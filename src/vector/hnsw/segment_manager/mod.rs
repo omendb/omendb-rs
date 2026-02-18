@@ -449,6 +449,14 @@ impl SegmentManager {
     pub fn last_merge_stats(&self) -> Option<&MergeStats> {
         self.last_merge_stats.as_ref()
     }
+
+    /// Add a parallel-built index as a new frozen segment with slot mapping
+    pub fn add_frozen_from_index(&mut self, index: HNSWIndex, slots: &[u32]) {
+        let mut index = index;
+        index.remap_slots(slots);
+        let frozen = self.create_merged_segment(index);
+        self.frozen.push(frozen);
+    }
 }
 
 #[cfg(test)]
