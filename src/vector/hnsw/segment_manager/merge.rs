@@ -1,7 +1,8 @@
 //! Segment merge operations
 //!
-//! Provides automatic and manual merging of frozen segments using
-//! the IGTM (Iterative Greedy Tree Merging) algorithm.
+//! Provides automatic and manual merging of frozen segments.
+//! Merges use parallel HNSW construction (`build_parallel`) for
+//! the merged index.
 
 use super::{SegmentConfig, SegmentManager};
 use crate::vector::hnsw::error::Result;
@@ -34,7 +35,9 @@ pub struct MergePolicy {
     /// Default: 4.0 (merge if segments are very unbalanced)
     pub size_ratio_threshold: f32,
 
-    /// IGTM merge configuration
+    /// IGTM merge configuration (reserved for future asymmetric merge
+    /// where one segment is >>10x larger — avoids full rebuild).
+    /// Currently unused: parallel build is fast enough for symmetric merge.
     pub merge_config: MergeConfig,
 
     /// Whether automatic merging is enabled

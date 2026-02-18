@@ -10,9 +10,9 @@
 //!
 //! ## Automatic Merging
 //!
-//! When multiple frozen segments accumulate, they can be merged using the
-//! IGTM (Iterative Greedy Tree Merging) algorithm for 1.3-1.7x speedup
-//! over naive insertion. Set a merge policy to enable automatic merging.
+//! When multiple frozen segments accumulate, they can be merged into a
+//! single segment via parallel HNSW construction. Set a merge policy to
+//! enable automatic merging.
 
 mod merge;
 mod persistence;
