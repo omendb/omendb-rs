@@ -111,6 +111,8 @@ impl VectorStore {
             self.checkpoint_wal()?;
         }
 
+        self.check_memory_pressure();
+
         Ok(slot)
     }
 

@@ -63,6 +63,11 @@ pub struct VectorStoreOptions {
     pub(super) rescore: Option<bool>,
     /// SQ8 refiner: candidate multiplier for rescoring (default: 3.0)
     pub(super) oversample: Option<f32>,
+
+    /// Memory limit in bytes (None = unlimited).
+    /// When estimated memory exceeds this, the mutable segment is frozen
+    /// so the OS can page it via mmap.
+    pub(super) max_memory_bytes: Option<usize>,
 }
 
 impl VectorStoreOptions {
@@ -212,6 +217,19 @@ impl VectorStoreOptions {
     #[must_use]
     pub fn oversample(mut self, factor: f32) -> Self {
         self.oversample = Some(factor);
+        self
+    }
+
+    /// Set memory limit in bytes.
+    ///
+    /// When estimated memory usage exceeds this limit, the mutable segment is
+    /// frozen (triggering mmap for the frozen data). This bounds heap usage
+    /// while allowing the OS to manage paging of older segments.
+    ///
+    /// Set to `None` (default) for unlimited memory.
+    #[must_use]
+    pub fn max_memory_bytes(mut self, limit: Option<usize>) -> Self {
+        self.max_memory_bytes = limit;
         self
     }
 

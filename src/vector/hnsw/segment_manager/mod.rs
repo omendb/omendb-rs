@@ -272,7 +272,7 @@ impl SegmentManager {
     ///
     /// After freezing, checks merge policy and triggers automatic merge
     /// if conditions are met.
-    fn freeze_mutable(&mut self) -> Result<()> {
+    pub fn freeze_mutable(&mut self) -> Result<()> {
         // Create new mutable segment
         let new_mutable = if self.config.quantization {
             MutableSegment::new_quantized(

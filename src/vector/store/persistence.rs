@@ -399,6 +399,7 @@ impl VectorStore {
             segment_capacity: None,
             rescore: quantization,
             oversample: 3.0,
+            max_memory_bytes: None,
         })
     }
 
@@ -447,6 +448,7 @@ impl VectorStore {
             if let Some(oversample) = options.oversample {
                 store.oversample = oversample;
             }
+            store.max_memory_bytes = options.max_memory_bytes;
 
             return Ok(store);
         }
@@ -511,6 +513,7 @@ impl VectorStore {
             segment_capacity: None,
             rescore,
             oversample,
+            max_memory_bytes: options.max_memory_bytes,
         })
     }
 
@@ -559,6 +562,7 @@ impl VectorStore {
             segment_capacity: None,
             rescore,
             oversample,
+            max_memory_bytes: options.max_memory_bytes,
         })
     }
 

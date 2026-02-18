@@ -134,6 +134,9 @@ pub struct VectorStore {
     rescore: bool,
     /// SQ8 refiner: candidate oversample multiplier (default: 3.0)
     oversample: f32,
+
+    /// Memory limit in bytes. When exceeded, triggers early freeze.
+    max_memory_bytes: Option<usize>,
 }
 
 /// Default maximum tokens per multi-vector document.
@@ -169,6 +172,7 @@ impl VectorStore {
             segment_capacity: None,
             rescore: false,
             oversample: 3.0,
+            max_memory_bytes: None,
         }
     }
 
@@ -312,6 +316,21 @@ impl VectorStore {
             );
         } else {
             Ok(self.dimensions())
+        }
+    }
+
+    /// Freeze mutable segment early if memory exceeds the configured limit.
+    ///
+    /// Frozen segments use mmap, so the OS handles paging. This bounds
+    /// heap usage while allowing large datasets.
+    fn check_memory_pressure(&mut self) {
+        if let Some(limit) = self.max_memory_bytes {
+            if let Some(ref mut segments) = self.segments {
+                let estimated = segments.total_memory();
+                if estimated > limit && segments.mutable_len() > 0 {
+                    let _ = segments.freeze_mutable();
+                }
+            }
         }
     }
 
