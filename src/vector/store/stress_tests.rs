@@ -563,12 +563,10 @@ fn stress_id_collision() {
 
 /// Recovery after vector-only auto-checkpoint.
 ///
-/// Inserts >10K vectors to trigger auto-checkpoint (which uses the
-/// vector-only fast path after the first full flush), then drops
-/// without explicit flush. Verifies all data recovered on reopen.
-///
-/// Uses batch insert for the first 9K (fast, no auto-checkpoint in batch),
-/// then individual set() for the last 1.5K to trigger the 10K WAL threshold.
+/// Flushes a batch of 9K vectors (durable via full checkpoint), then inserts
+/// 1.5K more via individual set() calls which are WAL'd and trigger an
+/// auto-checkpoint at the 10K WAL threshold. Drops without explicit flush.
+/// Verifies all data recovered on reopen.
 #[test]
 fn stress_crash_after_vector_only_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
@@ -579,14 +577,13 @@ fn stress_crash_after_vector_only_checkpoint() {
     let n = batch_size + individual_size;
     let dim = 16;
 
-    // Phase 1: batch + individual inserts to trigger auto-checkpoint, then crash
+    // Phase 1: flush batch (durable), then individual inserts trigger auto-checkpoint
     {
         let mut store = VectorStoreOptions::default()
             .dimensions(dim)
             .open(&path)
             .unwrap();
 
-        // Batch insert (no auto-checkpoint, but does WAL append)
         let batch: Vec<_> = (0..batch_size)
             .map(|i| {
                 (
@@ -597,6 +594,7 @@ fn stress_crash_after_vector_only_checkpoint() {
             })
             .collect();
         store.set_batch(batch).unwrap();
+        store.flush().unwrap(); // commit batch
 
         // Individual inserts push WAL past 10K → triggers auto-checkpoint
         for i in batch_size..n {
@@ -627,10 +625,9 @@ fn stress_crash_after_vector_only_checkpoint() {
 
 /// Recovery with WAL entries after vector-only checkpoint.
 ///
-/// Triggers auto-checkpoint at 10K, inserts 500 more (WAL-only), crashes.
-/// On recovery both checkpointed and WAL-only vectors must be present.
-///
-/// Uses batch for bulk, individual set() to trigger checkpoint threshold.
+/// Flushes a batch (durable), then uses individual set() calls to push WAL
+/// past 10K and trigger an auto-checkpoint. Inserts 500 more (WAL-only) and
+/// crashes. On recovery all vectors (checkpointed + WAL-tail) must be present.
 #[test]
 fn stress_crash_checkpoint_plus_wal_tail() {
     let dir = tempfile::tempdir().unwrap();
@@ -647,7 +644,6 @@ fn stress_crash_checkpoint_plus_wal_tail() {
             .open(&path)
             .unwrap();
 
-        // Batch insert (fast)
         let batch: Vec<_> = (0..batch_size)
             .map(|i| {
                 (
@@ -658,6 +654,7 @@ fn stress_crash_checkpoint_plus_wal_tail() {
             })
             .collect();
         store.set_batch(batch).unwrap();
+        store.flush().unwrap(); // commit batch
 
         // Individual inserts to trigger auto-checkpoint
         for i in batch_size..batch_size + individual_to_checkpoint {
@@ -991,6 +988,158 @@ fn stress_flush_reopen_identity() {
             (pre.distance - post.distance).abs() < 1e-5,
             "Distances should match"
         );
+    }
+}
+
+/// Test: metadata-only update survives simulated crash (WAL recovery)
+#[test]
+fn stress_metadata_crash_recovery() {
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("meta_crash_test");
+
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+        store
+            .set(
+                "doc1",
+                Vector::new(vec![1.0f32; 64]),
+                serde_json::json!({"title": "original"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+    }
+
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+        store
+            .update("doc1", None, Some(serde_json::json!({"title": "updated"})))
+            .unwrap();
+        // Simulate crash - no flush()
+    }
+
+    {
+        let store = VectorStore::open(&db_path).unwrap();
+        let meta = store.get_metadata_by_id("doc1").unwrap();
+        assert_eq!(
+            meta.get("title").and_then(|v| v.as_str()),
+            Some("updated"),
+            "Metadata update should survive crash via WAL recovery"
+        );
+    }
+}
+
+/// Test: set_batch() without flush + crash = data lost (expected semantics)
+#[test]
+fn stress_batch_without_flush_data_lost() {
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("batch_no_flush_test");
+
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+        let batch: Vec<(String, Vector, serde_json::Value)> = (0..100)
+            .map(|i| {
+                (
+                    format!("doc{i}"),
+                    Vector::new(random_vector(i, 64)),
+                    serde_json::json!({"idx": i}),
+                )
+            })
+            .collect();
+        store.set_batch(batch).unwrap();
+        // Simulate crash - no flush()
+    }
+
+    {
+        let store = VectorStore::open(&db_path).unwrap();
+        assert_eq!(
+            store.len(),
+            0,
+            "set_batch() without flush should result in data loss on crash"
+        );
+    }
+}
+
+/// Test: set_batch() + flush + crash = data present (correct semantics)
+#[test]
+fn stress_batch_with_flush_data_survives() {
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("batch_with_flush_test");
+
+    let count = 100;
+
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+        let batch: Vec<(String, Vector, serde_json::Value)> = (0..count)
+            .map(|i| {
+                (
+                    format!("doc{i}"),
+                    Vector::new(random_vector(i, 64)),
+                    serde_json::json!({"idx": i}),
+                )
+            })
+            .collect();
+        store.set_batch(batch).unwrap();
+        store.flush().unwrap();
+    }
+
+    {
+        let store = VectorStore::open(&db_path).unwrap();
+        assert_eq!(
+            store.len(),
+            count,
+            "set_batch() + flush() data should survive crash"
+        );
+        for i in 0..count {
+            assert!(
+                store.get_metadata_by_id(&format!("doc{i}")).is_some(),
+                "doc{i} should be present after flush"
+            );
+        }
+    }
+}
+
+/// Test: delete_batch uses single fsync (verify it succeeds for many deletions)
+#[test]
+fn stress_delete_batch_single_sync() {
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("delete_batch_test");
+
+    let count = 500;
+
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+        let batch: Vec<(String, Vector, serde_json::Value)> = (0..count)
+            .map(|i| {
+                (
+                    format!("doc{i}"),
+                    Vector::new(random_vector(i, 64)),
+                    serde_json::json!({"idx": i}),
+                )
+            })
+            .collect();
+        store.set_batch(batch).unwrap();
+        store.flush().unwrap();
+    }
+
+    {
+        let mut store = VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.len(), count);
+
+        let ids: Vec<String> = (0..count).map(|i| format!("doc{i}")).collect();
+        let deleted = store.delete_batch(&ids).unwrap();
+        assert_eq!(deleted, count, "All vectors should be deleted");
+        assert_eq!(store.len(), 0);
+
+        store.flush().unwrap();
+    }
+
+    {
+        let store = VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.len(), 0, "Deletions should persist after flush");
     }
 }
 

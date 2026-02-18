@@ -174,10 +174,8 @@ impl VectorStore {
                         records.delete(&delete_data.id);
                     }
                 }
-                WalEntryType::UpdateNeighbors
-                | WalEntryType::UpdateMetadata
-                | WalEntryType::Checkpoint => {
-                    // No-op: neighbors managed by HNSW, metadata/checkpoint are markers
+                WalEntryType::Checkpoint => {
+                    // No-op: checkpoint entries mark safe recovery points
                 }
             }
         }

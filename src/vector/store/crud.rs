@@ -121,6 +121,13 @@ impl VectorStore {
     /// This is the recommended method for bulk operations.
     /// Uses parallel HNSW construction for both new and existing indexes.
     ///
+    /// # Durability
+    ///
+    /// `set_batch()` does NOT write to the WAL and does NOT fsync. Data is durable
+    /// only after [`flush()`](Self::flush). This matches a transaction model where
+    /// `flush()` is the commit. An auto-checkpoint fires if a pre-existing WAL from
+    /// prior individual [`set()`](Self::set) calls exceeds the threshold.
+    ///
     /// # Ordering Guarantee
     ///
     /// This method processes updates before inserts to ensure slot ordering is predictable.
@@ -175,12 +182,6 @@ impl VectorStore {
             }
             self.metadata_index.index_json(new_slot, &metadata);
 
-            // WAL for crash durability
-            if let Some(ref mut storage) = self.storage {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
-                storage.wal_append_insert(&id, &vector.data, Some(&metadata_bytes))?;
-            }
-
             result_indices.push(new_slot as usize);
         }
 
@@ -221,14 +222,6 @@ impl VectorStore {
                 if self.pending_quantization {
                     if let Some(ref mut storage) = self.storage {
                         storage.put_quantization_mode(helpers::quantization_to_id(true))?;
-                    }
-                }
-
-                // WAL for crash durability
-                if let Some(ref mut storage) = self.storage {
-                    for (id, vector, metadata) in &inserts {
-                        let metadata_bytes = serde_json::to_vec(metadata)?;
-                        storage.wal_append_insert(id, &vector.data, Some(&metadata_bytes))?;
                     }
                 }
 
@@ -275,21 +268,16 @@ impl VectorStore {
                     segments.add_frozen_from_index(batch_index, &slots);
                 }
 
-                // WAL for crash durability
-                if let Some(ref mut storage) = self.storage {
-                    for (id, vector, metadata) in &inserts {
-                        let metadata_bytes = serde_json::to_vec(metadata)?;
-                        storage.wal_append_insert(id, &vector.data, Some(&metadata_bytes))?;
-                    }
-                }
-
                 result_indices.extend(slots.iter().map(|&s| s as usize));
             }
         }
 
-        // Sync WAL once at end of batch for durability
-        if let Some(ref mut storage) = self.storage {
-            storage.wal_sync()?;
+        let needs_checkpoint = self
+            .storage
+            .as_ref()
+            .is_some_and(|s| s.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES);
+        if needs_checkpoint {
+            self.checkpoint_wal()?;
         }
 
         Ok(result_indices)
@@ -329,14 +317,19 @@ impl VectorStore {
             };
             self.set(id, new_vector, merged_metadata)?;
         } else if let Some(ref new_metadata) = metadata {
-            // Metadata-only update: no HNSW re-indexing needed
+            let existing_vector = self.records.get_vector(slot).map(<[f32]>::to_vec);
+
+            if let Some(ref mut storage) = self.storage {
+                if let Some(vec_data) = &existing_vector {
+                    let metadata_bytes = serde_json::to_vec(new_metadata)?;
+                    storage.wal_append_insert(id, vec_data, Some(&metadata_bytes))?;
+                    storage.wal_sync()?;
+                }
+            }
+
             self.metadata_index.remove(slot);
             self.metadata_index.index_json(slot, new_metadata);
             self.records.update_metadata(slot, new_metadata.clone())?;
-
-            if let Some(ref mut storage) = self.storage {
-                storage.put_metadata(slot as usize, new_metadata)?;
-            }
         }
 
         Ok(())
@@ -364,9 +357,9 @@ impl VectorStore {
             sparse_index.remove(slot);
         }
 
-        // Use OmenFile::delete for WAL-backed persistence
         if let Some(ref mut storage) = self.storage {
-            storage.delete(id)?;
+            storage.wal_append_delete(id)?;
+            storage.wal_sync()?;
         }
 
         if let Some(ref mut text_index) = self.text_index {
@@ -397,11 +390,15 @@ impl VectorStore {
             }
         }
 
-        // Persist deletions
-        for id in &valid_ids {
-            if let Some(ref mut storage) = self.storage {
-                storage.delete(id)?;
+        if let Some(ref mut storage) = self.storage {
+            for id in &valid_ids {
+                storage.wal_append_delete(id)?;
             }
+            if !valid_ids.is_empty() {
+                storage.wal_sync()?;
+            }
+        }
+        for id in &valid_ids {
             if let Some(ref mut text_index) = self.text_index {
                 if let Err(e) = text_index.delete_document(id) {
                     tracing::warn!(id = %id, error = ?e, "Failed to delete from text index");

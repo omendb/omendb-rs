@@ -28,10 +28,6 @@ pub enum WalEntryType {
     InsertNode = 1,
     /// Delete a node: {id}
     DeleteNode = 2,
-    /// Update neighbors: {id, level, [`neighbor_ids`]}
-    UpdateNeighbors = 3,
-    /// Update metadata: {id, metadata}
-    UpdateMetadata = 4,
     /// Checkpoint marker - safe truncation point
     Checkpoint = 100,
 }
@@ -45,10 +41,8 @@ impl WalEntryType {
         match v {
             1 => Some(Self::InsertNode),
             2 => Some(Self::DeleteNode),
-            3 => Some(Self::UpdateNeighbors),
-            4 => Some(Self::UpdateMetadata),
             100 => Some(Self::Checkpoint),
-            _ => None, // Unknown entry type - caller should handle
+            _ => None,
         }
     }
 }
@@ -163,36 +157,6 @@ impl WalEntry {
         }
     }
 
-    /// Create update neighbors entry
-    #[must_use]
-    pub fn update_neighbors(timestamp: u64, node_id: u32, level: u8, neighbors: &[u32]) -> Self {
-        let mut data = Vec::new();
-
-        // Node ID
-        data.extend_from_slice(&node_id.to_le_bytes());
-
-        // Level
-        data.push(level);
-
-        // Neighbors (length-prefixed)
-        data.extend_from_slice(&(neighbors.len() as u32).to_le_bytes());
-        for &neighbor in neighbors {
-            data.extend_from_slice(&neighbor.to_le_bytes());
-        }
-
-        let checksum = crc32fast::hash(&data);
-
-        Self {
-            header: WalEntryHeader {
-                entry_type: WalEntryType::UpdateNeighbors,
-                timestamp,
-                data_len: data.len() as u32,
-                checksum,
-            },
-            data,
-        }
-    }
-
     /// Create checkpoint entry
     #[must_use]
     pub fn checkpoint(timestamp: u64) -> Self {
@@ -239,12 +203,18 @@ fn read_wal_meta(path: &std::path::Path) -> Option<(u64, u64, u64)> {
     Some((checkpoint_offset, max_timestamp, entry_count))
 }
 
-fn write_wal_meta(path: &std::path::Path, max_timestamp: u64, entry_count: u64) {
+fn write_wal_meta(path: &std::path::Path, max_timestamp: u64, entry_count: u64) -> io::Result<()> {
     let mut buf = [0u8; WAL_META_SIZE];
     buf[0..8].copy_from_slice(&0u64.to_le_bytes()); // checkpoint always at 0 after truncate
     buf[8..16].copy_from_slice(&max_timestamp.to_le_bytes());
     buf[16..24].copy_from_slice(&entry_count.to_le_bytes());
-    let _ = std::fs::write(path, buf);
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    configure_open_options(&mut opts);
+    let mut f = opts.open(path)?;
+    f.write_all(&buf)?;
+    f.sync_all()?;
+    Ok(())
 }
 
 /// Write-Ahead Log
@@ -362,13 +332,12 @@ impl Wal {
     pub fn sync(&mut self) -> io::Result<()> {
         self.file.flush()?;
         self.file.get_mut().sync_all()?;
-        // Update meta file for O(1) open on next restart
         let ts = if self.next_timestamp > 0 {
             self.next_timestamp - 1
         } else {
             0
         };
-        write_wal_meta(&meta_path(&self.path), ts, self.entry_count);
+        write_wal_meta(&meta_path(&self.path), ts, self.entry_count)?;
         Ok(())
     }
 
@@ -453,13 +422,11 @@ impl Wal {
 
     /// Truncate WAL (after checkpoint)
     pub fn truncate(&mut self) -> io::Result<()> {
-        // Flush buffer before truncating (required on Windows)
         self.file.flush()?;
         self.file.get_mut().set_len(0)?;
         self.file.get_mut().seek(SeekFrom::Start(0))?;
-        self.next_timestamp = 0;
         self.entry_count = 0;
-        write_wal_meta(&meta_path(&self.path), 0, 0);
+        write_wal_meta(&meta_path(&self.path), 0, 0)?;
         Ok(())
     }
 }

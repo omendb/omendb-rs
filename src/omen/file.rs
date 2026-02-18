@@ -16,7 +16,6 @@ use anyhow::Result;
 use fs2::FileExt;
 use memmap2::MmapMut;
 use roaring::RoaringBitmap;
-use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -392,13 +391,6 @@ impl OmenFile {
     // Note: insert(), find_nearest(), search() removed in Phase 5.
     // VectorStore uses wal_append_insert() for inserts and RecordStore for search.
 
-    pub fn delete(&mut self, id: &str) -> io::Result<bool> {
-        // Write delete to WAL - existence check is done at VectorStore level
-        self.wal.append(WalEntry::delete_node(0, id))?;
-        self.wal.sync()?;
-        Ok(true)
-    }
-
     /// Get vector count
     #[must_use]
     pub fn len(&self) -> u64 {
@@ -425,12 +417,6 @@ impl OmenFile {
 // OmenFile is now pure I/O: WAL + checkpoint_from_snapshot.
 
 impl OmenFile {
-    /// Store metadata for a vector (no-op, RecordStore is source of truth)
-    #[allow(clippy::unused_self)]
-    pub fn put_metadata(&mut self, _id: usize, _metadata: &JsonValue) -> Result<()> {
-        Ok(())
-    }
-
     /// Store configuration value
     pub fn put_config(&mut self, key: &str, value: u64) -> Result<()> {
         self.config.insert(key.to_string(), value);

@@ -268,6 +268,7 @@ impl RecordStore {
             .and_then(|r| r.as_mut())
             .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
 
+        self.dirty_slots.insert(slot);
         record.metadata = Some(metadata);
         Ok(())
     }
