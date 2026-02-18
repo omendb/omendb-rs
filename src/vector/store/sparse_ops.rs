@@ -70,7 +70,7 @@ impl VectorStore {
             let zero_vec = vec![0.0f32; dims];
             let slot =
                 self.records
-                    .upsert(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
+                    .set(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
             self.metadata_index.index_json(slot, &metadata);
 
             if let Some(ref mut storage) = self.storage {

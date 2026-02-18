@@ -49,6 +49,9 @@ pub struct RecordStore {
 
     /// Vector dimensions (fixed after first insert)
     dimensions: u32,
+
+    /// Slots modified since last checkpoint (for incremental persistence)
+    dirty_slots: RoaringBitmap,
 }
 
 impl RecordStore {
@@ -60,6 +63,7 @@ impl RecordStore {
             id_to_slot: FxHashMap::default(),
             live_count: 0,
             dimensions,
+            dirty_slots: RoaringBitmap::new(),
         }
     }
 
@@ -90,14 +94,15 @@ impl RecordStore {
             id_to_slot,
             live_count,
             dimensions,
+            dirty_slots: RoaringBitmap::new(),
         }
     }
 
-    /// Upsert a record (insert or update)
+    /// Set a record (insert or update)
     ///
     /// Returns the slot index where the record was stored.
     /// For updates, returns existing slot. For inserts, returns new slot.
-    pub fn upsert(
+    pub fn set(
         &mut self,
         id: String,
         vector: Vec<f32>,
@@ -122,6 +127,7 @@ impl RecordStore {
             // Mark old slot as deleted (don't clear data yet - compaction handles that)
             if !self.deleted.contains(old_slot) {
                 self.deleted.insert(old_slot);
+                self.dirty_slots.insert(old_slot);
                 self.live_count -= 1;
             }
             // Fall through to insert at new slot
@@ -133,6 +139,7 @@ impl RecordStore {
             .push(Some(Record::new(id.clone(), vector, metadata)));
         self.id_to_slot.insert(id, slot);
         self.live_count += 1;
+        self.dirty_slots.insert(slot);
 
         Ok(slot)
     }
@@ -150,6 +157,7 @@ impl RecordStore {
 
         // Mark as deleted
         self.deleted.insert(slot);
+        self.dirty_slots.insert(slot);
         self.live_count = self.live_count.saturating_sub(1);
 
         // Remove from ID mapping so it can be re-inserted later
@@ -298,6 +306,19 @@ impl RecordStore {
             .collect()
     }
 
+    /// Take dirty slots bitmap, resetting it to empty
+    pub fn take_dirty_slots(&mut self) -> RoaringBitmap {
+        std::mem::take(&mut self.dirty_slots)
+    }
+
+    /// Get vector data for a slot (for checkpoint I/O)
+    pub fn get_vector(&self, slot: u32) -> Option<&[f32]> {
+        self.slots
+            .get(slot as usize)?
+            .as_ref()
+            .map(|r| r.vector.as_slice())
+    }
+
     /// Compact the store - removes deleted records and reassigns slots
     ///
     /// Returns mapping from old slot to new slot for live records.
@@ -326,6 +347,7 @@ impl RecordStore {
         self.slots = new_slots;
         self.id_to_slot = new_id_to_slot;
         self.deleted.clear();
+        self.dirty_slots.clear();
         // live_count stays the same
 
         old_to_new
@@ -345,35 +367,35 @@ mod tests {
     }
 
     #[test]
-    fn test_upsert_insert() {
+    fn test_set_insert() {
         let mut store = RecordStore::new(3);
 
         let slot = store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
         assert_eq!(slot, 0);
         assert_eq!(store.len(), 1);
         assert!(!store.is_empty());
 
         let slot2 = store
-            .upsert("vec2".to_string(), vec![4.0, 5.0, 6.0], None)
+            .set("vec2".to_string(), vec![4.0, 5.0, 6.0], None)
             .unwrap();
         assert_eq!(slot2, 1);
         assert_eq!(store.len(), 2);
     }
 
     #[test]
-    fn test_upsert_update() {
+    fn test_set_update() {
         let mut store = RecordStore::new(3);
 
         let slot1 = store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
         assert_eq!(slot1, 0);
 
         // Update same ID - creates new slot (to maintain slot == HNSW node ID)
         let slot2 = store
-            .upsert("vec1".to_string(), vec![7.0, 8.0, 9.0], None)
+            .set("vec1".to_string(), vec![7.0, 8.0, 9.0], None)
             .unwrap();
         assert_eq!(slot2, 1); // New slot (old slot 0 is marked deleted)
         assert_eq!(store.len(), 1); // Still 1 live record
@@ -391,10 +413,10 @@ mod tests {
         let mut store = RecordStore::new(3);
 
         store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
         store
-            .upsert("vec2".to_string(), vec![4.0, 5.0, 6.0], None)
+            .set("vec2".to_string(), vec![4.0, 5.0, 6.0], None)
             .unwrap();
         assert_eq!(store.len(), 2);
 
@@ -416,7 +438,7 @@ mod tests {
     fn test_delete_nonexistent() {
         let mut store = RecordStore::new(3);
         store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
 
         assert!(store.delete("nonexistent").is_none());
@@ -428,7 +450,7 @@ mod tests {
         let mut store = RecordStore::new(3);
 
         let slot1 = store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
         assert_eq!(slot1, 0);
 
@@ -437,7 +459,7 @@ mod tests {
 
         // Re-insert same ID gets new slot
         let slot2 = store
-            .upsert("vec1".to_string(), vec![7.0, 8.0, 9.0], None)
+            .set("vec1".to_string(), vec![7.0, 8.0, 9.0], None)
             .unwrap();
         assert_eq!(slot2, 1); // New slot (old one is tombstoned)
         assert_eq!(store.len(), 1);
@@ -448,11 +470,11 @@ mod tests {
         let mut store = RecordStore::new(3);
 
         store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
 
         // Try to insert wrong dimension
-        let result = store.upsert("vec2".to_string(), vec![1.0, 2.0], None);
+        let result = store.set("vec2".to_string(), vec![1.0, 2.0], None);
         assert!(result.is_err());
     }
 
@@ -461,13 +483,13 @@ mod tests {
         let mut store = RecordStore::new(3);
 
         store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
         store
-            .upsert("vec2".to_string(), vec![4.0, 5.0, 6.0], None)
+            .set("vec2".to_string(), vec![4.0, 5.0, 6.0], None)
             .unwrap();
         store
-            .upsert("vec3".to_string(), vec![7.0, 8.0, 9.0], None)
+            .set("vec3".to_string(), vec![7.0, 8.0, 9.0], None)
             .unwrap();
 
         store.delete("vec2");
@@ -483,13 +505,13 @@ mod tests {
         let mut store = RecordStore::new(3);
 
         store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
         store
-            .upsert("vec2".to_string(), vec![4.0, 5.0, 6.0], None)
+            .set("vec2".to_string(), vec![4.0, 5.0, 6.0], None)
             .unwrap();
         store
-            .upsert("vec3".to_string(), vec![7.0, 8.0, 9.0], None)
+            .set("vec3".to_string(), vec![7.0, 8.0, 9.0], None)
             .unwrap();
 
         store.delete("vec1");
@@ -519,7 +541,7 @@ mod tests {
 
         let meta = serde_json::json!({"key": "value"});
         store
-            .upsert("vec1".to_string(), vec![1.0, 2.0, 3.0], Some(meta.clone()))
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], Some(meta.clone()))
             .unwrap();
 
         let record = store.get("vec1").unwrap();

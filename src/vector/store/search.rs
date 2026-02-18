@@ -313,10 +313,10 @@ mod tests {
     fn test_brute_force_cosine() {
         let mut records = RecordStore::new(3);
         records
-            .upsert("a".to_string(), vec![1.0, 0.0, 0.0], None)
+            .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
             .unwrap();
         records
-            .upsert("b".to_string(), vec![0.0, 1.0, 0.0], None)
+            .set("b".to_string(), vec![0.0, 1.0, 0.0], None)
             .unwrap();
         let query = vec![1.0, 0.0, 0.0];
         let results = brute_force_search(&records, &query, 2, Metric::Cosine);
@@ -331,10 +331,10 @@ mod tests {
     fn test_brute_force_inner_product() {
         let mut records = RecordStore::new(3);
         records
-            .upsert("a".to_string(), vec![1.0, 0.0, 0.0], None)
+            .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
             .unwrap();
         records
-            .upsert("b".to_string(), vec![0.5, 0.0, 0.0], None)
+            .set("b".to_string(), vec![0.5, 0.0, 0.0], None)
             .unwrap();
         let query = vec![1.0, 0.0, 0.0];
         let results = brute_force_search(&records, &query, 2, Metric::InnerProduct);
@@ -348,13 +348,13 @@ mod tests {
     fn test_rescore_results_basic() {
         let mut records = RecordStore::new(3);
         records
-            .upsert("a".to_string(), vec![1.0, 0.0, 0.0], None)
+            .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
             .unwrap();
         records
-            .upsert("b".to_string(), vec![0.0, 1.0, 0.0], None)
+            .set("b".to_string(), vec![0.0, 1.0, 0.0], None)
             .unwrap();
         records
-            .upsert("c".to_string(), vec![0.5, 0.5, 0.0], None)
+            .set("c".to_string(), vec![0.5, 0.5, 0.0], None)
             .unwrap();
 
         // Simulate SQ8 candidates with wrong ordering

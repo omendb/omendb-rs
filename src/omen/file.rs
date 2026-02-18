@@ -11,9 +11,11 @@ use crate::omen::{
 
 // Re-export WAL parsing functions for external use
 pub use crate::omen::wal::{parse_wal_delete, parse_wal_insert, WalDeleteData, WalInsertData};
+use crate::vector::store::record_store::RecordStore;
 use anyhow::Result;
 use fs2::FileExt;
 use memmap2::MmapMut;
+use roaring::RoaringBitmap;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -109,6 +111,11 @@ pub struct OmenFile {
 
     // Omen Manifest
     manifest: OmenManifest,
+
+    // Split .vecs file for incremental checkpoint
+    vec_mmap: Option<MmapMut>,
+    vec_file: Option<File>,
+    vec_path: PathBuf,
 }
 
 impl OmenFile {
@@ -134,10 +141,18 @@ impl OmenFile {
         PathBuf::from(wal)
     }
 
+    /// Compute .vecs path by appending extension
+    fn compute_vecs_path(path: &Path) -> PathBuf {
+        let mut p = path.as_os_str().to_os_string();
+        p.push(".vecs");
+        PathBuf::from(p)
+    }
+
     pub fn create(path: impl AsRef<Path>, dimensions: u32) -> io::Result<Self> {
         let path = path.as_ref();
         let omen_path = Self::compute_omen_path(path);
         let wal_path = Self::compute_wal_path(path);
+        let vec_path = Self::compute_vecs_path(path);
 
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).create(true).truncate(true);
@@ -172,6 +187,9 @@ impl OmenFile {
             wal: Wal::open(&wal_path)?,
             hnsw_index_bytes: None,
             manifest,
+            vec_mmap: None,
+            vec_file: None,
+            vec_path,
         })
     }
 
@@ -179,6 +197,7 @@ impl OmenFile {
         let path = path.as_ref();
         let omen_path = Self::compute_omen_path(path);
         let wal_path = Self::compute_wal_path(path);
+        let vec_path = Self::compute_vecs_path(path);
 
         let mut opts = OpenOptions::new();
         opts.read(true).write(true);
@@ -334,6 +353,25 @@ impl OmenFile {
         header.hnsw_ef_search = hnsw_ef_search;
         header.metric = metric;
 
+        // Open .vecs file if it exists (incremental checkpoint format)
+        let has_vec_file_flag = manifest.config.get("vec_file").copied().unwrap_or(0) == 1;
+        let (vec_mmap, vec_file) = if has_vec_file_flag && vec_path.exists() {
+            let mut opts = OpenOptions::new();
+            opts.read(true).write(true);
+            configure_open_options(&mut opts);
+            let vf = opts.open(&vec_path)?;
+            let vf_len = vf.metadata()?.len();
+            let vm = if vf_len > 0 {
+                // SAFETY: .vecs exclusively owned via .omen lock
+                Some(unsafe { MmapMut::map_mut(&vf)? })
+            } else {
+                None
+            };
+            (vm, Some(vf))
+        } else {
+            (None, None)
+        };
+
         // Note: WAL replay happens at VectorStore level, not here (Phase 5 architecture)
         // State (vectors, ids, deleted) is managed by RecordStore via load_persisted_snapshot()
         Ok(Self {
@@ -345,6 +383,9 @@ impl OmenFile {
             wal,
             hnsw_index_bytes,
             manifest,
+            vec_mmap,
+            vec_file,
+            vec_path,
         })
     }
 
@@ -601,8 +642,53 @@ impl OmenFile {
             ..Default::default()
         };
 
-        // Load vectors from mmap using manifest locations
-        if let Some(ref mmap) = self.mmap {
+        // Load vectors from .vecs mmap (incremental format) or .omen manifest (legacy)
+        let has_vec_file = self.manifest.config.get("vec_file").copied().unwrap_or(0) == 1;
+        if has_vec_file {
+            if let Some(ref vm) = self.vec_mmap {
+                // Fixed-slot format: slot i at offset i * dim * 4
+                let slot_bytes = dim * 4;
+                if slot_bytes > 0 {
+                    let slot_count = vm.len() / slot_bytes;
+                    snapshot.vectors.resize(slot_count, None);
+                    for slot in 0..slot_count {
+                        if self.manifest.deleted.contains(slot as u32) {
+                            continue;
+                        }
+                        let start = slot * slot_bytes;
+                        let end = start + slot_bytes;
+                        if end <= vm.len() {
+                            let vec = read_vector_from_bytes(&vm[start..end], dim);
+                            // Check for zero-filled deleted slots
+                            if vec.iter().any(|&v| v != 0.0)
+                                || self
+                                    .manifest
+                                    .id_to_index
+                                    .values()
+                                    .any(|&s| s == slot as u32)
+                            {
+                                snapshot.vectors[slot] = Some(vec);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Load HNSW index bytes from .omen manifest nodes
+            if let Some(ref mmap) = self.mmap {
+                for location in &self.manifest.nodes {
+                    if location.segment_type == SegmentType::IndexMetadata {
+                        let start = location.offset as usize;
+                        let end = start + location.length as usize;
+                        if end <= mmap.len() {
+                            snapshot.hnsw_bytes = Some(mmap[start..end].to_vec());
+                            break;
+                        }
+                    }
+                }
+            }
+        } else if let Some(ref mmap) = self.mmap {
+            // Legacy format: vectors stored in .omen via NodeLocations
             for (idx, location) in self.manifest.nodes.iter().enumerate() {
                 if location.segment_type == SegmentType::Vectors {
                     while snapshot.vectors.len() <= idx {
@@ -719,7 +805,352 @@ impl OmenFile {
 
     // Note: load_snapshot() removed in Phase 5. VectorStore uses load_persisted_snapshot().
 
-    /// Checkpoint from external snapshot
+    /// Check if this storage has a .vecs file for incremental checkpoints
+    #[must_use]
+    pub fn has_vec_file(&self) -> bool {
+        self.vec_mmap.is_some()
+    }
+
+    /// Full checkpoint: create .vecs file from all vectors in RecordStore.
+    ///
+    /// Used on first flush (migration from legacy format) and when .vecs doesn't exist.
+    /// After this, future checkpoints use the incremental path.
+    pub fn checkpoint_full(
+        &mut self,
+        records: &RecordStore,
+        id_to_slot: &HashMap<String, u32>,
+        deleted: &[u32],
+        metadata: &HashMap<u32, serde_json::Value>,
+        options: CheckpointOptions<'_>,
+    ) -> io::Result<()> {
+        let dim = self.header.dimensions as usize;
+        let slot_count = records.slot_count() as usize;
+        let slot_bytes = dim * 4;
+
+        // Create .vecs file with all vector data
+        if dim > 0 && slot_count > 0 {
+            let total_size = slot_count * slot_bytes;
+            let mut opts = OpenOptions::new();
+            opts.read(true).write(true).create(true).truncate(true);
+            configure_open_options(&mut opts);
+            let vf = opts.open(&self.vec_path)?;
+            vf.set_len(total_size as u64)?;
+
+            // SAFETY: File exclusively owned, just created
+            let mut vm = unsafe { MmapMut::map_mut(&vf)? };
+
+            // Write all slot vectors
+            let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
+            for slot in 0..slot_count {
+                let offset = slot * slot_bytes;
+                if deleted_set.contains(&(slot as u32)) {
+                    // Zero-fill deleted slots
+                    vm[offset..offset + slot_bytes].fill(0);
+                } else if let Some(vec_data) = records.get_vector(slot as u32) {
+                    if vec_data.len() == dim {
+                        let bytes = unsafe {
+                            std::slice::from_raw_parts(
+                                vec_data.as_ptr() as *const u8,
+                                vec_data.len() * 4,
+                            )
+                        };
+                        vm[offset..offset + slot_bytes].copy_from_slice(bytes);
+                    } else {
+                        vm[offset..offset + slot_bytes].fill(0);
+                    }
+                } else {
+                    vm[offset..offset + slot_bytes].fill(0);
+                }
+            }
+
+            vm.flush()?;
+            vf.sync_all()?;
+
+            self.vec_mmap = Some(vm);
+            self.vec_file = Some(vf);
+        }
+
+        // Write .omen with non-vector segments (HNSW, MultiVec) via atomic temp+rename
+        self.write_omen_manifest(id_to_slot, deleted, metadata, options)?;
+
+        Ok(())
+    }
+
+    /// Incremental checkpoint: write only dirty slots to .vecs mmap.
+    ///
+    /// Much faster than full checkpoint for large databases with small updates.
+    pub fn checkpoint_incremental(
+        &mut self,
+        records: &RecordStore,
+        dirty: &RoaringBitmap,
+        id_to_slot: &HashMap<String, u32>,
+        deleted: &[u32],
+        metadata: &HashMap<u32, serde_json::Value>,
+        options: CheckpointOptions<'_>,
+    ) -> io::Result<()> {
+        let dim = self.header.dimensions as usize;
+        let slot_count = records.slot_count() as usize;
+        let slot_bytes = dim * 4;
+
+        if dim == 0 || slot_count == 0 {
+            self.write_omen_manifest(id_to_slot, deleted, metadata, options)?;
+            return Ok(());
+        }
+
+        let required_size = (slot_count * slot_bytes) as u64;
+
+        // Grow .vecs if needed
+        let vf = self
+            .vec_file
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, ".vecs file not open"))?;
+        let current_size = vf.metadata()?.len();
+
+        if required_size > current_size {
+            // Drop mmap before resize
+            self.vec_mmap = None;
+            let vf = self.vec_file.as_ref().unwrap();
+            vf.set_len(required_size)?;
+            // Re-mmap
+            // SAFETY: File exclusively owned via .omen lock
+            self.vec_mmap = Some(unsafe { MmapMut::map_mut(vf)? });
+        }
+
+        // Write dirty slots
+        let vm = self
+            .vec_mmap
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, ".vecs mmap not available"))?;
+
+        let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
+        let dirty_count = dirty.len() as usize;
+        let total_slots = slot_count;
+
+        for slot in dirty {
+            let offset = slot as usize * slot_bytes;
+            let end = offset + slot_bytes;
+            if end > vm.len() {
+                continue;
+            }
+
+            if deleted_set.contains(&slot) {
+                vm[offset..end].fill(0);
+            } else if let Some(vec_data) = records.get_vector(slot) {
+                if vec_data.len() == dim {
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            vec_data.as_ptr() as *const u8,
+                            vec_data.len() * 4,
+                        )
+                    };
+                    vm[offset..end].copy_from_slice(bytes);
+                } else {
+                    vm[offset..end].fill(0);
+                }
+            } else {
+                vm[offset..end].fill(0);
+            }
+        }
+
+        // Flush: batch flush if >25% dirty, otherwise range flush
+        if dirty_count * 4 > total_slots {
+            vm.flush()?;
+        } else {
+            for slot in dirty {
+                let offset = slot as usize * slot_bytes;
+                let end = offset + slot_bytes;
+                if end <= vm.len() {
+                    vm.flush_range(offset, slot_bytes)?;
+                }
+            }
+        }
+
+        // fsync .vecs
+        self.vec_file.as_ref().unwrap().sync_all()?;
+
+        // Write .omen manifest (atomic temp+rename)
+        self.write_omen_manifest(id_to_slot, deleted, metadata, options)?;
+
+        Ok(())
+    }
+
+    /// Write .omen manifest file with non-vector segments.
+    ///
+    /// Shared by checkpoint_full and checkpoint_incremental. Uses atomic
+    /// temp+rename for crash safety.
+    fn write_omen_manifest(
+        &mut self,
+        id_to_slot: &HashMap<String, u32>,
+        deleted: &[u32],
+        metadata: &HashMap<u32, serde_json::Value>,
+        options: CheckpointOptions<'_>,
+    ) -> io::Result<()> {
+        // Drop .omen mmap before writing
+        self.mmap = None;
+
+        let temp_path = {
+            let mut p = self.path.as_os_str().to_os_string();
+            p.push(".tmp");
+            PathBuf::from(p)
+        };
+
+        let mut temp_file = {
+            let mut opts = OpenOptions::new();
+            opts.read(true).write(true).create(true).truncate(true);
+            configure_open_options(&mut opts);
+            opts.open(&temp_path)?
+        };
+
+        // Write header
+        temp_file.write_all(&self.header.to_bytes())?;
+
+        // Write non-vector segments (HNSW, MultiVec)
+        let current_offset = align_to_page(HEADER_SIZE) as u64;
+        let mut writer = SegmentWriter::new(&mut temp_file, current_offset);
+
+        let mut new_nodes: Vec<NodeLocation> = Vec::new();
+
+        if let Some(hnsw_data) = options.hnsw_bytes {
+            let location = writer.write_aligned(hnsw_data, SegmentType::IndexMetadata)?;
+            new_nodes.push(location);
+        }
+
+        if let Some(multivec_data) = options.multivec_bytes {
+            let location = writer.write_aligned(multivec_data, SegmentType::MultiVectors)?;
+            new_nodes.push(location);
+        }
+
+        // Build manifest (no vector NodeLocations — vectors are in .vecs)
+        let mut manifest = OmenManifest::new();
+        manifest.nodes = new_nodes;
+        manifest.max_node_id = id_to_slot.values().copied().max().unwrap_or(0);
+
+        let index_to_id: HashMap<u32, String> = id_to_slot
+            .iter()
+            .map(|(id, &slot)| (slot, id.clone()))
+            .collect();
+
+        manifest.id_to_index.clone_from(id_to_slot);
+        manifest.index_to_id = index_to_id;
+        manifest.deleted = deleted.iter().copied().collect();
+
+        // Convert metadata to bytes
+        let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
+        let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
+        for (&idx, json) in metadata {
+            if !deleted_set.contains(&idx) {
+                if let Ok(bytes) = serde_json::to_vec(json) {
+                    metadata_bytes.insert(idx, bytes);
+                }
+            }
+        }
+        manifest.metadata = metadata_bytes;
+        manifest.metadata_index = options.metadata_index_bytes.map(<[u8]>::to_vec);
+        manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
+        manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);
+
+        let live_count = id_to_slot.len();
+        for (key, val) in [
+            ("count", live_count as u64),
+            ("dimensions", u64::from(self.header.dimensions)),
+            ("hnsw_m", u64::from(self.header.hnsw_m)),
+            (
+                "hnsw_ef_construction",
+                u64::from(self.header.hnsw_ef_construction),
+            ),
+            ("hnsw_ef_search", u64::from(self.header.hnsw_ef_search)),
+            ("metric", self.header.metric as u64),
+        ] {
+            manifest.config.insert(key.to_string(), val);
+        }
+        // Only mark vec_file if .vecs was actually created
+        if self.vec_mmap.is_some() {
+            manifest.config.insert("vec_file".to_string(), 1);
+        }
+
+        // Store MUVERA config in manifest.config
+        if let Some(cfg) = options.multivec_config {
+            manifest
+                .config
+                .insert("muvera_repetitions".to_string(), cfg.repetitions as u64);
+            manifest.config.insert(
+                "muvera_partition_bits".to_string(),
+                cfg.partition_bits as u64,
+            );
+            manifest.config.insert("muvera_seed".to_string(), cfg.seed);
+            manifest
+                .config
+                .insert("muvera_token_dim".to_string(), cfg.token_dim as u64);
+            if let Some(d) = cfg.d_proj {
+                manifest
+                    .config
+                    .insert("muvera_d_proj".to_string(), d as u64);
+            }
+            if let Some(pf) = cfg.pool_factor {
+                manifest
+                    .config
+                    .insert("muvera_pool_factor".to_string(), pf as u64);
+            }
+        }
+
+        // Write Manifest with CRC header
+        let manifest_bytes = postcard::to_allocvec(&manifest)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let manifest_header = ManifestHeader::new(&manifest_bytes);
+
+        writer.current_offset = align_to_page(writer.current_offset as usize) as u64;
+        let manifest_offset = writer.current_offset;
+        writer.file.seek(SeekFrom::Start(writer.current_offset))?;
+        writer.file.write_all(&manifest_header.to_bytes())?;
+        writer.file.write_all(&manifest_bytes)?;
+
+        // Write Footer
+        let total_len = writer.file.stream_position()?;
+        let footer = OmenFooter::new(manifest_offset, total_len);
+        writer.file.write_all(&footer.to_bytes())?;
+
+        // Truncate to exact size and sync
+        let final_len = writer.file.stream_position()?;
+        writer.file.set_len(final_len)?;
+        writer.file.sync_all()?;
+        drop(temp_file);
+
+        // Close old file handle (releases advisory lock)
+        self.file = None;
+
+        // Atomic rename: temp -> original
+        std::fs::rename(&temp_path, &self.path)?;
+
+        // Fsync parent directory
+        if let Some(parent) = self.path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+
+        // Re-open with lock + mmap
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true);
+        configure_open_options(&mut opts);
+        let file = opts.open(&self.path)?;
+        lock_exclusive(&file)?;
+        // SAFETY: File exclusively locked via flock, valid file descriptor
+        self.mmap = Some(unsafe { MmapMut::map_mut(&file)? });
+        self.file = Some(file);
+
+        // Update in-memory state
+        self.manifest = manifest;
+        self.header.count = live_count as u64;
+
+        // Truncate WAL
+        self.wal.truncate()?;
+        self.wal.append(WalEntry::checkpoint(0))?;
+        self.wal.sync()?;
+
+        Ok(())
+    }
+
+    /// Checkpoint from external snapshot (legacy full-rewrite path)
     ///
     /// Writes a complete .omen file to a temp path, then atomically renames it
     /// over the original. This ensures a crash at any point leaves either the

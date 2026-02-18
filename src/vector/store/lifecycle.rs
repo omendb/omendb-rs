@@ -31,7 +31,7 @@ impl VectorStore {
 
         for (i, vector) in vectors.iter().enumerate() {
             let id = format!("_batch_{}", base_slot + i as u32);
-            let slot = self.records.upsert(id, vector.data.clone(), None)?;
+            let slot = self.records.set(id, vector.data.clone(), None)?;
             all_slots.push(slot as usize);
         }
 
@@ -130,7 +130,7 @@ impl VectorStore {
 
             // Insert into our RecordStore
             self.records
-                .upsert(id.clone(), record.vector.clone(), record.metadata.clone())?;
+                .set(id.clone(), record.vector.clone(), record.metadata.clone())?;
             merged_slots.push((slot, id));
             merged_count += 1;
         }

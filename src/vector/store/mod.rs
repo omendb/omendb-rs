@@ -16,7 +16,7 @@ mod lifecycle;
 mod multivec_ops;
 mod options;
 mod persistence;
-mod record_store;
+pub(crate) mod record_store;
 mod search;
 mod sparse_ops;
 mod text_search;

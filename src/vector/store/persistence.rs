@@ -29,8 +29,8 @@ use std::path::PathBuf;
 
 /// Compute the segments directory path for a given store path.
 ///
-/// Appends `.segments` to the full path. For example, "mydb.oadb"
-/// becomes "mydb.oadb.segments".
+/// Appends `.segments` to the full path. For example, "mydb.omen"
+/// becomes "mydb.omen.segments".
 fn segments_dir_for(path: &Path) -> PathBuf {
     let mut seg_path = path.as_os_str().to_os_string();
     seg_path.push(".segments");
@@ -44,11 +44,11 @@ impl VectorStore {
     /// All operations (insert, set, delete) are automatically persisted.
     ///
     /// # Arguments
-    /// * `path` - Directory path for the database (e.g., "mydb.oadb")
+    /// * `path` - Directory path for the database (e.g., "mydb.omen")
     ///
     /// # Example
     /// ```ignore
-    /// let mut store = VectorStore::open("mydb.oadb")?;
+    /// let mut store = VectorStore::open("mydb.omen")?;
     /// store.set("doc1", vector, metadata)?;
     /// // Data is automatically persisted
     /// ```
@@ -79,23 +79,39 @@ impl VectorStore {
 
         // Build RecordStore from snapshot
         let mut deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
-        let mut slots: Vec<Option<Record>> = Vec::with_capacity(snapshot.vectors.len());
 
-        for (slot, vec_opt) in snapshot.vectors.iter().enumerate() {
+        // Determine required slot count from vectors and id_to_slot
+        let max_slot_from_ids = snapshot
+            .id_to_slot
+            .values()
+            .copied()
+            .max()
+            .map_or(0, |m| m + 1) as usize;
+        let slot_capacity = snapshot.vectors.len().max(max_slot_from_ids);
+        let mut slots: Vec<Option<Record>> = Vec::with_capacity(slot_capacity);
+
+        for slot in 0..slot_capacity {
             let slot_u32 = slot as u32;
             if deleted_bitmap.contains(slot_u32) {
                 slots.push(None);
                 continue;
             }
 
-            if let Some(vec_data) = vec_opt {
-                // Find the ID for this slot
-                let id = snapshot
-                    .id_to_slot
-                    .iter()
-                    .find(|(_, &s)| s == slot_u32)
-                    .map_or_else(|| format!("__slot_{slot}"), |(id, _)| id.clone());
+            let vec_data = snapshot.vectors.get(slot).and_then(|v| v.as_ref());
 
+            // Find the ID for this slot
+            let id = snapshot
+                .id_to_slot
+                .iter()
+                .find(|(_, &s)| s == slot_u32)
+                .map(|(id, _)| id.clone());
+
+            if let Some(id) = id {
+                let metadata = snapshot.metadata.get(&slot_u32).cloned();
+                let vector = vec_data.cloned().unwrap_or_default();
+                slots.push(Some(Record::new(id, vector, metadata)));
+            } else if let Some(vec_data) = vec_data {
+                let id = format!("__slot_{slot}");
                 let metadata = snapshot.metadata.get(&slot_u32).cloned();
                 slots.push(Some(Record::new(id, vec_data.clone(), metadata)));
             } else {
@@ -149,7 +165,7 @@ impl VectorStore {
                             });
 
                         // Upsert into RecordStore
-                        let slot = records.upsert(insert_data.id, insert_data.vector, metadata)?;
+                        let slot = records.set(insert_data.id, insert_data.vector, metadata)?;
                         wal_modified_slots.push(slot);
                     }
                 }
@@ -579,8 +595,9 @@ impl VectorStore {
             );
             storage.set_metric(self.distance_metric);
 
-            // Export data from RecordStore (single source of truth, zero-copy)
-            let vectors = self.records.export_vector_refs();
+            // Get dirty slots for incremental checkpoint
+            let dirty = self.records.take_dirty_slots();
+
             let id_to_slot = self.records.export_id_to_slot();
             let deleted = self.records.export_deleted();
             let metadata = self.records.export_metadata();
@@ -617,21 +634,33 @@ impl VectorStore {
                 .map(SparseIndex::to_bytes)
                 .transpose()?;
 
-            // Checkpoint from RecordStore data (not OmenFile's internal state)
-            storage.checkpoint_from_snapshot(
-                &vectors,
-                &id_to_slot,
-                &deleted,
-                &metadata,
-                CheckpointOptions {
-                    hnsw_bytes: None,
-                    metadata_index_bytes: metadata_index_bytes.as_deref(),
-                    multivec_bytes: multivec_bytes.as_deref(),
-                    multivec_offsets: multivec_offsets.as_deref(),
-                    multivec_config,
-                    sparse_index_bytes: sparse_index_bytes.as_deref(),
-                },
-            )?;
+            let options = CheckpointOptions {
+                hnsw_bytes: None,
+                metadata_index_bytes: metadata_index_bytes.as_deref(),
+                multivec_bytes: multivec_bytes.as_deref(),
+                multivec_offsets: multivec_offsets.as_deref(),
+                multivec_config,
+                sparse_index_bytes: sparse_index_bytes.as_deref(),
+            };
+
+            if storage.has_vec_file() {
+                storage.checkpoint_incremental(
+                    &self.records,
+                    &dirty,
+                    &id_to_slot,
+                    &deleted,
+                    &metadata,
+                    options,
+                )?;
+            } else {
+                storage.checkpoint_full(
+                    &self.records,
+                    &id_to_slot,
+                    &deleted,
+                    &metadata,
+                    options,
+                )?;
+            }
         }
 
         if !skip_segments {

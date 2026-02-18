@@ -73,10 +73,10 @@ impl VectorStore {
 
         // Upsert into RecordStore - creates new slot (both for insert and update)
         // RecordStore marks old slot deleted internally to maintain slot == HNSW node ID
-        let slot =
-            self.records
-                .upsert(id.to_string(), vector.data.clone(), Some(metadata.clone()))?
-                as usize;
+        let slot = self
+            .records
+            .set(id.to_string(), vector.data.clone(), Some(metadata.clone()))?
+            as usize;
 
         // Insert into segments
         if let Some(ref mut segments) = self.segments {
@@ -155,7 +155,7 @@ impl VectorStore {
             // Update RecordStore - creates new slot, marks old as deleted
             let new_slot =
                 self.records
-                    .upsert(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
+                    .set(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
 
             // Insert into segments
             if let Some(ref mut segments) = self.segments {
@@ -195,7 +195,7 @@ impl VectorStore {
                 // Insert into RecordStore first to get slots
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in &inserts {
-                    let slot = self.records.upsert(
+                    let slot = self.records.set(
                         id.clone(),
                         vector.data.clone(),
                         Some(metadata.clone()),
@@ -246,7 +246,7 @@ impl VectorStore {
                 // Insert into RecordStore and index
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in &inserts {
-                    let slot = self.records.upsert(
+                    let slot = self.records.set(
                         id.clone(),
                         vector.data.clone(),
                         Some(metadata.clone()),
@@ -275,15 +275,8 @@ impl VectorStore {
         }
 
         // Sync WAL once at end of batch for durability
-        let needs_checkpoint = if let Some(ref mut storage) = self.storage {
+        if let Some(ref mut storage) = self.storage {
             storage.wal_sync()?;
-            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
-        } else {
-            false
-        };
-
-        if needs_checkpoint {
-            self.checkpoint_wal()?;
         }
 
         Ok(result_indices)
