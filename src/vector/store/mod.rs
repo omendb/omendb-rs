@@ -23,6 +23,7 @@ mod text_search;
 mod thread_safe;
 
 pub use crate::omen::Metric;
+pub use accessors::StoreInfo;
 pub use filter::MetadataFilter;
 pub use input::{
     BatchItem, HybridParams, QueryData, QueryInput, Rerank, SearchOptions, VectorData, VectorInput,

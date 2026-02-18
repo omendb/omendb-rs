@@ -67,3 +67,23 @@ pub struct StatsResult {
     pub count: u32,
     pub path: String,
 }
+
+#[napi(object)]
+pub struct InfoResult {
+    pub vector_count: u32,
+    pub deleted_count: u32,
+    pub dimensions: u32,
+    pub metric: String,
+    pub frozen_segment_count: u32,
+    pub mutable_segment_vectors: u32,
+    pub vector_bytes: u32,
+    pub graph_bytes: u32,
+    pub total_memory_bytes: u32,
+    pub wal_entries: u32,
+    pub is_persistent: bool,
+    pub hnsw_m: u32,
+    pub hnsw_ef_construction: u32,
+    pub hnsw_ef_search: u32,
+    pub quantization: bool,
+    pub segment_capacity: u32,
+}

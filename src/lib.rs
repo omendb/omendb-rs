@@ -107,7 +107,8 @@ pub use vector::{
     muvera::MultiVectorConfig,
     sparse::SparseVector,
     store::{
-        BatchItem, QueryInput, Rerank, SearchOptions, VectorData, VectorInput, VectorStoreOptions,
+        BatchItem, QueryInput, Rerank, SearchOptions, StoreInfo, VectorData, VectorInput,
+        VectorStoreOptions,
     },
     MetadataFilter, SearchResult, ThreadSafeVectorStore, Vector, VectorStore,
 };

@@ -719,6 +719,42 @@ impl VectorDatabase {
         inner.store.is_empty()
     }
 
+    /// Get comprehensive database diagnostics.
+    ///
+    /// Returns:
+    ///     dict: Store info including counts, memory, config, and segment details
+    ///
+    /// Examples:
+    ///     >>> info = db.info()
+    ///     >>> info["vector_count"]
+    ///     10000
+    ///     >>> info["total_memory_bytes"]
+    ///     5242880
+    fn info(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let inner = self.inner.read();
+        let info = inner.store.info();
+        let dict = pyo3::types::PyDict::new(py);
+
+        dict.set_item("vector_count", info.vector_count)?;
+        dict.set_item("deleted_count", info.deleted_count)?;
+        dict.set_item("dimensions", info.dimensions)?;
+        dict.set_item("metric", format!("{:?}", info.metric))?;
+        dict.set_item("frozen_segment_count", info.frozen_segment_count)?;
+        dict.set_item("mutable_segment_vectors", info.mutable_segment_vectors)?;
+        dict.set_item("vector_bytes", info.vector_bytes)?;
+        dict.set_item("graph_bytes", info.graph_bytes)?;
+        dict.set_item("total_memory_bytes", info.total_memory_bytes)?;
+        dict.set_item("wal_entries", info.wal_entries)?;
+        dict.set_item("is_persistent", info.is_persistent)?;
+        dict.set_item("hnsw_m", info.hnsw_m)?;
+        dict.set_item("hnsw_ef_construction", info.hnsw_ef_construction)?;
+        dict.set_item("hnsw_ef_search", info.hnsw_ef_search)?;
+        dict.set_item("quantization", info.quantization)?;
+        dict.set_item("segment_capacity", info.segment_capacity)?;
+
+        Ok(dict.into())
+    }
+
     /// Iterate over all vector IDs (without loading vector data).
     ///
     /// Returns a lazy iterator that yields IDs one at a time.

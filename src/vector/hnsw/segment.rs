@@ -387,6 +387,11 @@ impl FrozenSegment {
         }
     }
 
+    /// Access underlying index (for diagnostics)
+    pub fn index(&self) -> &HNSWIndex {
+        &self.index
+    }
+
     /// Access underlying storage (for persistence)
     pub fn storage(&self) -> &NodeStorage {
         &self.index.storage

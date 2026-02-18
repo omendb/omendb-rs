@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::conversions::convert_error;
 use crate::filters::parse_filter;
-use crate::types::{GetResult, SetItem, StatsResult};
+use crate::types::{GetResult, InfoResult, SetItem, StatsResult};
 
 pub(crate) struct VectorDatabaseInner {
     pub(crate) store: VectorStore,
@@ -447,6 +447,31 @@ impl VectorDatabase {
             dimensions: self.dimensions,
             count: inner.store.len() as u32,
             path: self.path.clone(),
+        }
+    }
+
+    /// Get comprehensive database diagnostics.
+    #[napi]
+    pub fn info(&self) -> InfoResult {
+        let inner = self.inner.read();
+        let info = inner.store.info();
+        InfoResult {
+            vector_count: info.vector_count as u32,
+            deleted_count: info.deleted_count as u32,
+            dimensions: info.dimensions as u32,
+            metric: format!("{:?}", info.metric),
+            frozen_segment_count: info.frozen_segment_count as u32,
+            mutable_segment_vectors: info.mutable_segment_vectors as u32,
+            vector_bytes: info.vector_bytes as u32,
+            graph_bytes: info.graph_bytes as u32,
+            total_memory_bytes: info.total_memory_bytes as u32,
+            wal_entries: info.wal_entries as u32,
+            is_persistent: info.is_persistent,
+            hnsw_m: info.hnsw_m as u32,
+            hnsw_ef_construction: info.hnsw_ef_construction as u32,
+            hnsw_ef_search: info.hnsw_ef_search as u32,
+            quantization: info.quantization,
+            segment_capacity: info.segment_capacity as u32,
         }
     }
 

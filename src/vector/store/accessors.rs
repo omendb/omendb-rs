@@ -1,6 +1,35 @@
 use serde_json::Value as JsonValue;
 
 use super::VectorStore;
+use crate::omen::{Metric, OmenFile};
+
+/// Comprehensive store diagnostics.
+///
+/// Returned by [`VectorStore::info()`]. All memory estimates are in bytes.
+#[derive(Debug, Clone)]
+pub struct StoreInfo {
+    // Counts
+    pub vector_count: usize,
+    pub deleted_count: usize,
+    pub dimensions: usize,
+    pub metric: Metric,
+    // Segments
+    pub frozen_segment_count: usize,
+    pub mutable_segment_vectors: usize,
+    // Memory
+    pub vector_bytes: usize,
+    pub graph_bytes: usize,
+    pub total_memory_bytes: usize,
+    // Storage
+    pub wal_entries: u64,
+    pub is_persistent: bool,
+    // Config
+    pub hnsw_m: usize,
+    pub hnsw_ef_construction: usize,
+    pub hnsw_ef_search: usize,
+    pub quantization: bool,
+    pub segment_capacity: usize,
+}
 
 impl VectorStore {
     /// Number of vectors stored (excluding deleted vectors)
@@ -135,5 +164,56 @@ impl VectorStore {
     #[must_use]
     pub fn segments(&self) -> Option<&crate::vector::hnsw::SegmentManager> {
         self.segments.as_ref()
+    }
+
+    /// Get comprehensive store diagnostics.
+    #[must_use]
+    pub fn info(&self) -> StoreInfo {
+        let vector_bytes = self
+            .records
+            .iter_live()
+            .map(|(_, r)| r.vector.len() * 4)
+            .sum::<usize>();
+
+        let (frozen_count, mutable_vecs, graph_bytes, segment_capacity) =
+            if let Some(ref segments) = self.segments {
+                let config = segments.config();
+                let graph = segments.total_memory() - vector_bytes;
+                (
+                    segments.frozen_count(),
+                    segments.mutable_len(),
+                    graph,
+                    config.segment_capacity,
+                )
+            } else {
+                (
+                    0,
+                    0,
+                    0,
+                    self.segment_capacity
+                        .unwrap_or(crate::vector::hnsw::SegmentConfig::DEFAULT_CAPACITY),
+                )
+            };
+
+        let wal_entries = self.storage.as_ref().map_or(0, OmenFile::wal_len);
+
+        StoreInfo {
+            vector_count: self.records.len() as usize,
+            deleted_count: self.records.deleted_count() as usize,
+            dimensions: self.dimensions(),
+            metric: self.distance_metric,
+            frozen_segment_count: frozen_count,
+            mutable_segment_vectors: mutable_vecs,
+            vector_bytes,
+            graph_bytes,
+            total_memory_bytes: vector_bytes + graph_bytes,
+            wal_entries,
+            is_persistent: self.storage.is_some(),
+            hnsw_m: self.hnsw_m,
+            hnsw_ef_construction: self.hnsw_ef_construction,
+            hnsw_ef_search: self.hnsw_ef_search,
+            quantization: self.pending_quantization,
+            segment_capacity,
+        }
     }
 }

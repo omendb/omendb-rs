@@ -231,6 +231,13 @@ impl SegmentManager {
         self.len() == 0
     }
 
+    /// Total memory usage across all segments (bytes)
+    pub fn total_memory(&self) -> usize {
+        let mutable = self.mutable.index().memory_usage();
+        let frozen: usize = self.frozen.iter().map(|s| s.index().memory_usage()).sum();
+        mutable + frozen
+    }
+
     /// Insert a vector with a specific slot
     ///
     /// Inserts into the mutable segment. If the segment reaches capacity,
