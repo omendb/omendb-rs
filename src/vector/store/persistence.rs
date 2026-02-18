@@ -683,6 +683,9 @@ impl VectorStore {
         if !skip_segments {
             // Persist HNSW segments alongside OmenFile checkpoint
             if let Some(ref mut segments) = self.segments {
+                // Wait for any background merge to finish before saving
+                segments.drain_pending_merge();
+
                 if let Some(ref path) = self.storage_path {
                     let segments_dir = segments_dir_for(path);
                     segments

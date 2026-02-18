@@ -363,4 +363,139 @@ impl SegmentManager {
         let stats = self.finish_merge(index, vectors_merged, build_duration);
         Ok(Some(stats))
     }
+
+    /// Start a background merge if conditions are met and no merge is already running.
+    ///
+    /// Clones the Arc refs to frozen segments (cheap) and spawns a thread to build
+    /// the merged index. The original segments stay in `self.frozen` and remain
+    /// searchable while the merge runs. When the merge completes, call
+    /// `apply_pending_merge_if_ready()` to atomically swap in the merged segment.
+    pub fn try_start_background_merge(&mut self) {
+        if self.pending_merge.is_some() {
+            return; // Already merging
+        }
+        if !self.should_merge() {
+            return;
+        }
+
+        let count = self.frozen.len();
+        if count < 2 {
+            return;
+        }
+
+        // Clone Arcs (cheap) — original segments stay in self.frozen and remain searchable
+        let segments = self.frozen.clone();
+        let config = self.config.clone();
+        // Pre-assign segment ID so the background thread can build the FrozenSegment directly
+        let segment_id = self.next_segment_id;
+        self.next_segment_id += 1;
+
+        tracing::info!(
+            frozen_count = count,
+            frozen_vectors = segments.iter().map(|s| s.len()).sum::<usize>(),
+            "Starting background segment merge"
+        );
+
+        let handle = std::thread::spawn(move || {
+            let (vectors, slots) = SegmentManager::collect_from_segments(&segments);
+            if vectors.is_empty() {
+                return Err(crate::vector::hnsw::error::HNSWError::internal(
+                    "No vectors to merge".to_string(),
+                ));
+            }
+
+            let (index, elapsed) = SegmentManager::build_merged_index(&config, vectors, &slots)?;
+
+            tracing::debug!(
+                vectors = slots.len(),
+                duration_ms = elapsed.as_millis(),
+                "Background merge build complete"
+            );
+
+            let frozen = FrozenSegment::from_parts(
+                segment_id,
+                index.entry_point,
+                *index.params(),
+                index.distance_fn,
+                index.storage,
+            );
+            Ok(Arc::new(frozen))
+        });
+
+        self.pending_merge = Some(handle);
+        self.pending_merge_count = count;
+    }
+
+    /// Apply a completed background merge if the thread is done.
+    ///
+    /// Non-blocking: returns immediately if the merge is still running.
+    /// When the merge completes, atomically removes the merged segments and
+    /// inserts the merged result. Segments added during the merge (at positions
+    /// >= pending_merge_count) are preserved.
+    pub fn apply_pending_merge_if_ready(&mut self) -> bool {
+        let handle = match self.pending_merge.take() {
+            Some(h) => h,
+            None => return false,
+        };
+
+        if !handle.is_finished() {
+            self.pending_merge = Some(handle);
+            return false;
+        }
+
+        let count = std::mem::replace(&mut self.pending_merge_count, 0);
+        match handle.join() {
+            Ok(Ok(merged)) => {
+                // Remove the first `count` segments (those that were merged).
+                // Segments added during the merge are at positions count..len and stay.
+                let drain_count = count.min(self.frozen.len());
+                self.frozen.drain(0..drain_count);
+                self.frozen.insert(0, merged);
+                tracing::info!(
+                    merged_segments = drain_count,
+                    remaining_segments = self.frozen.len(),
+                    "Applied background merge"
+                );
+                true
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Background merge failed: {e}");
+                false
+            }
+            Err(_) => {
+                tracing::warn!("Background merge thread panicked");
+                false
+            }
+        }
+    }
+
+    /// Wait for any pending background merge to complete and apply the result.
+    ///
+    /// Blocks until the merge thread finishes. Called during flush/close to ensure
+    /// merge results are not discarded on clean shutdown.
+    pub fn drain_pending_merge(&mut self) {
+        let handle = match self.pending_merge.take() {
+            Some(h) => h,
+            None => return,
+        };
+
+        let count = std::mem::replace(&mut self.pending_merge_count, 0);
+        match handle.join() {
+            Ok(Ok(merged)) => {
+                let drain_count = count.min(self.frozen.len());
+                self.frozen.drain(0..drain_count);
+                self.frozen.insert(0, merged);
+                tracing::info!(
+                    merged_segments = drain_count,
+                    "Applied pending background merge during drain"
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Background merge failed during drain: {e}");
+            }
+            Err(_) => {
+                tracing::warn!("Background merge thread panicked during drain");
+            }
+        }
+    }
 }

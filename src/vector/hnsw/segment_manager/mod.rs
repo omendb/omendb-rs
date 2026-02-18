@@ -25,7 +25,6 @@ use crate::vector::hnsw::merge::MergeStats;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 use crate::vector::hnsw::types::{HNSWParams, Metric};
 use std::sync::Arc;
-use tracing::debug;
 
 /// Configuration for segment manager
 #[derive(Clone, Debug)]
@@ -106,6 +105,12 @@ pub struct SegmentManager {
     pub(crate) last_merge_stats: Option<MergeStats>,
     /// Generation counter, incremented on each save for staleness detection
     pub(crate) generation: u64,
+    /// Background merge thread: None when idle, Some while merge is in progress
+    pub(crate) pending_merge:
+        Option<std::thread::JoinHandle<crate::vector::hnsw::error::Result<Arc<FrozenSegment>>>>,
+    /// Number of frozen segments that are being merged in the background
+    /// (always the first N entries in self.frozen at the time merge started)
+    pub(crate) pending_merge_count: usize,
 }
 
 impl SegmentManager {
@@ -135,6 +140,8 @@ impl SegmentManager {
             merge_policy,
             last_merge_stats: None,
             generation: 0,
+            pending_merge: None,
+            pending_merge_count: 0,
         })
     }
 
@@ -150,6 +157,8 @@ impl SegmentManager {
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
             generation: 0,
+            pending_merge: None,
+            pending_merge_count: 0,
         }
     }
 
@@ -175,6 +184,8 @@ impl SegmentManager {
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
             generation: 0,
+            pending_merge: None,
+            pending_merge_count: 0,
         })
     }
 
@@ -203,6 +214,8 @@ impl SegmentManager {
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
             generation: 0,
+            pending_merge: None,
+            pending_merge_count: 0,
         })
     }
 
@@ -300,14 +313,9 @@ impl SegmentManager {
             self.frozen.push(Arc::new(frozen));
         }
 
-        // Check merge policy and merge if needed
-        if self.should_merge() {
-            debug!(
-                frozen_count = self.frozen.len(),
-                "Auto-merge triggered by policy"
-            );
-            self.merge_all_frozen()?;
-        }
+        // Apply completed background merge if ready, then check if a new one should start
+        self.apply_pending_merge_if_ready();
+        self.try_start_background_merge();
 
         Ok(())
     }
@@ -459,10 +467,12 @@ impl SegmentManager {
 
     /// Add a parallel-built index as a new frozen segment with slot mapping
     pub fn add_frozen_from_index(&mut self, index: HNSWIndex, slots: &[u32]) {
+        self.apply_pending_merge_if_ready();
         let mut index = index;
         index.remap_slots(slots);
         let frozen = self.create_merged_segment(index);
         self.frozen.push(frozen);
+        self.try_start_background_merge();
     }
 }
 
