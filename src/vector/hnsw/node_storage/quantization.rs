@@ -55,6 +55,17 @@ impl NodeStorage {
         Ok(())
     }
 
+    /// Flush the SQ8 training buffer if it has pending vectors.
+    ///
+    /// Forces quantization training even with < 256 vectors. Call before
+    /// freezing a segment to ensure node data contains actual quantized
+    /// vectors (not zeros).
+    pub(crate) fn flush_sq8_training(&mut self) {
+        if self.sq8 && !self.sq8_trained && !self.training_buffer.is_empty() {
+            let _ = self.train_quantization();
+        }
+    }
+
     /// Train SQ8 quantization from buffered vectors
     ///
     /// # Errors

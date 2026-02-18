@@ -311,56 +311,29 @@ impl FrozenSegment {
         }
     }
 
-    /// Create from mutable segment
+    /// Create from mutable segment (zero-copy — moves the index directly)
     fn from_mutable(mutable: MutableSegment) -> Self {
-        let dimensions = mutable.index.dimensions();
-        let params = *mutable.index.params();
-        let distance_fn = mutable.index.distance_function();
-        let m = params.m;
+        let MutableSegment {
+            mut index,
+            id,
+            slots,
+            ..
+        } = mutable;
 
-        let mut storage = NodeStorage::new(dimensions, m, params.max_level as usize);
+        // Force SQ8 training if still buffering (< 256 vectors)
+        // so that node data contains actual quantized vectors
+        index.storage.flush_sq8_training();
 
-        // Copy all nodes from mutable to frozen
-        for id in 0..mutable.index.len() as u32 {
-            storage.allocate_node();
-
-            if let Some(vector) = mutable.index.get_vector(id) {
-                storage
-                    .set_vector(id, vector)
-                    .expect("set_vector cannot fail on non-SQ8 storage");
-            } else if let Some(vector) = mutable.index.get_vector_dequantized(id) {
-                storage
-                    .set_vector(id, &vector)
-                    .expect("set_vector cannot fail on non-SQ8 storage");
-            }
-
-            // Copy level 0 neighbors (main graph layer)
-            let neighbors = mutable.index.get_neighbors_level0(id);
-            storage.set_neighbors(id, &neighbors);
-
-            // Copy metadata and upper level neighbors
-            if let Some(level) = mutable.index.node_level(id) {
-                storage.set_level(id, level);
-
-                // Copy upper level neighbors (levels 1+) for HNSW hierarchy
-                for l in 1..=level {
-                    let upper_neighbors = mutable.index.get_neighbors(id, l);
-                    if !upper_neighbors.is_empty() {
-                        storage.set_neighbors_at_level(id, l, upper_neighbors);
-                    }
-                }
-            }
-            // Use slot from mutable segment's slot tracking
-            let slot = mutable.get_slot(id).unwrap_or(id);
-            storage.set_slot(id, slot);
-        }
+        // MutableSegment tracks slots separately in Vec<u32>;
+        // write them into NodeStorage so FrozenSegment search returns correct slots
+        index.remap_slots(&slots);
 
         Self::from_parts(
-            mutable.id,
-            mutable.index.entry_point(),
-            params,
-            distance_fn,
-            storage,
+            id,
+            index.entry_point,
+            *index.params(),
+            index.distance_fn,
+            index.storage,
         )
     }
 

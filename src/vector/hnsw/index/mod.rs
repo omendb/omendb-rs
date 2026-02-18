@@ -391,6 +391,15 @@ impl HNSWIndex {
         })
     }
 
+    /// Overwrite sequential slots with actual RecordStore slots.
+    /// Used after build_parallel() which assigns slot = local_id.
+    pub fn remap_slots(&mut self, slots: &[u32]) {
+        debug_assert_eq!(self.len(), slots.len());
+        for (id, &slot) in slots.iter().enumerate() {
+            self.storage.set_slot(id as u32, slot);
+        }
+    }
+
     /// Get HNSW parameters
     #[must_use]
     pub fn params(&self) -> &HNSWParams {
