@@ -248,8 +248,14 @@ impl VectorStore {
                 match load_result {
                     Ok(loaded)
                         if loaded.len() == active_count
-                            && loaded.generation() == stored_generation =>
+                            && loaded.generation() == stored_generation
+                            && modified_slots.is_empty() =>
                     {
+                        // Fast path: segments match RecordStore exactly and no WAL delta.
+                        // Must require modified_slots.is_empty() — WAL updates (set on existing
+                        // key) tombstone the old slot and allocate a new slot, keeping active_count
+                        // unchanged. If modified_slots is non-empty, those new slots are not in the
+                        // loaded segments and must be inserted via partial or full rebuild.
                         tracing::info!(
                             segments = loaded.frozen_count(),
                             total_vectors = active_count,
@@ -638,7 +644,14 @@ impl VectorStore {
                 return Ok(());
             }
             if let Some(ref mut storage) = self.storage {
-                storage.checkpoint_vectors_only(&self.records, &dirty)?;
+                if let Err(e) = storage.checkpoint_vectors_only(&self.records, &dirty) {
+                    // Restore dirty slots so the next checkpoint retries writing them.
+                    // Without this, failed .vecs writes leave slots in id_to_slot but
+                    // missing from dirty_since_flush, making them invisible to ANN search
+                    // after recovery via slim snapshot.
+                    self.records.restore_dirty_slots(dirty);
+                    return Err(e.into());
+                }
             }
             Ok(())
         } else {

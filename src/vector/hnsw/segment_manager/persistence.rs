@@ -326,6 +326,14 @@ impl SegmentManager {
             self.frozen.retain(|s| !source_ids.contains(&s.id()));
             self.frozen.insert(0, Arc::new(merged));
 
+            // Advance next_segment_id past the merged segment's ID. The manifest stores
+            // next_segment_id as of the last flush before the merge started, so it may
+            // be <= merged_segment_id. Without this, the next freeze would reuse the
+            // merged segment's ID, causing path collisions.
+            self.next_segment_id = self
+                .next_segment_id
+                .max(merged_segment_id.saturating_add(1));
+
             tracing::info!(
                 merged_segments = source_ids.len(),
                 merged_segment_id,

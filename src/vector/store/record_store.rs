@@ -312,6 +312,11 @@ impl RecordStore {
         std::mem::take(&mut self.dirty_slots)
     }
 
+    /// Restore dirty slots after a failed checkpoint, so the next checkpoint retries them.
+    pub fn restore_dirty_slots(&mut self, slots: RoaringBitmap) {
+        self.dirty_slots |= slots;
+    }
+
     /// Get vector data for a slot (for checkpoint I/O)
     pub fn get_vector(&self, slot: u32) -> Option<&[f32]> {
         self.slots

@@ -58,10 +58,12 @@ impl VectorStore {
             // Create segment manager with initial config
             let config = self.segment_config(dimensions);
 
-            self.segments = Some(
-                SegmentManager::new(config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?,
-            );
+            let mut segs = SegmentManager::new(config)
+                .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?;
+            if let Some(ref path) = self.storage_path {
+                segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+            }
+            self.segments = Some(segs);
         } else if vector.dim() != self.dimensions() {
             anyhow::bail!(
                 "Vector dimension mismatch: store expects {}, got {}",
@@ -213,10 +215,13 @@ impl VectorStore {
                 let config = self.segment_config(dimensions);
 
                 // Use parallel build with slot mapping
-                self.segments = Some(
+                let mut segs =
                     SegmentManager::build_parallel_with_slots(config, vectors_data, &slots)
-                        .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?,
-                );
+                        .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?;
+                if let Some(ref path) = self.storage_path {
+                    segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+                }
+                self.segments = Some(segs);
 
                 // Handle quantization mode persistence
                 if self.pending_quantization {
