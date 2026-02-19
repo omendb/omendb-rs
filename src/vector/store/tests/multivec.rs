@@ -24,7 +24,7 @@ mod muvera {
     #[test]
     fn test_multi_vector_creates_encoder() {
         let config = MultiVectorConfig::default(); // d_proj=16
-        let store = VectorStore::multi_vector_with(128, config);
+        let store = VectorStore::multi_vector_with(128, config).unwrap();
 
         assert!(store.is_multi_vector());
         assert_eq!(store.token_dimension(), Some(128));
@@ -43,7 +43,7 @@ mod muvera {
     #[test]
     fn test_set_multi_basic() {
         let config = small_dim_config();
-        let mut store = VectorStore::multi_vector_with(4, config);
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         let tokens = random_tokens(10, 4, 0);
         let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
@@ -59,7 +59,7 @@ mod muvera {
     #[test]
     fn test_set_multi_multiple_docs() {
         let config = small_dim_config();
-        let mut store = VectorStore::multi_vector_with(4, config);
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         for i in 0..10 {
             let tokens = random_tokens(5 + i, 4, i);
@@ -90,7 +90,7 @@ mod muvera {
 
     #[test]
     fn test_set_multi_error_on_empty_tokens() {
-        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default());
+        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default()).unwrap();
 
         let tokens: Vec<&[f32]> = vec![];
         let result = store.set_multi("doc1", &tokens, serde_json::json!({}));
@@ -101,7 +101,7 @@ mod muvera {
 
     #[test]
     fn test_set_multi_error_on_wrong_dimension() {
-        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default());
+        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default()).unwrap();
 
         let tokens = random_tokens(10, 64, 0); // Wrong dimension
         let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
@@ -114,7 +114,7 @@ mod muvera {
     #[test]
     fn test_search_multi_approx_basic() {
         let config = small_dim_config();
-        let mut store = VectorStore::multi_vector_with(4, config);
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         // Insert 100 documents
         for i in 0..100 {
@@ -145,7 +145,7 @@ mod muvera {
     #[test]
     fn test_search_multi_approx_returns_correct_metadata() {
         let config = small_dim_config();
-        let mut store = VectorStore::multi_vector_with(4, config);
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         let tokens = random_tokens(10, 4, 0);
         let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
@@ -177,7 +177,7 @@ mod muvera {
 
     #[test]
     fn test_search_multi_approx_error_on_empty_query() {
-        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default());
+        let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default()).unwrap();
 
         // Insert a document first
         let tokens = random_tokens(10, 128, 0);
@@ -196,7 +196,7 @@ mod muvera {
 
     #[test]
     fn test_set_multi_batch_basic() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         // Create batch of documents
         let batch: Vec<(&str, Vec<Vec<f32>>, serde_json::Value)> = (0..100)
@@ -220,7 +220,7 @@ mod muvera {
 
     #[test]
     fn test_set_multi_batch_searchable() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         // Batch insert
         let batch: Vec<(&str, Vec<Vec<f32>>, serde_json::Value)> = (0..50)
@@ -246,7 +246,7 @@ mod muvera {
 
     #[test]
     fn test_set_multi_batch_empty() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         let batch: Vec<(&str, Vec<Vec<f32>>, serde_json::Value)> = vec![];
         store.set_multi_batch(batch).unwrap();
@@ -256,7 +256,7 @@ mod muvera {
 
     #[test]
     fn test_set_multi_batch_error_on_invalid_doc() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         // One valid doc, one with wrong dimension
         let batch: Vec<(&str, Vec<Vec<f32>>, serde_json::Value)> = vec![
@@ -273,7 +273,7 @@ mod muvera {
     #[test]
     fn test_search_multi_basic() {
         let config = small_dim_config();
-        let mut store = VectorStore::multi_vector_with(4, config);
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         // Insert 100 documents
         for i in 0..100 {
@@ -304,7 +304,7 @@ mod muvera {
     #[test]
     fn test_search_multi_improves_ordering() {
         let config = small_dim_config();
-        let mut store = VectorStore::multi_vector_with(4, config);
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         // Insert 20 documents with varying similarity to query
         for i in 0..20 {
@@ -323,19 +323,21 @@ mod muvera {
 
         assert_eq!(results.len(), 10);
 
-        // Verify results are sorted by MaxSim score (descending)
+        // Verify results are sorted by distance (ascending = best match first)
+        // Rerank paths store -MaxSim as distance to match HNSW IP semantics
         for i in 1..results.len() {
             assert!(
-                results[i - 1].distance >= results[i].distance,
-                "Results should be sorted by MaxSim score"
+                results[i - 1].distance <= results[i].distance,
+                "Results should be sorted by distance (ascending)"
             );
         }
 
-        // Verify scores are reasonable (MaxSim with 5 query tokens should be positive)
+        // Verify scores are non-positive (-MaxSim where MaxSim >= 0 for normalized vectors)
         for result in &results {
             assert!(
-                result.distance >= 0.0,
-                "MaxSim scores should be non-negative"
+                result.distance <= 0.0,
+                "Rerank distances should be non-positive (-MaxSim), got {}",
+                result.distance
             );
         }
     }
@@ -343,7 +345,7 @@ mod muvera {
     #[test]
     fn test_search_multi_returns_maxsim_scores() {
         let config = small_dim_config();
-        let mut store = VectorStore::multi_vector_with(4, config);
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         // Insert document with known tokens
         let doc_tokens: Vec<Vec<f32>> = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
@@ -360,10 +362,10 @@ mod muvera {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "doc1");
-        // MaxSim score should be 1.0 (perfect match with first doc token)
+        // distance = -MaxSim; MaxSim should be ~1.0 (perfect match with first doc token)
         assert!(
-            (results[0].distance - 1.0).abs() < 0.01,
-            "MaxSim score should be ~1.0, got {}",
+            (results[0].distance + 1.0).abs() < 0.01,
+            "Distance should be ~-1.0 (-MaxSim), got {}",
             results[0].distance
         );
     }
@@ -381,7 +383,7 @@ mod muvera {
 
     #[test]
     fn test_search_multi_empty_store() {
-        let store = VectorStore::multi_vector_with(4, small_dim_config());
+        let store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         let query = random_tokens(5, 4, 0);
         let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
@@ -392,7 +394,7 @@ mod muvera {
 
     #[test]
     fn test_search_multi_custom_factor() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         // Insert 20 documents
         for i in 0..20 {
@@ -417,7 +419,7 @@ mod muvera {
 
     #[test]
     fn test_search_multi_scores_are_ordered() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         // Insert 50 documents
         for i in 0..50 {
@@ -433,11 +435,11 @@ mod muvera {
 
         let results = store.search_multi(&query_refs, 10).unwrap();
 
-        // Results should be ordered by descending MaxSim score
+        // Results should be ordered ascending by distance (-MaxSim), best match first
         for i in 1..results.len() {
             assert!(
-                results[i - 1].distance >= results[i].distance,
-                "Results should be ordered by MaxSim score (descending)"
+                results[i - 1].distance <= results[i].distance,
+                "Results should be ordered by distance (ascending)"
             );
         }
     }
@@ -569,7 +571,7 @@ mod unified_api {
 
     #[test]
     fn test_store_multi_vector() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
         let tokens = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
 
         store
@@ -582,7 +584,7 @@ mod unified_api {
 
     #[test]
     fn test_store_single_in_multi_store_fails() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         let result = store.store("doc1", vec![1.0, 2.0, 3.0, 4.0], serde_json::json!({}));
 
@@ -595,7 +597,7 @@ mod unified_api {
 
     #[test]
     fn test_query_multi_vector() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         // Insert documents
         let doc1_tokens = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
@@ -619,7 +621,7 @@ mod unified_api {
 
     #[test]
     fn test_query_single_in_multi_store_fails() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
         store
             .store(
                 "doc1",
@@ -639,7 +641,7 @@ mod unified_api {
 
     #[test]
     fn test_get_tokens() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
         let tokens = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
 
         store
@@ -654,7 +656,7 @@ mod unified_api {
 
     #[test]
     fn test_get_data_multi() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
         let tokens = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
 
         store
@@ -669,7 +671,7 @@ mod unified_api {
 
     #[test]
     fn test_get_vector_on_multi_store_returns_none() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
         store
             .store(
                 "doc1",
@@ -693,7 +695,7 @@ mod unified_api {
 
     #[test]
     fn test_store_batch_multi() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         store
             .store_batch(vec![
@@ -715,7 +717,7 @@ mod unified_api {
 
     #[test]
     fn test_query_with_options_no_rerank() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         let doc1_tokens = vec![vec![1.0, 0.0, 0.0, 0.0]];
         let doc2_tokens = vec![vec![0.0, 1.0, 0.0, 0.0]];
@@ -736,7 +738,7 @@ mod unified_api {
 
     #[test]
     fn test_query_with_options_custom_rerank() {
-        let mut store = VectorStore::multi_vector_with(4, small_dim_config());
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         let doc1_tokens = vec![vec![1.0, 0.0, 0.0, 0.0]];
         store
@@ -764,7 +766,7 @@ mod persistence_tests {
 
         // Create store, add documents, flush
         {
-            let mut store = VectorStore::multi_vector_with(token_dim, small_dim_config());
+            let mut store = VectorStore::multi_vector_with(token_dim, small_dim_config()).unwrap();
             store = store.persist(&path).unwrap();
 
             let doc1_tokens = random_tokens(5, token_dim, 100);
@@ -814,7 +816,7 @@ mod persistence_tests {
 
         // Create empty multi-vector store and flush
         {
-            let mut store = VectorStore::multi_vector(128);
+            let mut store = VectorStore::multi_vector(128).unwrap();
             store = store.persist(&path).unwrap();
             store.flush().unwrap();
         }
@@ -838,7 +840,7 @@ mod persistence_tests {
 
         // Create store with 100 documents
         {
-            let mut store = VectorStore::multi_vector(token_dim);
+            let mut store = VectorStore::multi_vector(token_dim).unwrap();
             store = store.persist(&path).unwrap();
 
             for i in 0..num_docs {
@@ -874,7 +876,7 @@ mod persistence_tests {
 
         // Create store with documents that have different relevance patterns
         {
-            let mut store = VectorStore::multi_vector_with(token_dim, small_dim_config());
+            let mut store = VectorStore::multi_vector_with(token_dim, small_dim_config()).unwrap();
             store = store.persist(&path).unwrap();
 
             // doc1: tokens aligned with query
@@ -933,7 +935,8 @@ mod persistence_tests {
 
         // Create with custom config
         {
-            let mut store = VectorStore::multi_vector_with(token_dim, custom_config.clone());
+            let mut store =
+                VectorStore::multi_vector_with(token_dim, custom_config.clone()).unwrap();
             store = store.persist(&path).unwrap();
 
             store
@@ -1010,13 +1013,15 @@ mod persistence_tests {
             .collect();
 
         // Store with pooling
-        let mut store_pooled = VectorStore::multi_vector_with(token_dim, config_with_pooling);
+        let mut store_pooled =
+            VectorStore::multi_vector_with(token_dim, config_with_pooling).unwrap();
         store_pooled
             .store("doc1", tokens.clone(), serde_json::json!({}))
             .unwrap();
 
         // Store without pooling
-        let mut store_no_pool = VectorStore::multi_vector_with(token_dim, config_no_pooling);
+        let mut store_no_pool =
+            VectorStore::multi_vector_with(token_dim, config_no_pooling).unwrap();
         store_no_pool
             .store("doc1", tokens.clone(), serde_json::json!({}))
             .unwrap();
@@ -1052,7 +1057,7 @@ mod persistence_tests {
 
         // Create and persist with pooling
         {
-            let mut store = VectorStore::multi_vector_with(token_dim, config);
+            let mut store = VectorStore::multi_vector_with(token_dim, config).unwrap();
             store = store.persist(&path).unwrap();
 
             let tokens: Vec<Vec<f32>> = (0..20)
@@ -1085,7 +1090,7 @@ mod persistence_tests {
     #[test]
     fn test_query_dimension_mismatch_returns_error() {
         let token_dim = 32;
-        let mut store = VectorStore::multi_vector(token_dim);
+        let mut store = VectorStore::multi_vector(token_dim).unwrap();
 
         // Insert a document
         let tokens: Vec<Vec<f32>> = vec![vec![0.1; token_dim]; 3];

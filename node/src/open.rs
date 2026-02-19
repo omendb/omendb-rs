@@ -203,7 +203,12 @@ pub fn open(
 
     if path == ":memory:" {
         let store = if let Some(mv_config) = multi_vector_config {
-            VectorStore::multi_vector_with(dimensions, mv_config)
+            VectorStore::multi_vector_with(dimensions, mv_config).map_err(|e| {
+                Error::new(
+                    Status::InvalidArg,
+                    format!("Invalid multi-vector config: {}", e),
+                )
+            })?
         } else {
             store_options.build().map_err(|e| {
                 Error::new(
@@ -264,6 +269,12 @@ pub fn open(
 
     if let Some(mv_config) = multi_vector_config {
         let store = VectorStore::multi_vector_with(dimensions, mv_config)
+            .map_err(|e| {
+                Error::new(
+                    Status::InvalidArg,
+                    format!("Invalid multi-vector config: {}", e),
+                )
+            })?
             .persist(&path)
             .map_err(convert_error)?;
 

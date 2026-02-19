@@ -404,8 +404,8 @@ impl VectorStore {
             .into_iter()
             .take(k)
             .map(|(_, id, metadata, score)| {
-                // Return MaxSim score as distance (higher = more similar)
-                SearchResult::new(id.to_string(), score, metadata.clone())
+                // Store as -MaxSim to match IP distance semantics (lower = better)
+                SearchResult::new(id.to_string(), -score, metadata.clone())
             })
             .collect();
 
@@ -720,7 +720,7 @@ impl VectorStore {
                 let slot = candidate_slots[idx];
                 let record = self.records.get_by_slot(slot)?;
                 let metadata = record.metadata.clone().unwrap_or(JsonValue::Null);
-                Some(SearchResult::new(record.id.clone(), score, metadata))
+                Some(SearchResult::new(record.id.clone(), -score, metadata))
             })
             .collect();
 
@@ -807,7 +807,7 @@ impl VectorStore {
             .take(k)
             .map(|(idx, score)| {
                 let (ref id, ref metadata, _) = candidate_data[idx];
-                SearchResult::new(id.clone(), score, metadata.clone())
+                SearchResult::new(id.clone(), -score, metadata.clone())
             })
             .collect();
 
@@ -1035,7 +1035,7 @@ impl VectorStore {
             .take(k)
             .map(|(idx, score)| {
                 let (ref id, ref metadata, _) = candidate_data[idx];
-                SearchResult::new(id.clone(), score, metadata.clone())
+                SearchResult::new(id.clone(), -score, metadata.clone())
             })
             .collect();
 

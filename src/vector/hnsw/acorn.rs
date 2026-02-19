@@ -54,7 +54,10 @@ pub fn collect_matching_neighbors<S, F>(
             // 2-hop expansion for non-matching neighbors (zero-copy via Cow)
             let second_hop = storage.neighbors_at_level_cow(neighbor_id, level);
             for &second_hop_id in &*second_hop {
-                if !visited.contains(second_hop_id) && filter_fn(second_hop_id) {
+                if !visited.contains(second_hop_id)
+                    && filter_fn(second_hop_id)
+                    && !output.contains(&second_hop_id)
+                {
                     output.push(second_hop_id);
                     if output.len() >= m {
                         return;

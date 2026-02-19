@@ -25,7 +25,7 @@
 //! use omendb::vector::muvera::{MultiVectorConfig, MuveraEncoder};
 //!
 //! let config = MultiVectorConfig::default();  // k_sim=4, r_reps=8, d_proj=16
-//! let encoder = MuveraEncoder::new(128, config);  // 128D tokens -> 2,048D FDE
+//! let encoder = MuveraEncoder::new(128, config).unwrap();  // 128D tokens -> 2,048D FDE
 //!
 //! let doc_fde = encoder.encode_document(&doc_tokens);
 //! let query_fde = encoder.encode_query(&query_tokens);

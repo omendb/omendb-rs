@@ -558,13 +558,32 @@ impl VectorDatabase {
         other: &VectorDatabase,
         key_prefix: Option<String>,
     ) -> Result<u32> {
-        let mut inner = self.inner.write();
-        let other_inner = other.inner.read();
+        if Arc::ptr_eq(&self.inner, &other.inner) {
+            return Err(napi::Error::from_reason(
+                "cannot merge a database into itself",
+            ));
+        }
 
-        let count = inner
-            .store
-            .merge_from_with_prefix(&other_inner.store, key_prefix.as_deref())
-            .map_err(convert_error)?;
+        // Acquire locks in pointer-address order to prevent AB/BA deadlock
+        // when a.merge_from(b) and b.merge_from(a) run concurrently.
+        let self_addr = Arc::as_ptr(&self.inner) as usize;
+        let other_addr = Arc::as_ptr(&other.inner) as usize;
+
+        let count = if self_addr < other_addr {
+            let mut inner = self.inner.write();
+            let other_inner = other.inner.read();
+            inner
+                .store
+                .merge_from_with_prefix(&other_inner.store, key_prefix.as_deref())
+                .map_err(convert_error)?
+        } else {
+            let other_inner = other.inner.read();
+            let mut inner = self.inner.write();
+            inner
+                .store
+                .merge_from_with_prefix(&other_inner.store, key_prefix.as_deref())
+                .map_err(convert_error)?
+        };
 
         Ok(count as u32)
     }

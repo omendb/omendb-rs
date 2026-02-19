@@ -176,7 +176,8 @@ pub(crate) fn open(
     if path == ":memory:" {
         // Multi-vector mode: use VectorStore::multi_vector() constructor
         if let Some(config) = mv_config {
-            let store = VectorStore::multi_vector_with(effective_dims, config);
+            let store =
+                VectorStore::multi_vector_with(effective_dims, config).map_err(convert_error)?;
 
             return Ok(VectorDatabase {
                 inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
@@ -260,6 +261,7 @@ pub(crate) fn open(
         if let Some(mv_cfg) = mv_config {
             // Create new multi-vector persistent store
             let store = VectorStore::multi_vector_with(effective_dims, mv_cfg)
+                .map_err(convert_error)?
                 .persist(&path)
                 .map_err(convert_error)?;
 

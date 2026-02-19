@@ -55,6 +55,9 @@ impl Level0Storage {
     }
 
     /// Execute closure with neighbors
+    ///
+    /// Uses a stack buffer for the common post-pruning case (≤64 neighbors).
+    /// Falls back to heap allocation during construction when count can reach max_m0.
     #[inline(always)]
     #[allow(clippy::needless_range_loop)] // Intentional: reading from one array, writing to another
     pub fn with_neighbors<F, R>(&self, node_id: u32, f: F) -> R
@@ -67,13 +70,21 @@ impl Level0Storage {
         }
         let base = idx * self.max_m0;
         let count = self.counts[idx].load(Ordering::Acquire) as usize;
+        let n = count.min(self.max_m0);
 
-        let mut buf = [0u32; 64];
-        let n = count.min(64).min(self.max_m0);
-        for i in 0..n {
-            buf[i] = self.data[base + i].load(Ordering::Relaxed);
+        if n <= 64 {
+            let mut buf = [0u32; 64];
+            for i in 0..n {
+                buf[i] = self.data[base + i].load(Ordering::Relaxed);
+            }
+            f(&buf[..n])
+        } else {
+            // During construction, nodes can accumulate up to max_m0 neighbors before pruning
+            let buf: Vec<u32> = (0..n)
+                .map(|i| self.data[base + i].load(Ordering::Relaxed))
+                .collect();
+            f(&buf)
         }
-        f(&buf[..n])
     }
 
     /// Get neighbors as Vec (API compatibility, allocates)

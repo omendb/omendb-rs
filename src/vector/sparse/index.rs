@@ -25,33 +25,21 @@ struct PostingElement {
 struct PostingList {
     /// Elements (unsorted; order doesn't matter for exact search).
     elements: Vec<PostingElement>,
-    /// Upper bound on weights (for future WAND optimization).
-    max_weight: f32,
 }
 
 impl PostingList {
     fn new() -> Self {
         Self {
             elements: Vec::new(),
-            max_weight: f32::NEG_INFINITY,
         }
     }
 
     fn push(&mut self, id: u32, weight: f32) {
         self.elements.push(PostingElement { id, weight });
-        if weight > self.max_weight {
-            self.max_weight = weight;
-        }
     }
 
     fn remove(&mut self, id: u32) {
         self.elements.retain(|e| e.id != id);
-        // Recompute max_weight
-        self.max_weight = self
-            .elements
-            .iter()
-            .map(|e| e.weight)
-            .fold(f32::NEG_INFINITY, f32::max);
     }
 }
 
@@ -112,6 +100,12 @@ impl SparseIndex {
         if self.vectors.contains_key(&slot) {
             self.remove(slot);
         }
+
+        debug_assert_eq!(
+            vector.indices().len(),
+            vector.values().len(),
+            "SparseVector indices and values length mismatch"
+        );
 
         // Add to posting lists
         for (&dim, &weight) in vector.indices().iter().zip(vector.values().iter()) {

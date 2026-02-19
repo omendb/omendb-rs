@@ -317,6 +317,11 @@ impl SegmentManager {
             return Ok(None);
         }
 
+        // A background merge in flight has snapshotted self.frozen[0..pending_merge_count].
+        // Mutating self.frozen before that merge is applied would misalign the drain indices.
+        // Complete any pending merge first to get a stable baseline.
+        self.drain_pending_merge();
+
         // Validate indices are sorted ascending and unique
         for i in 1..indices.len() {
             if indices[i] <= indices[i - 1] {

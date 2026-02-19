@@ -107,12 +107,32 @@ impl VectorDatabase {
     ///     >>> db.merge_from(other_db, key_prefix="subdir/")
     #[pyo3(signature = (other, key_prefix=None))]
     fn merge_from(&self, other: &VectorDatabase, key_prefix: Option<&str>) -> PyResult<usize> {
-        let mut inner = self.inner.write();
-        let other_inner = other.inner.read();
-        inner
-            .store
-            .merge_from_with_prefix(&other_inner.store, key_prefix)
-            .map_err(convert_error)
+        use std::sync::Arc;
+
+        if Arc::ptr_eq(&self.inner, &other.inner) {
+            return Err(PyValueError::new_err("cannot merge a database into itself"));
+        }
+
+        // Acquire locks in pointer-address order to prevent AB/BA deadlock
+        // when a.merge_from(b) and b.merge_from(a) run concurrently.
+        let self_addr = Arc::as_ptr(&self.inner) as usize;
+        let other_addr = Arc::as_ptr(&other.inner) as usize;
+
+        if self_addr < other_addr {
+            let mut inner = self.inner.write();
+            let other_inner = other.inner.read();
+            inner
+                .store
+                .merge_from_with_prefix(&other_inner.store, key_prefix)
+                .map_err(convert_error)
+        } else {
+            let other_inner = other.inner.read();
+            let mut inner = self.inner.write();
+            inner
+                .store
+                .merge_from_with_prefix(&other_inner.store, key_prefix)
+                .map_err(convert_error)
+        }
     }
 
     /// Optimize index for cache-efficient search.

@@ -499,7 +499,7 @@ fn test_store_with_text_single_vector() {
 
 #[test]
 fn test_store_with_text_multi_vector() {
-    let mut store = VectorStore::multi_vector(32);
+    let mut store = VectorStore::multi_vector(32).unwrap();
     store.enable_text_search().unwrap();
 
     let tokens = vec![vec![1.0f32; 32], vec![0.5f32; 32]];

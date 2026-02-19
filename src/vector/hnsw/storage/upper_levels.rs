@@ -87,12 +87,20 @@ impl UpperLevelStorage {
                 let base = level_idx * self.max_m;
                 let count = links.counts[level_idx].load(Ordering::Acquire) as usize;
 
-                let mut buf = [0u32; 32];
-                let n = count.min(32).min(self.max_m);
-                for i in 0..n {
-                    buf[i] = links.data[base + i].load(Ordering::Relaxed);
+                let n = count.min(self.max_m);
+                if n <= 32 {
+                    let mut buf = [0u32; 32];
+                    for i in 0..n {
+                        buf[i] = links.data[base + i].load(Ordering::Relaxed);
+                    }
+                    f(&buf[..n])
+                } else {
+                    // During construction, nodes can accumulate up to max_m neighbors before pruning
+                    let buf: Vec<u32> = (0..n)
+                        .map(|i| links.data[base + i].load(Ordering::Relaxed))
+                        .collect();
+                    f(&buf)
                 }
-                f(&buf[..n])
             }
             _ => f(&[]),
         }

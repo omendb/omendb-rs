@@ -388,7 +388,7 @@ impl VectorStore {
                     seed: mv_cfg.seed,
                     pool_factor: mv_cfg.pool_factor,
                 };
-                let encoder = MuveraEncoder::new(mv_cfg.token_dim, config);
+                let encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
 
                 // Reconstruct storage from persisted bytes
                 let token_dim = mv_cfg.token_dim;

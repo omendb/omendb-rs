@@ -207,8 +207,7 @@ impl VectorStore {
     /// // Search with query tokens
     /// let results = store.query_with_options(&tokens, 10, &Default::default()).unwrap();
     /// ```
-    #[must_use]
-    pub fn multi_vector(token_dim: usize) -> Self {
+    pub fn multi_vector(token_dim: usize) -> anyhow::Result<Self> {
         Self::multi_vector_with(token_dim, MultiVectorConfig::default())
     }
 
@@ -219,26 +218,29 @@ impl VectorStore {
     /// * `token_dim` - Dimension of each token embedding
     /// * `config` - Configuration controlling quality/size tradeoff
     ///
+    /// # Errors
+    ///
+    /// Returns an error if `d_proj` exceeds `token_dim`.
+    ///
     /// # Example
     ///
     /// ```rust
     /// use omendb::{VectorStore, MultiVectorConfig};
     ///
     /// // High-quality configuration for production
-    /// let store = VectorStore::multi_vector_with(128, MultiVectorConfig::quality());
+    /// let store = VectorStore::multi_vector_with(128, MultiVectorConfig::quality()).unwrap();
     ///
     /// // Fast configuration for prototyping
-    /// let store = VectorStore::multi_vector_with(128, MultiVectorConfig::fast());
+    /// let store = VectorStore::multi_vector_with(128, MultiVectorConfig::fast()).unwrap();
     /// ```
-    #[must_use]
-    pub fn multi_vector_with(token_dim: usize, config: MultiVectorConfig) -> Self {
-        let encoder = MuveraEncoder::new(token_dim, config);
+    pub fn multi_vector_with(token_dim: usize, config: MultiVectorConfig) -> anyhow::Result<Self> {
+        let encoder = MuveraEncoder::new(token_dim, config)?;
         let fde_dim = encoder.fde_dimension();
 
         let mut store = Self::with_defaults(fde_dim, Metric::InnerProduct);
         store.muvera_encoder = Some(encoder);
         store.multivec_storage = Some(MultiVecStorage::new(token_dim));
-        store
+        Ok(store)
     }
 
     /// Get the dimensionality of vectors stored in this database.
