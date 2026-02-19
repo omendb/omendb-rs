@@ -817,10 +817,16 @@ impl OmenFile {
 
     // Note: load_snapshot() removed in Phase 5. VectorStore uses load_persisted_snapshot().
 
-    /// Returns true if the .records snapshot exists and is more recent than the .omen manifest.
+    /// Returns true if the .records snapshot exists and is at least as recent as the .omen manifest.
     ///
     /// Used during recovery to decide whether to use the slim snapshot's ID/metadata mappings
     /// instead of the manifest's (happens when auto-checkpoint ran but flush() hasn't been called).
+    ///
+    /// Uses `>=` (not `>`) to handle 1-second precision filesystems (HFS+, ext3, NFS): if
+    /// `.records` and `.omen` have equal mtime, the snapshot was written after or during the
+    /// same flush tick and is still valid. Using `>` would cause data loss on these filesystems
+    /// because `checkpoint_vectors_only` truncates the WAL after writing `.records`, so ignoring
+    /// an equal-mtime snapshot leaves an empty WAL and no in-between vectors.
     pub fn records_newer_than_omen(&self) -> bool {
         let records_mtime = match std::fs::metadata(&self.records_path).and_then(|m| m.modified()) {
             Ok(t) => t,
@@ -830,7 +836,7 @@ impl OmenFile {
             Ok(t) => t,
             Err(_) => return false,
         };
-        records_mtime > omen_mtime
+        records_mtime >= omen_mtime
     }
 
     /// Write a slim records snapshot atomically (tmp → fsync → rename).
