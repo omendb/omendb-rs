@@ -91,6 +91,8 @@ impl VectorDatabase {
     /// Performance:
     ///     - Throughput: 20,000-28,000 vec/s @ 10K vectors
     ///     - Batch operations are more efficient than individual inserts
+    ///     - Batch inserts skip the WAL for performance. Data is not durable
+    ///       until flush() is called (or the context manager exits).
     ///
     /// Flexible input formats:
     ///     # Single item

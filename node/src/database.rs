@@ -44,6 +44,9 @@ impl VectorDatabase {
     ///
     /// @param items - Array of {id, vector, metadata?, text?} or {id, vectors, metadata?}
     /// @returns Number of vectors inserted/updated
+    ///
+    /// @note Batch inserts (multiple items) skip the WAL for performance. Data is not
+    /// durable until flush() is called.
     #[napi]
     pub async fn set(&self, items: Vec<SetItem>) -> Result<u32> {
         let has_documents = items.iter().any(|item| item.document.is_some());

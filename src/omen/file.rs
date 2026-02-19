@@ -868,6 +868,10 @@ impl OmenFile {
     /// manifest rewrite (~40MB at 1M vectors) and WAL truncation. On crash, WAL
     /// replay recovers IDs/metadata not yet in the manifest.
     ///
+    /// Note: this path syncs the WAL but does NOT truncate it — WAL entries are still
+    /// needed for ID/metadata recovery until the next full flush(). The WAL grows until
+    /// flush() is called.
+    ///
     /// Requires .vecs to already exist (call `checkpoint_full()` first).
     pub fn checkpoint_vectors_only(
         &mut self,

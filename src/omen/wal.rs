@@ -426,6 +426,8 @@ impl Wal {
         self.file.get_mut().set_len(0)?;
         self.file.get_mut().seek(SeekFrom::Start(0))?;
         self.entry_count = 0;
+        // next_timestamp intentionally resets to 0 — timestamps are session-scoped,
+        // not globally monotonic. Recovery uses Checkpoint entry type, not timestamps.
         write_wal_meta(&meta_path(&self.path), 0, 0)?;
         Ok(())
     }

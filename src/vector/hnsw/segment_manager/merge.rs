@@ -251,6 +251,9 @@ impl SegmentManager {
     /// Uses parallel HNSW construction for the merged index.
     /// Returns merge statistics if any segments were merged.
     pub fn merge_all_frozen(&mut self) -> Result<Option<MergeStats>> {
+        // Wait for any in-progress background merge to finish before starting
+        // an explicit merge — prevents redundant concurrent builds of the same segments.
+        self.drain_pending_merge();
         if self.frozen.len() < 2 {
             return Ok(None);
         }
