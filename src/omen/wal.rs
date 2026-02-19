@@ -183,8 +183,14 @@ impl WalEntry {
 
 /// WAL metadata for O(1) open (stored in .wal.meta file)
 ///
-/// 24 bytes: [checkpoint_offset: u64] [max_timestamp: u64] [entry_count: u64]
-const WAL_META_SIZE: usize = 24;
+/// 32 bytes: [checkpoint_offset: u64] [max_timestamp: u64] [entry_count: u64] [truncation_epoch: u64]
+///
+/// `truncation_epoch` increments on every `truncate()` call. The slim records snapshot
+/// stores the epoch at the time it was written. On recovery, if the current WAL epoch is
+/// greater than the snapshot's epoch, the WAL was truncated after the snapshot was taken,
+/// meaning all current WAL entries are new and must be replayed. If epochs match, the WAL
+/// was not truncated after the snapshot and its entries are already incorporated — skip replay.
+const WAL_META_SIZE: usize = 32;
 
 fn meta_path(wal_path: &std::path::Path) -> std::path::PathBuf {
     let mut p = wal_path.as_os_str().to_os_string();
@@ -192,22 +198,39 @@ fn meta_path(wal_path: &std::path::Path) -> std::path::PathBuf {
     std::path::PathBuf::from(p)
 }
 
-fn read_wal_meta(path: &std::path::Path) -> Option<(u64, u64, u64)> {
+fn read_wal_meta(path: &std::path::Path) -> Option<(u64, u64, u64, u64)> {
     let data = std::fs::read(path).ok()?;
-    if data.len() != WAL_META_SIZE {
+    // Support both old 24-byte format (epoch defaults to 0) and new 32-byte format
+    if data.len() != WAL_META_SIZE && data.len() != 24 {
         return None;
     }
     let checkpoint_offset = u64::from_le_bytes(data[0..8].try_into().ok()?);
     let max_timestamp = u64::from_le_bytes(data[8..16].try_into().ok()?);
     let entry_count = u64::from_le_bytes(data[16..24].try_into().ok()?);
-    Some((checkpoint_offset, max_timestamp, entry_count))
+    let truncation_epoch = if data.len() == WAL_META_SIZE {
+        u64::from_le_bytes(data[24..32].try_into().ok()?)
+    } else {
+        0
+    };
+    Some((
+        checkpoint_offset,
+        max_timestamp,
+        entry_count,
+        truncation_epoch,
+    ))
 }
 
-fn write_wal_meta(path: &std::path::Path, max_timestamp: u64, entry_count: u64) -> io::Result<()> {
+fn write_wal_meta(
+    path: &std::path::Path,
+    max_timestamp: u64,
+    entry_count: u64,
+    truncation_epoch: u64,
+) -> io::Result<()> {
     let mut buf = [0u8; WAL_META_SIZE];
     buf[0..8].copy_from_slice(&0u64.to_le_bytes()); // checkpoint always at 0 after truncate
     buf[8..16].copy_from_slice(&max_timestamp.to_le_bytes());
     buf[16..24].copy_from_slice(&entry_count.to_le_bytes());
+    buf[24..32].copy_from_slice(&truncation_epoch.to_le_bytes());
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     configure_open_options(&mut opts);
@@ -223,6 +246,9 @@ pub struct Wal {
     path: std::path::PathBuf,
     next_timestamp: u64,
     entry_count: u64,
+    /// Incremented on every truncate(). Stored in slim snapshots so recovery can tell
+    /// whether WAL entries predate the snapshot (skip) or postdate it (replay).
+    truncation_epoch: u64,
 }
 
 impl Wal {
@@ -249,13 +275,15 @@ impl Wal {
             path,
             next_timestamp: 0,
             entry_count: 0,
+            truncation_epoch: 0,
         };
 
         if file_len > 0 {
             // Try O(1) open via meta file, fall back to full scan
-            if let Some((_cp_offset, max_ts, count)) = read_wal_meta(&meta_path(&wal.path)) {
+            if let Some((_cp_offset, max_ts, count, epoch)) = read_wal_meta(&meta_path(&wal.path)) {
                 wal.next_timestamp = max_ts + 1;
                 wal.entry_count = count;
+                wal.truncation_epoch = epoch;
             } else {
                 wal.scan_for_timestamp()?;
             }
@@ -337,8 +365,22 @@ impl Wal {
         } else {
             0
         };
-        write_wal_meta(&meta_path(&self.path), ts, self.entry_count)?;
+        write_wal_meta(
+            &meta_path(&self.path),
+            ts,
+            self.entry_count,
+            self.truncation_epoch,
+        )?;
         Ok(())
+    }
+
+    /// Return the current truncation epoch.
+    ///
+    /// Stored in slim snapshots so recovery can tell whether WAL entries are new
+    /// (epoch increased since snapshot) or stale (epoch unchanged).
+    #[must_use]
+    pub fn truncation_epoch(&self) -> u64 {
+        self.truncation_epoch
     }
 
     /// Read all entries after last checkpoint
@@ -428,7 +470,8 @@ impl Wal {
         self.entry_count = 0;
         // next_timestamp intentionally resets to 0 — timestamps are session-scoped,
         // not globally monotonic. Recovery uses Checkpoint entry type, not timestamps.
-        write_wal_meta(&meta_path(&self.path), 0, 0)?;
+        self.truncation_epoch += 1;
+        write_wal_meta(&meta_path(&self.path), 0, 0, self.truncation_epoch)?;
         Ok(())
     }
 }

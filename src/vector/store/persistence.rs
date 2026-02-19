@@ -69,14 +69,21 @@ impl VectorStore {
         // full id_to_slot/metadata state, and dirty_since_flush drives partial segment rebuild.
         let mut slim_dirty_slots: Vec<u32> = Vec::new();
         let mut slim_snapshot_loaded = false;
+        // When slim snapshot is loaded, compare WAL truncation epochs to decide whether
+        // to replay WAL entries:
+        //   WAL epoch > snapshot epoch → WAL was truncated after snapshot, entries are new → replay
+        //   WAL epoch == snapshot epoch → WAL not truncated after snapshot, entries stale → skip
+        let mut slim_wal_epoch: u64 = 0;
         if storage.records_newer_than_omen() {
             match storage.load_records_snapshot() {
                 Ok(Some(slim)) => {
                     tracing::info!(
                         records = slim.id_to_slot.len(),
                         dirty_slots = slim.dirty_since_flush.len(),
+                        wal_epoch = slim.wal_truncation_epoch,
                         "Loaded slim records snapshot for recovery"
                     );
+                    slim_wal_epoch = slim.wal_truncation_epoch;
                     slim_dirty_slots = slim.dirty_since_flush.into_iter().collect();
                     snapshot.id_to_slot = slim.id_to_slot;
                     snapshot.deleted = slim.deleted;
@@ -152,17 +159,30 @@ impl VectorStore {
         // Replay WAL entries directly into RecordStore (Phase 5 architecture)
         // Track slots modified by WAL replay for partial segment rebuild.
         //
-        // Skip WAL replay when a slim records snapshot was loaded: the snapshot
-        // already captures id_to_slot, deleted, and metadata for all WAL entries
-        // up to the last auto-checkpoint. RecordStore::set() is NOT idempotent —
-        // replaying existing IDs on top of the snapshot marks their old slots
-        // deleted and allocates new slots, corrupting the segment rebuild.
+        // WAL replay decision when a slim snapshot is loaded uses truncation epochs:
+        //   WAL epoch > snapshot epoch → WAL was truncated after the snapshot (new entries) → replay
+        //   WAL epoch == snapshot epoch → WAL not truncated after snapshot (stale entries) → skip
         //
-        // Trade-off: in the rare case where WAL truncation failed, the process
-        // continued, and crash occurred, at most one in-flight operation is lost.
-        let wal_entries = if slim_snapshot_loaded {
+        // RecordStore::set() is NOT idempotent: replaying an existing ID allocates a new
+        // slot and marks the old one deleted, corrupting the segment rebuild. Skipping stale
+        // WAL entries prevents this. Old snapshots (wal_truncation_epoch == 0) conservatively
+        // skip WAL replay to maintain the prior safe-but-lossy behavior.
+        let current_wal_epoch = storage.wal_truncation_epoch();
+        let wal_entries = if slim_snapshot_loaded && current_wal_epoch <= slim_wal_epoch {
+            tracing::debug!(
+                current_wal_epoch,
+                slim_wal_epoch,
+                "Slim snapshot: WAL epoch unchanged, skipping stale WAL replay"
+            );
             vec![]
         } else {
+            if slim_snapshot_loaded {
+                tracing::debug!(
+                    current_wal_epoch,
+                    slim_wal_epoch,
+                    "Slim snapshot: WAL epoch advanced, replaying new WAL entries"
+                );
+            }
             storage.pending_wal_entries()?
         };
         let mut wal_modified_slots: Vec<u32> = Vec::new();
@@ -661,6 +681,29 @@ impl VectorStore {
     }
 
     fn flush_internal(&mut self, skip_segments: bool) -> Result<()> {
+        // Save segments FIRST so their generation is current when the manifest is written.
+        // Saving after the checkpoint writes the old generation to the manifest, causing a
+        // generation mismatch on every open that forces a full HNSW rebuild.
+        if !skip_segments {
+            if let Some(ref mut segments) = self.segments {
+                // Wait for any background merge to finish before saving
+                segments.drain_pending_merge();
+
+                if let Some(ref path) = self.storage_path {
+                    let segments_dir = segments_dir_for(path);
+                    segments.set_pending_merge_dir(segments_dir.clone());
+                    segments
+                        .save(&segments_dir)
+                        .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
+                    // Update config with new generation so the manifest checkpoint below
+                    // writes the correct value.
+                    if let Some(ref mut storage) = self.storage {
+                        storage.put_config("segments_generation", segments.generation())?;
+                    }
+                }
+            }
+        }
+
         if let Some(ref mut storage) = self.storage {
             // Ensure dimensions are set in storage header
             let dims = self.records.dimensions();
@@ -724,7 +767,7 @@ impl VectorStore {
                 sparse_index_bytes: sparse_index_bytes.as_deref(),
             };
 
-            if storage.has_vec_file() {
+            let result = if storage.has_vec_file() {
                 storage.checkpoint_incremental(
                     &self.records,
                     &dirty,
@@ -732,35 +775,16 @@ impl VectorStore {
                     &deleted,
                     &metadata,
                     options,
-                )?;
+                )
             } else {
-                storage.checkpoint_full(
-                    &self.records,
-                    &id_to_slot,
-                    &deleted,
-                    &metadata,
-                    options,
-                )?;
-            }
-        }
-
-        if !skip_segments {
-            // Persist HNSW segments alongside OmenFile checkpoint
-            if let Some(ref mut segments) = self.segments {
-                // Wait for any background merge to finish before saving
-                segments.drain_pending_merge();
-
-                if let Some(ref path) = self.storage_path {
-                    let segments_dir = segments_dir_for(path);
-                    segments.set_pending_merge_dir(segments_dir.clone());
-                    segments
-                        .save(&segments_dir)
-                        .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
-                    // Store generation for staleness detection on next open
-                    if let Some(ref mut storage) = self.storage {
-                        storage.put_config("segments_generation", segments.generation())?;
-                    }
-                }
+                storage.checkpoint_full(&self.records, &id_to_slot, &deleted, &metadata, options)
+            };
+            if let Err(e) = result {
+                // Restore dirty slots so the next flush retries writing them.
+                // Without this, a failed checkpoint silently drops the slots —
+                // same pattern as checkpoint_wal (persistence.rs:652).
+                self.records.restore_dirty_slots(dirty);
+                return Err(e.into());
             }
         }
 

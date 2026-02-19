@@ -353,7 +353,10 @@ impl RecordStore {
         self.slots = new_slots;
         self.id_to_slot = new_id_to_slot;
         self.deleted.clear();
-        self.dirty_slots.clear();
+        // Mark every live slot dirty so checkpoint_incremental rewrites .vecs at the new
+        // positions. Clearing dirty_slots here would leave the manifest pointing at new
+        // compact slot indices while .vecs still has vectors at their old positions.
+        self.dirty_slots = (0..self.slots.len() as u32).collect();
         // live_count stays the same
 
         old_to_new

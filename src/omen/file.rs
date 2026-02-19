@@ -581,12 +581,18 @@ pub struct OmenSnapshot {
 /// a full manifest rewrite. Recovery loads this snapshot when it is newer than the manifest.
 /// The `dirty_since_flush` field accumulates across checkpoints so partial segment rebuild
 /// works correctly even when the WAL has been truncated multiple times.
+///
+/// `wal_truncation_epoch` is the WAL's epoch at the time this snapshot was written (after
+/// the WAL was truncated). On recovery, if the WAL's current epoch > this value, the WAL
+/// was truncated again after this snapshot, meaning current WAL entries are new and must be
+/// replayed. If equal, the WAL was not truncated after the snapshot — entries are stale.
 #[derive(Debug, Default)]
 pub struct SlimRecordsSnapshot {
     pub id_to_slot: HashMap<String, u32>,
     pub deleted: Vec<u32>,
     pub metadata: HashMap<u32, serde_json::Value>,
     pub dirty_since_flush: RoaringBitmap,
+    pub wal_truncation_epoch: u64,
 }
 
 /// Options for checkpoint_from_snapshot
@@ -850,6 +856,7 @@ impl OmenFile {
         &self,
         records: &RecordStore,
         dirty_since_flush: &RoaringBitmap,
+        wal_truncation_epoch: u64,
     ) -> io::Result<()> {
         const MAGIC: &[u8; 4] = b"OREC";
         const VERSION: u32 = 2;
@@ -905,6 +912,9 @@ impl OmenFile {
                 dirty_since_flush.serialize_into(&mut dirty_buf)?;
                 w.write_all(&(dirty_buf.len() as u32).to_le_bytes())?;
                 w.write_all(&dirty_buf)?;
+
+                // wal_truncation_epoch (version 3 addition)
+                w.write_all(&wal_truncation_epoch.to_le_bytes())?;
 
                 w.flush()?;
             }
@@ -1035,11 +1045,20 @@ impl OmenFile {
         cursor.read_exact(&mut dirty_buf)?;
         let dirty_since_flush = RoaringBitmap::deserialize_from(&dirty_buf[..])?;
 
+        // wal_truncation_epoch section (version 3+; older snapshots default to 0)
+        let mut epoch_buf = [0u8; 8];
+        let wal_truncation_epoch = if cursor.read_exact(&mut epoch_buf).is_ok() {
+            u64::from_le_bytes(epoch_buf)
+        } else {
+            0
+        };
+
         Ok(Some(SlimRecordsSnapshot {
             id_to_slot,
             deleted,
             metadata,
             dirty_since_flush,
+            wal_truncation_epoch,
         }))
     }
 
@@ -1213,7 +1232,13 @@ impl OmenFile {
                 accumulated_dirty |= &prev.dirty_since_flush;
             }
         }
-        self.write_records_snapshot(records, &accumulated_dirty)?;
+        // Record the pre-truncation epoch. After truncate() the epoch increments to N+1.
+        // Recovery sees WAL epoch N+1 > snapshot epoch N → current WAL entries are new
+        // (written after this checkpoint) and must be replayed.
+        // If truncation fails (epoch stays N), WAL epoch == snapshot epoch → skip replay
+        // (entries are already in the snapshot).
+        let pre_truncation_epoch = self.wal.truncation_epoch();
+        self.write_records_snapshot(records, &accumulated_dirty, pre_truncation_epoch)?;
         self.wal.truncate()?;
 
         Ok(())
@@ -1458,6 +1483,15 @@ impl OmenFile {
         writer.file.sync_all()?;
         drop(temp_file);
 
+        // Write a WAL checkpoint entry BEFORE the atomic rename.
+        // If the process crashes between rename and WAL truncation, recovery loads the
+        // new manifest (not slim, so WAL replay runs). Without this checkpoint entry,
+        // entries_after_checkpoint() would return the stale WAL data entries and
+        // double-apply them (RecordStore::set is not idempotent). With the checkpoint
+        // entry written first, entries_after_checkpoint() returns nothing for that window.
+        self.wal.append(WalEntry::checkpoint(0))?;
+        self.wal.sync()?;
+
         // Close old file handle (releases advisory lock)
         self.file = None;
 
@@ -1485,7 +1519,7 @@ impl OmenFile {
         self.manifest = manifest;
         self.header.count = live_count as u64;
 
-        // Truncate WAL
+        // Truncate WAL and write a fresh checkpoint marker
         self.wal.truncate()?;
         self.wal.append(WalEntry::checkpoint(0))?;
         self.wal.sync()?;
@@ -1701,6 +1735,10 @@ impl OmenFile {
         writer.file.sync_all()?;
         drop(temp_file);
 
+        // Write WAL checkpoint BEFORE rename — same crash-safety reason as write_omen_manifest.
+        self.wal.append(WalEntry::checkpoint(0))?;
+        self.wal.sync()?;
+
         // Close old file handle (releases advisory lock)
         self.file = None;
 
@@ -1729,7 +1767,7 @@ impl OmenFile {
         self.manifest = manifest;
         self.header.count = live_count as u64;
 
-        // Truncate WAL (safe: if crash here, WAL replay is idempotent)
+        // Truncate WAL and write a fresh checkpoint marker
         self.wal.truncate()?;
         self.wal.append(WalEntry::checkpoint(0))?;
         self.wal.sync()?;
@@ -1741,6 +1779,11 @@ impl OmenFile {
     #[must_use]
     pub fn wal_len(&self) -> u64 {
         self.wal.len()
+    }
+
+    /// Return the WAL truncation epoch for slim snapshot recovery.
+    pub fn wal_truncation_epoch(&self) -> u64 {
+        self.wal.truncation_epoch()
     }
 }
 
