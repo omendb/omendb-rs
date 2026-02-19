@@ -115,6 +115,7 @@ pub struct OmenFile {
     vec_mmap: Option<MmapMut>,
     vec_file: Option<File>,
     vec_path: PathBuf,
+    records_path: PathBuf,
 }
 
 impl OmenFile {
@@ -147,11 +148,19 @@ impl OmenFile {
         PathBuf::from(p)
     }
 
+    /// Compute .records path (slim records snapshot) by appending extension
+    fn compute_records_path(path: &Path) -> PathBuf {
+        let mut p = path.as_os_str().to_os_string();
+        p.push(".records");
+        PathBuf::from(p)
+    }
+
     pub fn create(path: impl AsRef<Path>, dimensions: u32) -> io::Result<Self> {
         let path = path.as_ref();
         let omen_path = Self::compute_omen_path(path);
         let wal_path = Self::compute_wal_path(path);
         let vec_path = Self::compute_vecs_path(path);
+        let records_path = Self::compute_records_path(path);
 
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).create(true).truncate(true);
@@ -189,6 +198,7 @@ impl OmenFile {
             vec_mmap: None,
             vec_file: None,
             vec_path,
+            records_path,
         })
     }
 
@@ -197,6 +207,7 @@ impl OmenFile {
         let omen_path = Self::compute_omen_path(path);
         let wal_path = Self::compute_wal_path(path);
         let vec_path = Self::compute_vecs_path(path);
+        let records_path = Self::compute_records_path(path);
 
         let mut opts = OpenOptions::new();
         opts.read(true).write(true);
@@ -385,6 +396,7 @@ impl OmenFile {
             vec_mmap,
             vec_file,
             vec_path,
+            records_path,
         })
     }
 
@@ -561,6 +573,20 @@ pub struct OmenSnapshot {
     pub multivec_config: Option<PersistedMuveraConfig>,
     /// Serialized SparseIndex (if persisted)
     pub sparse_index_bytes: Option<Vec<u8>>,
+}
+
+/// Slim records snapshot: ID mappings, deleted slots, metadata, and dirty slots since last flush.
+///
+/// Written alongside `.vecs` during auto-checkpoint to allow WAL truncation without
+/// a full manifest rewrite. Recovery loads this snapshot when it is newer than the manifest.
+/// The `dirty_since_flush` field accumulates across checkpoints so partial segment rebuild
+/// works correctly even when the WAL has been truncated multiple times.
+#[derive(Debug, Default)]
+pub struct SlimRecordsSnapshot {
+    pub id_to_slot: HashMap<String, u32>,
+    pub deleted: Vec<u32>,
+    pub metadata: HashMap<u32, serde_json::Value>,
+    pub dirty_since_flush: RoaringBitmap,
 }
 
 /// Options for checkpoint_from_snapshot
@@ -791,6 +817,198 @@ impl OmenFile {
 
     // Note: load_snapshot() removed in Phase 5. VectorStore uses load_persisted_snapshot().
 
+    /// Returns true if the .records snapshot exists and is more recent than the .omen manifest.
+    ///
+    /// Used during recovery to decide whether to use the slim snapshot's ID/metadata mappings
+    /// instead of the manifest's (happens when auto-checkpoint ran but flush() hasn't been called).
+    pub fn records_newer_than_omen(&self) -> bool {
+        let records_mtime = match std::fs::metadata(&self.records_path).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        let omen_mtime = match std::fs::metadata(&self.path).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        records_mtime > omen_mtime
+    }
+
+    /// Write a slim records snapshot atomically (tmp → fsync → rename).
+    ///
+    /// Format: magic "OREC" + version 2 + id_to_slot + deleted bitmap +
+    /// metadata JSON + dirty_since_flush bitmap.
+    ///
+    /// `dirty_since_flush` should be the union of all dirty slots since the last flush(),
+    /// accumulated by the caller across multiple auto-checkpoints.
+    pub fn write_records_snapshot(
+        &self,
+        records: &RecordStore,
+        dirty_since_flush: &RoaringBitmap,
+    ) -> io::Result<()> {
+        const MAGIC: &[u8; 4] = b"OREC";
+        const VERSION: u32 = 2;
+
+        let id_to_slot = records.export_id_to_slot();
+        let deleted_bitmap = records.deleted_bitmap().clone();
+        let metadata = records.export_metadata();
+
+        let tmp_path = {
+            let mut p = self.records_path.as_os_str().to_os_string();
+            p.push(".tmp");
+            PathBuf::from(p)
+        };
+
+        {
+            let mut file = std::fs::File::create(&tmp_path)?;
+            {
+                let mut w = BufWriter::new(&mut file);
+
+                // Header
+                w.write_all(MAGIC)?;
+                w.write_all(&VERSION.to_le_bytes())?;
+
+                // id_to_slot section
+                let count = id_to_slot.len() as u32;
+                w.write_all(&count.to_le_bytes())?;
+                for (id, slot) in &id_to_slot {
+                    let id_bytes = id.as_bytes();
+                    w.write_all(&(id_bytes.len() as u32).to_le_bytes())?;
+                    w.write_all(id_bytes)?;
+                    w.write_all(&slot.to_le_bytes())?;
+                }
+
+                // deleted bitmap section
+                let mut bitmap_buf: Vec<u8> = Vec::new();
+                deleted_bitmap.serialize_into(&mut bitmap_buf)?;
+                w.write_all(&(bitmap_buf.len() as u32).to_le_bytes())?;
+                w.write_all(&bitmap_buf)?;
+
+                // metadata section
+                let meta_count = metadata.len() as u32;
+                w.write_all(&meta_count.to_le_bytes())?;
+                for (slot, value) in &metadata {
+                    let json_bytes = serde_json::to_vec(value)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    w.write_all(&slot.to_le_bytes())?;
+                    w.write_all(&(json_bytes.len() as u32).to_le_bytes())?;
+                    w.write_all(&json_bytes)?;
+                }
+
+                // dirty_since_flush bitmap section
+                let mut dirty_buf: Vec<u8> = Vec::new();
+                dirty_since_flush.serialize_into(&mut dirty_buf)?;
+                w.write_all(&(dirty_buf.len() as u32).to_le_bytes())?;
+                w.write_all(&dirty_buf)?;
+
+                w.flush()?;
+            }
+            file.sync_all()?;
+        }
+
+        std::fs::rename(&tmp_path, &self.records_path).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp_path);
+        })?;
+
+        // Fsync parent directory to durabilize the rename
+        if let Some(parent) = self.records_path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Load the slim records snapshot if it exists.
+    ///
+    /// Returns `None` if the file doesn't exist or is corrupted (caller falls back to manifest).
+    pub fn load_records_snapshot(&self) -> io::Result<Option<SlimRecordsSnapshot>> {
+        if !self.records_path.exists() {
+            return Ok(None);
+        }
+
+        let data = match std::fs::read(&self.records_path) {
+            Ok(d) => d,
+            Err(_) => return Ok(None),
+        };
+
+        if data.len() < 8 {
+            return Ok(None);
+        }
+
+        const MAGIC: &[u8; 4] = b"OREC";
+        if &data[0..4] != MAGIC {
+            return Ok(None);
+        }
+        let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
+        if version != 2 {
+            tracing::warn!(version, "Unrecognized slim records snapshot version");
+            return Ok(None);
+        }
+
+        let mut cursor = std::io::Cursor::new(&data[8..]);
+        let mut buf4 = [0u8; 4];
+
+        // id_to_slot section
+        cursor.read_exact(&mut buf4)?;
+        let count = u32::from_le_bytes(buf4) as usize;
+        let mut id_to_slot = HashMap::with_capacity(count);
+        for _ in 0..count {
+            cursor.read_exact(&mut buf4)?;
+            let id_len = u32::from_le_bytes(buf4) as usize;
+            let mut id_buf = vec![0u8; id_len];
+            cursor.read_exact(&mut id_buf)?;
+            let id = String::from_utf8(id_buf)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            cursor.read_exact(&mut buf4)?;
+            let slot = u32::from_le_bytes(buf4);
+            id_to_slot.insert(id, slot);
+        }
+
+        // deleted bitmap section
+        cursor.read_exact(&mut buf4)?;
+        let bitmap_len = u32::from_le_bytes(buf4) as usize;
+        let mut bitmap_buf = vec![0u8; bitmap_len];
+        cursor.read_exact(&mut bitmap_buf)?;
+        let deleted_bitmap = RoaringBitmap::deserialize_from(&bitmap_buf[..])?;
+        let deleted: Vec<u32> = deleted_bitmap.iter().collect();
+
+        // metadata section
+        cursor.read_exact(&mut buf4)?;
+        let meta_count = u32::from_le_bytes(buf4) as usize;
+        let mut metadata = HashMap::with_capacity(meta_count);
+        for _ in 0..meta_count {
+            cursor.read_exact(&mut buf4)?;
+            let slot = u32::from_le_bytes(buf4);
+            cursor.read_exact(&mut buf4)?;
+            let json_len = u32::from_le_bytes(buf4) as usize;
+            let mut json_buf = vec![0u8; json_len];
+            cursor.read_exact(&mut json_buf)?;
+            match serde_json::from_slice::<serde_json::Value>(&json_buf) {
+                Ok(value) => {
+                    metadata.insert(slot, value);
+                }
+                Err(e) => {
+                    tracing::warn!("Corrupt metadata at slot {slot} in records snapshot: {e}");
+                }
+            }
+        }
+
+        // dirty_since_flush bitmap section
+        cursor.read_exact(&mut buf4)?;
+        let dirty_len = u32::from_le_bytes(buf4) as usize;
+        let mut dirty_buf = vec![0u8; dirty_len];
+        cursor.read_exact(&mut dirty_buf)?;
+        let dirty_since_flush = RoaringBitmap::deserialize_from(&dirty_buf[..])?;
+
+        Ok(Some(SlimRecordsSnapshot {
+            id_to_slot,
+            deleted,
+            metadata,
+            dirty_since_flush,
+        }))
+    }
+
     /// Check if this storage has a .vecs file for incremental checkpoints
     #[must_use]
     pub fn has_vec_file(&self) -> bool {
@@ -862,15 +1080,13 @@ impl OmenFile {
         Ok(())
     }
 
-    /// Vector-only checkpoint: write dirty slots to .vecs without manifest rewrite.
+    /// Vector-only checkpoint: write dirty slots to .vecs, write a slim records snapshot,
+    /// and truncate the WAL.
     ///
-    /// Used by auto-checkpoint to persist vector data cheaply. Skips the expensive
-    /// manifest rewrite (~40MB at 1M vectors) and WAL truncation. On crash, WAL
-    /// replay recovers IDs/metadata not yet in the manifest.
-    ///
-    /// Note: this path syncs the WAL but does NOT truncate it — WAL entries are still
-    /// needed for ID/metadata recovery until the next full flush(). The WAL grows until
-    /// flush() is called.
+    /// Used by auto-checkpoint to persist vector data cheaply. Skips the expensive manifest
+    /// rewrite (~40MB at 1M vectors). The slim records snapshot captures id_to_slot, deleted,
+    /// metadata, and accumulated dirty_since_flush so the WAL can be truncated safely.
+    /// On crash, recovery loads the slim snapshot instead of replaying WAL entries.
     ///
     /// Requires .vecs to already exist (call `checkpoint_full()` first).
     pub fn checkpoint_vectors_only(
@@ -953,8 +1169,18 @@ impl OmenFile {
         // fsync .vecs
         self.vec_file.as_ref().unwrap().sync_all()?;
 
-        // Sync WAL for durability but do NOT truncate — manifest unchanged
-        self.wal.sync()?;
+        // Accumulate dirty slots since last flush. If a previous slim snapshot exists
+        // and is newer than the manifest (still from after the last flush), union its
+        // dirty_since_flush with the current batch so partial segment rebuild works
+        // correctly across multiple auto-checkpoints without WAL entries.
+        let mut accumulated_dirty = dirty.clone();
+        if self.records_newer_than_omen() {
+            if let Ok(Some(prev)) = self.load_records_snapshot() {
+                accumulated_dirty |= &prev.dirty_since_flush;
+            }
+        }
+        self.write_records_snapshot(records, &accumulated_dirty)?;
+        self.wal.truncate()?;
 
         Ok(())
     }

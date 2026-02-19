@@ -24,6 +24,7 @@ use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::MergeStats;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 use crate::vector::hnsw::types::{HNSWParams, Metric};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Configuration for segment manager
@@ -111,6 +112,9 @@ pub struct SegmentManager {
     /// Number of frozen segments that are being merged in the background
     /// (always the first N entries in self.frozen at the time merge started)
     pub(crate) pending_merge_count: usize,
+    /// Directory where segment files are stored, used to persist background merge results.
+    /// Set by VectorStore after loading or creating segments.
+    pub(crate) pending_merge_dir: Option<PathBuf>,
 }
 
 impl SegmentManager {
@@ -142,6 +146,7 @@ impl SegmentManager {
             generation: 0,
             pending_merge: None,
             pending_merge_count: 0,
+            pending_merge_dir: None,
         })
     }
 
@@ -159,6 +164,7 @@ impl SegmentManager {
             generation: 0,
             pending_merge: None,
             pending_merge_count: 0,
+            pending_merge_dir: None,
         }
     }
 
@@ -186,6 +192,7 @@ impl SegmentManager {
             generation: 0,
             pending_merge: None,
             pending_merge_count: 0,
+            pending_merge_dir: None,
         })
     }
 
@@ -216,6 +223,7 @@ impl SegmentManager {
             generation: 0,
             pending_merge: None,
             pending_merge_count: 0,
+            pending_merge_dir: None,
         })
     }
 
@@ -473,6 +481,15 @@ impl SegmentManager {
         let frozen = self.create_merged_segment(index);
         self.frozen.push(frozen);
         self.try_start_background_merge();
+    }
+
+    /// Set the directory for persisting background merge results.
+    ///
+    /// Call this after loading or creating segments to enable merge persistence.
+    /// Background merges will write their result to this directory so it can be
+    /// recovered if the process crashes before `drain_pending_merge()` runs.
+    pub fn set_pending_merge_dir(&mut self, dir: impl Into<PathBuf>) {
+        self.pending_merge_dir = Some(dir.into());
     }
 }
 

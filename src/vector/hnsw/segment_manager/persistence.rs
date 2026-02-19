@@ -250,7 +250,7 @@ impl SegmentManager {
             total_vectors, "Segment manager loaded"
         );
 
-        Ok(Self {
+        let mut manager = Self {
             config,
             mutable,
             frozen,
@@ -260,7 +260,101 @@ impl SegmentManager {
             generation,
             pending_merge: None,
             pending_merge_count: 0,
-        })
+            pending_merge_dir: None,
+        };
+
+        // Apply any background merge that completed before the last crash
+        manager.apply_pending_merge_from_disk(dir.as_ref());
+
+        Ok(manager)
+    }
+
+    /// Apply a persisted pending merge from disk if it matches current segments.
+    ///
+    /// Called during load to recover background merges that completed before a crash.
+    /// If `pending_merge.meta` exists and its source segment IDs match the currently
+    /// loaded segments, loads the merged segment and replaces the source segments.
+    /// Otherwise, cleans up the stale meta file and segment.
+    fn apply_pending_merge_from_disk(&mut self, dir: &std::path::Path) {
+        let meta_path = dir.join("pending_merge.meta");
+        if !meta_path.exists() {
+            return;
+        }
+
+        let result = (|| -> Result<bool> {
+            let meta_bytes = std::fs::read(&meta_path).map_err(|e| {
+                crate::vector::hnsw::error::HNSWError::Storage(format!(
+                    "Failed to read pending_merge.meta: {e}"
+                ))
+            })?;
+            let meta: serde_json::Value = serde_json::from_slice(&meta_bytes).map_err(|e| {
+                crate::vector::hnsw::error::HNSWError::Storage(format!(
+                    "Failed to parse pending_merge.meta: {e}"
+                ))
+            })?;
+
+            let source_ids: Vec<u64> = meta["source_ids"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(serde_json::Value::as_u64).collect())
+                .unwrap_or_default();
+            let total_vectors = meta["total_vectors"].as_u64().unwrap_or(0) as usize;
+            let merged_segment_id = meta["merged_segment_id"].as_u64().unwrap_or(u64::MAX);
+
+            // Verify source segments are still present with matching total vector count
+            let current_ids: std::collections::HashSet<u64> =
+                self.frozen.iter().map(|s| s.id()).collect();
+            let current_total: usize = self.frozen.iter().map(|s| s.len()).sum();
+
+            let source_ids_match = source_ids.iter().all(|id| current_ids.contains(id));
+            let vectors_match = current_total == total_vectors;
+
+            if !source_ids_match || !vectors_match {
+                tracing::info!("Pending merge signature mismatch, discarding stale merge");
+                return Ok(false);
+            }
+
+            // Load the merged segment
+            let segment_path = dir.join(format!("segment_{merged_segment_id}.bin"));
+            #[cfg(feature = "mmap")]
+            let merged = FrozenSegment::load_mmap(&segment_path)?;
+            #[cfg(not(feature = "mmap"))]
+            let merged = FrozenSegment::load(&segment_path)?;
+
+            // Apply: remove source segments, insert merged
+            self.frozen.retain(|s| !source_ids.contains(&s.id()));
+            self.frozen.insert(0, Arc::new(merged));
+
+            tracing::info!(
+                merged_segments = source_ids.len(),
+                merged_segment_id,
+                "Applied persisted background merge on load"
+            );
+
+            Ok(true)
+        })();
+
+        match result {
+            Ok(true) => {
+                // Successfully applied — remove the meta file (segment is now a regular segment)
+                let _ = std::fs::remove_file(&meta_path);
+            }
+            Ok(false) => {
+                // Signature mismatch — clean up meta and the orphan merged segment file
+                // Read meta before removing to get the merged_segment_id
+                if let Ok(meta_bytes) = std::fs::read(&meta_path) {
+                    if let Ok(meta) = serde_json::from_slice::<serde_json::Value>(&meta_bytes) {
+                        if let Some(id) = meta["merged_segment_id"].as_u64() {
+                            let _ = std::fs::remove_file(dir.join(format!("segment_{id}.bin")));
+                        }
+                    }
+                }
+                let _ = std::fs::remove_file(&meta_path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to apply persisted background merge: {e}");
+                let _ = std::fs::remove_file(&meta_path);
+            }
+        }
     }
 
     /// Load segment manager with memory-mapped frozen segments

@@ -393,9 +393,13 @@ impl SegmentManager {
         let segment_id = self.next_segment_id;
         self.next_segment_id += 1;
 
+        let segments_dir = self.pending_merge_dir.clone();
+        let source_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
+        let total_vectors: usize = self.frozen.iter().map(|s| s.len()).sum();
+
         tracing::info!(
             frozen_count = count,
-            frozen_vectors = segments.iter().map(|s| s.len()).sum::<usize>(),
+            frozen_vectors = total_vectors,
             "Starting background segment merge"
         );
 
@@ -422,6 +426,43 @@ impl SegmentManager {
                 index.distance_fn,
                 index.storage,
             );
+
+            // Persist the merged segment and a metadata file so the merge survives a crash.
+            // Recovery checks for pending_merge.meta and applies it if source segments match.
+            if let Some(ref dir) = segments_dir {
+                let segment_path = dir.join(format!("segment_{segment_id}.bin"));
+                if let Err(e) = frozen.save(&segment_path) {
+                    tracing::warn!("Failed to persist background merge segment: {e}");
+                } else {
+                    let meta = serde_json::json!({
+                        "source_ids": source_ids,
+                        "total_vectors": total_vectors,
+                        "merged_segment_id": segment_id,
+                    });
+                    let meta_path = dir.join("pending_merge.meta");
+                    let meta_tmp = dir.join("pending_merge.meta.tmp");
+                    match serde_json::to_vec_pretty(&meta) {
+                        Ok(meta_bytes) => {
+                            if let Ok(mut f) = std::fs::File::create(&meta_tmp) {
+                                use std::io::Write;
+                                if f.write_all(&meta_bytes).is_ok() && f.sync_all().is_ok() {
+                                    if let Err(e) = std::fs::rename(&meta_tmp, &meta_path) {
+                                        tracing::warn!("Failed to write pending_merge.meta: {e}");
+                                        let _ = std::fs::remove_file(&meta_tmp);
+                                    } else {
+                                        tracing::debug!(
+                                            merged_segment_id = segment_id,
+                                            "Persisted background merge result"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => tracing::warn!("Failed to serialize pending_merge.meta: {e}"),
+                    }
+                }
+            }
+
             Ok(Arc::new(frozen))
         });
 
@@ -459,6 +500,14 @@ impl SegmentManager {
                     remaining_segments = self.frozen.len(),
                     "Applied background merge"
                 );
+                if let Some(ref dir) = self.pending_merge_dir {
+                    let meta_path = dir.join("pending_merge.meta");
+                    if meta_path.exists() {
+                        if let Err(e) = std::fs::remove_file(&meta_path) {
+                            tracing::warn!("Failed to remove pending_merge.meta: {e}");
+                        }
+                    }
+                }
                 true
             }
             Ok(Err(e)) => {
@@ -492,6 +541,14 @@ impl SegmentManager {
                     merged_segments = drain_count,
                     "Applied pending background merge during drain"
                 );
+                if let Some(ref dir) = self.pending_merge_dir {
+                    let meta_path = dir.join("pending_merge.meta");
+                    if meta_path.exists() {
+                        if let Err(e) = std::fs::remove_file(&meta_path) {
+                            tracing::warn!("Failed to remove pending_merge.meta: {e}");
+                        }
+                    }
+                }
             }
             Ok(Err(e)) => {
                 tracing::warn!("Background merge failed during drain: {e}");

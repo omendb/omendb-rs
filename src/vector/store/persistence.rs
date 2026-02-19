@@ -62,7 +62,34 @@ impl VectorStore {
         };
 
         // Load persisted snapshot (checkpoint data only, not WAL)
-        let snapshot = storage.load_persisted_snapshot()?;
+        let mut snapshot = storage.load_persisted_snapshot()?;
+
+        // Load slim records snapshot if it was written more recently than the manifest.
+        // This happens when auto-checkpoint ran after the last flush(). The snapshot captures
+        // full id_to_slot/metadata state, and dirty_since_flush drives partial segment rebuild.
+        let mut slim_dirty_slots: Vec<u32> = Vec::new();
+        let mut slim_snapshot_loaded = false;
+        if storage.records_newer_than_omen() {
+            match storage.load_records_snapshot() {
+                Ok(Some(slim)) => {
+                    tracing::info!(
+                        records = slim.id_to_slot.len(),
+                        dirty_slots = slim.dirty_since_flush.len(),
+                        "Loaded slim records snapshot for recovery"
+                    );
+                    slim_dirty_slots = slim.dirty_since_flush.into_iter().collect();
+                    snapshot.id_to_slot = slim.id_to_slot;
+                    snapshot.deleted = slim.deleted;
+                    snapshot.metadata = slim.metadata;
+                    slim_snapshot_loaded = true;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("Failed to load slim records snapshot, using manifest: {e}");
+                }
+            }
+        }
+
         let mut dimensions = snapshot.dimensions as usize;
 
         // Get HNSW parameters from header
@@ -180,6 +207,15 @@ impl VectorStore {
             }
         }
 
+        // Use slim snapshot's accumulated dirty slots instead of WAL-derived slots when
+        // the slim snapshot was loaded. slim_dirty_slots covers all dirty slots since the last
+        // flush, accumulated across multiple auto-checkpoints, even though the WAL was truncated.
+        let modified_slots: Vec<u32> = if slim_snapshot_loaded && !slim_dirty_slots.is_empty() {
+            slim_dirty_slots
+        } else {
+            wal_modified_slots
+        };
+
         // Update deleted bitmap after WAL replay
         deleted_bitmap.clone_from(records.deleted_bitmap());
 
@@ -212,12 +248,12 @@ impl VectorStore {
                     Ok(mut loaded)
                         if loaded.generation() == stored_generation
                             && loaded.len() < active_count
-                            && !wal_modified_slots.is_empty() =>
+                            && !modified_slots.is_empty() =>
                     {
                         // Partial rebuild: keep frozen segments, insert WAL delta
                         let delta = active_count - loaded.len();
                         let mut inserted = 0;
-                        for &slot in &wal_modified_slots {
+                        for &slot in &modified_slots {
                             if let Some(record) = records.get_by_slot(slot) {
                                 if !records.deleted_bitmap().contains(slot) {
                                     loaded.insert_with_slot(&record.vector, slot).map_err(|e| {
@@ -255,7 +291,9 @@ impl VectorStore {
                 None
             };
 
-            if let Some(segments) = loaded {
+            if let Some(mut segments) = loaded {
+                // Enable background merge persistence so merge results survive crashes
+                segments.set_pending_merge_dir(segments_dir_for(path));
                 Some(segments)
             } else {
                 // Slow path: rebuild from vectors
@@ -275,10 +313,10 @@ impl VectorStore {
                     .with_distance(distance_metric)
                     .with_quantization(quantization);
 
-                Some(
-                    SegmentManager::build_parallel_with_slots(config, vectors, &slots)
-                        .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?,
-                )
+                let mut segs = SegmentManager::build_parallel_with_slots(config, vectors, &slots)
+                    .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?;
+                segs.set_pending_merge_dir(segments_dir_for(path));
+                Some(segs)
             }
         } else {
             None
@@ -688,6 +726,7 @@ impl VectorStore {
 
                 if let Some(ref path) = self.storage_path {
                     let segments_dir = segments_dir_for(path);
+                    segments.set_pending_merge_dir(segments_dir.clone());
                     segments
                         .save(&segments_dir)
                         .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
