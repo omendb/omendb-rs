@@ -1,6 +1,7 @@
 use crate::conversions::convert_error;
 use crate::database::VectorDatabase;
 use omendb_lib::vector::VectorStoreOptions;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 #[pymethods]
