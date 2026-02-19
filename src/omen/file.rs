@@ -952,6 +952,10 @@ impl OmenFile {
         const MAX_METADATA_JSON_BYTES: usize = 16 << 20; // 16 MB
         const MAX_RECORD_COUNT: usize = 100_000_000; // 100M
 
+        // Physical bound: each entry requires at minimum 8 bytes on disk.
+        // Cap with_capacity to avoid multi-GB pre-allocation from a corrupt count field.
+        let max_entries_by_size = data.len() / 8;
+
         let mut cursor = std::io::Cursor::new(&data[8..]);
         let mut buf4 = [0u8; 4];
 
@@ -961,7 +965,7 @@ impl OmenFile {
         if count > MAX_RECORD_COUNT {
             return Ok(None);
         }
-        let mut id_to_slot = HashMap::with_capacity(count);
+        let mut id_to_slot = HashMap::with_capacity(count.min(max_entries_by_size));
         for _ in 0..count {
             cursor.read_exact(&mut buf4)?;
             let id_len = u32::from_le_bytes(buf4) as usize;
@@ -994,7 +998,7 @@ impl OmenFile {
         if meta_count > MAX_RECORD_COUNT {
             return Ok(None);
         }
-        let mut metadata = HashMap::with_capacity(meta_count);
+        let mut metadata = HashMap::with_capacity(meta_count.min(max_entries_by_size));
         for _ in 0..meta_count {
             cursor.read_exact(&mut buf4)?;
             let slot = u32::from_le_bytes(buf4);

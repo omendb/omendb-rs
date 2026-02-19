@@ -31,7 +31,7 @@ use std::path::PathBuf;
 ///
 /// Appends `.segments` to the full path. For example, "mydb.omen"
 /// becomes "mydb.omen.segments".
-fn segments_dir_for(path: &Path) -> PathBuf {
+pub(super) fn segments_dir_for(path: &Path) -> PathBuf {
     let mut seg_path = path.as_os_str().to_os_string();
     seg_path.push(".segments");
     PathBuf::from(seg_path)
@@ -150,8 +150,21 @@ impl VectorStore {
             RecordStore::from_snapshot(slots, deleted_bitmap.clone(), dimensions as u32);
 
         // Replay WAL entries directly into RecordStore (Phase 5 architecture)
-        // Track slots modified by WAL replay for partial segment rebuild
-        let wal_entries = storage.pending_wal_entries()?;
+        // Track slots modified by WAL replay for partial segment rebuild.
+        //
+        // Skip WAL replay when a slim records snapshot was loaded: the snapshot
+        // already captures id_to_slot, deleted, and metadata for all WAL entries
+        // up to the last auto-checkpoint. RecordStore::set() is NOT idempotent —
+        // replaying existing IDs on top of the snapshot marks their old slots
+        // deleted and allocates new slots, corrupting the segment rebuild.
+        //
+        // Trade-off: in the rare case where WAL truncation failed, the process
+        // continued, and crash occurred, at most one in-flight operation is lost.
+        let wal_entries = if slim_snapshot_loaded {
+            vec![]
+        } else {
+            storage.pending_wal_entries()?
+        };
         let mut wal_modified_slots: Vec<u32> = Vec::new();
         for entry in wal_entries {
             if !entry.verify() {

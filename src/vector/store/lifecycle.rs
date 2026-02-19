@@ -43,10 +43,12 @@ impl VectorStore {
             // Build new segment with parallel construction
             let config = self.segment_config(dimensions);
 
-            self.segments = Some(
-                SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
-                    .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?,
-            );
+            let mut segs = SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
+                .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?;
+            if let Some(ref path) = self.storage_path {
+                segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+            }
+            self.segments = Some(segs);
         } else if let Some(ref mut segments) = self.segments {
             // Insert into existing segments
             for (vector, &slot) in vector_data.iter().zip(slots.iter()) {
@@ -78,10 +80,12 @@ impl VectorStore {
         let config = self.segment_config(dims);
 
         // Rebuild with parallel construction
-        self.segments = Some(
-            SegmentManager::build_parallel_with_slots(config, vectors, &slots)
-                .map_err(|e| anyhow::anyhow!("Segment rebuild failed: {e}"))?,
-        );
+        let mut segs = SegmentManager::build_parallel_with_slots(config, vectors, &slots)
+            .map_err(|e| anyhow::anyhow!("Segment rebuild failed: {e}"))?;
+        if let Some(ref path) = self.storage_path {
+            segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+        }
+        self.segments = Some(segs);
 
         Ok(())
     }
