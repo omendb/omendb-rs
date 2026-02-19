@@ -946,16 +946,28 @@ impl OmenFile {
             return Ok(None);
         }
 
+        // Size limits match WAL parser constants to prevent OOM on corrupt files
+        const MAX_ID_LEN: usize = 65536;
+        const MAX_BITMAP_BYTES: usize = 16 << 20; // 16 MB
+        const MAX_METADATA_JSON_BYTES: usize = 16 << 20; // 16 MB
+        const MAX_RECORD_COUNT: usize = 100_000_000; // 100M
+
         let mut cursor = std::io::Cursor::new(&data[8..]);
         let mut buf4 = [0u8; 4];
 
         // id_to_slot section
         cursor.read_exact(&mut buf4)?;
         let count = u32::from_le_bytes(buf4) as usize;
+        if count > MAX_RECORD_COUNT {
+            return Ok(None);
+        }
         let mut id_to_slot = HashMap::with_capacity(count);
         for _ in 0..count {
             cursor.read_exact(&mut buf4)?;
             let id_len = u32::from_le_bytes(buf4) as usize;
+            if id_len > MAX_ID_LEN {
+                return Ok(None);
+            }
             let mut id_buf = vec![0u8; id_len];
             cursor.read_exact(&mut id_buf)?;
             let id = String::from_utf8(id_buf)
@@ -968,6 +980,9 @@ impl OmenFile {
         // deleted bitmap section
         cursor.read_exact(&mut buf4)?;
         let bitmap_len = u32::from_le_bytes(buf4) as usize;
+        if bitmap_len > MAX_BITMAP_BYTES {
+            return Ok(None);
+        }
         let mut bitmap_buf = vec![0u8; bitmap_len];
         cursor.read_exact(&mut bitmap_buf)?;
         let deleted_bitmap = RoaringBitmap::deserialize_from(&bitmap_buf[..])?;
@@ -976,12 +991,18 @@ impl OmenFile {
         // metadata section
         cursor.read_exact(&mut buf4)?;
         let meta_count = u32::from_le_bytes(buf4) as usize;
+        if meta_count > MAX_RECORD_COUNT {
+            return Ok(None);
+        }
         let mut metadata = HashMap::with_capacity(meta_count);
         for _ in 0..meta_count {
             cursor.read_exact(&mut buf4)?;
             let slot = u32::from_le_bytes(buf4);
             cursor.read_exact(&mut buf4)?;
             let json_len = u32::from_le_bytes(buf4) as usize;
+            if json_len > MAX_METADATA_JSON_BYTES {
+                return Ok(None);
+            }
             let mut json_buf = vec![0u8; json_len];
             cursor.read_exact(&mut json_buf)?;
             match serde_json::from_slice::<serde_json::Value>(&json_buf) {
@@ -997,6 +1018,9 @@ impl OmenFile {
         // dirty_since_flush bitmap section
         cursor.read_exact(&mut buf4)?;
         let dirty_len = u32::from_le_bytes(buf4) as usize;
+        if dirty_len > MAX_BITMAP_BYTES {
+            return Ok(None);
+        }
         let mut dirty_buf = vec![0u8; dirty_len];
         cursor.read_exact(&mut dirty_buf)?;
         let dirty_since_flush = RoaringBitmap::deserialize_from(&dirty_buf[..])?;

@@ -281,7 +281,9 @@ impl SegmentManager {
             return;
         }
 
-        let result = (|| -> Result<bool> {
+        // Returns Ok(None) on success, Ok(Some(orphan_id)) on signature mismatch (caller
+        // removes the orphan segment), Err on hard failure.
+        let result = (|| -> Result<Option<u64>> {
             let meta_bytes = std::fs::read(&meta_path).map_err(|e| {
                 crate::vector::hnsw::error::HNSWError::Storage(format!(
                     "Failed to read pending_merge.meta: {e}"
@@ -310,7 +312,7 @@ impl SegmentManager {
 
             if !source_ids_match || !vectors_match {
                 tracing::info!("Pending merge signature mismatch, discarding stale merge");
-                return Ok(false);
+                return Ok(Some(merged_segment_id));
             }
 
             // Load the merged segment
@@ -330,24 +332,17 @@ impl SegmentManager {
                 "Applied persisted background merge on load"
             );
 
-            Ok(true)
+            Ok(None)
         })();
 
         match result {
-            Ok(true) => {
+            Ok(None) => {
                 // Successfully applied — remove the meta file (segment is now a regular segment)
                 let _ = std::fs::remove_file(&meta_path);
             }
-            Ok(false) => {
-                // Signature mismatch — clean up meta and the orphan merged segment file
-                // Read meta before removing to get the merged_segment_id
-                if let Ok(meta_bytes) = std::fs::read(&meta_path) {
-                    if let Ok(meta) = serde_json::from_slice::<serde_json::Value>(&meta_bytes) {
-                        if let Some(id) = meta["merged_segment_id"].as_u64() {
-                            let _ = std::fs::remove_file(dir.join(format!("segment_{id}.bin")));
-                        }
-                    }
-                }
+            Ok(Some(orphan_id)) => {
+                // Signature mismatch — remove orphan merged segment and meta
+                let _ = std::fs::remove_file(dir.join(format!("segment_{orphan_id}.bin")));
                 let _ = std::fs::remove_file(&meta_path);
             }
             Err(e) => {
