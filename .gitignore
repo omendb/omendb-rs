@@ -30,6 +30,7 @@ package-lock.json
 python/benchmark_results/
 benchmarks/results/
 benchmarks/history.jsonl
+python/benchmarks/history.json
 *.hdf5
 
 # Proptest

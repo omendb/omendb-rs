@@ -15,8 +15,7 @@ Usage:
     python benchmarks/run.py -q sq8                 # Test SQ8 quantization
     python benchmarks/run.py --all-modes            # Test fp32 and SQ8
 
-Save to cloud/ for canonical history:
-    python benchmarks/run.py --output ../../cloud/benchmarks/history.jsonl
+Saves to cloud/benchmarks/ automatically when that repo is present alongside omendb/.
 """
 
 import argparse
@@ -38,7 +37,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 import omendb
 
-DEFAULT_HISTORY_FILE = Path(__file__).parent / "history.jsonl"
+_CLOUD_BENCHMARKS = Path(__file__).parent.parent.parent / "cloud" / "benchmarks"
+DEFAULT_HISTORY_FILE = (
+    _CLOUD_BENCHMARKS / "history.jsonl"
+    if _CLOUD_BENCHMARKS.exists()
+    else Path(__file__).parent / "history.jsonl"
+)
 SIFT_DATA_DIR = Path(__file__).parent / "data"
 
 SIFT_DATASETS: dict[int, str] = {

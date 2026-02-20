@@ -489,9 +489,17 @@ def save_results(output_path: str, metadata: dict, results: list):
     print(f"\nResults saved to: {path}")
 
 
+_CLOUD_BENCHMARKS = Path(__file__).parent.parent.parent / "cloud" / "benchmarks"
+_HISTORY_FILE = (
+    _CLOUD_BENCHMARKS / "history.json"
+    if _CLOUD_BENCHMARKS.exists()
+    else Path(__file__).parent / "benchmarks" / "history.json"
+)
+
+
 def append_to_history(metadata: dict, results: list):
-    """Append results to benchmarks/history.json for tracking over time."""
-    history_path = Path(__file__).parent / "benchmarks" / "history.json"
+    """Append results to cloud/benchmarks/history.json for tracking over time."""
+    history_path = _HISTORY_FILE
     history_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Load existing history or create new
@@ -522,7 +530,7 @@ def check_regressions(results: list) -> bool:
 
     Returns True if regressions detected.
     """
-    history_path = Path(__file__).parent / "benchmarks" / "history.json"
+    history_path = _HISTORY_FILE
     if not history_path.exists():
         return False
 
