@@ -5,6 +5,8 @@ Uses real SIFT embeddings for all benchmarks. Skips scales with no dataset.
 
 Usage:
     python benchmark.py              # SIFT-100K benchmark (100K, 128D)
+    python benchmark.py --publish    # 5 runs, median ± IQR (publishable numbers)
+    python benchmark.py --vectors 1000000  # SIFT-1M benchmark
     python benchmark.py --full       # Multi-dimension (random vectors)
     python benchmark.py --scale      # Scale tests (SIFT data only, skips missing sizes)
     python benchmark.py --output results.json  # Save to JSON
@@ -345,13 +347,15 @@ def run_benchmark(
     n_queries: int = 1000,
     quantize_bits: int = 0,
     sift_data: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+    verbose: bool = True,
 ):
     """Run full benchmark suite for given parameters."""
     mode = f"SQ{quantize_bits}" if quantize_bits > 0 else "f32"
     dataset = "SIFT" if sift_data else "random"
-    print(f"\n{'=' * 60}")
-    print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode}, {dataset})")
-    print(f"{'=' * 60}")
+    if verbose:
+        print(f"\n{'=' * 60}")
+        print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode}, {dataset})")
+        print(f"{'=' * 60}")
 
     if sift_data:
         vectors, queries, ground_truth = sift_data
@@ -364,29 +368,36 @@ def run_benchmark(
     with tempfile.TemporaryDirectory() as tmpdir:
         # Build
         build = benchmark_build(f"{tmpdir}/db", vectors, quantize_bits=quantize_bits)
-        print(f"\nBuild:    {build['vec_per_s']:>10,.0f} vec/s  ({build['time_s']:.2f}s)")
+        if verbose:
+            print(f"\nBuild:    {build['vec_per_s']:>10,.0f} vec/s  ({build['time_s']:.2f}s)")
 
         db = build["db"]
 
         # Search
         search = benchmark_search(db, queries)
-        print(
-            f"Search:   {search['qps']:>10,.0f} QPS    ({search['latency_avg_ms']:.2f}ms avg, {search['latency_p99_ms']:.2f}ms p99)"
-        )
+        if verbose:
+            print(
+                f"Search:   {search['qps']:>10,.0f} QPS    ({search['latency_avg_ms']:.2f}ms avg, {search['latency_p99_ms']:.2f}ms p99)"
+            )
 
         # Recall measurement (graph quality indicator)
         recall = benchmark_recall(db, vectors, queries, ground_truth=ground_truth)
-        print(f"Recall:   {recall['recall_at_k']:>10.1%} @{recall['k']}")
+        if verbose:
+            print(f"Recall:   {recall['recall_at_k']:>10.1%} @{recall['k']}")
 
         # Filtered search (10% selectivity)
         filtered = benchmark_filtered_search(db, queries, {"cat": 5})
-        print(
-            f"Filtered: {filtered['qps']:>10,.0f} QPS    ({filtered['latency_ms']:.2f}ms, 10% selectivity)"
-        )
+        if verbose:
+            print(
+                f"Filtered: {filtered['qps']:>10,.0f} QPS    ({filtered['latency_ms']:.2f}ms, 10% selectivity)"
+            )
 
         # Batch search
         batch = benchmark_batch_search(db, queries)
-        print(f"Batch:    {batch['qps']:>10,.0f} QPS    ({batch['latency_ms']:.3f}ms per query)")
+        if verbose:
+            print(
+                f"Batch:    {batch['qps']:>10,.0f} QPS    ({batch['latency_ms']:.3f}ms per query)"
+            )
 
     # Return serializable results (no db object)
     return {
@@ -585,6 +596,63 @@ def check_regressions(results: list) -> bool:
     return False
 
 
+def _percentile(values: list[float], p: float) -> float:
+    """Return percentile p (0-100) of values using linear interpolation."""
+    sorted_vals = sorted(values)
+    n = len(sorted_vals)
+    if n == 1:
+        return sorted_vals[0]
+    idx = (p / 100) * (n - 1)
+    lo, hi = int(idx), min(int(idx) + 1, n - 1)
+    frac = idx - lo
+    return sorted_vals[lo] + frac * (sorted_vals[hi] - sorted_vals[lo])
+
+
+def _print_publish_summary(runs_results: list[dict], n_runs: int):
+    """Print median ± IQR summary for publish mode."""
+    print(f"\n{'=' * 70}")
+    print(f"OmenDB Publish Results (median of {n_runs}, 128D, M=16, ef_c=100, k=10)")
+    print(f"{'=' * 70}")
+
+    builds = [r["build"]["vec_per_s"] for r in runs_results]
+    searches = [r["search"]["qps"] for r in runs_results]
+    batches = [r["batch"]["qps"] for r in runs_results]
+    recalls = [r["recall"]["recall_at_k"] for r in runs_results]
+
+    for label, values, unit in [
+        ("Build", builds, "vec/s"),
+        ("Search", searches, "QPS"),
+        ("Batch", batches, "QPS"),
+    ]:
+        med = _percentile(values, 50)
+        q1 = _percentile(values, 25)
+        q3 = _percentile(values, 75)
+        print(f"{label}: {med:,.0f} {unit} (median of {n_runs}, IQR: {q1:,.0f}–{q3:,.0f})")
+
+    med_recall = _percentile(recalls, 50)
+    print(f"Recall@10: {med_recall:.1%}")
+    print()
+
+
+def _median_result(runs_results: list[dict]) -> dict:
+    """Return a result dict with median values from multiple runs."""
+    import copy
+
+    base = copy.deepcopy(runs_results[0])
+
+    builds = [r["build"]["vec_per_s"] for r in runs_results]
+    searches = [r["search"]["qps"] for r in runs_results]
+    batches = [r["batch"]["qps"] for r in runs_results]
+    recalls = [r["recall"]["recall_at_k"] for r in runs_results]
+
+    base["build"]["vec_per_s"] = round(_percentile(builds, 50))
+    base["search"]["qps"] = round(_percentile(searches, 50))
+    base["batch"]["qps"] = round(_percentile(batches, 50))
+    base["recall"]["recall_at_k"] = round(_percentile(recalls, 50), 4)
+
+    return base
+
+
 def main():
     parser = argparse.ArgumentParser(description="OmenDB Performance Benchmark")
     parser.add_argument("--full", action="store_true", help="Run full benchmark suite")
@@ -604,7 +672,21 @@ def main():
     )
     parser.add_argument("--output", "-o", type=str, help="Save results to JSON file")
     parser.add_argument("--no-history", action="store_true", help="Don't append to history.json")
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="Publishable mode: 5 runs, report median ± IQR",
+    )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="Number of full benchmark runs (default: 1, --publish sets to 5)",
+    )
     args = parser.parse_args()
+
+    if args.publish:
+        args.runs = max(args.runs, 5)
 
     print("=" * 60)
     print("OmenDB Performance Benchmark")
@@ -659,14 +741,40 @@ def main():
         if args.dimension == 128 and args.quantize == 0:
             sift_data = load_sift(args.vectors)
 
-        result = run_benchmark(
-            args.vectors,
-            args.dimension,
-            n_queries=args.queries,
-            quantize_bits=args.quantize,
-            sift_data=sift_data,
-        )
-        all_results.append(result)
+        if args.runs > 1:
+            # Multi-run mode: run silently, report median
+            print(f"\nRunning {args.runs} benchmark runs...", flush=True)
+            runs_results = []
+            for i in range(args.runs):
+                print(f"  Run {i + 1}/{args.runs}...", flush=True)
+                r = run_benchmark(
+                    args.vectors,
+                    args.dimension,
+                    n_queries=args.queries,
+                    quantize_bits=args.quantize,
+                    sift_data=sift_data,
+                    verbose=False,
+                )
+                runs_results.append(r)
+
+            _print_publish_summary(runs_results, args.runs)
+
+            # Use median result for history
+            result = _median_result(runs_results)
+            all_results.append(result)
+
+            if args.publish:
+                metadata["runs"] = args.runs
+                metadata["methodology"] = "median"
+        else:
+            result = run_benchmark(
+                args.vectors,
+                args.dimension,
+                n_queries=args.queries,
+                quantize_bits=args.quantize,
+                sift_data=sift_data,
+            )
+            all_results.append(result)
 
     print("\n" + "=" * 60)
     print("Benchmark complete")

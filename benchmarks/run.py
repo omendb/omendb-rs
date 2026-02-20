@@ -2,11 +2,12 @@
 """
 OmenDB Benchmark Runner
 
-Runs benchmarks on SIFT-10K (real embeddings) with QPS and recall measurement.
+Runs benchmarks on SIFT-100K (real embeddings) with QPS and recall measurement.
 
 Usage:
-    python benchmarks/run.py                        # SIFT-10K benchmark (~30s)
-    python benchmarks/run.py --quick                # Quick run (~10s)
+    python benchmarks/run.py                        # SIFT-100K benchmark (~90s)
+    python benchmarks/run.py --quick                # Quick run (~30s)
+    python benchmarks/run.py --vectors 10000        # SIFT-10K benchmark
     python benchmarks/run.py --output FILE          # Save results to FILE
     python benchmarks/run.py --history              # Show history
     python benchmarks/run.py --compare              # Compare last 2 runs
@@ -38,7 +39,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 import omendb
 
 DEFAULT_HISTORY_FILE = Path(__file__).parent / "history.jsonl"
-SIFT_10K_PATH = Path(__file__).parent / "data" / "sift-10k.npz"
+SIFT_DATA_DIR = Path(__file__).parent / "data"
+
+SIFT_DATASETS: dict[int, str] = {
+    10_000: "sift-10k.npz",
+    100_000: "sift-100k.npz",
+    1_000_000: "sift-1m.npz",
+}
 
 
 @dataclass
@@ -51,7 +58,7 @@ class BenchmarkConfig:
     m: int = 16
     ef_construction: int = 100
     quantization: Optional[str] = None  # None or "sq8"
-    dataset: str = "sift-10k"
+    dataset: str = "sift-100k"
 
 
 @dataclass
@@ -67,17 +74,24 @@ class BenchmarkResult:
     recall_at_10: Optional[float] = None
 
 
-def load_sift_10k() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load SIFT-10K dataset (real embeddings with pre-computed ground truth)."""
-    if not SIFT_10K_PATH.exists():
+def load_sift(n_vectors: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load SIFT dataset for given size. Returns (vectors, queries, ground_truth)."""
+    filename = SIFT_DATASETS.get(n_vectors)
+    if filename is None:
+        sizes = ", ".join(f"{n:,}" for n in SIFT_DATASETS)
+        raise ValueError(
+            f"No SIFT dataset for {n_vectors:,} vectors. Available sizes: {sizes}"
+        )
+    path = SIFT_DATA_DIR / filename
+    if not path.exists():
         print(
-            f"SIFT-10K not found at {SIFT_10K_PATH}. "
-            "Download sift-10k.npz and place it in benchmarks/data/",
+            f"SIFT dataset not found at {path}. "
+            f"Download sift-{n_vectors // 1000}k.npz and place it in benchmarks/data/",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    data = np.load(SIFT_10K_PATH)
+    data = np.load(path)
     return data["vectors"], data["queries"], data["ground_truth"]
 
 
@@ -248,18 +262,23 @@ def run_benchmark(
 
 
 def run_all_benchmarks(
-    quick: bool = False, quantization: Optional[str] = None, all_modes: bool = False
+    n_vectors: int = 100_000,
+    quick: bool = False,
+    quantization: Optional[str] = None,
+    all_modes: bool = False,
 ) -> list[BenchmarkResult]:
-    """Run benchmarks on SIFT-10K (real embeddings).
+    """Run benchmarks on SIFT dataset (real embeddings).
 
     Args:
+        n_vectors: Number of vectors to benchmark (default 100K)
         quick: Use fewer iterations for faster runs
         quantization: Specific mode to test (None or "sq8")
         all_modes: Run all quantization modes (fp32, SQ8)
     """
-    vectors, queries, ground_truth = load_sift_10k()
-    n_vectors, dimensions = vectors.shape
+    vectors, queries, ground_truth = load_sift(n_vectors)
+    n_vectors_actual, dimensions = vectors.shape
     n_queries = queries.shape[0]
+    dataset = f"sift-{n_vectors_actual // 1000}k"
 
     # Determine which quantization modes to run
     if all_modes:
@@ -270,15 +289,16 @@ def run_all_benchmarks(
     results = []
     for qmode in quant_modes:
         config = BenchmarkConfig(
-            n_vectors=n_vectors,
+            n_vectors=n_vectors_actual,
             n_queries=n_queries,
             dimensions=dimensions,
             k=10,
             quantization=qmode,
-            dataset="sift-10k",
+            dataset=dataset,
         )
         mode_str = qmode or "fp32"
-        print(f"Running SIFT-10K ({mode_str})...", file=sys.stderr)
+        dataset_display = dataset.upper()
+        print(f"Running {dataset_display} ({mode_str})...", file=sys.stderr)
         result = run_benchmark(config, vectors, queries, ground_truth, quick=quick)
         print(
             f"  Build: {result.build_vec_per_s:,} vec/s | "
@@ -344,8 +364,12 @@ def print_summary(run: dict):
     """Print a summary of a benchmark run."""
     dirty = " [dirty]" if run["git"]["dirty"] else ""
 
+    # Derive dataset name from results
+    dataset_key = next(iter(run["results"]), "sift-100k")
+    dataset_display = dataset_key.split("_")[0].upper()  # strip _sq8 suffix
+
     print(f"\n{'=' * 70}")
-    print("OmenDB Benchmark Results (SIFT-10K, 128D, M=16, ef_c=100, k=10)")
+    print(f"OmenDB Benchmark Results ({dataset_display}, 128D, M=16, ef_c=100, k=10)")
     print(f"{'=' * 70}")
     print(f"Time:   {run['ts']}")
     print(f"System: {run['sys']['cpu']} ({run['sys']['cores']} cores)")
@@ -372,7 +396,7 @@ def show_history(history_file: Path, limit: int = 10):
         return
 
     print(f"\n{'=' * 75}")
-    print("Recent Benchmarks (SIFT-10K)")
+    print("Recent Benchmarks (SIFT)")
     print(f"{'=' * 75}")
     print(
         f"| {'Date':10} | {'Commit':7} | {'Host':8} | {'Build':>8} | {'QPS':>8} | {'Batch':>8} | {'Recall':>7} |"
@@ -386,9 +410,9 @@ def show_history(history_file: Path, limit: int = 10):
         commit = run["git"]["commit"]
         host = run["sys"]["host"][:8]
 
-        # Show the fp32 result (or first result)
+        # Show the fp32 result (prefer newer 100k key, fall back to 10k)
         r = None
-        for key in ["sift-10k", "128D"]:
+        for key in ["sift-100k", "sift-10k", "128D"]:
             if key in run["results"]:
                 r = run["results"][key]
                 break
@@ -431,8 +455,14 @@ def compare_runs(run1: dict, run2: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OmenDB Benchmark Runner (SIFT-10K)")
-    parser.add_argument("--quick", action="store_true", help="Quick mode (~10s)")
+    parser = argparse.ArgumentParser(description="OmenDB Benchmark Runner (SIFT)")
+    parser.add_argument("--quick", action="store_true", help="Quick mode (~30s)")
+    parser.add_argument(
+        "--vectors",
+        type=int,
+        default=100_000,
+        help="Number of vectors to benchmark (default: 100000)",
+    )
     parser.add_argument("--output", "-o", type=str, help="Save results to file (JSONL)")
     parser.add_argument("--notes", type=str, default="", help="Notes to include")
     parser.add_argument("--history", action="store_true", help="Show history")
@@ -465,8 +495,9 @@ def main():
         compare_runs(runs[0], runs[1])
         return
 
-    # Run benchmarks on SIFT-10K
+    # Run benchmarks
     results = run_all_benchmarks(
+        n_vectors=args.vectors,
         quick=args.quick,
         quantization=args.quantization,
         all_modes=args.all_modes,
