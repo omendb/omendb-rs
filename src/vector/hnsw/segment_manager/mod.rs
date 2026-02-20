@@ -338,19 +338,20 @@ impl SegmentManager {
 
         // Search frozen segments (parallel only when enough segments to offset overhead)
         if !self.frozen.is_empty() {
-            let frozen_results: Vec<SegmentSearchResult> = if self.frozen.len() >= 4 {
+            if self.frozen.len() >= 4 {
                 use rayon::prelude::*;
-                self.frozen
+                let frozen_results: Vec<SegmentSearchResult> = self
+                    .frozen
                     .par_iter()
                     .flat_map(|seg| seg.search(query, k, ef))
-                    .collect()
+                    .collect();
+                results.extend(frozen_results);
             } else {
-                self.frozen
-                    .iter()
-                    .flat_map(|seg| seg.search(query, k, ef))
-                    .collect()
-            };
-            results.extend(frozen_results);
+                // Sequential path: extend directly, avoiding intermediate Vec
+                for seg in &self.frozen {
+                    results.extend(seg.search(query, k, ef));
+                }
+            }
         }
 
         // Sort by distance and take top k
@@ -383,19 +384,20 @@ impl SegmentManager {
 
         // Search frozen segments (parallel only when enough segments to offset overhead)
         if !self.frozen.is_empty() {
-            let frozen_results: Vec<SegmentSearchResult> = if self.frozen.len() >= 4 {
+            if self.frozen.len() >= 4 {
                 use rayon::prelude::*;
-                self.frozen
+                let frozen_results: Vec<SegmentSearchResult> = self
+                    .frozen
                     .par_iter()
                     .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
-                    .collect()
+                    .collect();
+                results.extend(frozen_results);
             } else {
-                self.frozen
-                    .iter()
-                    .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
-                    .collect()
-            };
-            results.extend(frozen_results);
+                // Sequential path: extend directly, avoiding intermediate Vec
+                for seg in &self.frozen {
+                    results.extend(seg.search_with_filter(query, k, ef, &filter_fn));
+                }
+            }
         }
 
         // Sort by distance and take top k

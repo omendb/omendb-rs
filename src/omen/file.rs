@@ -1261,6 +1261,14 @@ impl OmenFile {
         let slot_bytes = dim * 4;
 
         if dim == 0 || slot_count == 0 {
+            // Truncate .vecs when all records are gone so stale vectors
+            // aren't reconstructed as phantom records on reopen.
+            if slot_count == 0 {
+                self.vec_mmap = None;
+                if let Some(ref vf) = self.vec_file {
+                    vf.set_len(0)?;
+                }
+            }
             self.write_omen_manifest(id_to_slot, deleted, metadata, options)?;
             return Ok(());
         }

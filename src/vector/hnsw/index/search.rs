@@ -449,18 +449,26 @@ impl HNSWIndex {
         let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
         let entry_level = self.storage.level(entry_point);
 
-        // Start from entry point, descend to layer 0
-        let mut nearest = vec![entry_point];
-
-        // Greedy search at each layer (find 1 nearest)
-        for level in (1..=entry_level).rev() {
-            let pairs = self.search_layer(query, &nearest, 1, level)?;
-            nearest = pairs.into_iter().map(|(id, _)| id).collect();
-        }
-
         // Beam search at layer 0 (find ef nearest)
         let search_ef = ef.max(k);
-        let candidates = self.search_layer(query, &nearest, search_ef, 0)?;
+
+        // Start from entry point, descend to layer 0.
+        // Use a stack array to avoid heap allocation when entry_level == 0 (95% of nodes):
+        // the greedy traversal loop is skipped entirely and we search directly from the
+        // entry point without any allocation.
+        let candidates = if entry_level == 0 {
+            self.search_layer(query, std::slice::from_ref(&entry_point), search_ef, 0)?
+        } else {
+            let mut nearest = vec![entry_point];
+            for level in (1..=entry_level).rev() {
+                nearest = self
+                    .search_layer(query, &nearest, 1, level)?
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect();
+            }
+            self.search_layer(query, &nearest, search_ef, 0)?
+        };
 
         // Convert comparison distances to actual (e.g., sqrt for L2)
         // Already sorted: comparison_to_actual() is monotonic for all distance functions
@@ -575,23 +583,33 @@ impl HNSWIndex {
         let entry_point = self.entry_point.ok_or(HNSWError::EmptyIndex)?;
         let entry_level = self.storage.level(entry_point);
 
-        // Start from entry point, descend to layer 0
-        let mut nearest = vec![entry_point];
-
-        // Greedy search at each layer (find 1 nearest that matches filter)
-        for level in (1..=entry_level).rev() {
-            let pairs = self.search_layer_with_filter(query, &nearest, 1, level, &slot_filter)?;
-            nearest = pairs.into_iter().map(|(id, _)| id).collect();
-            if nearest.is_empty() {
-                debug!(level, "No matches at this level, falling back");
-                nearest = vec![entry_point];
-            }
-        }
-
         // Beam search at layer 0 (find ef nearest that match filter)
         let search_ef = ef.max(k);
-        let candidates =
-            self.search_layer_with_filter(query, &nearest, search_ef, 0, &slot_filter)?;
+
+        // Start from entry point, descend to layer 0.
+        // When entry_level == 0 (95% of nodes), skip upper traversal entirely — no Vec allocation.
+        let candidates = if entry_level == 0 {
+            self.search_layer_with_filter(
+                query,
+                std::slice::from_ref(&entry_point),
+                search_ef,
+                0,
+                &slot_filter,
+            )?
+        } else {
+            let mut nearest = vec![entry_point];
+            for level in (1..=entry_level).rev() {
+                let pairs =
+                    self.search_layer_with_filter(query, &nearest, 1, level, &slot_filter)?;
+                if pairs.is_empty() {
+                    debug!(level, "No matches at this level, falling back");
+                    // Keep nearest as-is (still points to entry_point or last good result)
+                } else {
+                    nearest = pairs.into_iter().map(|(id, _)| id).collect();
+                }
+            }
+            self.search_layer_with_filter(query, &nearest, search_ef, 0, &slot_filter)?
+        };
 
         // Already sorted: comparison_to_actual() is monotonic
         let results: Vec<SearchResult> = candidates

@@ -105,7 +105,10 @@ impl WalEntry {
         vector: &[f32],
         metadata: &[u8],
     ) -> Self {
-        let mut data = Vec::new();
+        // Pre-calculate exact capacity: 4 (id len) + id bytes + 1 (level) +
+        // 4 (vec len) + vec f32s * 4 + 4 (meta len) + meta bytes
+        let capacity = 4 + string_id.len() + 1 + 4 + (vector.len() * 4) + 4 + metadata.len();
+        let mut data = Vec::with_capacity(capacity);
 
         // String ID (length-prefixed)
         data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());
@@ -140,7 +143,8 @@ impl WalEntry {
     /// Create delete node entry
     #[must_use]
     pub fn delete_node(timestamp: u64, string_id: &str) -> Self {
-        let mut data = Vec::new();
+        // Pre-calculate exact capacity: 4 (id len) + id bytes
+        let mut data = Vec::with_capacity(4 + string_id.len());
         data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());
         data.extend_from_slice(string_id.as_bytes());
 

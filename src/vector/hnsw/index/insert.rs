@@ -120,12 +120,17 @@ impl HNSWIndex {
         // The key insight is that we must add the new node and prune properly,
         // not skip adding when at capacity (which breaks the graph).
         for &neighbor_id in neighbors {
-            let mut neighbor_neighbors = self.storage.neighbors_at_level(neighbor_id, level);
+            // Use zero-copy COW for the contains check: avoids cloning when the
+            // neighbor is already connected (the common continue path).
+            let existing = self.storage.neighbors_at_level_cow(neighbor_id, level);
 
             // Skip if already connected (avoid duplicates)
-            if neighbor_neighbors.contains(&node_id) {
+            if existing.contains(&node_id) {
                 continue;
             }
+
+            // Need to mutate: materialize the owned Vec only when adding a link.
+            let mut neighbor_neighbors = existing.into_owned();
 
             // Add the new reverse link
             neighbor_neighbors.push(node_id);
@@ -419,8 +424,10 @@ impl HNSWIndex {
 
                 // Add reverse links with proper pruning
                 for &neighbor_id in &neighbors {
-                    let mut neighbor_neighbors = self.storage.neighbors_at_level(neighbor_id, lc);
-                    if !neighbor_neighbors.contains(node_id) {
+                    // Zero-copy COW: skip clone when already connected (common path).
+                    let existing = self.storage.neighbors_at_level_cow(neighbor_id, lc);
+                    if !existing.contains(node_id) {
+                        let mut neighbor_neighbors = existing.into_owned();
                         neighbor_neighbors.push(*node_id);
                         // Prune if over capacity (must recompute distances for pruning)
                         if neighbor_neighbors.len() > m {
@@ -512,8 +519,6 @@ impl HNSWIndex {
                 .map(|(id, _)| id)
                 .collect();
         }
-
-        // Insert at levels 0..=level (iterate from top to bottom)
         for lc in (0..=level).rev() {
             // Find ef_construction nearest neighbors at this level
             // Use distance-aware search to avoid recomputing in heuristic
