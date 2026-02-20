@@ -279,11 +279,27 @@ impl VectorStore {
             }
         }
 
-        // Auto-flush for persistent stores to prevent data resurrection on crash
-        if removed_count > 0 && self.storage.is_some() {
-            self.flush()?;
-        }
-
         Ok(removed_count)
+    }
+
+    /// Compute tombstone ratio: deleted slots / total slots.
+    ///
+    /// Returns 0.0 when no slots exist. Used by `flush()` to decide whether
+    /// to auto-compact before persisting.
+    #[inline]
+    pub(crate) fn tombstone_ratio(&self) -> f32 {
+        let total = self.records.slot_count();
+        if total == 0 {
+            return 0.0;
+        }
+        self.records.deleted_count() as f32 / total as f32
+    }
+
+    /// Set the auto-compact threshold.
+    ///
+    /// `flush()` triggers compaction when the tombstone ratio exceeds this value.
+    /// Default: 0.25. Set to 1.0 to disable auto-compact.
+    pub fn set_auto_compact_threshold(&mut self, threshold: f32) {
+        self.auto_compact_threshold = threshold.clamp(0.0, 1.0);
     }
 }

@@ -137,6 +137,10 @@ pub struct VectorStore {
 
     /// Memory limit in bytes. When exceeded, triggers early freeze.
     max_memory_bytes: Option<usize>,
+
+    /// Auto-compact threshold: tombstone ratio above which flush() triggers compaction.
+    /// Range: 0.0–1.0. Default: 0.25 (compact when >25% of slots are tombstones).
+    auto_compact_threshold: f32,
 }
 
 /// Default maximum tokens per multi-vector document.
@@ -173,6 +177,7 @@ impl VectorStore {
             rescore: false,
             oversample: 3.0,
             max_memory_bytes: None,
+            auto_compact_threshold: 0.25,
         }
     }
 

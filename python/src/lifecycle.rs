@@ -63,6 +63,9 @@ impl VectorDatabase {
     /// contiguous, and rebuilds the search index. Call after bulk deletes
     /// to reclaim memory and improve search performance.
     ///
+    /// Note: flush() automatically compacts when more than 25% of slots are
+    /// tombstones, so explicit compact() calls are optional for most workloads.
+    ///
     /// Returns:
     ///     int: Number of deleted records that were removed
     ///
@@ -72,12 +75,11 @@ impl VectorDatabase {
     ///     >>> db.delete(stale_ids)
     ///     >>> removed = db.compact()
     ///     >>> print(f"Removed {removed} deleted records")
+    ///     >>> db.flush()  # Persist compacted state
     ///
     ///     Periodic maintenance:
     ///
     ///     >>> removed = db.compact()
-    ///     >>> if removed > 0:
-    ///     ...     db.flush()  # Persist compacted state
     ///
     /// Performance:
     ///     Compaction rebuilds the HNSW index, which is O(n log n).

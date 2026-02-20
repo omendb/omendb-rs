@@ -405,3 +405,98 @@ fn test_merge_from_prefix_skips_conflicts() {
     assert_eq!(merged, 1); // Only bar.py merged, foo.py conflicted
     assert_eq!(main.len(), 2);
 }
+
+#[test]
+fn test_auto_compact_triggers_on_flush() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("auto-compact-test");
+
+    let mut store = VectorStore::open(&db_path).unwrap();
+
+    // Insert 100 vectors
+    for i in 0..100 {
+        store
+            .set(
+                &format!("vec{i}"),
+                random_vector(128, i),
+                serde_json::json!({"idx": i}),
+            )
+            .unwrap();
+    }
+
+    // Delete 30 (30% tombstone ratio, above 25% threshold)
+    for i in 0..30 {
+        store.delete(&format!("vec{i}")).unwrap();
+    }
+
+    assert_eq!(store.deleted_count(), 30);
+
+    // flush() should auto-compact since 30/100 = 30% > 25% threshold
+    store.flush().unwrap();
+
+    // Tombstones should be gone after auto-compact
+    assert_eq!(store.deleted_count(), 0, "auto-compact should clear tombstones");
+    assert_eq!(store.len(), 70);
+}
+
+#[test]
+fn test_auto_compact_no_trigger_below_threshold() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("no-auto-compact-test");
+
+    let mut store = VectorStore::open(&db_path).unwrap();
+
+    // Insert 100 vectors
+    for i in 0..100 {
+        store
+            .set(
+                &format!("vec{i}"),
+                random_vector(128, i),
+                serde_json::json!({"idx": i}),
+            )
+            .unwrap();
+    }
+
+    // Delete 20 (20% tombstone ratio, below 25% threshold)
+    for i in 0..20 {
+        store.delete(&format!("vec{i}")).unwrap();
+    }
+
+    assert_eq!(store.deleted_count(), 20);
+
+    // flush() should NOT auto-compact since 20/100 = 20% < 25% threshold
+    store.flush().unwrap();
+
+    // Tombstones should remain
+    assert_eq!(store.deleted_count(), 20, "tombstones should remain below threshold");
+    assert_eq!(store.len(), 80);
+}
+
+#[test]
+fn test_explicit_compact_still_works() {
+    let mut store = VectorStore::new(128);
+
+    // Insert and delete (in-memory store, no auto-compact from flush)
+    for i in 0..50 {
+        store
+            .set(
+                &format!("vec{i}"),
+                random_vector(128, i),
+                serde_json::json!({}),
+            )
+            .unwrap();
+    }
+    for i in 0..20 {
+        store.delete(&format!("vec{i}")).unwrap();
+    }
+
+    assert_eq!(store.deleted_count(), 20);
+    let removed = store.compact().unwrap();
+    assert_eq!(removed, 20);
+    assert_eq!(store.deleted_count(), 0);
+    assert_eq!(store.len(), 30);
+}

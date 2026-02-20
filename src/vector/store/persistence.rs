@@ -475,6 +475,7 @@ impl VectorStore {
             rescore: quantization,
             oversample: 3.0,
             max_memory_bytes: None,
+            auto_compact_threshold: 0.25,
         })
     }
 
@@ -589,6 +590,7 @@ impl VectorStore {
             rescore,
             oversample,
             max_memory_bytes: options.max_memory_bytes,
+            auto_compact_threshold: 0.25,
         })
     }
 
@@ -638,6 +640,7 @@ impl VectorStore {
             rescore,
             oversample,
             max_memory_bytes: options.max_memory_bytes,
+            auto_compact_threshold: 0.25,
         })
     }
 
@@ -645,7 +648,14 @@ impl VectorStore {
     ///
     /// Commits vector/metadata changes and HNSW index to `.omen` storage.
     /// Uses RecordStore as single source of truth (no duplicated state in OmenFile).
+    ///
+    /// If the tombstone ratio exceeds `auto_compact_threshold` (default 25%),
+    /// compaction runs automatically before persisting.
     pub fn flush(&mut self) -> Result<()> {
+        if self.records.deleted_count() > 0 && self.tombstone_ratio() > self.auto_compact_threshold
+        {
+            self.compact()?;
+        }
         self.flush_internal(false)
     }
 
