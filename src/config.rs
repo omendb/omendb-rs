@@ -18,10 +18,6 @@ pub struct StorageConfig {
     /// Block cache capacity in bytes
     /// Default: 128MB
     pub block_cache_capacity: usize,
-
-    /// Enable background compaction
-    /// Default: true
-    pub background_compaction: bool,
 }
 
 impl Default for StorageConfig {
@@ -30,7 +26,6 @@ impl Default for StorageConfig {
             sync_writes: false, // Default to performance for vector graphs (derived data)
             memtable_capacity: 128 * 1024 * 1024,
             block_cache_capacity: 128 * 1024 * 1024,
-            background_compaction: true,
         }
     }
 }
@@ -49,7 +44,6 @@ pub struct StorageConfigBuilder {
     sync_writes: Option<bool>,
     memtable_capacity: Option<usize>,
     block_cache_capacity: Option<usize>,
-    background_compaction: Option<bool>,
 }
 
 impl StorageConfigBuilder {
@@ -74,13 +68,6 @@ impl StorageConfigBuilder {
         self
     }
 
-    /// Enable/disable background compaction
-    #[must_use]
-    pub fn background_compaction(mut self, enabled: bool) -> Self {
-        self.background_compaction = Some(enabled);
-        self
-    }
-
     /// Build configuration
     #[must_use]
     pub fn build(self) -> StorageConfig {
@@ -92,9 +79,6 @@ impl StorageConfigBuilder {
             block_cache_capacity: self
                 .block_cache_capacity
                 .unwrap_or(defaults.block_cache_capacity),
-            background_compaction: self
-                .background_compaction
-                .unwrap_or(defaults.background_compaction),
         }
     }
 }
