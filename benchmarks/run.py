@@ -37,12 +37,6 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 import omendb
 
-_CLOUD_BENCHMARKS = Path(__file__).parent.parent.parent / "cloud" / "benchmarks"
-DEFAULT_HISTORY_FILE = (
-    _CLOUD_BENCHMARKS / "history.jsonl"
-    if _CLOUD_BENCHMARKS.exists()
-    else Path(__file__).parent / "history.jsonl"
-)
 SIFT_DATA_DIR = Path(__file__).parent / "data"
 
 SIFT_DATASETS: dict[int, str] = {
@@ -467,10 +461,21 @@ def main():
         default=100_000,
         help="Number of vectors to benchmark (default: 100000)",
     )
-    parser.add_argument("--output", "-o", type=str, help="Save results to file (JSONL)")
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        help="Save results to JSONL file (required for --history/--compare)",
+    )
     parser.add_argument("--notes", type=str, default="", help="Notes to include")
-    parser.add_argument("--history", action="store_true", help="Show history")
-    parser.add_argument("--compare", action="store_true", help="Compare last 2 runs")
+    parser.add_argument(
+        "--history", action="store_true", help="Show history (requires --output FILE)"
+    )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Compare last 2 runs (requires --output FILE)",
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument(
         "--quantization",
@@ -485,7 +490,12 @@ def main():
     )
     args = parser.parse_args()
 
-    history_file = Path(args.output) if args.output else DEFAULT_HISTORY_FILE
+    if args.history or args.compare:
+        if not args.output:
+            parser.error("--history and --compare require --output FILE")
+        history_file = Path(args.output)
+    else:
+        history_file = Path(args.output) if args.output else None
 
     if args.history:
         show_history(history_file)
@@ -530,7 +540,7 @@ def main():
     if args.notes:
         run["notes"] = args.notes
 
-    if args.output:
+    if history_file:
         save_run(results, history_file, notes=args.notes)
         print(f"\nSaved to: {history_file}")
 

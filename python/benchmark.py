@@ -489,17 +489,8 @@ def save_results(output_path: str, metadata: dict, results: list):
     print(f"\nResults saved to: {path}")
 
 
-_CLOUD_BENCHMARKS = Path(__file__).parent.parent.parent / "cloud" / "benchmarks"
-_HISTORY_FILE = (
-    _CLOUD_BENCHMARKS / "history.json"
-    if _CLOUD_BENCHMARKS.exists()
-    else Path(__file__).parent / "benchmarks" / "history.json"
-)
-
-
-def append_to_history(metadata: dict, results: list):
-    """Append results to cloud/benchmarks/history.json for tracking over time."""
-    history_path = _HISTORY_FILE
+def append_to_history(metadata: dict, results: list, history_path: Path):
+    """Append results to the given history file."""
     history_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Load existing history or create new
@@ -525,12 +516,11 @@ def append_to_history(metadata: dict, results: list):
     print(f"History updated: {history_path} ({len(history)} entries)")
 
 
-def check_regressions(results: list) -> bool:
+def check_regressions(results: list, history_path: Path) -> bool:
     """Compare results to previous runs and warn about regressions.
 
     Returns True if regressions detected.
     """
-    history_path = _HISTORY_FILE
     if not history_path.exists():
         return False
 
@@ -679,7 +669,9 @@ def main():
         help="Quantization bits (0=none, 2/4/8=quantized)",
     )
     parser.add_argument("--output", "-o", type=str, help="Save results to JSON file")
-    parser.add_argument("--no-history", action="store_true", help="Don't append to history.json")
+    parser.add_argument(
+        "--history", type=str, metavar="FILE", help="Append results to history file (JSON)"
+    )
     parser.add_argument(
         "--publish",
         action="store_true",
@@ -792,10 +784,10 @@ def main():
     if args.output:
         save_results(args.output, metadata, all_results)
 
-    # Append to history unless disabled
-    if not args.no_history:
-        append_to_history(metadata, all_results)
-        check_regressions(all_results)
+    if args.history:
+        history_path = Path(args.history)
+        append_to_history(metadata, all_results, history_path)
+        check_regressions(all_results, history_path)
 
 
 if __name__ == "__main__":
