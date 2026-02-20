@@ -9,7 +9,7 @@ Usage:
     python benchmark.py --vectors 1000000  # SIFT-1M benchmark
     python benchmark.py --full       # Multi-dimension (random vectors)
     python benchmark.py --scale      # Scale tests (SIFT data only, skips missing sizes)
-    python benchmark.py --output results.json  # Save to JSON
+    python benchmark.py --append history.json  # Append results to history file
 """
 
 import argparse
@@ -479,16 +479,6 @@ def run_hybrid_benchmark(n_vectors: int, dim: int, n_queries: int = 100):
     }
 
 
-def save_results(output_path: str, metadata: dict, results: list):
-    """Save benchmark results to JSON file."""
-    output = {"metadata": metadata, "results": results}
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(output, f, indent=2)
-    print(f"\nResults saved to: {path}")
-
-
 def append_to_history(metadata: dict, results: list, history_path: Path):
     """Append results to the given history file."""
     history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -668,9 +658,8 @@ def main():
         default=0,
         help="Quantization bits (0=none, 2/4/8=quantized)",
     )
-    parser.add_argument("--output", "-o", type=str, help="Save results to JSON file")
     parser.add_argument(
-        "--history", type=str, metavar="FILE", help="Append results to history file (JSON)"
+        "--append", type=str, metavar="FILE", help="Append results to history file (JSON)"
     )
     parser.add_argument(
         "--publish",
@@ -780,12 +769,8 @@ def main():
     print("Benchmark complete")
     print("=" * 60)
 
-    # Save to JSON if output specified
-    if args.output:
-        save_results(args.output, metadata, all_results)
-
-    if args.history:
-        history_path = Path(args.history)
+    if args.append:
+        history_path = Path(args.append)
         append_to_history(metadata, all_results, history_path)
         check_regressions(all_results, history_path)
 

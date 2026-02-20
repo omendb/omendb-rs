@@ -5,17 +5,15 @@ OmenDB Benchmark Runner
 Runs benchmarks on SIFT-100K (real embeddings) with QPS and recall measurement.
 
 Usage:
-    python benchmarks/run.py                        # SIFT-100K benchmark (~90s)
-    python benchmarks/run.py --quick                # Quick run (~30s)
-    python benchmarks/run.py --vectors 10000        # SIFT-10K benchmark
-    python benchmarks/run.py --output FILE          # Save results to FILE
-    python benchmarks/run.py --history              # Show history
-    python benchmarks/run.py --compare              # Compare last 2 runs
-    python benchmarks/run.py --notes "text"         # Add notes to run
-    python benchmarks/run.py -q sq8                 # Test SQ8 quantization
-    python benchmarks/run.py --all-modes            # Test fp32 and SQ8
-
-Saves to cloud/benchmarks/ automatically when that repo is present alongside omendb/.
+    python benchmarks/run.py                          # SIFT-100K benchmark (~90s)
+    python benchmarks/run.py --quick                  # Quick run (~30s)
+    python benchmarks/run.py --vectors 10000          # SIFT-10K benchmark
+    python benchmarks/run.py --append FILE            # Append results to history file
+    python benchmarks/run.py --history FILE           # Show history from FILE
+    python benchmarks/run.py --compare FILE           # Compare last 2 runs in FILE
+    python benchmarks/run.py --notes "text"           # Add notes to run
+    python benchmarks/run.py -q sq8                   # Test SQ8 quantization
+    python benchmarks/run.py --all-modes              # Test fp32 and SQ8
 """
 
 import argparse
@@ -462,19 +460,14 @@ def main():
         help="Number of vectors to benchmark (default: 100000)",
     )
     parser.add_argument(
-        "--output",
-        "-o",
-        type=str,
-        help="Save results to JSONL file (required for --history/--compare)",
+        "--append", type=str, metavar="FILE", help="Append results to history file"
     )
     parser.add_argument("--notes", type=str, default="", help="Notes to include")
     parser.add_argument(
-        "--history", action="store_true", help="Show history (requires --output FILE)"
+        "--history", type=str, metavar="FILE", help="Show history from FILE"
     )
     parser.add_argument(
-        "--compare",
-        action="store_true",
-        help="Compare last 2 runs (requires --output FILE)",
+        "--compare", type=str, metavar="FILE", help="Compare last 2 runs in FILE"
     )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument(
@@ -490,19 +483,12 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.history or args.compare:
-        if not args.output:
-            parser.error("--history and --compare require --output FILE")
-        history_file = Path(args.output)
-    else:
-        history_file = Path(args.output) if args.output else None
-
     if args.history:
-        show_history(history_file)
+        show_history(Path(args.history))
         return
 
     if args.compare:
-        runs = load_history(history_file, 2)
+        runs = load_history(Path(args.compare), 2)
         if len(runs) < 2:
             print("Need at least 2 runs to compare")
             return
@@ -540,9 +526,9 @@ def main():
     if args.notes:
         run["notes"] = args.notes
 
-    if history_file:
-        save_run(results, history_file, notes=args.notes)
-        print(f"\nSaved to: {history_file}")
+    if args.append:
+        save_run(results, Path(args.append), notes=args.notes)
+        print(f"\nSaved to: {args.append}")
 
     if args.json:
         print(json.dumps(run, indent=2))
