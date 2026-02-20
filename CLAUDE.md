@@ -88,21 +88,22 @@ omendb-ffi/             # C FFI bindings
 **Benchmarks:**
 
 ```bash
-cd python && uv run python ../benchmarks/run.py --quick   # Dev (~15s)
-cd python && uv run python ../benchmarks/run.py           # Full (~60s)
+cd python && uv run python benchmark.py --quick   # Dev (~15s)
+cd python && uv run python benchmark.py           # SIFT-100K (~60s)
 ```
 
-Expected (10K vectors, M3 Max):
+Expected (SIFT-100K, 128D, M=16, ef=100, M3 Max):
 
-- 128D: ~19,700 QPS single, ~156,000 QPS batch
-- 768D: ~2,400 QPS single, ~15,000 QPS batch
+- Build: ~55K vec/s
+- Search: ~6,600 QPS single, ~56,000 QPS batch
+- Recall@10: ~99.9%
 
 ## Testing
 
 ```bash
-cargo test --lib                              # 441 Rust tests
-cd python && uv run pytest tests/ -x          # 313 Python tests
-cd node && bun test                           # 104 Node tests
+cargo test --lib                              # 525+ Rust tests
+cd python && uv run pytest tests/ -x          # 322+ Python tests
+cd node && bun test                           # 111+ Node tests
 cd python && uv run pytest tests/test_recall.py  # Recall verification
 ```
 
@@ -115,35 +116,35 @@ Before ANY release, complete ALL of these checks:
 ### 1. Run ALL Test Suites
 
 ```bash
-# Rust (must pass 441+ tests)
+# Rust (must pass 525+ tests)
 cargo test --lib
 cargo clippy --lib -- -D warnings
 
-# Python (must pass 313+ tests)
+# Python (must pass 322+ tests)
 cd python && uv run pytest tests/ -x
 
-# Node (must pass 104+ tests)
+# Node (must pass 111+ tests)
 cd node && bun test
 ```
 
 ### 2. Run Performance Benchmarks
 
 ```bash
-# Standard benchmark (10k/128D) - compare against history.json
-cd python && uv run python ../benchmarks/run.py
+# Standard benchmark (SIFT-100K)
+cd python && uv run python benchmark.py
 
 # Full benchmark (multiple dimensions and scales)
-cd python && uv run python ../benchmarks/run.py --full
-
-# Check for regressions against previous versions in python/benchmarks/history.json
+cd python && uv run python benchmark.py --full
 ```
 
-**Performance baselines (10k vectors, M3 Max):**
+**Performance baselines (SIFT-100K, 128D, M=16, ef=100, M3 Max):**
 
-| Dimension | Single QPS | Batch QPS | Recall |
-| --------- | ---------- | --------- | ------ |
-| 128D      | >9,000     | >80,000   | >89%   |
-| 768D      | >3,000     | >15,000   | >84%   |
+| Metric    | Value       |
+| --------- | ----------- |
+| Build     | ~55K vec/s  |
+| Single    | ~6,600 QPS  |
+| Batch     | ~56,000 QPS |
+| Recall@10 | ~99.9%      |
 
 ### 3. Verify SDK APIs Match
 
