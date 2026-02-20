@@ -6,8 +6,8 @@
 
 Embedded vector database for Python and Node.js. No server, no setup, just install.
 
-- **20K QPS** single-threaded search with 100% recall (SIFT-10K)
-- **105K vec/s** insert throughput
+- **6,600 QPS** single / **56,000 QPS** batch search, 99.9% recall (SIFT-100K)
+- **55K vec/s** insert throughput
 - **SQ8 quantization** (4x compression, ~99% recall)
 - **ACORN-1** predicate-aware filtered search
 - **Hybrid search** -- BM25 text + vector with RRF fusion
@@ -301,47 +301,24 @@ results = mvdb.search([[0.1]*128, [0.15]*128], k=5)  # MaxSim scoring
 
 ## Performance
 
-**SIFT-10K** (128D, M=16, ef=100, k=10, Apple M3 Max):
+SIFT-100K · 128D · M=16 · ef_construction=100 · ef_search=100 · k=10 · Apple M3 Max
 
-| Metric    | Result     |
-| --------- | ---------- |
-| Build     | 105K vec/s |
-| Search    | 19.7K QPS  |
-| Batch     | 156K QPS   |
-| Recall@10 | 100.0%     |
+| Mode | Build      | Single    | Batch      | Recall@10 |
+| ---- | ---------- | --------- | ---------- | --------- |
+| fp32 | 55,260 v/s | 6,634 QPS | 56,108 QPS | 99.9%     |
 
-**SIFT-1M** (1M vectors, 128D, M=16, ef=100, k=10):
+Batch search uses Rayon for parallel execution across all cores. Scales to 1M+ vectors.
 
-| Machine      | QPS   | Recall |
-| ------------ | ----- | ------ |
-| i9-13900KF   | 4,591 | 98.6%  |
-| Apple M3 Max | 3,216 | 98.4%  |
-
-**Quantization:**
-
-| Mode | Compression | Recall | Use Case             |
-| ---- | ----------- | ------ | -------------------- |
-| f32  | 1x          | 100%   | Default              |
-| SQ8  | 4x          | ~99%   | Recommended for most |
-
-```python
-db = omendb.open("./db", dimensions=768, quantization=True)          # SQ8
-```
-
-**Filtered search** (ACORN-1, SIFT-10K, 10% selectivity):
-
-| Method  | QPS | Recall | Speedup               |
-| ------- | --- | ------ | --------------------- |
-| ACORN-1 | --  | --     | 37.79x vs post-filter |
+**Filtered search** (ACORN-1, 10% selectivity): predicate-aware graph traversal, no post-filter overhead.
 
 <details>
 <summary>Benchmark methodology</summary>
 
-- **Parameters**: m=16, ef_construction=100, ef_search=100
-- **Batch**: Uses Rayon for parallel search across all cores
-- **Recall**: Validated against brute-force ground truth on SIFT/GloVe
-- **Reproduce**:
-  - Quick (10K): `uv run python benchmarks/run.py`
+- **Dataset**: SIFT-100K (real 128D embeddings, not random vectors)
+- **Parameters**: M=16, ef_construction=100, ef_search=100, k=10
+- **Batch**: parallel via Rayon
+- **Recall**: validated against brute-force ground truth
+- **Reproduce**: `cd python && uv run python benchmark.py`
 
 </details>
 
