@@ -63,19 +63,19 @@ results = db.search([0.1] * 128, k=5, filter={"category": "science"})
 **With auto-embedding:**
 
 ```javascript
-const omendb = require("omendb");
+const { open } = require("omendb");
 
-const db = omendb.open("./mydb", 384, { embeddingFn: embed });
-db.set([{ id: "doc1", document: "Paris is the capital of France" }]);
-const results = db.search("capital of France", 5);
+const db = open("./mydb", { dimensions: 384 }, embed);
+await db.set([{ id: "doc1", document: "Paris is the capital of France" }]);
+const results = await db.search("capital of France", 5);
 ```
 
 **With vectors:**
 
 ```javascript
-const db = omendb.open("./mydb", 128);
-db.set([{ id: "doc1", vector: new Float32Array(128).fill(0.1) }]);
-const results = db.search(new Float32Array(128).fill(0.1), 5);
+const db = open("./mydb", { dimensions: 128 });
+await db.set([{ id: "doc1", vector: new Float32Array(128).fill(0.1) }]);
+const results = await db.search(new Float32Array(128).fill(0.1), 5);
 ```
 
 ## Features
@@ -162,24 +162,24 @@ db.stats()                              # Database statistics
 
 ```javascript
 // Database
-const db = omendb.open(path, dimensions, { embeddingFn: fn });
-const db = omendb.open(path, dimensions);
+const db = open(path, { dimensions, embeddingFn: fn });
+const db = open(path, { dimensions });
 
 // CRUD
-db.set(items);
+await db.set(items);
 db.get(id);
 db.getBatch(ids);
 db.delete(ids);
 db.deleteByFilter(filter);
-db.update(id, { vector, metadata, text });
+await db.set([{ id, vector, metadata }]); // update
 
 // Search
-db.search(query, k);
-db.search(query, k, { filter, maxDistance, ef });
-db.searchBatch(queries, k);
+await db.search(query, k);
+await db.search(query, k, { filter, maxDistance, ef });
+await db.searchBatch(queries, k);
 
 // Hybrid
-db.searchHybrid(queryVector, queryText, k);
+await db.searchHybrid(queryVector, queryText, k);
 db.searchText(queryText, k);
 
 // Collections
