@@ -437,7 +437,11 @@ fn test_auto_compact_triggers_on_flush() {
     store.flush().unwrap();
 
     // Tombstones should be gone after auto-compact
-    assert_eq!(store.deleted_count(), 0, "auto-compact should clear tombstones");
+    assert_eq!(
+        store.deleted_count(),
+        0,
+        "auto-compact should clear tombstones"
+    );
     assert_eq!(store.len(), 70);
 }
 
@@ -472,7 +476,11 @@ fn test_auto_compact_no_trigger_below_threshold() {
     store.flush().unwrap();
 
     // Tombstones should remain
-    assert_eq!(store.deleted_count(), 20, "tombstones should remain below threshold");
+    assert_eq!(
+        store.deleted_count(),
+        20,
+        "tombstones should remain below threshold"
+    );
     assert_eq!(store.len(), 80);
 }
 
