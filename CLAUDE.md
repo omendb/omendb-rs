@@ -94,9 +94,9 @@ cd python && uv run python benchmark.py           # SIFT-100K (~60s)
 
 Expected (SIFT-100K, 128D, M=16, ef=100, M3 Max):
 
-- Build: ~55K vec/s
-- Search: ~6,600 QPS single, ~56,000 QPS batch
-- Recall@10: ~99.9%
+- Build: ~60K vec/s
+- Search: ~7,600 QPS single, ~65,000 QPS batch
+- Recall@10: ~99.8%
 
 ## Testing
 
@@ -139,12 +139,12 @@ cd python && uv run python benchmark.py --full
 
 **Performance baselines (SIFT-100K, 128D, M=16, ef=100, M3 Max):**
 
-| Metric    | Value       |
-| --------- | ----------- |
-| Build     | ~55K vec/s  |
-| Single    | ~6,600 QPS  |
-| Batch     | ~56,000 QPS |
-| Recall@10 | ~99.9%      |
+| Metric    | fp32        | SQ8         |
+| --------- | ----------- | ----------- |
+| Build     | ~60K vec/s  | ~60K vec/s  |
+| Single    | ~7,600 QPS  | ~15,400 QPS |
+| Batch     | ~65,000 QPS | ~95,000 QPS |
+| Recall@10 | ~99.8%      | ~99.8%      |
 
 ### 3. Verify SDK APIs Match
 

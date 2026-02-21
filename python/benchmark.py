@@ -139,7 +139,7 @@ def benchmark_build(
     """Benchmark index build throughput."""
     n, dim = vectors.shape
     if quantize_bits > 0:
-        db = omendb.open(db_path, dimensions=dim, quantization=quantize_bits)
+        db = omendb.open(db_path, dimensions=dim, quantization="sq8")
     else:
         db = omendb.open(db_path, dimensions=dim)
 
@@ -727,7 +727,7 @@ def main():
         all_results.append(result)
     else:
         sift_data = None
-        if args.dimension == 128 and args.quantize == 0:
+        if args.dimension == 128:
             sift_data = load_sift(args.vectors)
 
         if args.runs > 1:

@@ -6,9 +6,9 @@
 
 Embedded vector database for Python and Node.js. No server, no setup, just install.
 
-- **6,600 QPS** single / **56,000 QPS** batch search, 99.9% recall (SIFT-100K)
-- **55K vec/s** insert throughput
-- **SQ8 quantization** (4x compression, ~99% recall)
+- **7,600 QPS** single / **64,000 QPS** batch search, 99.8% recall (SIFT-100K)
+- **60K vec/s** insert throughput
+- **SQ8 quantization** (4x compression, 99.8% recall, 2x faster search)
 - **ACORN-1** predicate-aware filtered search
 - **Hybrid search** -- BM25 text + vector with RRF fusion
 - **Multi-vector** -- ColBERT/MaxSim with MUVERA and token pooling
@@ -82,7 +82,7 @@ const results = db.search(new Float32Array(128).fill(0.1), 5);
 
 - **HNSW graph indexing** -- SIMD-accelerated distance computation
 - **ACORN-1 filtered search** -- predicate-aware graph traversal, 37.79x speedup over post-filtering
-- **SQ8 quantization** -- 4x compression, ~99% recall
+- **SQ8 quantization** -- 4x compression, 99.8% recall, 2x faster search
 - **BM25 text search** -- full-text search via Tantivy
 - **Hybrid search** -- RRF fusion of vector + text results
 - **Multi-vector / ColBERT** -- MUVERA + MaxSim scoring for token-level retrieval
@@ -303,9 +303,10 @@ results = mvdb.search([[0.1]*128, [0.15]*128], k=5)  # MaxSim scoring
 
 SIFT-100K · 128D · M=16 · ef_construction=100 · ef_search=100 · k=10 · Apple M3 Max
 
-| Mode | Build      | Single    | Batch      | Recall@10 |
-| ---- | ---------- | --------- | ---------- | --------- |
-| fp32 | 55,260 v/s | 6,634 QPS | 56,108 QPS | 99.9%     |
+| Mode | Build      | Single     | Batch      | Recall@10 |
+| ---- | ---------- | ---------- | ---------- | --------- |
+| fp32 | 59,789 v/s | 7,644 QPS  | 64,570 QPS | 99.8%     |
+| SQ8  | 59,905 v/s | 15,403 QPS | 95,442 QPS | 99.8%     |
 
 Batch search uses Rayon for parallel execution across all cores. Scales to 1M+ vectors.
 
