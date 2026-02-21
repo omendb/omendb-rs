@@ -24,6 +24,9 @@ export declare class VectorDatabase {
    *
    * @param items - Array of {id, vector, metadata?, text?} or {id, vectors, metadata?}
    * @returns Number of vectors inserted/updated
+   *
+   * @note Batch inserts (multiple items) skip the WAL for performance. Data is not
+   * durable until flush() is called.
    */
   set(items: Array<SetItem>): Promise<number>
   /** Get a vector by ID. */
@@ -124,6 +127,8 @@ export declare class VectorDatabase {
   isEmpty(): boolean
   /** Get database statistics. */
   stats(): StatsResult
+  /** Get comprehensive database diagnostics. */
+  info(): InfoResult
   /** Get current ef_search value. */
   get efSearch(): number
   /** Set ef_search value. */
@@ -371,6 +376,25 @@ export interface HybridSearchResult {
   keywordScore?: number
   /** Vector similarity score (null if document only matched text search) */
   semanticScore?: number
+}
+
+export interface InfoResult {
+  vectorCount: number
+  deletedCount: number
+  dimensions: number
+  metric: string
+  frozenSegmentCount: number
+  mutableSegmentVectors: number
+  vectorBytes: number
+  graphBytes: number
+  totalMemoryBytes: number
+  walEntries: number
+  isPersistent: boolean
+  hnswM: number
+  hnswEfConstruction: number
+  hnswEfSearch: number
+  quantization: boolean
+  segmentCapacity: number
 }
 
 /**
