@@ -4,7 +4,7 @@
 Uses real SIFT embeddings for all benchmarks. Skips scales with no dataset.
 
 Usage:
-    python benchmark.py              # SIFT-10K benchmark (10K, 128D)
+    python benchmark.py              # SIFT-100K benchmark (100K, 128D)
     python benchmark.py --full       # Multi-dimension (random vectors)
     python benchmark.py --scale      # Scale tests (SIFT data only, skips missing sizes)
     python benchmark.py --output results.json  # Save to JSON
@@ -593,7 +593,7 @@ def main():
     )
     parser.add_argument("--hybrid", action="store_true", help="Run hybrid search benchmarks")
     parser.add_argument("--dimension", type=int, default=128, help="Vector dimension")
-    parser.add_argument("--vectors", type=int, default=10000, help="Number of vectors")
+    parser.add_argument("--vectors", type=int, default=100000, help="Number of vectors")
     parser.add_argument("--queries", type=int, default=1000, help="Number of queries")
     parser.add_argument(
         "--quantize",

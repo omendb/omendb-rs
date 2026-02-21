@@ -47,3 +47,4 @@ __pycache__/
 *.pyo
 *.json.gz
 .worktrees/
+benchmarks/data/sift-1m.npz
