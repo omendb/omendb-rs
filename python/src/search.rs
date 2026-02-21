@@ -31,7 +31,7 @@ impl VectorDatabase {
     ///     rerank_factor (int, optional): Candidates multiplier for reranking (default: 32)
     ///
     /// Returns:
-    ///     list[dict]: Results with keys {id, distance, metadata}
+    ///     list[dict]: Results with keys {id, distance, score, metadata}
     ///
     /// Examples:
     ///     >>> results = db.search([0.1, 0.2, 0.3], k=5)

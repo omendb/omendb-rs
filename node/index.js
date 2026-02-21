@@ -314,8 +314,12 @@ class VectorDatabase {
 		return this._native.optimize();
 	}
 
-	mergeFrom(other) {
-		return this._native.mergeFrom(other._native);
+	mergeFrom(other, keyPrefix) {
+		return this._native.mergeFrom(other._native, keyPrefix);
+	}
+
+	info() {
+		return this._native.info();
 	}
 
 	ids() {

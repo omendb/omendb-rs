@@ -258,9 +258,11 @@ export declare class VectorDatabase {
   /**
    * Search for k nearest neighbors.
    *
-   * @param query - Query vector (number[] or Float32Array)
+   * @param query - Query vector(s): number[] or Float32Array for single-vector stores;
+   *                number[][] or Float32Array[] for multi-vector stores
    * @param k - Number of results to return
-   * @param options - Optional search options: {filter?, ef?, maxDistance?}
+   * @param options - Optional search options. Single-vector: {filter?, ef?, maxDistance?}.
+   *                  Multi-vector: {rerank?, rerankFactor?}
    * @returns Array of {id, distance, score, metadata}
    *
    * @example
@@ -271,9 +273,12 @@ export declare class VectorDatabase {
    * // With options
    * db.search([1, 0, 0, 0], 10, { filter: { category: "A" }, ef: 200 });
    * db.search([1, 0, 0, 0], 10, { maxDistance: 0.5 });
+   *
+   * // Multi-vector search
+   * db.search([[0.1, 0.2], [0.3, 0.4]], 5, { rerank: true, rerankFactor: 8 });
    * ```
    */
-  search(query: Array<number> | Float32Array | string, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): Promise<Array<SearchResult>>
+  search(query: Array<number> | Float32Array | string | Array<Array<number>> | Array<Float32Array>, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number; rerank?: boolean; rerankFactor?: number } | undefined): Promise<Array<SearchResult>>
   /**
    * Search multi-vector store with query tokens.
    *

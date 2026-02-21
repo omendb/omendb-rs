@@ -47,7 +47,11 @@ def test_set_and_search():
         assert len(results) == 2
         assert results[0]["id"] == "doc1"
         assert "distance" in results[0]
+        assert "score" in results[0]
         assert "metadata" in results[0]
+        assert isinstance(results[0]["distance"], float)
+        assert isinstance(results[0]["score"], float)
+        assert 0.0 <= results[0]["score"] <= 1.0
         assert results[0]["metadata"]["title"] == "Document 1"
 
 

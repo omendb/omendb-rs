@@ -609,6 +609,50 @@ describe("VectorDatabase", () => {
 		});
 	});
 
+	describe("info", () => {
+		it("should return comprehensive diagnostics", async () => {
+			const db = open(":memory:", { dimensions: 4 });
+			await db.set([{ id: "a", vector: [1, 0, 0, 0] }]);
+			const info = db.info();
+			expect(info.vectorCount).toBe(1);
+			expect(info.deletedCount).toBe(0);
+			expect(info.dimensions).toBe(4);
+			expect(typeof info.metric).toBe("string");
+			expect(typeof info.totalMemoryBytes).toBe("number");
+			expect(info.totalMemoryBytes).toBeGreaterThan(0);
+			expect(info.isPersistent).toBe(false);
+			expect(info.hnswM).toBe(16);
+			expect(info.quantization).toBe(false);
+			db.close();
+		});
+	});
+
+	describe("mergeFrom", () => {
+		it("should merge without prefix", async () => {
+			const db1 = open(":memory:", { dimensions: 4 });
+			const db2 = open(":memory:", { dimensions: 4 });
+			await db1.set([{ id: "a", vector: [1, 0, 0, 0] }]);
+			await db2.set([{ id: "b", vector: [0, 1, 0, 0] }]);
+			const count = db1.mergeFrom(db2);
+			expect(count).toBe(1);
+			expect(new Set(db1.ids())).toEqual(new Set(["a", "b"]));
+			db1.close();
+			db2.close();
+		});
+
+		it("should merge with key prefix", async () => {
+			const db1 = open(":memory:", { dimensions: 4 });
+			const db2 = open(":memory:", { dimensions: 4 });
+			await db1.set([{ id: "a", vector: [1, 0, 0, 0] }]);
+			await db2.set([{ id: "b", vector: [0, 1, 0, 0] }]);
+			const count = db1.mergeFrom(db2, "src_");
+			expect(count).toBe(1);
+			expect(new Set(db1.ids())).toEqual(new Set(["a", "src_b"]));
+			db1.close();
+			db2.close();
+		});
+	});
+
 	describe("error handling", () => {
 		it("should reject invalid m parameter", () => {
 			expect(() => open(":memory:", { dimensions: 128, m: 2 })).toThrow();

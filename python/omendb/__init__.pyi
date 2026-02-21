@@ -18,6 +18,7 @@ class SearchResult(TypedDict):
 
     id: str
     distance: float
+    score: float
     metadata: dict[str, Any]
 
 class TextSearchResult(TypedDict):
@@ -251,7 +252,7 @@ class VectorDatabase:
                           (multi-vector stores only, default: 32).
 
         Returns:
-            List of results with id, distance, metadata.
+            List of results with id, distance, score, metadata.
 
         Examples:
             >>> # Single-vector store
