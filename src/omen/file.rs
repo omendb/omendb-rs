@@ -116,6 +116,12 @@ pub struct OmenFile {
     vec_file: Option<File>,
     vec_path: PathBuf,
     records_path: PathBuf,
+
+    // Accumulated dirty slots since last full flush. Unioned into each auto-checkpoint's
+    // .records snapshot so crash recovery can rebuild partial segments correctly across
+    // multiple auto-checkpoints. Reset on full flush (write_omen_manifest /
+    // checkpoint_from_snapshot). Avoids reading the .records file on every auto-checkpoint.
+    accumulated_dirty: RoaringBitmap,
 }
 
 impl OmenFile {
@@ -199,6 +205,7 @@ impl OmenFile {
             vec_file: None,
             vec_path,
             records_path,
+            accumulated_dirty: RoaringBitmap::new(),
         })
     }
 
@@ -397,6 +404,7 @@ impl OmenFile {
             vec_file,
             vec_path,
             records_path,
+            accumulated_dirty: RoaringBitmap::new(),
         })
     }
 
@@ -1222,23 +1230,19 @@ impl OmenFile {
         // fsync .vecs
         self.vec_file.as_ref().unwrap().sync_all()?;
 
-        // Accumulate dirty slots since last flush. If a previous slim snapshot exists
-        // and is newer than the manifest (still from after the last flush), union its
-        // dirty_since_flush with the current batch so partial segment rebuild works
-        // correctly across multiple auto-checkpoints without WAL entries.
-        let mut accumulated_dirty = dirty.clone();
-        if self.records_newer_than_omen() {
-            if let Ok(Some(prev)) = self.load_records_snapshot() {
-                accumulated_dirty |= &prev.dirty_since_flush;
-            }
-        }
+        // Accumulate dirty slots across auto-checkpoints in memory. The .records snapshot
+        // must contain the union of all dirty slots since the last full flush so crash
+        // recovery can rebuild partial segments correctly without reading the previous
+        // snapshot from disk on every auto-checkpoint.
+        self.accumulated_dirty |= dirty;
+
         // Record the pre-truncation epoch. After truncate() the epoch increments to N+1.
         // Recovery sees WAL epoch N+1 > snapshot epoch N → current WAL entries are new
         // (written after this checkpoint) and must be replayed.
         // If truncation fails (epoch stays N), WAL epoch == snapshot epoch → skip replay
         // (entries are already in the snapshot).
         let pre_truncation_epoch = self.wal.truncation_epoch();
-        self.write_records_snapshot(records, &accumulated_dirty, pre_truncation_epoch)?;
+        self.write_records_snapshot(records, &self.accumulated_dirty, pre_truncation_epoch)?;
         self.wal.truncate()?;
 
         Ok(())
@@ -1531,6 +1535,9 @@ impl OmenFile {
         // already covers the crash window between rename and truncation.
         self.wal.truncate()?;
 
+        // Full flush complete — reset accumulated dirty set for the next cycle.
+        self.accumulated_dirty = RoaringBitmap::new();
+
         Ok(())
     }
 
@@ -1777,6 +1784,9 @@ impl OmenFile {
         // Truncate WAL. An empty WAL replays nothing; the pre-rename checkpoint entry
         // already covers the crash window between rename and truncation.
         self.wal.truncate()?;
+
+        // Full flush complete — reset accumulated dirty set for the next cycle.
+        self.accumulated_dirty = RoaringBitmap::new();
 
         Ok(())
     }
