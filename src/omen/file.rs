@@ -1105,10 +1105,9 @@ impl OmenFile {
             let mut vm = unsafe { MmapMut::map_mut(&vf)? };
 
             // Write all slot vectors
-            let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
             for slot in 0..slot_count {
                 let offset = slot * slot_bytes;
-                if deleted_set.contains(&(slot as u32)) {
+                if records.deleted_bitmap().contains(slot as u32) {
                     // Zero-fill deleted slots
                     vm[offset..offset + slot_bytes].fill(0);
                 } else if let Some(vec_data) = records.get_vector(slot as u32) {
@@ -1302,7 +1301,6 @@ impl OmenFile {
             .as_mut()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, ".vecs mmap not available"))?;
 
-        let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
         let dirty_count = dirty.len() as usize;
         let total_slots = slot_count;
 
@@ -1313,7 +1311,7 @@ impl OmenFile {
                 continue;
             }
 
-            if deleted_set.contains(&slot) {
+            if records.deleted_bitmap().contains(slot) {
                 vm[offset..end].fill(0);
             } else if let Some(vec_data) = records.get_vector(slot) {
                 if vec_data.len() == dim {
@@ -1412,19 +1410,21 @@ impl OmenFile {
 
         manifest.id_to_index.clone_from(id_to_slot);
         manifest.index_to_id = index_to_id;
-        manifest.deleted = deleted.iter().copied().collect();
 
-        // Convert metadata to bytes
-        let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
+        // Build deleted bitmap once — reused for both the metadata filter and manifest.deleted
+        let deleted_bitmap: RoaringBitmap = deleted.iter().copied().collect();
+
+        // Convert metadata to bytes (skip deleted slots)
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
         for (&idx, json) in metadata {
-            if !deleted_set.contains(&idx) {
+            if !deleted_bitmap.contains(idx) {
                 if let Ok(bytes) = serde_json::to_vec(json) {
                     metadata_bytes.insert(idx, bytes);
                 }
             }
         }
         manifest.metadata = metadata_bytes;
+        manifest.deleted = deleted_bitmap;
         manifest.metadata_index = options.metadata_index_bytes.map(<[u8]>::to_vec);
         manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
         manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);
@@ -1573,7 +1573,8 @@ impl OmenFile {
                 format!("Vector count {} exceeds u32 maximum", vectors.len()),
             ));
         }
-        let deleted_set: std::collections::HashSet<u32> = deleted.iter().copied().collect();
+        // Build deleted bitmap once — reused for vector loop, metadata filter, and manifest.deleted
+        let deleted_bitmap: RoaringBitmap = deleted.iter().copied().collect();
 
         // Write complete checkpoint to temp file
         let temp_path = {
@@ -1600,7 +1601,7 @@ impl OmenFile {
         let mut new_nodes: Vec<NodeLocation> = Vec::with_capacity(vectors.len());
 
         for (idx, vec_opt) in vectors.iter().enumerate() {
-            if deleted_set.contains(&(idx as u32)) {
+            if deleted_bitmap.contains(idx as u32) {
                 new_nodes.push(NodeLocation {
                     offset: 0,
                     length: 0,
@@ -1666,18 +1667,18 @@ impl OmenFile {
 
         manifest.id_to_index.clone_from(id_to_slot);
         manifest.index_to_id = index_to_id;
-        manifest.deleted = deleted.iter().copied().collect();
 
-        // Convert metadata to bytes
+        // Convert metadata to bytes (skip deleted slots)
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
         for (&idx, json) in metadata {
-            if !deleted_set.contains(&idx) {
+            if !deleted_bitmap.contains(idx) {
                 if let Ok(bytes) = serde_json::to_vec(json) {
                     metadata_bytes.insert(idx, bytes);
                 }
             }
         }
         manifest.metadata = metadata_bytes;
+        manifest.deleted = deleted_bitmap; // move — reuses the bitmap built above
         manifest.metadata_index = options.metadata_index_bytes.map(<[u8]>::to_vec);
 
         // Store multi-vector offsets in manifest (small, atomic with manifest)
