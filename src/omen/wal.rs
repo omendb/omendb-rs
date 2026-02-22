@@ -3,7 +3,7 @@
 //! Based on P-HNSW research: `NLog` (node ops) + `NlistLog` (neighbor ops)
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// Configure OpenOptions for cross-platform compatibility.
@@ -118,10 +118,11 @@ impl WalEntry {
         data.push(level);
 
         // Vector (length-prefixed f32 array)
+        // SAFETY: little-endian required crate-wide (compile_error! in file.rs); f32 alignment ≥ u8
         data.extend_from_slice(&(vector.len() as u32).to_le_bytes());
-        for &val in vector {
-            data.extend_from_slice(&val.to_le_bytes());
-        }
+        let byte_slice =
+            unsafe { std::slice::from_raw_parts(vector.as_ptr() as *const u8, vector.len() * 4) };
+        data.extend_from_slice(byte_slice);
 
         // Metadata (length-prefixed)
         data.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
@@ -246,7 +247,7 @@ fn write_wal_meta(
 
 /// Write-Ahead Log
 pub struct Wal {
-    file: BufWriter<File>,
+    file: File,
     path: std::path::PathBuf,
     next_timestamp: u64,
     entry_count: u64,
@@ -275,7 +276,7 @@ impl Wal {
         }
 
         let mut wal = Self {
-            file: BufWriter::new(file),
+            file,
             path,
             next_timestamp: 0,
             entry_count: 0,
@@ -298,7 +299,7 @@ impl Wal {
 
     /// Scan WAL to find highest timestamp
     fn scan_for_timestamp(&mut self) -> io::Result<()> {
-        let file = self.file.get_mut();
+        let file = &mut self.file;
         file.seek(SeekFrom::Start(0))?;
 
         let mut header_buf = [0u8; WalEntryHeader::SIZE];
@@ -367,9 +368,7 @@ impl Wal {
     /// timestamps are session-scoped (see truncate()), entry_count stale only delays
     /// auto-checkpoint slightly, and truncation_epoch is always correct after truncate().
     pub fn sync(&mut self) -> io::Result<()> {
-        self.file.flush()?;
-        self.file.get_mut().sync_all()?;
-        Ok(())
+        self.file.sync_all()
     }
 
     /// Return the current truncation epoch.
@@ -386,7 +385,7 @@ impl Wal {
     /// Note: Entries are validated via checksum. Invalid entries are skipped.
     /// Unknown entry types are also skipped (not treated as checkpoints).
     pub fn entries_after_checkpoint(&mut self) -> io::Result<Vec<WalEntry>> {
-        let file = self.file.get_mut();
+        let file = &mut self.file;
         file.seek(SeekFrom::Start(0))?;
 
         let mut all_entries = Vec::new();
@@ -462,9 +461,8 @@ impl Wal {
 
     /// Truncate WAL (after checkpoint)
     pub fn truncate(&mut self) -> io::Result<()> {
-        self.file.flush()?;
-        self.file.get_mut().set_len(0)?;
-        self.file.get_mut().seek(SeekFrom::Start(0))?;
+        self.file.set_len(0)?;
+        self.file.seek(SeekFrom::Start(0))?;
         self.entry_count = 0;
         // next_timestamp intentionally resets to 0 — timestamps are session-scoped,
         // not globally monotonic. Recovery uses Checkpoint entry type, not timestamps.
