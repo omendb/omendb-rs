@@ -874,7 +874,7 @@ impl OmenFile {
         {
             let mut file = std::fs::File::create(&tmp_path)?;
             {
-                let mut w = BufWriter::new(&mut file);
+                let mut w = BufWriter::with_capacity(1 << 20, &mut file);
 
                 // Header
                 w.write_all(MAGIC)?;
@@ -1527,10 +1527,9 @@ impl OmenFile {
         self.manifest = manifest;
         self.header.count = live_count as u64;
 
-        // Truncate WAL and write a fresh checkpoint marker
+        // Truncate WAL. An empty WAL replays nothing; the pre-rename checkpoint entry
+        // already covers the crash window between rename and truncation.
         self.wal.truncate()?;
-        self.wal.append(WalEntry::checkpoint(0))?;
-        self.wal.sync()?;
 
         Ok(())
     }
@@ -1588,7 +1587,7 @@ impl OmenFile {
 
         // Write vectors to temp file (packed contiguously, skip deleted)
         let vec_block_start = align_to_page(HEADER_SIZE) as u64;
-        let mut buf_writer = BufWriter::new(&mut temp_file);
+        let mut buf_writer = BufWriter::with_capacity(1 << 20, &mut temp_file);
         buf_writer.seek(SeekFrom::Start(vec_block_start))?;
         let mut current_offset = vec_block_start;
         let mut new_nodes: Vec<NodeLocation> = Vec::with_capacity(vectors.len());
@@ -1775,10 +1774,9 @@ impl OmenFile {
         self.manifest = manifest;
         self.header.count = live_count as u64;
 
-        // Truncate WAL and write a fresh checkpoint marker
+        // Truncate WAL. An empty WAL replays nothing; the pre-rename checkpoint entry
+        // already covers the crash window between rename and truncation.
         self.wal.truncate()?;
-        self.wal.append(WalEntry::checkpoint(0))?;
-        self.wal.sync()?;
 
         Ok(())
     }
@@ -2032,7 +2030,7 @@ mod tests {
                 .unwrap();
             assert!(db.wal_len() > 0);
 
-            // Checkpoint should clear WAL (leaves 1 checkpoint marker)
+            // Checkpoint should clear WAL completely
             let v1 = vec![1.0f32, 2.0, 3.0];
             let vectors: Vec<Option<&[f32]>> = vec![Some(&v1)];
             let mut id_to_slot: HashMap<String, u32> = HashMap::new();
@@ -2048,8 +2046,10 @@ mod tests {
             )
             .unwrap();
 
-            // WAL has 1 entry (checkpoint marker)
-            assert_eq!(db.wal_len(), 1);
+            // WAL is empty after checkpoint (no post-truncate marker needed —
+            // empty WAL replays nothing; the pre-rename checkpoint entry covers
+            // the crash window between rename and truncation)
+            assert_eq!(db.wal_len(), 0);
         }
 
         // After reopen, no pending WAL entries (checkpoint marker is not returned)

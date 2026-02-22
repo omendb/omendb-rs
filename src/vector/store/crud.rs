@@ -324,17 +324,26 @@ impl VectorStore {
         } else if let Some(ref new_metadata) = metadata {
             let existing_vector = self.records.get_vector(slot).map(<[f32]>::to_vec);
 
-            if let Some(ref mut storage) = self.storage {
+            let needs_checkpoint = if let Some(ref mut storage) = self.storage {
                 if let Some(vec_data) = &existing_vector {
                     let metadata_bytes = serde_json::to_vec(new_metadata)?;
                     storage.wal_append_insert(id, vec_data, Some(&metadata_bytes))?;
                     storage.wal_sync()?;
+                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
+                } else {
+                    false
                 }
-            }
+            } else {
+                false
+            };
 
             self.metadata_index.remove(slot);
             self.metadata_index.index_json(slot, new_metadata);
             self.records.update_metadata(slot, new_metadata.clone())?;
+
+            if needs_checkpoint {
+                self.checkpoint_wal()?;
+            }
         }
 
         Ok(())
@@ -362,13 +371,20 @@ impl VectorStore {
             sparse_index.remove(slot);
         }
 
-        if let Some(ref mut storage) = self.storage {
+        let needs_checkpoint = if let Some(ref mut storage) = self.storage {
             storage.wal_append_delete(id)?;
             storage.wal_sync()?;
-        }
+            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
+        } else {
+            false
+        };
 
         if let Some(ref mut text_index) = self.text_index {
             text_index.delete_document(id)?;
+        }
+
+        if needs_checkpoint {
+            self.checkpoint_wal()?;
         }
 
         Ok(())
