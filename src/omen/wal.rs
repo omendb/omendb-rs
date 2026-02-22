@@ -225,29 +225,18 @@ fn read_wal_meta(path: &std::path::Path) -> Option<(u64, u64, u64, u64)> {
     ))
 }
 
-fn write_wal_meta(
-    path: &std::path::Path,
-    max_timestamp: u64,
-    entry_count: u64,
-    truncation_epoch: u64,
-) -> io::Result<()> {
-    let mut buf = [0u8; WAL_META_SIZE];
-    buf[0..8].copy_from_slice(&0u64.to_le_bytes()); // checkpoint always at 0 after truncate
-    buf[8..16].copy_from_slice(&max_timestamp.to_le_bytes());
-    buf[16..24].copy_from_slice(&entry_count.to_le_bytes());
-    buf[24..32].copy_from_slice(&truncation_epoch.to_le_bytes());
+fn open_meta_file(path: &std::path::Path) -> Option<File> {
     let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create(true);
     configure_open_options(&mut opts);
-    let mut f = opts.open(path)?;
-    f.write_all(&buf)?;
-    f.sync_all()?;
-    Ok(())
+    opts.open(path).ok()
 }
 
 /// Write-Ahead Log
 pub struct Wal {
     file: File,
+    /// Kept open across truncate() calls to avoid one open() syscall per checkpoint.
+    meta_file: Option<File>,
     path: std::path::PathBuf,
     next_timestamp: u64,
     entry_count: u64,
@@ -275,8 +264,12 @@ impl Wal {
             file.seek(SeekFrom::End(0))?;
         }
 
+        let meta_path_buf = meta_path(&path);
+        let meta_file = open_meta_file(&meta_path_buf);
+
         let mut wal = Self {
             file,
+            meta_file,
             path,
             next_timestamp: 0,
             entry_count: 0,
@@ -467,8 +460,31 @@ impl Wal {
         // next_timestamp intentionally resets to 0 — timestamps are session-scoped,
         // not globally monotonic. Recovery uses Checkpoint entry type, not timestamps.
         self.truncation_epoch += 1;
-        write_wal_meta(&meta_path(&self.path), 0, 0, self.truncation_epoch)?;
-        Ok(())
+        self.write_meta()
+    }
+
+    /// Write .wal.meta using the cached file handle (avoids open() syscall on each checkpoint).
+    /// Falls back to opening a fresh file if the handle is unavailable.
+    fn write_meta(&mut self) -> io::Result<()> {
+        // Layout: checkpoint_offset(8) + max_timestamp(8) + entry_count(8) + truncation_epoch(8)
+        // After truncate: checkpoint_offset=0, max_timestamp=0, entry_count=0; only epoch varies.
+        let mut buf = [0u8; WAL_META_SIZE];
+        buf[24..32].copy_from_slice(&self.truncation_epoch.to_le_bytes());
+
+        if let Some(ref mut f) = self.meta_file {
+            f.seek(SeekFrom::Start(0))?;
+            f.write_all(&buf)?;
+            f.sync_all()
+        } else {
+            // Fallback: open (or create) and write
+            let path = meta_path(&self.path);
+            let mut opts = OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            configure_open_options(&mut opts);
+            let mut f = opts.open(&path)?;
+            f.write_all(&buf)?;
+            f.sync_all()
+        }
     }
 }
 
