@@ -281,12 +281,9 @@ impl RecordStore {
             .collect()
     }
 
-    /// Export ID mappings for checkpoint
-    pub fn export_id_to_slot(&self) -> std::collections::HashMap<String, u32> {
-        self.id_to_slot
-            .iter()
-            .map(|(k, &v)| (k.clone(), v))
-            .collect()
+    /// Borrow the ID→slot map (zero-copy for checkpoint I/O)
+    pub fn id_to_slot_ref(&self) -> &FxHashMap<String, u32> {
+        &self.id_to_slot
     }
 
     /// Export deleted slots for checkpoint
@@ -294,17 +291,13 @@ impl RecordStore {
         self.deleted.iter().collect()
     }
 
-    /// Export metadata for checkpoint
-    pub fn export_metadata(&self) -> std::collections::HashMap<u32, JsonValue> {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, opt)| {
-                opt.as_ref()
-                    .and_then(|r| r.metadata.clone())
-                    .map(|m| (slot as u32, m))
-            })
-            .collect()
+    /// Iterate (slot, &metadata) pairs (zero-copy for checkpoint I/O)
+    pub fn iter_metadata(&self) -> impl Iterator<Item = (u32, &JsonValue)> {
+        self.slots.iter().enumerate().filter_map(|(slot, opt)| {
+            opt.as_ref()
+                .and_then(|r| r.metadata.as_ref())
+                .map(|m| (slot as u32, m))
+        })
     }
 
     /// Take dirty slots bitmap, resetting it to empty

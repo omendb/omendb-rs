@@ -869,10 +869,6 @@ impl OmenFile {
         const MAGIC: &[u8; 4] = b"OREC";
         const VERSION: u32 = 2;
 
-        let id_to_slot = records.export_id_to_slot();
-        let deleted_bitmap = records.deleted_bitmap().clone();
-        let metadata = records.export_metadata();
-
         let tmp_path = {
             let mut p = self.records_path.as_os_str().to_os_string();
             p.push(".tmp");
@@ -888,10 +884,11 @@ impl OmenFile {
                 w.write_all(MAGIC)?;
                 w.write_all(&VERSION.to_le_bytes())?;
 
-                // id_to_slot section
+                // id_to_slot section (zero-copy borrow — no HashMap clone)
+                let id_to_slot = records.id_to_slot_ref();
                 let count = id_to_slot.len() as u32;
                 w.write_all(&count.to_le_bytes())?;
-                for (id, slot) in &id_to_slot {
+                for (id, slot) in id_to_slot {
                     let id_bytes = id.as_bytes();
                     w.write_all(&(id_bytes.len() as u32).to_le_bytes())?;
                     w.write_all(id_bytes)?;
@@ -899,12 +896,14 @@ impl OmenFile {
                 }
 
                 // deleted bitmap section
+                let deleted_bitmap = records.deleted_bitmap();
                 let mut bitmap_buf: Vec<u8> = Vec::new();
                 deleted_bitmap.serialize_into(&mut bitmap_buf)?;
                 w.write_all(&(bitmap_buf.len() as u32).to_le_bytes())?;
                 w.write_all(&bitmap_buf)?;
 
-                // metadata section
+                // metadata section (zero-copy iterator — no HashMap clone)
+                let metadata: Vec<(u32, &serde_json::Value)> = records.iter_metadata().collect();
                 let meta_count = metadata.len() as u32;
                 w.write_all(&meta_count.to_le_bytes())?;
                 for (slot, value) in &metadata {
@@ -1083,9 +1082,6 @@ impl OmenFile {
     pub fn checkpoint_full(
         &mut self,
         records: &RecordStore,
-        id_to_slot: &HashMap<String, u32>,
-        deleted: &[u32],
-        metadata: &HashMap<u32, serde_json::Value>,
         options: CheckpointOptions<'_>,
     ) -> io::Result<()> {
         let dim = self.header.dimensions as usize;
@@ -1135,7 +1131,7 @@ impl OmenFile {
         }
 
         // Write .omen with non-vector segments (HNSW, MultiVec) via atomic temp+rename
-        self.write_omen_manifest(id_to_slot, deleted, metadata, options)?;
+        self.write_omen_manifest(records, options)?;
 
         Ok(())
     }
@@ -1254,9 +1250,6 @@ impl OmenFile {
         &mut self,
         records: &RecordStore,
         dirty: &RoaringBitmap,
-        id_to_slot: &HashMap<String, u32>,
-        deleted: &[u32],
-        metadata: &HashMap<u32, serde_json::Value>,
         options: CheckpointOptions<'_>,
     ) -> io::Result<()> {
         let dim = self.header.dimensions as usize;
@@ -1272,7 +1265,7 @@ impl OmenFile {
                     vf.set_len(0)?;
                 }
             }
-            self.write_omen_manifest(id_to_slot, deleted, metadata, options)?;
+            self.write_omen_manifest(records, options)?;
             return Ok(());
         }
 
@@ -1347,7 +1340,7 @@ impl OmenFile {
         self.vec_file.as_ref().unwrap().sync_all()?;
 
         // Write .omen manifest (atomic temp+rename)
-        self.write_omen_manifest(id_to_slot, deleted, metadata, options)?;
+        self.write_omen_manifest(records, options)?;
 
         Ok(())
     }
@@ -1358,9 +1351,7 @@ impl OmenFile {
     /// temp+rename for crash safety.
     fn write_omen_manifest(
         &mut self,
-        id_to_slot: &HashMap<String, u32>,
-        deleted: &[u32],
-        metadata: &HashMap<u32, serde_json::Value>,
+        records: &RecordStore,
         options: CheckpointOptions<'_>,
     ) -> io::Result<()> {
         // Drop .omen mmap before writing
@@ -1401,22 +1392,20 @@ impl OmenFile {
         // Build manifest (no vector NodeLocations — vectors are in .vecs)
         let mut manifest = OmenManifest::new();
         manifest.nodes = new_nodes;
-        manifest.max_node_id = id_to_slot.values().copied().max().unwrap_or(0);
 
-        let index_to_id: HashMap<u32, String> = id_to_slot
+        // Zero-copy borrows — no HashMap/Vec clone; String clones are unavoidable (manifest owns)
+        let id_to_slot = records.id_to_slot_ref();
+        manifest.max_node_id = id_to_slot.values().copied().max().unwrap_or(0);
+        manifest.id_to_index = id_to_slot.iter().map(|(k, &v)| (k.clone(), v)).collect();
+        manifest.index_to_id = id_to_slot
             .iter()
             .map(|(id, &slot)| (slot, id.clone()))
             .collect();
 
-        manifest.id_to_index.clone_from(id_to_slot);
-        manifest.index_to_id = index_to_id;
-
-        // Build deleted bitmap once — reused for both the metadata filter and manifest.deleted
-        let deleted_bitmap: RoaringBitmap = deleted.iter().copied().collect();
-
         // Convert metadata to bytes (skip deleted slots)
+        let deleted_bitmap = records.deleted_bitmap();
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
-        for (&idx, json) in metadata {
+        for (idx, json) in records.iter_metadata() {
             if !deleted_bitmap.contains(idx) {
                 if let Ok(bytes) = serde_json::to_vec(json) {
                     metadata_bytes.insert(idx, bytes);
@@ -1424,12 +1413,12 @@ impl OmenFile {
             }
         }
         manifest.metadata = metadata_bytes;
-        manifest.deleted = deleted_bitmap;
+        manifest.deleted = deleted_bitmap.clone();
         manifest.metadata_index = options.metadata_index_bytes.map(<[u8]>::to_vec);
         manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
         manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);
 
-        let live_count = id_to_slot.len();
+        let live_count = records.len() as usize;
         for (key, val) in [
             ("count", live_count as u64),
             ("dimensions", u64::from(self.header.dimensions)),

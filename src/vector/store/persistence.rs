@@ -732,10 +732,6 @@ impl VectorStore {
             // Get dirty slots for incremental checkpoint
             let dirty = self.records.take_dirty_slots();
 
-            let id_to_slot = self.records.export_id_to_slot();
-            let deleted = self.records.export_deleted();
-            let metadata = self.records.export_metadata();
-
             // Serialize MetadataIndex for fast recovery
             let metadata_index_bytes = Some(self.metadata_index.to_bytes()?);
 
@@ -778,16 +774,9 @@ impl VectorStore {
             };
 
             let result = if storage.has_vec_file() {
-                storage.checkpoint_incremental(
-                    &self.records,
-                    &dirty,
-                    &id_to_slot,
-                    &deleted,
-                    &metadata,
-                    options,
-                )
+                storage.checkpoint_incremental(&self.records, &dirty, options)
             } else {
-                storage.checkpoint_full(&self.records, &id_to_slot, &deleted, &metadata, options)
+                storage.checkpoint_full(&self.records, options)
             };
             if let Err(e) = result {
                 // Restore dirty slots so the next flush retries writing them.
