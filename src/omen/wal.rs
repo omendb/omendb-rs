@@ -361,20 +361,14 @@ impl Wal {
     }
 
     /// Flush WAL to disk
+    ///
+    /// Only fsyncs the WAL data file. `.wal.meta` is written on truncation/checkpoint
+    /// only — not on every sync — to avoid a second fsync per write. Stale meta is safe:
+    /// timestamps are session-scoped (see truncate()), entry_count stale only delays
+    /// auto-checkpoint slightly, and truncation_epoch is always correct after truncate().
     pub fn sync(&mut self) -> io::Result<()> {
         self.file.flush()?;
         self.file.get_mut().sync_all()?;
-        let ts = if self.next_timestamp > 0 {
-            self.next_timestamp - 1
-        } else {
-            0
-        };
-        write_wal_meta(
-            &meta_path(&self.path),
-            ts,
-            self.entry_count,
-            self.truncation_epoch,
-        )?;
         Ok(())
     }
 
