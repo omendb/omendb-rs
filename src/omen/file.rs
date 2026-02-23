@@ -1413,7 +1413,7 @@ impl OmenFile {
             }
         }
         manifest.metadata = metadata_bytes;
-        manifest.deleted = deleted_bitmap.clone();
+        manifest.deleted.clone_from(deleted_bitmap);
         manifest.metadata_index = options.metadata_index_bytes.map(<[u8]>::to_vec);
         manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
         manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);
