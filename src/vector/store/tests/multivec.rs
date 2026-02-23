@@ -1087,6 +1087,165 @@ mod persistence_tests {
         }
     }
 
+    // --- Gap tests: delete, threshold boundary, pooling recall ---
+
+    #[test]
+    fn test_delete_multivec_doc_removed_from_search() {
+        let config = small_dim_config();
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
+
+        // Insert 10 docs; doc0 uses seed=0 so it's most similar to a seed=0 query
+        for i in 0..10 {
+            let tokens = random_tokens(5, 4, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .unwrap();
+        }
+
+        let query = random_tokens(5, 4, 0);
+        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+
+        // doc0 must appear in results before delete
+        let before = store.search_multi(&query_refs, 10).unwrap();
+        assert!(
+            before.iter().any(|r| r.id == "doc0"),
+            "doc0 should be in results before delete"
+        );
+
+        store.delete("doc0").unwrap();
+
+        // doc0 must not appear after delete
+        let after = store.search_multi(&query_refs, 10).unwrap();
+        assert!(
+            !after.iter().any(|r| r.id == "doc0"),
+            "doc0 should not appear in results after delete"
+        );
+        // Remaining results should all be other docs
+        assert!(after.iter().all(|r| r.id != "doc0"));
+    }
+
+    #[test]
+    fn test_delete_multivec_reinsert_same_id() {
+        let config = small_dim_config();
+        let mut store = VectorStore::multi_vector_with(4, config).unwrap();
+
+        // Insert doc0 and some background docs
+        for i in 0..5 {
+            let tokens = random_tokens(5, 4, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .unwrap();
+        }
+
+        // Delete doc0
+        store.delete("doc0").unwrap();
+
+        // Re-insert doc0 with a completely different seed
+        let new_tokens = random_tokens(5, 4, 99);
+        let new_refs: Vec<&[f32]> = new_tokens.iter().map(|t| t.as_slice()).collect();
+        store
+            .set_multi("doc0", &new_refs, serde_json::json!({"version": 2}))
+            .unwrap();
+
+        // Query matching the new tokens — doc0 should reappear
+        let query_refs: Vec<&[f32]> = new_tokens.iter().map(|t| t.as_slice()).collect();
+        let results = store.search_multi(&query_refs, 5).unwrap();
+        assert!(
+            results.iter().any(|r| r.id == "doc0"),
+            "re-inserted doc0 should appear in results"
+        );
+
+        // Metadata should reflect the new version
+        let result = results.iter().find(|r| r.id == "doc0").unwrap();
+        assert_eq!(result.metadata["version"], 2);
+    }
+
+    #[test]
+    fn test_pooling_preserves_top_k_correctness() {
+        // Verify that pooling doesn't break search — top result should still be the
+        // most similar document.
+        let token_dim = 4;
+        let config_pooled = MultiVectorConfig {
+            pool_factor: Some(2),
+            d_proj: None,
+            ..Default::default()
+        };
+        let mut store = VectorStore::multi_vector_with(token_dim, config_pooled).unwrap();
+
+        // Insert 20 docs; doc0 is most similar to a seed=0 query
+        for i in 0..20 {
+            let tokens = random_tokens(10, token_dim, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .unwrap();
+        }
+
+        let query = random_tokens(10, token_dim, 0);
+        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+
+        let results = store.search_multi(&query_refs, 5).unwrap();
+
+        // doc0 (same seed as query) must appear in top-5 even with pooling
+        assert!(
+            results.iter().any(|r| r.id == "doc0"),
+            "pooling should not eliminate the most similar document from top-k"
+        );
+
+        // Results must be sorted by distance (ascending = best first)
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].distance <= results[i].distance,
+                "pooled search results must be sorted by distance"
+            );
+        }
+    }
+
+    #[test]
+    fn test_brute_force_threshold_at_boundary() {
+        // Below BRUTE_FORCE_MAXSIM_THRESHOLD (5000): brute-force MaxSim path.
+        // Above threshold: FDE+HNSW path. Both must return valid results.
+        //
+        // We don't test at 5000 (too slow for unit test). Instead we verify that:
+        // 1. Well below threshold → search succeeds and returns k results
+        // 2. Top result is the most similar doc (brute-force gives exact recall)
+        let token_dim = 4;
+        let config = small_dim_config();
+        let mut store = VectorStore::multi_vector_with(token_dim, config).unwrap();
+
+        // Insert 50 docs (well below 5000 threshold → brute-force path)
+        for i in 0..50 {
+            let tokens = random_tokens(5, token_dim, i);
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            store
+                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .unwrap();
+        }
+
+        let query = random_tokens(5, token_dim, 0); // Identical to doc0
+        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+
+        let results = store.search_multi(&query_refs, 10).unwrap();
+
+        assert_eq!(results.len(), 10, "should return k results");
+
+        // Brute-force path gives exact MaxSim — doc0 must be first
+        assert_eq!(
+            results[0].id, "doc0",
+            "brute-force path must return exact top-1"
+        );
+
+        // All results sorted by distance
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].distance <= results[i].distance,
+                "results must be sorted"
+            );
+        }
+    }
+
     #[test]
     fn test_query_dimension_mismatch_returns_error() {
         let token_dim = 32;
