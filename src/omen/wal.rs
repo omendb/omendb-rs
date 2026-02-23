@@ -28,19 +28,25 @@ pub enum WalEntryType {
     InsertNode = 1,
     /// Delete a node: {id}
     DeleteNode = 2,
+    /// Insert an edge: {from_id, to_id, edge_type, weight, metadata}
+    InsertEdge = 3,
+    /// Delete an edge: {from_id, to_id, edge_type}
+    DeleteEdge = 4,
     /// Checkpoint marker - safe truncation point
     Checkpoint = 100,
 }
 
 impl WalEntryType {
-    /// Try to parse a WAL entry type from a byte
+    /// Try to parse a WAL entry type from a byte.
     ///
-    /// Returns None for unknown entry types (which should be skipped during recovery)
+    /// Returns `None` for unknown entry types (skipped during recovery for forward compat).
     #[must_use]
     pub fn from_byte(v: u8) -> Option<Self> {
         match v {
             1 => Some(Self::InsertNode),
             2 => Some(Self::DeleteNode),
+            3 => Some(Self::InsertEdge),
+            4 => Some(Self::DeleteEdge),
             100 => Some(Self::Checkpoint),
             _ => None,
         }
@@ -154,6 +160,68 @@ impl WalEntry {
         Self {
             header: WalEntryHeader {
                 entry_type: WalEntryType::DeleteNode,
+                timestamp,
+                data_len: data.len() as u32,
+                checksum,
+            },
+            data,
+        }
+    }
+
+    /// Create insert edge entry: {from_id, to_id, edge_type, weight, metadata}
+    #[must_use]
+    pub fn insert_edge(
+        timestamp: u64,
+        from_id: &str,
+        to_id: &str,
+        edge_type: &str,
+        weight: f32,
+        metadata: Option<&[u8]>,
+    ) -> Self {
+        let meta_bytes = metadata.unwrap_or(&[]);
+        let capacity =
+            4 + from_id.len() + 4 + to_id.len() + 4 + edge_type.len() + 4 + 4 + meta_bytes.len();
+        let mut data = Vec::with_capacity(capacity);
+
+        data.extend_from_slice(&(from_id.len() as u32).to_le_bytes());
+        data.extend_from_slice(from_id.as_bytes());
+        data.extend_from_slice(&(to_id.len() as u32).to_le_bytes());
+        data.extend_from_slice(to_id.as_bytes());
+        data.extend_from_slice(&(edge_type.len() as u32).to_le_bytes());
+        data.extend_from_slice(edge_type.as_bytes());
+        data.extend_from_slice(&weight.to_le_bytes());
+        data.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());
+        data.extend_from_slice(meta_bytes);
+
+        let checksum = crc32fast::hash(&data);
+        Self {
+            header: WalEntryHeader {
+                entry_type: WalEntryType::InsertEdge,
+                timestamp,
+                data_len: data.len() as u32,
+                checksum,
+            },
+            data,
+        }
+    }
+
+    /// Create delete edge entry: {from_id, to_id, edge_type}
+    #[must_use]
+    pub fn delete_edge(timestamp: u64, from_id: &str, to_id: &str, edge_type: &str) -> Self {
+        let capacity = 4 + from_id.len() + 4 + to_id.len() + 4 + edge_type.len();
+        let mut data = Vec::with_capacity(capacity);
+
+        data.extend_from_slice(&(from_id.len() as u32).to_le_bytes());
+        data.extend_from_slice(from_id.as_bytes());
+        data.extend_from_slice(&(to_id.len() as u32).to_le_bytes());
+        data.extend_from_slice(to_id.as_bytes());
+        data.extend_from_slice(&(edge_type.len() as u32).to_le_bytes());
+        data.extend_from_slice(edge_type.as_bytes());
+
+        let checksum = crc32fast::hash(&data);
+        Self {
+            header: WalEntryHeader {
+                entry_type: WalEntryType::DeleteEdge,
                 timestamp,
                 data_len: data.len() as u32,
                 checksum,
@@ -391,6 +459,21 @@ impl Wal {
         loop {
             match file.read_exact(&mut header_buf) {
                 Ok(()) => {
+                    // Check for unknown entry type — skip it (forward compat with future versions).
+                    let entry_type_byte = header_buf[0];
+                    if WalEntryType::from_byte(entry_type_byte).is_none() {
+                        let data_len = u32::from_le_bytes([
+                            header_buf[12],
+                            header_buf[13],
+                            header_buf[14],
+                            header_buf[15],
+                        ]);
+                        if data_len > 0 && data_len <= MAX_ENTRY_SIZE {
+                            file.seek(SeekFrom::Current(data_len as i64))?;
+                        }
+                        continue;
+                    }
+
                     let header = WalEntryHeader::from_bytes(&header_buf)?;
 
                     // Sanity check on data_len
@@ -591,6 +674,73 @@ pub fn parse_wal_delete(data: &[u8]) -> io::Result<WalDeleteData> {
     let mut cursor = std::io::Cursor::new(data);
     let id = read_string_id(&mut cursor)?;
     Ok(WalDeleteData { id })
+}
+
+/// Parsed insert-edge data from a WAL entry
+#[derive(Debug, Clone)]
+pub struct WalInsertEdgeData {
+    pub from_id: String,
+    pub to_id: String,
+    pub edge_type: String,
+    pub weight: f32,
+    pub metadata: Option<Vec<u8>>,
+}
+
+/// Parsed delete-edge data from a WAL entry
+#[derive(Debug, Clone)]
+pub struct WalDeleteEdgeData {
+    pub from_id: String,
+    pub to_id: String,
+    pub edge_type: String,
+}
+
+/// Parse WAL insert-edge entry data.
+pub fn parse_wal_insert_edge(data: &[u8]) -> io::Result<WalInsertEdgeData> {
+    let mut cursor = std::io::Cursor::new(data);
+    let from_id = read_string_id(&mut cursor)?;
+    let to_id = read_string_id(&mut cursor)?;
+    let edge_type = read_string_id(&mut cursor)?;
+
+    let mut buf4 = [0u8; 4];
+    cursor.read_exact(&mut buf4)?;
+    let weight = f32::from_le_bytes(buf4);
+
+    cursor.read_exact(&mut buf4)?;
+    let meta_len = u32::from_le_bytes(buf4) as usize;
+    let metadata = if meta_len > 0 {
+        if meta_len > MAX_METADATA_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Edge metadata length {meta_len} exceeds maximum {MAX_METADATA_LEN}"),
+            ));
+        }
+        let mut meta_bytes = vec![0u8; meta_len];
+        cursor.read_exact(&mut meta_bytes)?;
+        Some(meta_bytes)
+    } else {
+        None
+    };
+
+    Ok(WalInsertEdgeData {
+        from_id,
+        to_id,
+        edge_type,
+        weight,
+        metadata,
+    })
+}
+
+/// Parse WAL delete-edge entry data.
+pub fn parse_wal_delete_edge(data: &[u8]) -> io::Result<WalDeleteEdgeData> {
+    let mut cursor = std::io::Cursor::new(data);
+    let from_id = read_string_id(&mut cursor)?;
+    let to_id = read_string_id(&mut cursor)?;
+    let edge_type = read_string_id(&mut cursor)?;
+    Ok(WalDeleteEdgeData {
+        from_id,
+        to_id,
+        edge_type,
+    })
 }
 
 #[cfg(test)]

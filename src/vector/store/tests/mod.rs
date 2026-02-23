@@ -1,6 +1,7 @@
 use super::*;
 
 mod crud;
+mod edges;
 mod hybrid;
 mod metadata;
 mod multivec;

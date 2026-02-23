@@ -23,8 +23,9 @@ mod vectors;
 mod wal;
 
 pub use file::{
-    parse_wal_delete, parse_wal_insert, CheckpointOptions, OmenFile, OmenSnapshot,
-    PersistedMuveraConfig, SlimRecordsSnapshot, WalDeleteData, WalInsertData,
+    parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
+    CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, SlimRecordsSnapshot,
+    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData,
 };
 pub use graph::GraphSection;
 pub use header::{Metric, OmenHeader, HEADER_SIZE, MAGIC, VERSION_MAJOR, VERSION_MINOR};

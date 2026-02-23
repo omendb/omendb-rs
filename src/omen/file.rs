@@ -10,7 +10,10 @@ use crate::omen::{
 };
 
 // Re-export WAL parsing functions for external use
-pub use crate::omen::wal::{parse_wal_delete, parse_wal_insert, WalDeleteData, WalInsertData};
+pub use crate::omen::wal::{
+    parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
+    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData,
+};
 use crate::vector::store::record_store::RecordStore;
 use anyhow::Result;
 use fs2::FileExt;
@@ -581,6 +584,8 @@ pub struct OmenSnapshot {
     pub multivec_config: Option<PersistedMuveraConfig>,
     /// Serialized SparseIndex (if persisted)
     pub sparse_index_bytes: Option<Vec<u8>>,
+    /// Serialized EdgeStore (if persisted)
+    pub edge_store_bytes: Option<Vec<u8>>,
 }
 
 /// Slim records snapshot: ID mappings, deleted slots, metadata, and dirty slots since last flush.
@@ -618,6 +623,8 @@ pub struct CheckpointOptions<'a> {
     pub multivec_config: Option<PersistedMuveraConfig>,
     /// Serialized SparseIndex bytes
     pub sparse_index_bytes: Option<&'a [u8]>,
+    /// Serialized EdgeStore bytes
+    pub edge_store_bytes: Option<&'a [u8]>,
 }
 
 impl OmenFile {
@@ -642,6 +649,31 @@ impl OmenFile {
     /// Note: Does not sync to disk. Call `wal_sync()` for durability.
     pub fn wal_append_delete(&mut self, id: &str) -> io::Result<()> {
         self.wal.append(WalEntry::delete_node(0, id))
+    }
+
+    /// Append insert-edge entry to WAL.
+    pub fn wal_append_insert_edge(
+        &mut self,
+        from_id: &str,
+        to_id: &str,
+        edge_type: &str,
+        weight: f32,
+        metadata: Option<&[u8]>,
+    ) -> io::Result<()> {
+        self.wal.append(WalEntry::insert_edge(
+            0, from_id, to_id, edge_type, weight, metadata,
+        ))
+    }
+
+    /// Append delete-edge entry to WAL.
+    pub fn wal_append_delete_edge(
+        &mut self,
+        from_id: &str,
+        to_id: &str,
+        edge_type: &str,
+    ) -> io::Result<()> {
+        self.wal
+            .append(WalEntry::delete_edge(0, from_id, to_id, edge_type))
     }
 
     /// Sync WAL to disk for durability
@@ -801,6 +833,11 @@ impl OmenFile {
         snapshot
             .sparse_index_bytes
             .clone_from(&self.manifest.sparse_index_bytes);
+
+        // Load edge store from manifest
+        snapshot
+            .edge_store_bytes
+            .clone_from(&self.manifest.edge_store_bytes);
 
         // Extract MUVERA config from manifest.config if present
         let reps = self.manifest.config.get("muvera_repetitions").copied();
@@ -1417,6 +1454,7 @@ impl OmenFile {
         manifest.metadata_index = options.metadata_index_bytes.map(<[u8]>::to_vec);
         manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
         manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);
+        manifest.edge_store_bytes = options.edge_store_bytes.map(<[u8]>::to_vec);
 
         let live_count = records.len() as usize;
         for (key, val) in [
@@ -1675,6 +1713,9 @@ impl OmenFile {
 
         // Store sparse index in manifest
         manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);
+
+        // Store edge store in manifest
+        manifest.edge_store_bytes = options.edge_store_bytes.map(<[u8]>::to_vec);
 
         let live_count = vectors.len().saturating_sub(deleted.len());
         for (key, val) in [

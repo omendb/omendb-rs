@@ -213,6 +213,9 @@ pub struct OmenManifest {
     /// Serialized SparseIndex (postcard format)
     #[serde(default)]
     pub sparse_index_bytes: Option<Vec<u8>>,
+    /// Serialized EdgeStore (postcard format)
+    #[serde(default)]
+    pub edge_store_bytes: Option<Vec<u8>>,
 }
 
 impl OmenManifest {
@@ -230,6 +233,7 @@ impl OmenManifest {
             config: std::collections::HashMap::new(),
             multivec_offsets: None,
             sparse_index_bytes: None,
+            edge_store_bytes: None,
         }
     }
 

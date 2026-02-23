@@ -9,6 +9,8 @@
 
 mod accessors;
 mod crud;
+pub mod edge_ops;
+pub mod edge_store;
 mod filter;
 mod helpers;
 mod input;
@@ -24,6 +26,7 @@ mod thread_safe;
 
 pub use crate::omen::Metric;
 pub use accessors::StoreInfo;
+pub use edge_store::{Edge, EdgeDirection};
 pub use filter::MetadataFilter;
 pub use input::{
     BatchItem, HybridParams, QueryData, QueryInput, Rerank, SearchOptions, VectorData, VectorInput,
@@ -40,6 +43,7 @@ use crate::omen::OmenFile;
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
+use edge_store::EdgeStore;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::path::PathBuf;
@@ -123,6 +127,9 @@ pub struct VectorStore {
     /// Inverted index for sparse vector search (SPLADE, etc.)
     sparse_index: Option<SparseIndex>,
 
+    /// Typed directed edge graph over document IDs.
+    pub(crate) edge_store: Option<EdgeStore>,
+
     /// Maximum tokens per document (default: 512, matches ColBERT).
     max_tokens: usize,
 
@@ -172,6 +179,7 @@ impl VectorStore {
             muvera_encoder: None,
             multivec_storage: None,
             sparse_index: None,
+            edge_store: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
             rescore: false,

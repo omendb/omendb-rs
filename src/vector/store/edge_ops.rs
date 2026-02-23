@@ -1,0 +1,147 @@
+//! Edge operations on VectorStore.
+//!
+//! Public API for the typed directed edge graph embedded in VectorStore.
+
+use super::edge_store::{Edge, EdgeDirection};
+use super::VectorStore;
+use anyhow::Result;
+use serde_json::Value as JsonValue;
+
+impl VectorStore {
+    /// Enable edge graph storage.
+    ///
+    /// Called automatically by `add_edge()`. Call explicitly if you need
+    /// `has_edges()` to return true before inserting any edges.
+    pub fn enable_edges(&mut self) {
+        if self.edge_store.is_none() {
+            self.edge_store = Some(super::edge_store::EdgeStore::new());
+        }
+    }
+
+    /// Whether edge graph storage has been initialized.
+    #[must_use]
+    pub fn has_edges(&self) -> bool {
+        self.edge_store.is_some()
+    }
+
+    /// Total number of edges stored.
+    #[must_use]
+    pub fn edge_count(&self) -> usize {
+        self.edge_store.as_ref().map_or(0, |e| e.edge_count())
+    }
+
+    /// Add a typed directed edge between two document IDs.
+    ///
+    /// Replaces an existing edge of the same type between the same nodes.
+    /// Automatically enables edge storage if not already enabled.
+    ///
+    /// # Durability
+    ///
+    /// Written to WAL immediately. Call [`flush()`](Self::flush) to persist to manifest.
+    pub fn add_edge(
+        &mut self,
+        from_id: &str,
+        to_id: &str,
+        edge_type: &str,
+        weight: f32,
+        metadata: Option<JsonValue>,
+    ) -> Result<()> {
+        self.enable_edges();
+
+        if let Some(ref mut storage) = self.storage {
+            let meta_bytes = metadata.as_ref().map(serde_json::to_vec).transpose()?;
+            storage.wal_append_insert_edge(
+                from_id,
+                to_id,
+                edge_type,
+                weight,
+                meta_bytes.as_deref(),
+            )?;
+            storage.wal_sync()?;
+        }
+
+        self.edge_store.as_mut().unwrap().add_edge(Edge {
+            from_id: from_id.to_string(),
+            to_id: to_id.to_string(),
+            edge_type: edge_type.to_string(),
+            weight,
+            metadata,
+        });
+
+        Ok(())
+    }
+
+    /// Remove the edge of the given type between two nodes.
+    ///
+    /// Returns `true` if an edge was found and removed.
+    ///
+    /// # Durability
+    ///
+    /// Written to WAL immediately. Call [`flush()`](Self::flush) to persist to manifest.
+    pub fn remove_edge(&mut self, from_id: &str, to_id: &str, edge_type: &str) -> Result<bool> {
+        if self.edge_store.is_none() {
+            return Ok(false);
+        }
+
+        if let Some(ref mut storage) = self.storage {
+            storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
+            storage.wal_sync()?;
+        }
+
+        Ok(self
+            .edge_store
+            .as_mut()
+            .unwrap()
+            .remove_edge(from_id, to_id, edge_type))
+    }
+
+    /// Get all edges for a node in the given direction.
+    #[must_use]
+    pub fn get_edges(&self, id: &str, direction: EdgeDirection) -> Vec<Edge> {
+        self.edge_store
+            .as_ref()
+            .map_or_else(Vec::new, |e| e.get_edges(id, direction))
+    }
+
+    /// BFS traversal from a starting node.
+    ///
+    /// Returns all IDs reachable within `max_depth` hops, not including the start node.
+    #[must_use]
+    pub fn traverse(
+        &self,
+        start_id: &str,
+        direction: EdgeDirection,
+        max_depth: usize,
+        edge_type_filter: Option<&str>,
+    ) -> Vec<String> {
+        self.edge_store.as_ref().map_or_else(Vec::new, |e| {
+            e.traverse(start_id, direction, max_depth, edge_type_filter)
+        })
+    }
+
+    /// Expand search results by following edges.
+    ///
+    /// For each result ID, traverses outgoing edges (depth 1) and returns the
+    /// union of result IDs and their neighbors.
+    #[must_use]
+    pub fn expand_via_edges(
+        &self,
+        ids: &[String],
+        direction: EdgeDirection,
+        edge_type_filter: Option<&str>,
+    ) -> Vec<String> {
+        let Some(ref store) = self.edge_store else {
+            return ids.to_vec();
+        };
+
+        let mut expanded: rustc_hash::FxHashSet<String> = ids.iter().cloned().collect();
+
+        for id in ids {
+            for neighbor in store.traverse(id, direction, 1, edge_type_filter) {
+                expanded.insert(neighbor);
+            }
+        }
+
+        expanded.into_iter().collect()
+    }
+}

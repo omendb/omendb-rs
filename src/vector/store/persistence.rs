@@ -10,14 +10,15 @@ use super::{
     DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M, DEFAULT_MAX_TOKENS,
 };
 use crate::omen::{
-    parse_wal_delete, parse_wal_insert, CheckpointOptions, OmenFile, PersistedMuveraConfig,
-    WalEntryType,
+    parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
+    CheckpointOptions, OmenFile, PersistedMuveraConfig, WalEntryType,
 };
 use crate::text::TextIndex;
 use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use crate::vector::metadata::MetadataIndex;
 use crate::vector::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use crate::vector::sparse::SparseIndex;
+use crate::vector::store::edge_store::{Edge, EdgeStore};
 use crate::vector::store::options::VectorStoreOptions;
 use anyhow::Result;
 use roaring::RoaringBitmap;
@@ -186,6 +187,7 @@ impl VectorStore {
             storage.pending_wal_entries()?
         };
         let mut wal_modified_slots: Vec<u32> = Vec::new();
+        let mut wal_edge_store: Option<EdgeStore> = None;
         for entry in wal_entries {
             if !entry.verify() {
                 tracing::warn!(
@@ -236,6 +238,36 @@ impl VectorStore {
                 }
                 WalEntryType::Checkpoint => {
                     // No-op: checkpoint entries mark safe recovery points
+                }
+                WalEntryType::InsertEdge => {
+                    if let Ok(data) = parse_wal_insert_edge(&entry.data) {
+                        let metadata: Option<serde_json::Value> =
+                            data.metadata.as_ref().and_then(|b| {
+                                serde_json::from_slice(b)
+                                    .map_err(|e| {
+                                        tracing::warn!(
+                                            "Corrupt edge metadata during WAL replay: {e}"
+                                        );
+                                    })
+                                    .ok()
+                            });
+                        wal_edge_store
+                            .get_or_insert_with(EdgeStore::new)
+                            .add_edge(Edge {
+                                from_id: data.from_id,
+                                to_id: data.to_id,
+                                edge_type: data.edge_type,
+                                weight: data.weight,
+                                metadata,
+                            });
+                    }
+                }
+                WalEntryType::DeleteEdge => {
+                    if let Ok(data) = parse_wal_delete_edge(&entry.data) {
+                        if let Some(ref mut es) = wal_edge_store {
+                            es.remove_edge(&data.from_id, &data.to_id, &data.edge_type);
+                        }
+                    }
                 }
             }
         }
@@ -446,6 +478,27 @@ impl VectorStore {
             })
             .transpose()?;
 
+        // Reconstruct edge store: start from persisted snapshot, then apply WAL delta
+        let edge_store = {
+            let mut base = snapshot
+                .edge_store_bytes
+                .as_deref()
+                .map(|bytes| {
+                    EdgeStore::from_bytes(bytes)
+                        .map_err(|e| anyhow::anyhow!("Failed to deserialize EdgeStore: {e}"))
+                })
+                .transpose()?;
+
+            if let Some(wal_es) = wal_edge_store {
+                // Merge WAL edges into base (or use WAL store directly if no base)
+                let merged = base.get_or_insert_with(EdgeStore::new);
+                for edge in wal_es.all_edges() {
+                    merged.add_edge(edge);
+                }
+            }
+            base
+        };
+
         Ok(Self {
             records,
             segments,
@@ -470,6 +523,7 @@ impl VectorStore {
             muvera_encoder,
             multivec_storage,
             sparse_index,
+            edge_store,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
             rescore: quantization,
@@ -585,6 +639,7 @@ impl VectorStore {
             muvera_encoder: None,
             multivec_storage: None,
             sparse_index: None,
+            edge_store: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
             rescore,
@@ -635,6 +690,7 @@ impl VectorStore {
             muvera_encoder: None,
             multivec_storage: None,
             sparse_index: None,
+            edge_store: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
             rescore,
@@ -764,6 +820,14 @@ impl VectorStore {
                 .map(SparseIndex::to_bytes)
                 .transpose()?;
 
+            // Export edge store if present
+            let edge_store_bytes = self
+                .edge_store
+                .as_ref()
+                .map(EdgeStore::to_bytes)
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("Failed to serialize EdgeStore: {e}"))?;
+
             let options = CheckpointOptions {
                 hnsw_bytes: None,
                 metadata_index_bytes: metadata_index_bytes.as_deref(),
@@ -771,6 +835,7 @@ impl VectorStore {
                 multivec_offsets: multivec_offsets.as_deref(),
                 multivec_config,
                 sparse_index_bytes: sparse_index_bytes.as_deref(),
+                edge_store_bytes: edge_store_bytes.as_deref(),
             };
 
             let result = if storage.has_vec_file() {

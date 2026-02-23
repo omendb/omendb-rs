@@ -371,6 +371,10 @@ impl VectorStore {
             sparse_index.remove(slot);
         }
 
+        if let Some(ref mut edge_store) = self.edge_store {
+            edge_store.remove_all_for(id);
+        }
+
         let needs_checkpoint = if let Some(ref mut storage) = self.storage {
             storage.wal_append_delete(id)?;
             storage.wal_sync()?;
@@ -405,6 +409,9 @@ impl VectorStore {
                 self.metadata_index.remove(slot);
                 if let Some(ref mut sparse_index) = self.sparse_index {
                     sparse_index.remove(slot);
+                }
+                if let Some(ref mut edge_store) = self.edge_store {
+                    edge_store.remove_all_for(id);
                 }
                 slots.push(slot);
                 valid_ids.push(id.to_string());

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rustc_hash::FxHashSet;
 
 use super::VectorStore;
 use super::{MetadataIndex, SegmentManager, Vector};
@@ -262,6 +263,16 @@ impl VectorStore {
         // Compact sparse index if present
         if let Some(ref mut sparse_index) = self.sparse_index {
             sparse_index.compact(&old_to_new);
+        }
+
+        // GC orphaned edges (safety net after slot reassignment)
+        if let Some(ref mut edge_store) = self.edge_store {
+            let live_ids: FxHashSet<String> = self
+                .records
+                .iter_live()
+                .map(|(_, r)| r.id.clone())
+                .collect();
+            edge_store.gc_orphaned(&live_ids);
         }
 
         // Rebuild segments with new contiguous slots
