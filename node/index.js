@@ -365,6 +365,32 @@ class VectorDatabase {
 	hybridSparseSearch(queryVector, sparseQuery, k, options) {
 		return this._native.hybridSparseSearch(queryVector, sparseQuery, k, options);
 	}
+
+	// --- Edge graph API ---
+
+	addEdge(fromId, toId, edgeType, weight, metadata) {
+		return this._native.addEdge(fromId, toId, edgeType, weight, metadata);
+	}
+
+	removeEdge(fromId, toId, edgeType) {
+		return this._native.removeEdge(fromId, toId, edgeType);
+	}
+
+	getEdges(id, direction) {
+		return this._native.getEdges(id, direction);
+	}
+
+	traverse(startId, direction, maxDepth, edgeType) {
+		return this._native.traverse(startId, direction, maxDepth, edgeType);
+	}
+
+	expandViaEdges(ids, direction, edgeType) {
+		return this._native.expandViaEdges(ids, direction, edgeType);
+	}
+
+	get edgeCount() {
+		return this._native.edgeCount;
+	}
 }
 
 function open(path, options, embeddingFn) {

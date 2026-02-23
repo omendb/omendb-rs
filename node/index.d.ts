@@ -210,6 +210,51 @@ export declare class VectorDatabase {
    */
   getBatch(ids: Array<string>): Array<GetResult | undefined | null>
   /**
+   * Add a typed directed edge between two document IDs.
+   *
+   * @param fromId - Source document ID
+   * @param toId - Target document ID
+   * @param edgeType - Edge type label (e.g. "related", "parent")
+   * @param weight - Edge weight (default: 1.0)
+   * @param metadata - Arbitrary JSON-compatible metadata
+   */
+  addEdge(fromId: string, toId: string, edgeType: string, weight?: number | undefined | null, metadata?: JsonValue | undefined | null): void
+  /**
+   * Remove the edge of the given type between two nodes.
+   *
+   * @returns true if an edge was found and removed
+   */
+  removeEdge(fromId: string, toId: string, edgeType: string): boolean
+  /**
+   * Get all edges for a node in the given direction.
+   *
+   * @param id - Node ID
+   * @param direction - "outgoing", "incoming", or "both" (default: "both")
+   * @returns Array of edges with fromId, toId, edgeType, weight, metadata
+   */
+  getEdges(id: string, direction?: string | undefined | null): Array<EdgeResult>
+  /**
+   * BFS traversal from a starting node.
+   *
+   * @param startId - Starting node ID
+   * @param direction - "outgoing", "incoming", or "both" (default: "outgoing")
+   * @param maxDepth - Maximum traversal depth (default: 1)
+   * @param edgeType - Filter by edge type
+   * @returns Reachable node IDs (not including startId)
+   */
+  traverse(startId: string, direction?: string | undefined | null, maxDepth?: number | undefined | null, edgeType?: string | undefined | null): Array<string>
+  /**
+   * Expand a list of IDs by following their edges (depth=1).
+   *
+   * @param ids - Starting node IDs
+   * @param direction - "outgoing", "incoming", or "both" (default: "outgoing")
+   * @param edgeType - Filter by edge type
+   * @returns Expanded ID set (includes original IDs + neighbors)
+   */
+  expandViaEdges(ids: Array<string>, direction?: string | undefined | null, edgeType?: string | undefined | null): Array<string>
+  /** Number of edges in the graph. */
+  get edgeCount(): number
+  /**
    * Check if text search is enabled.
    *
    * Text search is automatically enabled when using set() with text field.
@@ -258,11 +303,9 @@ export declare class VectorDatabase {
   /**
    * Search for k nearest neighbors.
    *
-   * @param query - Query vector(s): number[] or Float32Array for single-vector stores;
-   *                number[][] or Float32Array[] for multi-vector stores
+   * @param query - Query vector (number[] or Float32Array)
    * @param k - Number of results to return
-   * @param options - Optional search options. Single-vector: {filter?, ef?, maxDistance?}.
-   *                  Multi-vector: {rerank?, rerankFactor?}
+   * @param options - Optional search options: {filter?, ef?, maxDistance?}
    * @returns Array of {id, distance, score, metadata}
    *
    * @example
@@ -273,12 +316,9 @@ export declare class VectorDatabase {
    * // With options
    * db.search([1, 0, 0, 0], 10, { filter: { category: "A" }, ef: 200 });
    * db.search([1, 0, 0, 0], 10, { maxDistance: 0.5 });
-   *
-   * // Multi-vector search
-   * db.search([[0.1, 0.2], [0.3, 0.4]], 5, { rerank: true, rerankFactor: 8 });
    * ```
    */
-  search(query: Array<number> | Float32Array | string | Array<Array<number>> | Array<Float32Array>, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number; rerank?: boolean; rerankFactor?: number } | undefined): Promise<Array<SearchResult>>
+  search(query: Array<number> | Float32Array | string, k: number, options?: { filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined): Promise<Array<SearchResult>>
   /**
    * Search multi-vector store with query tokens.
    *
@@ -365,6 +405,14 @@ export declare class VectorDatabase {
    * ```
    */
   hybridSparseSearch(queryVector: Array<number> | Float32Array, sparseQuery: { indices: number[]; values: number[] } | Record<string, number>, k: number, options?: { alpha?: number; filter?: Record<string, unknown> } | undefined): Array<SparseSearchResult>
+}
+
+export interface EdgeResult {
+  fromId: string
+  toId: string
+  edgeType: string
+  weight: number
+  metadata?: Record<string, unknown> | null
 }
 
 export interface GetResult {

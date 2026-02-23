@@ -8,6 +8,7 @@
 mod collections;
 mod conversions;
 mod database;
+mod edges;
 mod filters;
 mod hybrid;
 mod open;
