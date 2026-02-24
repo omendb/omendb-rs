@@ -117,6 +117,12 @@ impl EdgeStore {
                     weight: edge.weight,
                     metadata: edge.metadata.clone(),
                 };
+            } else {
+                debug_assert!(
+                    false,
+                    "EdgeStore invariant: incoming entry missing for existing outgoing edge {}->{}",
+                    edge.from_id, edge.to_id
+                );
             }
         } else {
             in_list.push(EdgeRecord {
@@ -331,6 +337,24 @@ impl EdgeStore {
         }
     }
 
+    /// Returns (from_id, to_id, edge_type) for all edges touching a node.
+    ///
+    /// Used by VectorStore to emit WAL DeleteEdge entries during cascade delete.
+    pub fn edges_involving(&self, id: &str) -> Vec<(String, String, String)> {
+        let mut result = Vec::new();
+        if let Some(records) = self.outgoing.get(id) {
+            for r in records {
+                result.push((id.to_string(), r.peer_id.clone(), r.edge_type.clone()));
+            }
+        }
+        if let Some(records) = self.incoming.get(id) {
+            for r in records {
+                result.push((r.peer_id.clone(), id.to_string(), r.edge_type.clone()));
+            }
+        }
+        result
+    }
+
     /// Return all edges as a flat iterator (used for WAL merge on open).
     pub fn all_edges(&self) -> impl Iterator<Item = Edge> + '_ {
         self.outgoing.iter().flat_map(|(from_id, records)| {
@@ -373,24 +397,27 @@ impl EdgeStore {
     /// Serialize to bytes for manifest storage (postcard format).
     ///
     /// Metadata is serialized as JSON bytes since postcard cannot handle serde_json::Value.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, postcard::Error> {
-        let edges: Vec<(String, String, String, f32, Option<Vec<u8>>)> = self
-            .outgoing
-            .iter()
-            .flat_map(|(from_id, records)| {
-                records.iter().map(move |r| {
-                    let meta_bytes = r.metadata.as_ref().and_then(|m| serde_json::to_vec(m).ok());
-                    (
-                        from_id.clone(),
-                        r.peer_id.clone(),
-                        r.edge_type.clone(),
-                        r.weight,
-                        meta_bytes,
-                    )
-                })
-            })
-            .collect();
-        postcard::to_allocvec(&EdgeStoreWire { edges })
+    pub fn to_bytes(&self) -> anyhow::Result<Vec<u8>> {
+        let mut edges: Vec<(String, String, String, f32, Option<Vec<u8>>)> =
+            Vec::with_capacity(self.edge_count);
+        for (from_id, records) in &self.outgoing {
+            for r in records {
+                let meta_bytes = r
+                    .metadata
+                    .as_ref()
+                    .map(serde_json::to_vec)
+                    .transpose()
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize edge metadata: {e}"))?;
+                edges.push((
+                    from_id.clone(),
+                    r.peer_id.clone(),
+                    r.edge_type.clone(),
+                    r.weight,
+                    meta_bytes,
+                ));
+            }
+        }
+        Ok(postcard::to_allocvec(&EdgeStoreWire { edges })?)
     }
 
     /// Deserialize from bytes (postcard format).

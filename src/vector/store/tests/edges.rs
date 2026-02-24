@@ -416,3 +416,41 @@ fn test_vector_store_expand_via_edges() {
     let expanded = store.expand_via_edges(&seed, EdgeDirection::Outgoing, None);
     assert_eq!(expanded.len(), 4);
 }
+
+#[test]
+fn test_vector_store_cascade_delete_wal_recovery() {
+    // Verifies that cascade-deleted edges are WAL-logged and not resurrected on recovery.
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test.omen");
+
+    {
+        let mut store = VectorStore::open(&path).unwrap();
+        store
+            .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
+            .unwrap();
+        store
+            .set("b", crate::Vector::new(vec![2.0; 4]), json!({}))
+            .unwrap();
+        store.add_edge("a", "b", "link", 1.0, None).unwrap();
+        store.flush().unwrap();
+        // Edge is now in the manifest snapshot.
+        // Delete "a" — should write WAL DeleteEdge entries for the cascade.
+        store.delete("a").unwrap();
+        // No second flush — edge removal is WAL-only.
+    }
+
+    {
+        // Recovery: manifest has edge "a→b", WAL has DeleteNode("a") + DeleteEdge("a","b","link").
+        // After replay the edge must be gone.
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(
+            store.edge_count(),
+            0,
+            "cascade-deleted edge survived WAL recovery"
+        );
+        assert!(
+            store.get_edges("b", EdgeDirection::Incoming).is_empty(),
+            "stale incoming edge for deleted node 'a'"
+        );
+    }
+}

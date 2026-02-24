@@ -188,6 +188,10 @@ impl VectorStore {
         };
         let mut wal_modified_slots: Vec<u32> = Vec::new();
         let mut wal_edge_store: Option<EdgeStore> = None;
+        // Track WAL edge deletions separately so they can be applied to the manifest base.
+        // DeleteEdge in wal_edge_store only removes edges added *in the same WAL session*;
+        // deletions of manifest-loaded edges must be applied after the merge.
+        let mut wal_edge_deletes: Vec<(String, String, String)> = Vec::new();
         for entry in wal_entries {
             if !entry.verify() {
                 tracing::warn!(
@@ -264,9 +268,12 @@ impl VectorStore {
                 }
                 WalEntryType::DeleteEdge => {
                     if let Ok(data) = parse_wal_delete_edge(&entry.data) {
+                        // Remove from wal_edge_store (handles same-session inserts)
                         if let Some(ref mut es) = wal_edge_store {
                             es.remove_edge(&data.from_id, &data.to_id, &data.edge_type);
                         }
+                        // Track for post-merge removal against the manifest base
+                        wal_edge_deletes.push((data.from_id, data.to_id, data.edge_type));
                     }
                 }
             }
@@ -496,6 +503,17 @@ impl VectorStore {
                     merged.add_edge(edge);
                 }
             }
+
+            // Apply WAL deletions to the merged store.
+            // This handles edges that were in the manifest snapshot but deleted via cascade.
+            if !wal_edge_deletes.is_empty() {
+                if let Some(ref mut store) = base {
+                    for (from_id, to_id, edge_type) in &wal_edge_deletes {
+                        store.remove_edge(from_id, to_id, edge_type);
+                    }
+                }
+            }
+
             base
         };
 
@@ -825,8 +843,7 @@ impl VectorStore {
                 .edge_store
                 .as_ref()
                 .map(EdgeStore::to_bytes)
-                .transpose()
-                .map_err(|e| anyhow::anyhow!("Failed to serialize EdgeStore: {e}"))?;
+                .transpose()?;
 
             let options = CheckpointOptions {
                 hnsw_bytes: None,

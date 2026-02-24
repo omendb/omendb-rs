@@ -60,13 +60,16 @@ impl VectorStore {
             storage.wal_sync()?;
         }
 
-        self.edge_store.as_mut().unwrap().add_edge(Edge {
-            from_id: from_id.to_string(),
-            to_id: to_id.to_string(),
-            edge_type: edge_type.to_string(),
-            weight,
-            metadata,
-        });
+        self.edge_store
+            .as_mut()
+            .expect("enable_edges() was just called")
+            .add_edge(Edge {
+                from_id: from_id.to_string(),
+                to_id: to_id.to_string(),
+                edge_type: edge_type.to_string(),
+                weight,
+                metadata,
+            });
 
         Ok(())
     }
@@ -83,16 +86,20 @@ impl VectorStore {
             return Ok(false);
         }
 
-        if let Some(ref mut storage) = self.storage {
-            storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
-            storage.wal_sync()?;
-        }
-
-        Ok(self
+        let removed = self
             .edge_store
             .as_mut()
-            .unwrap()
-            .remove_edge(from_id, to_id, edge_type))
+            .expect("checked above")
+            .remove_edge(from_id, to_id, edge_type);
+
+        if removed {
+            if let Some(ref mut storage) = self.storage {
+                storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
+                storage.wal_sync()?;
+            }
+        }
+
+        Ok(removed)
     }
 
     /// Get all edges for a node in the given direction.

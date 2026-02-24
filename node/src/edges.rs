@@ -137,6 +137,11 @@ impl VectorDatabase {
     /// Number of edges in the graph.
     #[napi(getter, js_name = "edgeCount")]
     pub fn edge_count(&self) -> u32 {
-        self.inner.read().store.edge_count() as u32
+        self.inner
+            .read()
+            .store
+            .edge_count()
+            .try_into()
+            .unwrap_or(u32::MAX)
     }
 }

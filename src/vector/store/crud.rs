@@ -371,11 +371,21 @@ impl VectorStore {
             sparse_index.remove(slot);
         }
 
+        // Collect edge WAL entries before removing (borrow checker: immutable then mutable)
+        let edge_deletes: Vec<(String, String, String)> = self
+            .edge_store
+            .as_ref()
+            .map(|es| es.edges_involving(id))
+            .unwrap_or_default();
+
         if let Some(ref mut edge_store) = self.edge_store {
             edge_store.remove_all_for(id);
         }
 
         let needs_checkpoint = if let Some(ref mut storage) = self.storage {
+            for (from_id, to_id, edge_type) in &edge_deletes {
+                storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
+            }
             storage.wal_append_delete(id)?;
             storage.wal_sync()?;
             storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
@@ -403,12 +413,17 @@ impl VectorStore {
         let mut slots: Vec<u32> = Vec::with_capacity(ids.len());
         let mut valid_ids: Vec<String> = Vec::with_capacity(ids.len());
 
+        let mut edge_deletes: Vec<(String, String, String)> = Vec::new();
+
         for id in ids {
             let id = id.as_ref();
             if let Some(slot) = self.records.delete(id) {
                 self.metadata_index.remove(slot);
                 if let Some(ref mut sparse_index) = self.sparse_index {
                     sparse_index.remove(slot);
+                }
+                if let Some(ref es) = self.edge_store {
+                    edge_deletes.extend(es.edges_involving(id));
                 }
                 if let Some(ref mut edge_store) = self.edge_store {
                     edge_store.remove_all_for(id);
@@ -419,6 +434,9 @@ impl VectorStore {
         }
 
         if let Some(ref mut storage) = self.storage {
+            for (from_id, to_id, edge_type) in &edge_deletes {
+                storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
+            }
             for id in &valid_ids {
                 storage.wal_append_delete(id)?;
             }
