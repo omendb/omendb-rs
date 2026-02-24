@@ -30,7 +30,7 @@ pub enum EdgeDirection {
 }
 
 /// Internal adjacency list record.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct EdgeRecord {
     peer_id: String,
     edge_type: String,
@@ -149,7 +149,10 @@ impl EdgeStore {
             EdgeDirection::Incoming => self.get_incoming(id, edge_type),
             EdgeDirection::Both => {
                 let mut edges = self.get_outgoing(id, edge_type);
-                edges.extend(self.get_incoming(id, edge_type));
+                // Incoming edges for self-loops (from_id == to_id == id) are
+                // already covered by get_outgoing, so skip them to avoid dupes.
+                let incoming = self.get_incoming(id, edge_type);
+                edges.extend(incoming.into_iter().filter(|e| e.from_id != e.to_id));
                 edges
             }
         }
@@ -348,6 +351,7 @@ impl EdgeStore {
     /// Returns (from_id, to_id, edge_type) for all edges touching a node.
     ///
     /// Used by VectorStore to emit WAL DeleteEdge entries during cascade delete.
+    /// Self-loops (from_id == to_id == id) appear only once (via outgoing).
     pub fn edges_involving(&self, id: &str) -> Vec<(String, String, String)> {
         let mut result = Vec::new();
         if let Some(records) = self.outgoing.get(id) {
@@ -357,7 +361,10 @@ impl EdgeStore {
         }
         if let Some(records) = self.incoming.get(id) {
             for r in records {
-                result.push((r.peer_id.clone(), id.to_string(), r.edge_type.clone()));
+                // Skip self-loops — already emitted via outgoing above.
+                if r.peer_id != id {
+                    result.push((r.peer_id.clone(), id.to_string(), r.edge_type.clone()));
+                }
             }
         }
         result
@@ -434,9 +441,15 @@ impl EdgeStore {
         let wire: EdgeStoreWire = postcard::from_bytes(bytes)?;
         let mut store = Self::new();
         for (from_id, to_id, edge_type, weight, meta_bytes) in wire.edges {
-            let metadata = meta_bytes
-                .as_deref()
-                .and_then(|b| serde_json::from_slice(b).ok());
+            let metadata = meta_bytes.as_deref().and_then(|b| {
+                serde_json::from_slice(b).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        from_id = %from_id, to_id = %to_id, edge_type = %edge_type,
+                        "Dropping corrupt edge metadata during load: {e}"
+                    );
+                    None
+                })
+            });
             store.add_edge(Edge {
                 from_id,
                 to_id,

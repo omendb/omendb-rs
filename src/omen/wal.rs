@@ -468,7 +468,12 @@ impl Wal {
                             header_buf[14],
                             header_buf[15],
                         ]);
-                        if data_len > 0 && data_len <= MAX_ENTRY_SIZE {
+                        if data_len > MAX_ENTRY_SIZE {
+                            // Oversized unknown entry — treat as corruption boundary,
+                            // stop replay to avoid seeking into garbage.
+                            break;
+                        }
+                        if data_len > 0 {
                             file.seek(SeekFrom::Current(data_len as i64))?;
                         }
                         continue;

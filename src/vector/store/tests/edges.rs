@@ -237,6 +237,37 @@ fn test_edge_store_serialize_roundtrip() {
 }
 
 #[test]
+fn test_edge_store_self_edge_no_duplicate() {
+    let mut store = EdgeStore::new();
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "a".into(),
+        edge_type: "self_ref".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    assert_eq!(store.edge_count(), 2);
+
+    // get_edges(Both) must not duplicate the self-edge.
+    // Outgoing: a→a, a→b. Incoming self-loop filtered as duplicate.
+    let both = store.get_edges("a", EdgeDirection::Both, None);
+    assert_eq!(both.len(), 2);
+
+    // edges_involving must not duplicate the self-edge for WAL deletes.
+    let involving = store.edges_involving("a");
+    assert_eq!(involving.len(), 2);
+    assert!(involving.contains(&("a".into(), "a".into(), "self_ref".into())));
+    assert!(involving.contains(&("a".into(), "b".into(), "link".into())));
+}
+
+#[test]
 fn test_edge_store_gc_orphaned() {
     use rustc_hash::FxHashSet;
     let mut store = EdgeStore::new();
