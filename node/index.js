@@ -376,16 +376,16 @@ class VectorDatabase {
 		return this._native.removeEdge(fromId, toId, edgeType);
 	}
 
-	getEdges(id, direction) {
-		return this._native.getEdges(id, direction);
+	getEdges(id, direction, edgeType) {
+		return this._native.getEdges(id, direction, edgeType);
 	}
 
 	traverse(startId, direction, maxDepth, edgeType) {
 		return this._native.traverse(startId, direction, maxDepth, edgeType);
 	}
 
-	expandViaEdges(ids, direction, edgeType) {
-		return this._native.expandViaEdges(ids, direction, edgeType);
+	expand(ids, direction, edgeType) {
+		return this._native.expand(ids, direction, edgeType);
 	}
 
 	get edgeCount() {

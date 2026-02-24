@@ -83,15 +83,16 @@ impl VectorDatabase {
     ///
     /// Returns:
     ///     list[dict]: Edges with keys: from_id, to_id, edge_type, weight, metadata
-    #[pyo3(signature = (id, direction="both"))]
+    #[pyo3(signature = (id, direction="both", edge_type=None))]
     pub fn get_edges<'py>(
         &self,
         py: Python<'py>,
         id: &str,
         direction: &str,
+        edge_type: Option<&str>,
     ) -> PyResult<Bound<'py, PyList>> {
         let dir = parse_direction(direction)?;
-        let edges = self.inner.read().store.get_edges(id, dir);
+        let edges = self.inner.read().store.get_edges(id, dir, edge_type);
         let list = PyList::empty(py);
         for edge in &edges {
             list.append(edge_to_dict(py, edge)?)?;
@@ -143,7 +144,7 @@ impl VectorDatabase {
     /// Returns:
     ///     list[str]: Expanded ID set (includes original IDs + neighbors)
     #[pyo3(signature = (ids, direction="outgoing", edge_type=None))]
-    pub fn expand_via_edges<'py>(
+    pub fn expand<'py>(
         &self,
         py: Python<'py>,
         ids: Vec<String>,
@@ -151,11 +152,7 @@ impl VectorDatabase {
         edge_type: Option<&str>,
     ) -> PyResult<Bound<'py, PyList>> {
         let dir = parse_direction(direction)?;
-        let expanded = self
-            .inner
-            .read()
-            .store
-            .expand_via_edges(&ids, dir, edge_type);
+        let expanded = self.inner.read().store.expand(&ids, dir, edge_type);
         let list = PyList::empty(py);
         for id in &expanded {
             list.append(PyString::new(py, id))?;

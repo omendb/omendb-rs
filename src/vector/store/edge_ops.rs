@@ -27,7 +27,9 @@ impl VectorStore {
     /// Total number of edges stored.
     #[must_use]
     pub fn edge_count(&self) -> usize {
-        self.edge_store.as_ref().map_or(0, |e| e.edge_count())
+        self.edge_store
+            .as_ref()
+            .map_or(0, super::edge_store::EdgeStore::edge_count)
     }
 
     /// Add a typed directed edge between two document IDs.
@@ -102,12 +104,17 @@ impl VectorStore {
         Ok(removed)
     }
 
-    /// Get all edges for a node in the given direction.
+    /// Get edges for a node in the given direction, optionally filtered by type.
     #[must_use]
-    pub fn get_edges(&self, id: &str, direction: EdgeDirection) -> Vec<Edge> {
+    pub fn get_edges(
+        &self,
+        id: &str,
+        direction: EdgeDirection,
+        edge_type: Option<&str>,
+    ) -> Vec<Edge> {
         self.edge_store
             .as_ref()
-            .map_or_else(Vec::new, |e| e.get_edges(id, direction))
+            .map_or_else(Vec::new, |e| e.get_edges(id, direction, edge_type))
     }
 
     /// BFS traversal from a starting node.
@@ -131,7 +138,7 @@ impl VectorStore {
     /// For each result ID, traverses outgoing edges (depth 1) and returns the
     /// union of result IDs and their neighbors.
     #[must_use]
-    pub fn expand_via_edges(
+    pub fn expand(
         &self,
         ids: &[String],
         direction: EdgeDirection,

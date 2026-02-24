@@ -45,6 +45,7 @@ struct EdgeRecord {
 #[derive(Serialize, Deserialize)]
 struct EdgeStoreWire {
     /// (from_id, to_id, edge_type, weight, metadata_json_bytes)
+    #[allow(clippy::type_complexity)]
     edges: Vec<(String, String, String, f32, Option<Vec<u8>>)>,
 }
 
@@ -135,26 +136,32 @@ impl EdgeStore {
         }
     }
 
-    /// Get all edges for a node in the given direction.
+    /// Get edges for a node in the given direction, optionally filtered by type.
     #[must_use]
-    pub fn get_edges(&self, id: &str, direction: EdgeDirection) -> Vec<Edge> {
+    pub fn get_edges(
+        &self,
+        id: &str,
+        direction: EdgeDirection,
+        edge_type: Option<&str>,
+    ) -> Vec<Edge> {
         match direction {
-            EdgeDirection::Outgoing => self.get_outgoing(id),
-            EdgeDirection::Incoming => self.get_incoming(id),
+            EdgeDirection::Outgoing => self.get_outgoing(id, edge_type),
+            EdgeDirection::Incoming => self.get_incoming(id, edge_type),
             EdgeDirection::Both => {
-                let mut edges = self.get_outgoing(id);
-                edges.extend(self.get_incoming(id));
+                let mut edges = self.get_outgoing(id, edge_type);
+                edges.extend(self.get_incoming(id, edge_type));
                 edges
             }
         }
     }
 
-    fn get_outgoing(&self, id: &str) -> Vec<Edge> {
+    fn get_outgoing(&self, id: &str, edge_type: Option<&str>) -> Vec<Edge> {
         self.outgoing
             .get(id)
             .map(|records| {
                 records
                     .iter()
+                    .filter(|r| edge_type.is_none_or(|t| r.edge_type == t))
                     .map(|r| Edge {
                         from_id: id.to_string(),
                         to_id: r.peer_id.clone(),
@@ -167,12 +174,13 @@ impl EdgeStore {
             .unwrap_or_default()
     }
 
-    fn get_incoming(&self, id: &str) -> Vec<Edge> {
+    fn get_incoming(&self, id: &str, edge_type: Option<&str>) -> Vec<Edge> {
         self.incoming
             .get(id)
             .map(|records| {
                 records
                     .iter()
+                    .filter(|r| edge_type.is_none_or(|t| r.edge_type == t))
                     .map(|r| Edge {
                         from_id: r.peer_id.clone(),
                         to_id: id.to_string(),
@@ -289,7 +297,7 @@ impl EdgeStore {
         direction: EdgeDirection,
         edge_type_filter: Option<&str>,
     ) -> Vec<String> {
-        let matches_filter = |edge_type: &str| edge_type_filter.map_or(true, |t| edge_type == t);
+        let matches_filter = |edge_type: &str| edge_type_filter.is_none_or(|t| edge_type == t);
 
         match direction {
             EdgeDirection::Outgoing => self
@@ -397,6 +405,7 @@ impl EdgeStore {
     /// Serialize to bytes for manifest storage (postcard format).
     ///
     /// Metadata is serialized as JSON bytes since postcard cannot handle serde_json::Value.
+    #[allow(clippy::type_complexity)]
     pub fn to_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let mut edges: Vec<(String, String, String, f32, Option<Vec<u8>>)> =
             Vec::with_capacity(self.edge_count);

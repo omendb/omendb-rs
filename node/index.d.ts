@@ -232,7 +232,7 @@ export declare class VectorDatabase {
    * @param direction - "outgoing", "incoming", or "both" (default: "both")
    * @returns Array of edges with fromId, toId, edgeType, weight, metadata
    */
-  getEdges(id: string, direction?: string | undefined | null): Array<EdgeResult>
+  getEdges(id: string, direction?: string | undefined | null, edgeType?: string | undefined | null): Array<EdgeResult>
   /**
    * BFS traversal from a starting node.
    *
@@ -251,7 +251,7 @@ export declare class VectorDatabase {
    * @param edgeType - Filter by edge type
    * @returns Expanded ID set (includes original IDs + neighbors)
    */
-  expandViaEdges(ids: Array<string>, direction?: string | undefined | null, edgeType?: string | undefined | null): Array<string>
+  expand(ids: Array<string>, direction?: string | undefined | null, edgeType?: string | undefined | null): Array<string>
   /** Number of edges in the graph. */
   get edgeCount(): number
   /**

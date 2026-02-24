@@ -91,10 +91,10 @@ describe("EdgeStore", () => {
 		expect(db.traverse("a", "outgoing", 1, "ref")).toEqual(["c"]);
 	});
 
-	it("expandViaEdges", () => {
+	it("expand", () => {
 		db.addEdge("a", "c", "rel");
 		db.addEdge("b", "d", "rel");
-		const expanded = db.expandViaEdges(["a", "b"]);
+		const expanded = db.expand(["a", "b"]);
 		expect(expanded.sort()).toEqual(["a", "b", "c", "d"]);
 	});
 

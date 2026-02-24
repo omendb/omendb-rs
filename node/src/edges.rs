@@ -74,9 +74,18 @@ impl VectorDatabase {
     /// @param direction - "outgoing", "incoming", or "both" (default: "both")
     /// @returns Array of edges with fromId, toId, edgeType, weight, metadata
     #[napi(js_name = "getEdges")]
-    pub fn get_edges(&self, id: String, direction: Option<String>) -> Result<Vec<EdgeResult>> {
+    pub fn get_edges(
+        &self,
+        id: String,
+        direction: Option<String>,
+        edge_type: Option<String>,
+    ) -> Result<Vec<EdgeResult>> {
         let dir = parse_direction(direction.as_deref().unwrap_or("both"))?;
-        let edges = self.inner.read().store.get_edges(&id, dir);
+        let edges = self
+            .inner
+            .read()
+            .store
+            .get_edges(&id, dir, edge_type.as_deref());
         Ok(edges
             .into_iter()
             .map(|e| EdgeResult {
@@ -119,8 +128,8 @@ impl VectorDatabase {
     /// @param direction - "outgoing", "incoming", or "both" (default: "outgoing")
     /// @param edgeType - Filter by edge type
     /// @returns Expanded ID set (includes original IDs + neighbors)
-    #[napi(js_name = "expandViaEdges")]
-    pub fn expand_via_edges(
+    #[napi(js_name = "expand")]
+    pub fn expand(
         &self,
         ids: Vec<String>,
         direction: Option<String>,
@@ -131,7 +140,7 @@ impl VectorDatabase {
             .inner
             .read()
             .store
-            .expand_via_edges(&ids, dir, edge_type.as_deref()))
+            .expand(&ids, dir, edge_type.as_deref()))
     }
 
     /// Number of edges in the graph.

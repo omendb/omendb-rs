@@ -97,12 +97,12 @@ def test_traverse_with_edge_type_filter():
         assert refs == ["c"]
 
 
-def test_expand_via_edges():
+def test_expand():
     with tempfile.TemporaryDirectory() as tmpdir:
         db = make_db(tmpdir)
         db.add_edge("a", "c", "rel")
         db.add_edge("b", "d", "rel")
-        expanded = db.expand_via_edges(["a", "b"], "outgoing")
+        expanded = db.expand(["a", "b"], "outgoing")
         assert set(expanded) == {"a", "b", "c", "d"}
 
 
