@@ -1143,6 +1143,270 @@ fn stress_delete_batch_single_sync() {
     }
 }
 
+// ============================================================
+// Edge stress tests
+// ============================================================
+
+/// Crash recovery with edges at scale.
+///
+/// Insert 500 vectors + 1000 edges, flush, delete 200 vectors (cascade),
+/// crash. Reopen and verify no orphaned edges, correct counts.
+#[test]
+fn stress_crash_recovery_edges_at_scale() {
+    use crate::vector::store::edge_store::EdgeDirection;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("edge_scale.omen");
+
+    let num_vectors = 500;
+    let num_edges = 1000;
+    let num_deletes = 200;
+    let dim = 16;
+
+    // Phase 1: insert, add edges, flush, delete, crash
+    {
+        let mut store = VectorStoreOptions::default()
+            .dimensions(dim)
+            .open(&path)
+            .unwrap();
+
+        // Insert vectors
+        for i in 0..num_vectors {
+            store
+                .set(
+                    &format!("v{i}"),
+                    Vector::new(random_vector(i, dim)),
+                    serde_json::json!({}),
+                )
+                .unwrap();
+        }
+
+        // Add edges between deterministic pairs
+        let edge_types = ["link", "ref", "parent", "sibling"];
+        for i in 0..num_edges {
+            let from_idx = i % num_vectors;
+            let to_idx = (i * 7 + 3) % num_vectors;
+            if from_idx == to_idx {
+                continue;
+            }
+            let etype = edge_types[i % edge_types.len()];
+            store
+                .add_edge(
+                    &format!("v{from_idx}"),
+                    &format!("v{to_idx}"),
+                    etype,
+                    1.0,
+                    None,
+                )
+                .unwrap();
+        }
+
+        store.flush().unwrap();
+        let edges_before = store.edge_count();
+        assert!(edges_before > 0, "Should have edges");
+
+        // Delete first 200 vectors (cascade removes their edges)
+        for i in 0..num_deletes {
+            store.delete(&format!("v{i}")).unwrap();
+        }
+        // Crash
+    }
+
+    // Phase 2: verify recovery
+    {
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(
+            store.len(),
+            num_vectors - num_deletes,
+            "Correct vector count after recovery"
+        );
+
+        // No orphaned edges — every edge must reference live nodes
+        let deleted: rustc_hash::FxHashSet<String> =
+            (0..num_deletes).map(|i| format!("v{i}")).collect();
+
+        for i in num_deletes..num_vectors {
+            let id = format!("v{i}");
+            for edge in store.get_edges(&id, EdgeDirection::Both, None) {
+                assert!(
+                    !deleted.contains(&edge.from_id),
+                    "Orphaned edge from deleted node {}",
+                    edge.from_id
+                );
+                assert!(
+                    !deleted.contains(&edge.to_id),
+                    "Orphaned edge to deleted node {}",
+                    edge.to_id
+                );
+            }
+        }
+    }
+}
+
+/// Large edge metadata: edges with 100KB+ JSON metadata.
+///
+/// Verifies serialization roundtrip and WAL recovery with large metadata.
+#[test]
+fn stress_large_edge_metadata() {
+    use crate::vector::store::edge_store::EdgeDirection;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("large_edge_meta.omen");
+
+    let large_text: String = (0..100_000)
+        .map(|i| ((i % 26) as u8 + b'a') as char)
+        .collect();
+    let large_meta = serde_json::json!({
+        "large_field": large_text,
+        "array": (0..1000).collect::<Vec<i32>>(),
+        "nested": {"deep": {"key": "value"}},
+    });
+
+    // Phase 1: insert with large metadata, flush, add WAL-only edge, crash
+    {
+        let mut store = VectorStoreOptions::default()
+            .dimensions(16)
+            .open(&path)
+            .unwrap();
+
+        store
+            .set(
+                "a",
+                Vector::new(random_vector(0, 16)),
+                serde_json::json!({}),
+            )
+            .unwrap();
+        store
+            .set(
+                "b",
+                Vector::new(random_vector(1, 16)),
+                serde_json::json!({}),
+            )
+            .unwrap();
+        store
+            .set(
+                "c",
+                Vector::new(random_vector(2, 16)),
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        // Flushed edge with large metadata
+        store
+            .add_edge("a", "b", "big", 0.5, Some(large_meta.clone()))
+            .unwrap();
+        store.flush().unwrap();
+
+        // WAL-only edge with large metadata
+        store
+            .add_edge("b", "c", "big", 0.75, Some(large_meta.clone()))
+            .unwrap();
+        // Crash
+    }
+
+    // Phase 2: verify both edges recovered with metadata intact
+    {
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(store.edge_count(), 2);
+
+        let ab = store.get_edges("a", EdgeDirection::Outgoing, None);
+        assert_eq!(ab.len(), 1);
+        let ab_meta = ab[0].metadata.as_ref().unwrap();
+        assert_eq!(ab_meta["large_field"].as_str().unwrap().len(), 100_000);
+        assert_eq!(ab_meta["array"].as_array().unwrap().len(), 1000);
+
+        let bc = store.get_edges("b", EdgeDirection::Outgoing, None);
+        assert_eq!(bc.len(), 1);
+        let bc_meta = bc[0].metadata.as_ref().unwrap();
+        assert_eq!(bc_meta["large_field"].as_str().unwrap().len(), 100_000);
+    }
+}
+
+/// Repeated crash recovery with edges.
+///
+/// 5 cycles of: open → insert vectors + edges → crash → reopen.
+/// Verify edge count grows correctly and no corruption.
+#[test]
+fn stress_repeated_crash_recovery_with_edges() {
+    use crate::vector::store::edge_store::EdgeDirection;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("repeated_edge_crash.omen");
+
+    let vectors_per_cycle = 20;
+    let edges_per_cycle = 10;
+    let num_cycles = 5;
+    let dim = 16;
+
+    for cycle in 0..num_cycles {
+        {
+            let mut store = if cycle == 0 {
+                VectorStore::open_with_dimensions(&path, dim).unwrap()
+            } else {
+                VectorStore::open(&path).unwrap()
+            };
+
+            // Verify previous data
+            let expected_vecs = cycle * vectors_per_cycle;
+            assert_eq!(
+                store.len(),
+                expected_vecs,
+                "Cycle {cycle}: wrong vector count"
+            );
+
+            // Verify edges from previous cycles are present
+            let expected_edges = cycle * edges_per_cycle;
+            assert_eq!(
+                store.edge_count(),
+                expected_edges,
+                "Cycle {cycle}: wrong edge count"
+            );
+
+            // Add more vectors
+            for i in 0..vectors_per_cycle {
+                let id = format!("c{cycle}_v{i}");
+                store
+                    .set(
+                        &id,
+                        Vector::new(random_vector(cycle * 1000 + i, dim)),
+                        serde_json::json!({}),
+                    )
+                    .unwrap();
+            }
+
+            // Add edges within this cycle's vectors
+            for i in 0..edges_per_cycle {
+                let from = format!("c{cycle}_v{}", i % vectors_per_cycle);
+                let to = format!("c{cycle}_v{}", (i * 3 + 1) % vectors_per_cycle);
+                if from == to {
+                    // Still add an edge, just pick different target
+                    let to = format!("c{cycle}_v{}", (i + 1) % vectors_per_cycle);
+                    store.add_edge(&from, &to, "cycle_edge", 1.0, None).unwrap();
+                } else {
+                    store.add_edge(&from, &to, "cycle_edge", 1.0, None).unwrap();
+                }
+            }
+
+            // Crash (no flush)
+        }
+    }
+
+    // Final verification
+    let store = VectorStore::open(&path).unwrap();
+    assert_eq!(store.len(), num_cycles * vectors_per_cycle);
+    assert_eq!(store.edge_count(), num_cycles * edges_per_cycle);
+
+    // Verify edges from each cycle
+    for cycle in 0..num_cycles {
+        let first_vec = format!("c{cycle}_v0");
+        let edges = store.get_edges(&first_vec, EdgeDirection::Both, None);
+        assert!(
+            !edges.is_empty(),
+            "Cycle {cycle} first vector should have edges"
+        );
+    }
+}
+
 /// Multiple flush/reopen cycles maintain data integrity.
 #[test]
 fn stress_multiple_flush_reopen_cycles() {

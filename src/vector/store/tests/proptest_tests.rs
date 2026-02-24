@@ -158,6 +158,150 @@ mod general {
     }
 }
 
+mod edges {
+    use super::*;
+    use crate::vector::store::edge_store::{Edge, EdgeDirection, EdgeStore};
+
+    proptest! {
+        #[test]
+        fn edge_serialization_roundtrip(
+            edge_count in 1usize..50,
+            seed in 0u64..10000
+        ) {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let mut store = EdgeStore::new();
+
+            let edge_types = ["related", "parent", "sibling", "contains", "references"];
+            let mut expected_edges: Vec<(String, String, String, f32, Option<serde_json::Value>)> = Vec::new();
+
+            for i in 0..edge_count {
+                let from = format!("node_{}", i % 20);
+                let to = format!("node_{}", (i * 7 + 3) % 20);
+                if from == to { continue; }
+
+                let etype = edge_types[i % edge_types.len()];
+
+                // Deterministic weight from seed
+                let mut hasher = DefaultHasher::new();
+                (seed, i).hash(&mut hasher);
+                let hash = hasher.finish();
+                let weight = ((hash % 2000) as f32 / 1000.0) - 1.0; // -1.0..1.0
+
+                let metadata = if i % 3 == 0 {
+                    Some(serde_json::json!({
+                        "score": i * 10,
+                        "tags": ["a", "b"],
+                        "nested": {"depth": i}
+                    }))
+                } else if i % 3 == 1 {
+                    None
+                } else {
+                    Some(serde_json::json!({"simple": true}))
+                };
+
+                store.add_edge(Edge {
+                    from_id: from.clone(),
+                    to_id: to.clone(),
+                    edge_type: etype.to_string(),
+                    weight,
+                    metadata: metadata.clone(),
+                });
+
+                // Track expected (last write wins for same from/to/type key)
+                expected_edges.retain(|(f, t, et, _, _)| !(f == &from && t == &to && et == etype));
+                expected_edges.push((from, to, etype.to_string(), weight, metadata));
+            }
+
+            let bytes = store.to_bytes().unwrap();
+            let restored = EdgeStore::from_bytes(&bytes).unwrap();
+
+            prop_assert_eq!(restored.edge_count(), store.edge_count());
+
+            // Verify each expected edge
+            for (from, to, etype, weight, metadata) in &expected_edges {
+                let edges = restored.get_edges(from, EdgeDirection::Outgoing, None);
+                let found = edges.iter().find(|e| e.to_id == *to && e.edge_type == *etype);
+                prop_assert!(found.is_some(), "Edge {}→{} ({}) not found after roundtrip", from, to, etype);
+                let found = found.unwrap();
+                prop_assert!((found.weight - weight).abs() < f32::EPSILON, "Weight mismatch");
+                prop_assert_eq!(&found.metadata, metadata, "Metadata mismatch");
+            }
+        }
+
+        #[test]
+        fn edge_wal_recovery_no_dangling(
+            num_vectors in 5usize..20,
+            edge_count in 1usize..30,
+            delete_ratio in 0.1f64..0.5
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("edge_wal_prop.omen");
+            let dim = 4;
+
+            let num_deletes = ((num_vectors as f64) * delete_ratio) as usize;
+
+            // Insert vectors, add edges, flush, delete some vectors, crash
+            {
+                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+
+                // Insert vectors
+                for i in 0..num_vectors {
+                    let data: Vec<f32> = (0..dim).map(|j| (i * 10 + j) as f32).collect();
+                    store.set(&format!("v{i}"), Vector::new(data), serde_json::json!({})).unwrap();
+                }
+
+                // Add edges between random pairs (deterministic from index)
+                let mut added_edges = Vec::new();
+                for i in 0..edge_count {
+                    let from_idx = i % num_vectors;
+                    let to_idx = (i * 3 + 1) % num_vectors;
+                    if from_idx == to_idx { continue; }
+                    let from = format!("v{from_idx}");
+                    let to = format!("v{to_idx}");
+                    store.add_edge(&from, &to, "link", 1.0, None).unwrap();
+                    added_edges.push((from, to));
+                }
+
+                store.flush().unwrap();
+
+                // Delete first N vectors (cascade removes their edges)
+                for i in 0..num_deletes {
+                    store.delete(&format!("v{i}")).unwrap();
+                }
+                // Crash
+            }
+
+            // Verify: no dangling edges
+            {
+                let store = VectorStore::open(&path).unwrap();
+                let expected_vectors = num_vectors - num_deletes;
+                prop_assert_eq!(store.len(), expected_vectors);
+
+                // Check every edge references live nodes
+                let deleted_ids: rustc_hash::FxHashSet<String> =
+                    (0..num_deletes).map(|i| format!("v{i}")).collect();
+
+                for i in 0..num_vectors {
+                    let id = format!("v{i}");
+                    let edges = store.get_edges(&id, EdgeDirection::Both, None);
+                    for edge in &edges {
+                        prop_assert!(
+                            !deleted_ids.contains(&edge.from_id),
+                            "Dangling edge from deleted node: {}", edge.from_id
+                        );
+                        prop_assert!(
+                            !deleted_ids.contains(&edge.to_id),
+                            "Dangling edge to deleted node: {}", edge.to_id
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 mod persistence {
     use super::*;
 
