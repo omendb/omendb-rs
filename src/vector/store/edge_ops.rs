@@ -2,7 +2,7 @@
 //!
 //! Public API for the typed directed edge graph embedded in VectorStore.
 
-use super::edge_store::{Edge, EdgeDirection};
+use super::edge_store::{Edge, EdgeDirection, Subgraph, TraversalHit};
 use super::VectorStore;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
@@ -131,6 +131,151 @@ impl VectorStore {
         self.edge_store.as_ref().map_or_else(Vec::new, |e| {
             e.traverse(start_id, direction, max_depth, edge_type_filter)
         })
+    }
+
+    /// Direct lookup of a single edge.
+    #[must_use]
+    pub fn get_edge(&self, from_id: &str, to_id: &str, edge_type: &str) -> Option<Edge> {
+        self.edge_store
+            .as_ref()
+            .and_then(|e| e.get_edge(from_id, to_id, edge_type))
+    }
+
+    /// Get neighbor IDs for a node.
+    #[must_use]
+    pub fn neighbors(
+        &self,
+        id: &str,
+        direction: EdgeDirection,
+        edge_type: Option<&str>,
+    ) -> Vec<String> {
+        self.edge_store
+            .as_ref()
+            .map_or_else(Vec::new, |e| e.neighbors(id, direction, edge_type))
+    }
+
+    /// Count edges for a node without allocating.
+    #[must_use]
+    pub fn node_degree(
+        &self,
+        id: &str,
+        direction: EdgeDirection,
+        edge_type: Option<&str>,
+    ) -> usize {
+        self.edge_store
+            .as_ref()
+            .map_or(0, |e| e.node_degree(id, direction, edge_type))
+    }
+
+    /// Check if a path exists between two nodes.
+    #[must_use]
+    pub fn has_path(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        direction: EdgeDirection,
+        max_depth: usize,
+        edge_type: Option<&str>,
+    ) -> bool {
+        self.edge_store.as_ref().map_or(from_id == to_id, |e| {
+            e.has_path(from_id, to_id, direction, max_depth, edge_type)
+        })
+    }
+
+    /// Find shortest path between two nodes.
+    #[must_use]
+    pub fn shortest_path(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        direction: EdgeDirection,
+        max_depth: usize,
+        edge_type: Option<&str>,
+    ) -> Option<Vec<String>> {
+        if from_id == to_id {
+            return Some(vec![from_id.to_string()]);
+        }
+        self.edge_store
+            .as_ref()
+            .and_then(|e| e.shortest_path(from_id, to_id, direction, max_depth, edge_type))
+    }
+
+    /// BFS traversal returning the discovery edge for each node.
+    #[must_use]
+    pub fn traverse_edges(
+        &self,
+        start_id: &str,
+        direction: EdgeDirection,
+        max_depth: usize,
+        edge_type_filter: Option<&str>,
+    ) -> Vec<TraversalHit> {
+        self.edge_store.as_ref().map_or_else(Vec::new, |e| {
+            e.traverse_edges(start_id, direction, max_depth, edge_type_filter)
+        })
+    }
+
+    /// Extract the ego-graph around a node.
+    #[must_use]
+    pub fn subgraph(
+        &self,
+        id: &str,
+        max_depth: usize,
+        direction: EdgeDirection,
+        edge_type: Option<&str>,
+    ) -> Subgraph {
+        self.edge_store.as_ref().map_or_else(
+            || Subgraph {
+                node_ids: vec![id.to_string()],
+                edges: Vec::new(),
+            },
+            |e| e.subgraph(id, max_depth, direction, edge_type),
+        )
+    }
+
+    /// Batch add edges with a single WAL sync.
+    pub fn add_edges(&mut self, edges: Vec<Edge>) -> Result<usize> {
+        if edges.is_empty() {
+            return Ok(0);
+        }
+        self.enable_edges();
+
+        if let Some(ref mut storage) = self.storage {
+            for edge in &edges {
+                let meta_bytes = edge.metadata.as_ref().map(serde_json::to_vec).transpose()?;
+                storage.wal_append_insert_edge(
+                    &edge.from_id,
+                    &edge.to_id,
+                    &edge.edge_type,
+                    edge.weight,
+                    meta_bytes.as_deref(),
+                )?;
+            }
+            storage.wal_sync()?;
+        }
+
+        let added = self
+            .edge_store
+            .as_mut()
+            .expect("enable_edges() was just called")
+            .add_edges(edges);
+
+        Ok(added)
+    }
+
+    /// Collect all unique edge types.
+    #[must_use]
+    pub fn edge_types(&self) -> Vec<String> {
+        self.edge_store
+            .as_ref()
+            .map_or_else(Vec::new, super::edge_store::EdgeStore::edge_types)
+    }
+
+    /// Collect all node IDs that have at least one edge.
+    #[must_use]
+    pub fn node_ids(&self) -> Vec<String> {
+        self.edge_store
+            .as_ref()
+            .map_or_else(Vec::new, super::edge_store::EdgeStore::node_ids)
     }
 
     /// Expand search results by following edges.

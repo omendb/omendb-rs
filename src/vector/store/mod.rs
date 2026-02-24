@@ -26,7 +26,7 @@ mod thread_safe;
 
 pub use crate::omen::Metric;
 pub use accessors::StoreInfo;
-pub use edge_store::{Edge, EdgeDirection};
+pub use edge_store::{Edge, EdgeDirection, Subgraph, TraversalHit};
 pub use filter::MetadataFilter;
 pub use input::{
     BatchItem, HybridParams, QueryData, QueryInput, Rerank, SearchOptions, VectorData, VectorInput,

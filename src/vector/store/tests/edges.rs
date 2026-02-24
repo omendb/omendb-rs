@@ -760,3 +760,428 @@ fn test_edge_wal_across_checkpoint_boundary() {
         assert_eq!(post_edges[0].metadata, Some(json!({"phase": "post"})));
     }
 }
+
+// --- New graph primitives tests ---
+
+fn make_chain_store() -> EdgeStore {
+    let mut store = EdgeStore::new();
+    // a -> b -> c -> d
+    for (from, to) in [("a", "b"), ("b", "c"), ("c", "d")] {
+        store.add_edge(Edge {
+            from_id: from.into(),
+            to_id: to.into(),
+            edge_type: "next".into(),
+            weight: 1.0,
+            metadata: None,
+        });
+    }
+    store
+}
+
+#[test]
+fn test_get_edge() {
+    let mut store = EdgeStore::new();
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 0.5,
+        metadata: Some(json!({"k": 1})),
+    });
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "ref".into(),
+        weight: 0.9,
+        metadata: None,
+    });
+
+    let found = store.get_edge("a", "b", "link").unwrap();
+    assert_eq!(found.weight, 0.5);
+    assert_eq!(found.metadata, Some(json!({"k": 1})));
+
+    let found_ref = store.get_edge("a", "b", "ref").unwrap();
+    assert_eq!(found_ref.weight, 0.9);
+
+    assert!(store.get_edge("a", "b", "nonexistent").is_none());
+    assert!(store.get_edge("b", "a", "link").is_none());
+    assert!(store.get_edge("x", "y", "link").is_none());
+}
+
+#[test]
+fn test_neighbors() {
+    let mut store = EdgeStore::new();
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "c".into(),
+        edge_type: "ref".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "d".into(),
+        to_id: "a".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+
+    let out = store.neighbors("a", EdgeDirection::Outgoing, None);
+    assert_eq!(out.len(), 2);
+    assert!(out.contains(&"b".to_string()));
+    assert!(out.contains(&"c".to_string()));
+
+    let inc = store.neighbors("a", EdgeDirection::Incoming, None);
+    assert_eq!(inc, vec!["d"]);
+
+    let both = store.neighbors("a", EdgeDirection::Both, None);
+    assert_eq!(both.len(), 3);
+
+    let filtered = store.neighbors("a", EdgeDirection::Outgoing, Some("link"));
+    assert_eq!(filtered, vec!["b"]);
+}
+
+#[test]
+fn test_node_degree() {
+    let mut store = EdgeStore::new();
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "c".into(),
+        edge_type: "ref".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "d".into(),
+        to_id: "a".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+
+    assert_eq!(store.node_degree("a", EdgeDirection::Outgoing, None), 2);
+    assert_eq!(store.node_degree("a", EdgeDirection::Incoming, None), 1);
+    assert_eq!(store.node_degree("a", EdgeDirection::Both, None), 3);
+    assert_eq!(
+        store.node_degree("a", EdgeDirection::Outgoing, Some("link")),
+        1
+    );
+    assert_eq!(store.node_degree("x", EdgeDirection::Both, None), 0);
+}
+
+#[test]
+fn test_node_degree_self_loop() {
+    let mut store = EdgeStore::new();
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "a".into(),
+        edge_type: "self".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    // Both should not double-count the self-loop.
+    // get_edges(Both) returns: outgoing(a→a, a→b) + incoming filtered(b→a excluded as self-loop already counted).
+    // Actually incoming for "a": self(a→a), link from somewhere — no. incoming["a"] has peer_id="a" (self-loop).
+    // So degree(Both) = outgoing(2) + incoming(1 self-loop) - self_loop_overlap(1) = 2
+    assert_eq!(store.node_degree("a", EdgeDirection::Both, None), 2);
+}
+
+#[test]
+fn test_has_path_direct() {
+    let store = make_chain_store();
+    assert!(store.has_path("a", "b", EdgeDirection::Outgoing, 1, None));
+}
+
+#[test]
+fn test_has_path_indirect() {
+    let store = make_chain_store();
+    assert!(store.has_path("a", "d", EdgeDirection::Outgoing, 10, None));
+}
+
+#[test]
+fn test_has_path_no_path() {
+    let store = make_chain_store();
+    assert!(!store.has_path("d", "a", EdgeDirection::Outgoing, 10, None));
+}
+
+#[test]
+fn test_has_path_max_depth() {
+    let store = make_chain_store();
+    // a->b->c->d requires depth 3, depth 2 should fail
+    assert!(!store.has_path("a", "d", EdgeDirection::Outgoing, 2, None));
+    assert!(store.has_path("a", "d", EdgeDirection::Outgoing, 3, None));
+}
+
+#[test]
+fn test_has_path_same_node() {
+    let store = make_chain_store();
+    assert!(store.has_path("a", "a", EdgeDirection::Outgoing, 0, None));
+}
+
+#[test]
+fn test_shortest_path_direct() {
+    let store = make_chain_store();
+    let path = store
+        .shortest_path("a", "b", EdgeDirection::Outgoing, 10, None)
+        .unwrap();
+    assert_eq!(path, vec!["a", "b"]);
+}
+
+#[test]
+fn test_shortest_path_multi_hop() {
+    let store = make_chain_store();
+    let path = store
+        .shortest_path("a", "d", EdgeDirection::Outgoing, 10, None)
+        .unwrap();
+    assert_eq!(path, vec!["a", "b", "c", "d"]);
+}
+
+#[test]
+fn test_shortest_path_no_path() {
+    let store = make_chain_store();
+    assert!(store
+        .shortest_path("d", "a", EdgeDirection::Outgoing, 10, None)
+        .is_none());
+}
+
+#[test]
+fn test_shortest_path_same_node() {
+    let store = make_chain_store();
+    let path = store
+        .shortest_path("a", "a", EdgeDirection::Outgoing, 10, None)
+        .unwrap();
+    assert_eq!(path, vec!["a"]);
+}
+
+#[test]
+fn test_shortest_path_picks_shortest() {
+    let mut store = EdgeStore::new();
+    // Direct: a -> c
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "c".into(),
+        edge_type: "direct".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    // Long: a -> b -> c
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "b".into(),
+        to_id: "c".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    let path = store
+        .shortest_path("a", "c", EdgeDirection::Outgoing, 10, None)
+        .unwrap();
+    assert_eq!(path.len(), 2); // a -> c (direct)
+}
+
+#[test]
+fn test_traverse_edges() {
+    let store = make_chain_store();
+    let hits = store.traverse_edges("a", EdgeDirection::Outgoing, 2, None);
+    assert_eq!(hits.len(), 2);
+
+    let hit_b = hits.iter().find(|h| h.id == "b").unwrap();
+    assert_eq!(hit_b.depth, 1);
+    assert_eq!(hit_b.edge.from_id, "a");
+    assert_eq!(hit_b.edge.to_id, "b");
+
+    let hit_c = hits.iter().find(|h| h.id == "c").unwrap();
+    assert_eq!(hit_c.depth, 2);
+    assert_eq!(hit_c.edge.from_id, "b");
+    assert_eq!(hit_c.edge.to_id, "c");
+}
+
+#[test]
+fn test_subgraph() {
+    let mut store = EdgeStore::new();
+    // Triangle: a->b, b->c, c->a, plus d->a (external)
+    for (f, t) in [("a", "b"), ("b", "c"), ("c", "a"), ("d", "a")] {
+        store.add_edge(Edge {
+            from_id: f.into(),
+            to_id: t.into(),
+            edge_type: "link".into(),
+            weight: 1.0,
+            metadata: None,
+        });
+    }
+
+    let sg = store.subgraph("a", 2, EdgeDirection::Outgoing, None);
+    assert!(sg.node_ids.contains(&"a".to_string()));
+    assert!(sg.node_ids.contains(&"b".to_string()));
+    assert!(sg.node_ids.contains(&"c".to_string()));
+    // d is not reachable via outgoing from a
+    assert!(!sg.node_ids.contains(&"d".to_string()));
+    // All 3 internal edges (a->b, b->c, c->a) should be included
+    assert_eq!(sg.edges.len(), 3);
+    // d->a should NOT be included (d not in subgraph)
+    assert!(!sg.edges.iter().any(|e| e.from_id == "d"));
+}
+
+#[test]
+fn test_add_edges_batch() {
+    let mut store = EdgeStore::new();
+    let edges = vec![
+        Edge {
+            from_id: "a".into(),
+            to_id: "b".into(),
+            edge_type: "link".into(),
+            weight: 1.0,
+            metadata: None,
+        },
+        Edge {
+            from_id: "b".into(),
+            to_id: "c".into(),
+            edge_type: "link".into(),
+            weight: 1.0,
+            metadata: None,
+        },
+    ];
+    let added = store.add_edges(edges);
+    assert_eq!(added, 2);
+    assert_eq!(store.edge_count(), 2);
+
+    // Adding an existing edge should not count as new
+    let added2 = store.add_edges(vec![Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 0.5,
+        metadata: None,
+    }]);
+    assert_eq!(added2, 0);
+    assert_eq!(store.edge_count(), 2);
+}
+
+#[test]
+fn test_add_edges_wal_recovery() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test.omen");
+
+    {
+        let mut store = VectorStore::open(&path).unwrap();
+        store
+            .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
+            .unwrap();
+        store
+            .set("b", crate::Vector::new(vec![2.0; 4]), json!({}))
+            .unwrap();
+        store
+            .set("c", crate::Vector::new(vec![3.0; 4]), json!({}))
+            .unwrap();
+
+        let edges = vec![
+            crate::Edge {
+                from_id: "a".into(),
+                to_id: "b".into(),
+                edge_type: "link".into(),
+                weight: 0.5,
+                metadata: Some(json!({"batch": true})),
+            },
+            crate::Edge {
+                from_id: "b".into(),
+                to_id: "c".into(),
+                edge_type: "link".into(),
+                weight: 0.7,
+                metadata: None,
+            },
+        ];
+        let added = store.add_edges(edges).unwrap();
+        assert_eq!(added, 2);
+        // No flush — WAL only
+    }
+
+    {
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(store.edge_count(), 2);
+        let ab = store.get_edge("a", "b", "link").unwrap();
+        assert_eq!(ab.weight, 0.5);
+        assert_eq!(ab.metadata, Some(json!({"batch": true})));
+        let bc = store.get_edge("b", "c", "link").unwrap();
+        assert_eq!(bc.weight, 0.7);
+    }
+}
+
+#[test]
+fn test_edge_types() {
+    let mut store = EdgeStore::new();
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "c".into(),
+        edge_type: "ref".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "b".into(),
+        to_id: "c".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+
+    let mut types = store.edge_types();
+    types.sort();
+    assert_eq!(types, vec!["link", "ref"]);
+}
+
+#[test]
+fn test_node_ids() {
+    let mut store = EdgeStore::new();
+    store.add_edge(Edge {
+        from_id: "a".into(),
+        to_id: "b".into(),
+        edge_type: "link".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+    store.add_edge(Edge {
+        from_id: "c".into(),
+        to_id: "a".into(),
+        edge_type: "ref".into(),
+        weight: 1.0,
+        metadata: None,
+    });
+
+    let mut ids = store.node_ids();
+    ids.sort();
+    assert_eq!(ids, vec!["a", "b", "c"]);
+}

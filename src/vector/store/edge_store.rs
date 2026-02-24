@@ -18,6 +18,21 @@ pub struct Edge {
     pub metadata: Option<JsonValue>,
 }
 
+/// A node discovered during edge-aware traversal.
+#[derive(Debug, Clone)]
+pub struct TraversalHit {
+    pub id: String,
+    pub depth: usize,
+    pub edge: Edge,
+}
+
+/// Ego-graph extraction result.
+#[derive(Debug, Clone)]
+pub struct Subgraph {
+    pub node_ids: Vec<String>,
+    pub edges: Vec<Edge>,
+}
+
 /// Direction for edge queries and traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeDirection {
@@ -159,41 +174,41 @@ impl EdgeStore {
     }
 
     fn get_outgoing(&self, id: &str, edge_type: Option<&str>) -> Vec<Edge> {
-        self.outgoing
-            .get(id)
-            .map(|records| {
-                records
-                    .iter()
-                    .filter(|r| edge_type.is_none_or(|t| r.edge_type == t))
-                    .map(|r| Edge {
-                        from_id: id.to_string(),
-                        to_id: r.peer_id.clone(),
-                        edge_type: r.edge_type.clone(),
-                        weight: r.weight,
-                        metadata: r.metadata.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(records) = self.outgoing.get(id) else {
+            return Vec::new();
+        };
+        let mut result = Vec::with_capacity(records.len());
+        for r in records {
+            if edge_type.is_none_or(|t| r.edge_type == t) {
+                result.push(Edge {
+                    from_id: id.to_string(),
+                    to_id: r.peer_id.clone(),
+                    edge_type: r.edge_type.clone(),
+                    weight: r.weight,
+                    metadata: r.metadata.clone(),
+                });
+            }
+        }
+        result
     }
 
     fn get_incoming(&self, id: &str, edge_type: Option<&str>) -> Vec<Edge> {
-        self.incoming
-            .get(id)
-            .map(|records| {
-                records
-                    .iter()
-                    .filter(|r| edge_type.is_none_or(|t| r.edge_type == t))
-                    .map(|r| Edge {
-                        from_id: r.peer_id.clone(),
-                        to_id: id.to_string(),
-                        edge_type: r.edge_type.clone(),
-                        weight: r.weight,
-                        metadata: r.metadata.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(records) = self.incoming.get(id) else {
+            return Vec::new();
+        };
+        let mut result = Vec::with_capacity(records.len());
+        for r in records {
+            if edge_type.is_none_or(|t| r.edge_type == t) {
+                result.push(Edge {
+                    from_id: r.peer_id.clone(),
+                    to_id: id.to_string(),
+                    edge_type: r.edge_type.clone(),
+                    weight: r.weight,
+                    metadata: r.metadata.clone(),
+                });
+            }
+        }
+        result
     }
 
     /// Remove the edge of the given type between two nodes.
@@ -281,7 +296,7 @@ impl EdgeStore {
                 continue;
             }
 
-            let neighbors = self.neighbors_at(&node, direction, edge_type_filter);
+            let neighbors = self.neighbors(&node, direction, edge_type_filter);
 
             for neighbor in neighbors {
                 if visited.insert(neighbor.clone()) {
@@ -294,7 +309,9 @@ impl EdgeStore {
         result
     }
 
-    fn neighbors_at(
+    /// Get neighbor IDs for a node in the given direction, optionally filtered by type.
+    #[must_use]
+    pub fn neighbors(
         &self,
         node: &str,
         direction: EdgeDirection,
@@ -346,6 +363,293 @@ impl EdgeStore {
                 neighbors
             }
         }
+    }
+
+    /// Direct lookup of a single edge by endpoints and type.
+    #[must_use]
+    pub fn get_edge(&self, from_id: &str, to_id: &str, edge_type: &str) -> Option<Edge> {
+        self.outgoing.get(from_id).and_then(|records| {
+            records
+                .iter()
+                .find(|r| r.peer_id == to_id && r.edge_type == edge_type)
+                .map(|r| Edge {
+                    from_id: from_id.to_string(),
+                    to_id: r.peer_id.clone(),
+                    edge_type: r.edge_type.clone(),
+                    weight: r.weight,
+                    metadata: r.metadata.clone(),
+                })
+        })
+    }
+
+    /// Count edges for a node without allocating.
+    ///
+    /// For `Both`: sums outgoing + incoming counts, subtracting self-loop overlap
+    /// (consistent with `get_edges(Both)` dedup).
+    #[must_use]
+    pub fn node_degree(
+        &self,
+        id: &str,
+        direction: EdgeDirection,
+        edge_type: Option<&str>,
+    ) -> usize {
+        let count_records = |records: &[EdgeRecord]| -> usize {
+            if let Some(t) = edge_type {
+                records.iter().filter(|r| r.edge_type == t).count()
+            } else {
+                records.len()
+            }
+        };
+
+        match direction {
+            EdgeDirection::Outgoing => self.outgoing.get(id).map_or(0, |r| count_records(r)),
+            EdgeDirection::Incoming => self.incoming.get(id).map_or(0, |r| count_records(r)),
+            EdgeDirection::Both => {
+                let out = self.outgoing.get(id).map_or(0, |r| count_records(r));
+                let inc = self.incoming.get(id).map_or(0, |r| count_records(r));
+                // Subtract self-loop incoming records (already counted in outgoing),
+                // matching get_edges(Both) which filters incoming where from_id == to_id.
+                let self_loop_overlap = self.incoming.get(id).map_or(0, |records| {
+                    records
+                        .iter()
+                        .filter(|r| r.peer_id == id && edge_type.is_none_or(|t| r.edge_type == t))
+                        .count()
+                });
+                out + inc - self_loop_overlap
+            }
+        }
+    }
+
+    /// Early-exit BFS reachability check.
+    #[must_use]
+    pub fn has_path(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        direction: EdgeDirection,
+        max_depth: usize,
+        edge_type: Option<&str>,
+    ) -> bool {
+        if from_id == to_id {
+            return true;
+        }
+        if max_depth == 0 {
+            return false;
+        }
+
+        let mut visited = FxHashSet::default();
+        visited.insert(from_id.to_string());
+
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+        queue.push_back((from_id.to_string(), 0));
+
+        while let Some((node, depth)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+            for neighbor in self.neighbors(&node, direction, edge_type) {
+                if neighbor == to_id {
+                    return true;
+                }
+                if visited.insert(neighbor.clone()) {
+                    queue.push_back((neighbor, depth + 1));
+                }
+            }
+        }
+        false
+    }
+
+    /// BFS shortest path. Returns path including start and end, or None if unreachable.
+    #[must_use]
+    pub fn shortest_path(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        direction: EdgeDirection,
+        max_depth: usize,
+        edge_type: Option<&str>,
+    ) -> Option<Vec<String>> {
+        if from_id == to_id {
+            return Some(vec![from_id.to_string()]);
+        }
+        if max_depth == 0 {
+            return None;
+        }
+
+        let mut parent: FxHashMap<String, String> = FxHashMap::default();
+        parent.insert(from_id.to_string(), String::new());
+
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+        queue.push_back((from_id.to_string(), 0));
+
+        while let Some((node, depth)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+            for neighbor in self.neighbors(&node, direction, edge_type) {
+                if !parent.contains_key(&neighbor) {
+                    parent.insert(neighbor.clone(), node.clone());
+                    if neighbor == to_id {
+                        let mut path = vec![to_id.to_string()];
+                        let mut current = to_id.to_string();
+                        while let Some(p) = parent.get(&current) {
+                            if p.is_empty() {
+                                break;
+                            }
+                            path.push(p.clone());
+                            current = p.clone();
+                        }
+                        path.reverse();
+                        return Some(path);
+                    }
+                    queue.push_back((neighbor, depth + 1));
+                }
+            }
+        }
+        None
+    }
+
+    /// BFS traversal returning the discovery edge for each node.
+    #[must_use]
+    pub fn traverse_edges(
+        &self,
+        start_id: &str,
+        direction: EdgeDirection,
+        max_depth: usize,
+        edge_type_filter: Option<&str>,
+    ) -> Vec<TraversalHit> {
+        if max_depth == 0 {
+            return Vec::new();
+        }
+
+        let mut visited = FxHashSet::default();
+        visited.insert(start_id.to_string());
+
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+        queue.push_back((start_id.to_string(), 0));
+
+        let mut result = Vec::new();
+
+        while let Some((node, depth)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+            let edges = self.get_edges(&node, direction, edge_type_filter);
+            for edge in edges {
+                let peer = match direction {
+                    EdgeDirection::Incoming => edge.from_id.clone(),
+                    EdgeDirection::Outgoing => edge.to_id.clone(),
+                    EdgeDirection::Both => {
+                        if edge.to_id == node {
+                            edge.from_id.clone()
+                        } else {
+                            edge.to_id.clone()
+                        }
+                    }
+                };
+                if visited.insert(peer.clone()) {
+                    queue.push_back((peer.clone(), depth + 1));
+                    result.push(TraversalHit {
+                        id: peer,
+                        depth: depth + 1,
+                        edge,
+                    });
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Extract the ego-graph: all nodes reachable within max_depth and all edges between them.
+    #[must_use]
+    pub fn subgraph(
+        &self,
+        id: &str,
+        max_depth: usize,
+        direction: EdgeDirection,
+        edge_type: Option<&str>,
+    ) -> Subgraph {
+        let reachable = self.traverse(id, direction, max_depth, edge_type);
+        let mut node_set: FxHashSet<String> = reachable.into_iter().collect();
+        node_set.insert(id.to_string());
+
+        let mut edges = Vec::new();
+        let mut seen_edges: FxHashSet<(String, String, String)> = FxHashSet::default();
+
+        for node in &node_set {
+            if let Some(records) = self.outgoing.get(node.as_str()) {
+                for r in records {
+                    if node_set.contains(&r.peer_id) && edge_type.is_none_or(|t| r.edge_type == t) {
+                        let key = (node.clone(), r.peer_id.clone(), r.edge_type.clone());
+                        if seen_edges.insert(key) {
+                            edges.push(Edge {
+                                from_id: node.clone(),
+                                to_id: r.peer_id.clone(),
+                                edge_type: r.edge_type.clone(),
+                                weight: r.weight,
+                                metadata: r.metadata.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            // For Both direction, also collect incoming edges where peer is in set
+            if direction == EdgeDirection::Both || direction == EdgeDirection::Incoming {
+                if let Some(records) = self.incoming.get(node.as_str()) {
+                    for r in records {
+                        if node_set.contains(&r.peer_id)
+                            && edge_type.is_none_or(|t| r.edge_type == t)
+                        {
+                            let key = (r.peer_id.clone(), node.clone(), r.edge_type.clone());
+                            if seen_edges.insert(key) {
+                                edges.push(Edge {
+                                    from_id: r.peer_id.clone(),
+                                    to_id: node.clone(),
+                                    edge_type: r.edge_type.clone(),
+                                    weight: r.weight,
+                                    metadata: r.metadata.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Subgraph {
+            node_ids: node_set.into_iter().collect(),
+            edges,
+        }
+    }
+
+    /// Batch add edges. Returns the number of new edges added (not updates).
+    pub fn add_edges(&mut self, edges: Vec<Edge>) -> usize {
+        let before = self.edge_count;
+        for edge in edges {
+            self.add_edge(edge);
+        }
+        self.edge_count - before
+    }
+
+    /// Collect all unique edge types in the store.
+    #[must_use]
+    pub fn edge_types(&self) -> Vec<String> {
+        let mut types = FxHashSet::default();
+        for records in self.outgoing.values() {
+            for r in records {
+                types.insert(r.edge_type.clone());
+            }
+        }
+        types.into_iter().collect()
+    }
+
+    /// Collect all node IDs that have at least one edge.
+    #[must_use]
+    pub fn node_ids(&self) -> Vec<String> {
+        let mut ids: FxHashSet<String> = self.outgoing.keys().cloned().collect();
+        ids.extend(self.incoming.keys().cloned());
+        ids.into_iter().collect()
     }
 
     /// Returns (from_id, to_id, edge_type) for all edges touching a node.
