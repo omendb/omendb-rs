@@ -496,21 +496,23 @@ impl VectorStore {
                 })
                 .transpose()?;
 
-            if let Some(wal_es) = wal_edge_store {
-                // Merge WAL edges into base (or use WAL store directly if no base)
-                let merged = base.get_or_insert_with(EdgeStore::new);
-                for edge in wal_es.all_edges() {
-                    merged.add_edge(edge);
-                }
-            }
-
-            // Apply WAL deletions to the merged store.
+            // Apply WAL deletions to the manifest base FIRST.
             // This handles edges that were in the manifest snapshot but deleted via cascade.
+            // Must happen before merging WAL inserts so that a delete→re-add sequence
+            // correctly preserves the re-added edge.
             if !wal_edge_deletes.is_empty() {
                 if let Some(ref mut store) = base {
                     for (from_id, to_id, edge_type) in &wal_edge_deletes {
                         store.remove_edge(from_id, to_id, edge_type);
                     }
+                }
+            }
+
+            if let Some(wal_es) = wal_edge_store {
+                // Merge WAL edges into base (or use WAL store directly if no base)
+                let merged = base.get_or_insert_with(EdgeStore::new);
+                for edge in wal_es.all_edges() {
+                    merged.add_edge(edge);
                 }
             }
 
