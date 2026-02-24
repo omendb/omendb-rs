@@ -164,4 +164,246 @@ impl VectorDatabase {
     pub fn edge_count(&self) -> usize {
         self.inner.read().store.edge_count()
     }
+
+    /// Look up a single edge by endpoints and type.
+    ///
+    /// Returns:
+    ///     dict | None: Edge dict or None if not found
+    #[pyo3(signature = (from_id, to_id, edge_type))]
+    pub fn get_edge(
+        &self,
+        py: Python<'_>,
+        from_id: &str,
+        to_id: &str,
+        edge_type: &str,
+    ) -> PyResult<Option<Py<PyDict>>> {
+        self.inner
+            .read()
+            .store
+            .get_edge(from_id, to_id, edge_type)
+            .map(|e| edge_to_dict(py, &e))
+            .transpose()
+    }
+
+    /// Get neighbor IDs for a node.
+    ///
+    /// Returns:
+    ///     list[str]: Neighbor node IDs
+    #[pyo3(signature = (id, direction="outgoing", edge_type=None))]
+    pub fn neighbors<'py>(
+        &self,
+        py: Python<'py>,
+        id: &str,
+        direction: &str,
+        edge_type: Option<&str>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let dir = parse_direction(direction)?;
+        let ids = self.inner.read().store.neighbors(id, dir, edge_type);
+        let list = PyList::empty(py);
+        for id in &ids {
+            list.append(PyString::new(py, id))?;
+        }
+        Ok(list)
+    }
+
+    /// Count edges for a node without allocating.
+    ///
+    /// Returns:
+    ///     int: Number of edges
+    #[pyo3(signature = (id, direction="both", edge_type=None))]
+    pub fn node_degree(
+        &self,
+        id: &str,
+        direction: &str,
+        edge_type: Option<&str>,
+    ) -> PyResult<usize> {
+        let dir = parse_direction(direction)?;
+        Ok(self.inner.read().store.node_degree(id, dir, edge_type))
+    }
+
+    /// Check if a path exists between two nodes.
+    ///
+    /// Returns:
+    ///     bool: True if reachable within max_depth
+    #[pyo3(signature = (from_id, to_id, direction="outgoing", max_depth=10, edge_type=None))]
+    pub fn has_path(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        direction: &str,
+        max_depth: usize,
+        edge_type: Option<&str>,
+    ) -> PyResult<bool> {
+        let dir = parse_direction(direction)?;
+        Ok(self
+            .inner
+            .read()
+            .store
+            .has_path(from_id, to_id, dir, max_depth, edge_type))
+    }
+
+    /// Find shortest path between two nodes.
+    ///
+    /// Returns:
+    ///     list[str] | None: Path including start and end, or None
+    #[pyo3(signature = (from_id, to_id, direction="outgoing", max_depth=10, edge_type=None))]
+    pub fn shortest_path<'py>(
+        &self,
+        py: Python<'py>,
+        from_id: &str,
+        to_id: &str,
+        direction: &str,
+        max_depth: usize,
+        edge_type: Option<&str>,
+    ) -> PyResult<Option<Bound<'py, PyList>>> {
+        let dir = parse_direction(direction)?;
+        match self
+            .inner
+            .read()
+            .store
+            .shortest_path(from_id, to_id, dir, max_depth, edge_type)
+        {
+            Some(path) => {
+                let list = PyList::empty(py);
+                for id in &path {
+                    list.append(PyString::new(py, id))?;
+                }
+                Ok(Some(list))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// BFS traversal returning discovery edges.
+    ///
+    /// Returns:
+    ///     list[dict]: Each dict has 'id', 'depth', 'edge' (nested dict)
+    #[pyo3(signature = (start_id, direction="outgoing", max_depth=1, edge_type=None))]
+    pub fn traverse_edges<'py>(
+        &self,
+        py: Python<'py>,
+        start_id: &str,
+        direction: &str,
+        max_depth: usize,
+        edge_type: Option<&str>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let dir = parse_direction(direction)?;
+        let hits = self
+            .inner
+            .read()
+            .store
+            .traverse_edges(start_id, dir, max_depth, edge_type);
+        let list = PyList::empty(py);
+        for hit in &hits {
+            let dict = PyDict::new(py);
+            dict.set_item("id", &hit.id)?;
+            dict.set_item("depth", hit.depth)?;
+            dict.set_item("edge", edge_to_dict(py, &hit.edge)?)?;
+            list.append(dict)?;
+        }
+        Ok(list)
+    }
+
+    /// Extract ego-graph around a node.
+    ///
+    /// Returns:
+    ///     dict: {"node_ids": list[str], "edges": list[dict]}
+    #[pyo3(signature = (id, max_depth=1, direction="outgoing", edge_type=None))]
+    pub fn subgraph(
+        &self,
+        py: Python<'_>,
+        id: &str,
+        max_depth: usize,
+        direction: &str,
+        edge_type: Option<&str>,
+    ) -> PyResult<Py<PyDict>> {
+        let dir = parse_direction(direction)?;
+        let sg = self
+            .inner
+            .read()
+            .store
+            .subgraph(id, max_depth, dir, edge_type);
+        let dict = PyDict::new(py);
+        let node_list = PyList::empty(py);
+        for nid in &sg.node_ids {
+            node_list.append(PyString::new(py, nid))?;
+        }
+        dict.set_item("node_ids", node_list)?;
+        let edge_list = PyList::empty(py);
+        for edge in &sg.edges {
+            edge_list.append(edge_to_dict(py, edge)?)?;
+        }
+        dict.set_item("edges", edge_list)?;
+        Ok(dict.into())
+    }
+
+    /// Batch add edges with a single WAL sync.
+    ///
+    /// Returns:
+    ///     int: Number of new edges added
+    #[pyo3(signature = (edges,))]
+    pub fn add_edges(&self, edges: Vec<Bound<'_, PyDict>>) -> PyResult<usize> {
+        let mut edge_vec = Vec::with_capacity(edges.len());
+        for dict in &edges {
+            let from_id: String = dict
+                .get_item("from_id")?
+                .ok_or_else(|| PyValueError::new_err("Edge dict missing 'from_id'"))?
+                .extract()?;
+            let to_id: String = dict
+                .get_item("to_id")?
+                .ok_or_else(|| PyValueError::new_err("Edge dict missing 'to_id'"))?
+                .extract()?;
+            let edge_type: String = dict
+                .get_item("edge_type")?
+                .ok_or_else(|| PyValueError::new_err("Edge dict missing 'edge_type'"))?
+                .extract()?;
+            let weight: f32 = dict
+                .get_item("weight")?
+                .map(|v| v.extract())
+                .transpose()?
+                .unwrap_or(1.0);
+            let metadata = dict
+                .get_item("metadata")?
+                .map(|m| pyobject_to_json(&m))
+                .transpose()?;
+            edge_vec.push(Edge {
+                from_id,
+                to_id,
+                edge_type,
+                weight,
+                metadata,
+            });
+        }
+        self.inner
+            .write()
+            .store
+            .add_edges(edge_vec)
+            .map_err(convert_error)
+    }
+
+    /// Get all unique edge types.
+    ///
+    /// Returns:
+    ///     list[str]: Unique edge type strings
+    pub fn edge_types<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
+        let types = self.inner.read().store.edge_types();
+        let list = PyList::empty(py);
+        for t in &types {
+            list.append(PyString::new(py, t)).expect("append edge type");
+        }
+        list
+    }
+
+    /// Get all node IDs with edges.
+    ///
+    /// Returns:
+    ///     list[str]: Node IDs
+    pub fn node_ids<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
+        let ids = self.inner.read().store.node_ids();
+        let list = PyList::empty(py);
+        for id in &ids {
+            list.append(PyString::new(py, id)).expect("append node id");
+        }
+        list
+    }
 }

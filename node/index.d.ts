@@ -254,6 +254,26 @@ export declare class VectorDatabase {
   expand(ids: Array<string>, direction?: string | undefined | null, edgeType?: string | undefined | null): Array<string>
   /** Number of edges in the graph. */
   get edgeCount(): number
+  /** Look up a single edge by endpoints and type. */
+  getEdge(fromId: string, toId: string, edgeType: string): EdgeResult | null
+  /** Get neighbor IDs for a node. */
+  neighbors(id: string, direction?: string | undefined | null, edgeType?: string | undefined | null): Array<string>
+  /** Count edges for a node. */
+  nodeDegree(id: string, direction?: string | undefined | null, edgeType?: string | undefined | null): number
+  /** Check if a path exists between two nodes. */
+  hasPath(fromId: string, toId: string, direction?: string | undefined | null, maxDepth?: number | undefined | null, edgeType?: string | undefined | null): boolean
+  /** Find shortest path between two nodes. */
+  shortestPath(fromId: string, toId: string, direction?: string | undefined | null, maxDepth?: number | undefined | null, edgeType?: string | undefined | null): Array<string> | null
+  /** BFS traversal returning discovery edges. */
+  traverseEdges(startId: string, direction?: string | undefined | null, maxDepth?: number | undefined | null, edgeType?: string | undefined | null): Array<TraversalHitResult>
+  /** Extract ego-graph around a node. */
+  subgraph(id: string, maxDepth?: number | undefined | null, direction?: string | undefined | null, edgeType?: string | undefined | null): SubgraphResult
+  /** Batch add edges with a single WAL sync. */
+  addEdges(edges: Array<EdgeInput>): number
+  /** Get all unique edge types. */
+  edgeTypes(): Array<string>
+  /** Get all node IDs with edges. */
+  nodeIds(): Array<string>
   /**
    * Check if text search is enabled.
    *
@@ -405,6 +425,14 @@ export declare class VectorDatabase {
    * ```
    */
   hybridSparseSearch(queryVector: Array<number> | Float32Array, sparseQuery: { indices: number[]; values: number[] } | Record<string, number>, k: number, options?: { alpha?: number; filter?: Record<string, unknown> } | undefined): Array<SparseSearchResult>
+}
+
+export interface EdgeInput {
+  fromId: string
+  toId: string
+  edgeType: string
+  weight?: number
+  metadata?: Record<string, unknown> | null
 }
 
 export interface EdgeResult {
@@ -559,8 +587,19 @@ export interface StatsResult {
   path: string
 }
 
+export interface SubgraphResult {
+  nodeIds: Array<string>
+  edges: Array<EdgeResult>
+}
+
 export interface TextSearchResult {
   id: string
   score: number
   metadata: Record<string, unknown>
+}
+
+export interface TraversalHitResult {
+  id: string
+  depth: number
+  edge: EdgeResult
 }

@@ -391,6 +391,46 @@ class VectorDatabase {
 	get edgeCount() {
 		return this._native.edgeCount;
 	}
+
+	getEdge(fromId, toId, edgeType) {
+		return this._native.getEdge(fromId, toId, edgeType);
+	}
+
+	neighbors(id, direction, edgeType) {
+		return this._native.neighbors(id, direction, edgeType);
+	}
+
+	nodeDegree(id, direction, edgeType) {
+		return this._native.nodeDegree(id, direction, edgeType);
+	}
+
+	hasPath(fromId, toId, direction, maxDepth, edgeType) {
+		return this._native.hasPath(fromId, toId, direction, maxDepth, edgeType);
+	}
+
+	shortestPath(fromId, toId, direction, maxDepth, edgeType) {
+		return this._native.shortestPath(fromId, toId, direction, maxDepth, edgeType);
+	}
+
+	traverseEdges(startId, direction, maxDepth, edgeType) {
+		return this._native.traverseEdges(startId, direction, maxDepth, edgeType);
+	}
+
+	subgraph(id, maxDepth, direction, edgeType) {
+		return this._native.subgraph(id, maxDepth, direction, edgeType);
+	}
+
+	addEdges(edges) {
+		return this._native.addEdges(edges);
+	}
+
+	edgeTypes() {
+		return this._native.edgeTypes();
+	}
+
+	nodeIds() {
+		return this._native.nodeIds();
+	}
 }
 
 function open(path, options, embeddingFn) {

@@ -2,7 +2,7 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use omendb_lib::vector::store::edge_store::EdgeDirection;
+use omendb_lib::vector::store::edge_store::{Edge, EdgeDirection};
 use serde_json::Value as JsonValue;
 
 use crate::conversions::convert_error;
@@ -16,6 +16,29 @@ pub struct EdgeResult {
     pub weight: f64,
     #[napi(ts_type = "Record<string, unknown> | null")]
     pub metadata: Option<JsonValue>,
+}
+
+#[napi(object)]
+pub struct TraversalHitResult {
+    pub id: String,
+    pub depth: u32,
+    pub edge: EdgeResult,
+}
+
+#[napi(object)]
+pub struct SubgraphResult {
+    pub node_ids: Vec<String>,
+    pub edges: Vec<EdgeResult>,
+}
+
+fn edge_to_result(e: omendb_lib::Edge) -> EdgeResult {
+    EdgeResult {
+        from_id: e.from_id,
+        to_id: e.to_id,
+        edge_type: e.edge_type,
+        weight: e.weight as f64,
+        metadata: e.metadata,
+    }
 }
 
 fn parse_direction(direction: &str) -> Result<EdgeDirection> {
@@ -153,4 +176,182 @@ impl VectorDatabase {
             .try_into()
             .unwrap_or(u32::MAX)
     }
+
+    /// Look up a single edge by endpoints and type.
+    #[napi(js_name = "getEdge")]
+    pub fn get_edge(
+        &self,
+        from_id: String,
+        to_id: String,
+        edge_type: String,
+    ) -> Option<EdgeResult> {
+        self.inner
+            .read()
+            .store
+            .get_edge(&from_id, &to_id, &edge_type)
+            .map(edge_to_result)
+    }
+
+    /// Get neighbor IDs for a node.
+    #[napi(js_name = "neighbors")]
+    pub fn neighbors(
+        &self,
+        id: String,
+        direction: Option<String>,
+        edge_type: Option<String>,
+    ) -> Result<Vec<String>> {
+        let dir = parse_direction(direction.as_deref().unwrap_or("outgoing"))?;
+        Ok(self
+            .inner
+            .read()
+            .store
+            .neighbors(&id, dir, edge_type.as_deref()))
+    }
+
+    /// Count edges for a node.
+    #[napi(js_name = "nodeDegree")]
+    pub fn node_degree(
+        &self,
+        id: String,
+        direction: Option<String>,
+        edge_type: Option<String>,
+    ) -> Result<u32> {
+        let dir = parse_direction(direction.as_deref().unwrap_or("both"))?;
+        Ok(self
+            .inner
+            .read()
+            .store
+            .node_degree(&id, dir, edge_type.as_deref()) as u32)
+    }
+
+    /// Check if a path exists between two nodes.
+    #[napi(js_name = "hasPath")]
+    pub fn has_path(
+        &self,
+        from_id: String,
+        to_id: String,
+        direction: Option<String>,
+        max_depth: Option<u32>,
+        edge_type: Option<String>,
+    ) -> Result<bool> {
+        let dir = parse_direction(direction.as_deref().unwrap_or("outgoing"))?;
+        let depth = max_depth.unwrap_or(10) as usize;
+        Ok(self
+            .inner
+            .read()
+            .store
+            .has_path(&from_id, &to_id, dir, depth, edge_type.as_deref()))
+    }
+
+    /// Find shortest path between two nodes.
+    #[napi(js_name = "shortestPath")]
+    pub fn shortest_path(
+        &self,
+        from_id: String,
+        to_id: String,
+        direction: Option<String>,
+        max_depth: Option<u32>,
+        edge_type: Option<String>,
+    ) -> Result<Option<Vec<String>>> {
+        let dir = parse_direction(direction.as_deref().unwrap_or("outgoing"))?;
+        let depth = max_depth.unwrap_or(10) as usize;
+        Ok(self.inner.read().store.shortest_path(
+            &from_id,
+            &to_id,
+            dir,
+            depth,
+            edge_type.as_deref(),
+        ))
+    }
+
+    /// BFS traversal returning discovery edges.
+    #[napi(js_name = "traverseEdges")]
+    pub fn traverse_edges(
+        &self,
+        start_id: String,
+        direction: Option<String>,
+        max_depth: Option<u32>,
+        edge_type: Option<String>,
+    ) -> Result<Vec<TraversalHitResult>> {
+        let dir = parse_direction(direction.as_deref().unwrap_or("outgoing"))?;
+        let depth = max_depth.unwrap_or(1) as usize;
+        let hits =
+            self.inner
+                .read()
+                .store
+                .traverse_edges(&start_id, dir, depth, edge_type.as_deref());
+        Ok(hits
+            .into_iter()
+            .map(|h| TraversalHitResult {
+                id: h.id,
+                depth: h.depth as u32,
+                edge: edge_to_result(h.edge),
+            })
+            .collect())
+    }
+
+    /// Extract ego-graph around a node.
+    #[napi(js_name = "subgraph")]
+    pub fn subgraph(
+        &self,
+        id: String,
+        max_depth: Option<u32>,
+        direction: Option<String>,
+        edge_type: Option<String>,
+    ) -> Result<SubgraphResult> {
+        let dir = parse_direction(direction.as_deref().unwrap_or("outgoing"))?;
+        let depth = max_depth.unwrap_or(1) as usize;
+        let sg = self
+            .inner
+            .read()
+            .store
+            .subgraph(&id, depth, dir, edge_type.as_deref());
+        Ok(SubgraphResult {
+            node_ids: sg.node_ids,
+            edges: sg.edges.into_iter().map(edge_to_result).collect(),
+        })
+    }
+
+    /// Batch add edges with a single WAL sync.
+    #[napi(js_name = "addEdges")]
+    pub fn add_edges(&self, edges: Vec<EdgeInput>) -> Result<u32> {
+        let edge_vec: Vec<Edge> = edges
+            .into_iter()
+            .map(|e| Edge {
+                from_id: e.from_id,
+                to_id: e.to_id,
+                edge_type: e.edge_type,
+                weight: e.weight.unwrap_or(1.0) as f32,
+                metadata: e.metadata,
+            })
+            .collect();
+        self.inner
+            .write()
+            .store
+            .add_edges(edge_vec)
+            .map(|n| n as u32)
+            .map_err(convert_error)
+    }
+
+    /// Get all unique edge types.
+    #[napi(js_name = "edgeTypes")]
+    pub fn edge_types(&self) -> Vec<String> {
+        self.inner.read().store.edge_types()
+    }
+
+    /// Get all node IDs with edges.
+    #[napi(js_name = "nodeIds")]
+    pub fn node_ids(&self) -> Vec<String> {
+        self.inner.read().store.node_ids()
+    }
+}
+
+#[napi(object)]
+pub struct EdgeInput {
+    pub from_id: String,
+    pub to_id: String,
+    pub edge_type: String,
+    pub weight: Option<f64>,
+    #[napi(ts_type = "Record<string, unknown> | null")]
+    pub metadata: Option<JsonValue>,
 }

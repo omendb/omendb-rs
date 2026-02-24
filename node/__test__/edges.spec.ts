@@ -108,4 +108,94 @@ describe("EdgeStore", () => {
 		db.addEdge("a", "b", "link");
 		expect(() => db.getEdges("a", "sideways" as any)).toThrow();
 	});
+
+	it("getEdge", () => {
+		db.addEdge("a", "b", "link", 0.5, { k: 1 });
+		const edge = db.getEdge("a", "b", "link");
+		expect(edge).not.toBeNull();
+		expect(edge!.weight).toBeCloseTo(0.5, 5);
+		expect(edge!.metadata).toEqual({ k: 1 });
+		expect(db.getEdge("a", "b", "nope")).toBeNull();
+		expect(db.getEdge("b", "a", "link")).toBeNull();
+	});
+
+	it("neighbors", () => {
+		db.addEdge("a", "b", "link");
+		db.addEdge("a", "c", "ref");
+		db.addEdge("d", "a", "link");
+		expect(db.neighbors("a", "outgoing")!.sort()).toEqual(["b", "c"]);
+		expect(db.neighbors("a", "incoming")).toEqual(["d"]);
+		expect(db.neighbors("a", "outgoing", "link")).toEqual(["b"]);
+	});
+
+	it("nodeDegree", () => {
+		db.addEdge("a", "b", "link");
+		db.addEdge("a", "c", "ref");
+		db.addEdge("d", "a", "link");
+		expect(db.nodeDegree("a", "outgoing")).toBe(2);
+		expect(db.nodeDegree("a", "incoming")).toBe(1);
+		expect(db.nodeDegree("a", "both")).toBe(3);
+		expect(db.nodeDegree("a", "outgoing", "link")).toBe(1);
+	});
+
+	it("hasPath", () => {
+		db.addEdge("a", "b", "next");
+		db.addEdge("b", "c", "next");
+		expect(db.hasPath("a", "c")).toBe(true);
+		expect(db.hasPath("c", "a")).toBe(false);
+		expect(db.hasPath("a", "c", "outgoing", 1)).toBe(false);
+		expect(db.hasPath("a", "a")).toBe(true);
+	});
+
+	it("shortestPath", () => {
+		db.addEdge("a", "b", "next");
+		db.addEdge("b", "c", "next");
+		db.addEdge("c", "d", "next");
+		expect(db.shortestPath("a", "d")).toEqual(["a", "b", "c", "d"]);
+		expect(db.shortestPath("d", "a")).toBeNull();
+		expect(db.shortestPath("a", "a")).toEqual(["a"]);
+	});
+
+	it("traverseEdges", () => {
+		db.addEdge("a", "b", "next");
+		db.addEdge("b", "c", "next");
+		const hits = db.traverseEdges("a", "outgoing", 2);
+		expect(hits).toHaveLength(2);
+		const hitB = hits.find((h) => h.id === "b")!;
+		expect(hitB.depth).toBe(1);
+		expect(hitB.edge.fromId).toBe("a");
+		expect(hitB.edge.toId).toBe("b");
+	});
+
+	it("subgraph", () => {
+		db.addEdge("a", "b", "link");
+		db.addEdge("b", "c", "link");
+		db.addEdge("d", "a", "link");
+		const sg = db.subgraph("a", 2, "outgoing");
+		expect(sg.nodeIds.sort()).toEqual(["a", "b", "c"]);
+		expect(sg.edges).toHaveLength(2);
+	});
+
+	it("addEdges batch", () => {
+		const added = db.addEdges([
+			{ fromId: "a", toId: "b", edgeType: "link" },
+			{ fromId: "b", toId: "c", edgeType: "link", weight: 0.5 },
+		]);
+		expect(added).toBe(2);
+		expect(db.edgeCount).toBe(2);
+		const edge = db.getEdge("b", "c", "link");
+		expect(edge!.weight).toBeCloseTo(0.5, 5);
+	});
+
+	it("edgeTypes", () => {
+		db.addEdge("a", "b", "link");
+		db.addEdge("a", "c", "ref");
+		expect(db.edgeTypes().sort()).toEqual(["link", "ref"]);
+	});
+
+	it("nodeIds", () => {
+		db.addEdge("a", "b", "link");
+		db.addEdge("c", "a", "ref");
+		expect(db.nodeIds().sort()).toEqual(["a", "b", "c"]);
+	});
 });

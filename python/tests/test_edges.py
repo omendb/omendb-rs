@@ -142,3 +142,121 @@ def test_invalid_direction_raises():
             assert False, "expected ValueError"
         except ValueError:
             pass
+
+
+def test_get_edge():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "link", weight=0.5, metadata={"k": 1})
+        edge = db.get_edge("a", "b", "link")
+        assert edge is not None
+        assert edge["weight"] == pytest.approx(0.5, rel=1e-5)
+        assert edge["metadata"] == {"k": 1}
+        assert db.get_edge("a", "b", "nonexistent") is None
+        assert db.get_edge("b", "a", "link") is None
+
+
+def test_neighbors():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "link")
+        db.add_edge("a", "c", "ref")
+        db.add_edge("d", "a", "link")
+        out = db.neighbors("a", "outgoing")
+        assert set(out) == {"b", "c"}
+        inc = db.neighbors("a", "incoming")
+        assert inc == ["d"]
+        filtered = db.neighbors("a", "outgoing", edge_type="link")
+        assert filtered == ["b"]
+
+
+def test_node_degree():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "link")
+        db.add_edge("a", "c", "ref")
+        db.add_edge("d", "a", "link")
+        assert db.node_degree("a", "outgoing") == 2
+        assert db.node_degree("a", "incoming") == 1
+        assert db.node_degree("a", "both") == 3
+        assert db.node_degree("a", "outgoing", edge_type="link") == 1
+
+
+def test_has_path():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "next")
+        db.add_edge("b", "c", "next")
+        assert db.has_path("a", "c") is True
+        assert db.has_path("c", "a") is False
+        assert db.has_path("a", "c", max_depth=1) is False
+        assert db.has_path("a", "a") is True
+
+
+def test_shortest_path():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "next")
+        db.add_edge("b", "c", "next")
+        db.add_edge("c", "d", "next")
+        path = db.shortest_path("a", "d")
+        assert path == ["a", "b", "c", "d"]
+        assert db.shortest_path("d", "a") is None
+        assert db.shortest_path("a", "a") == ["a"]
+
+
+def test_traverse_edges():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "next")
+        db.add_edge("b", "c", "next")
+        hits = db.traverse_edges("a", "outgoing", max_depth=2)
+        assert len(hits) == 2
+        hit_b = next(h for h in hits if h["id"] == "b")
+        assert hit_b["depth"] == 1
+        assert hit_b["edge"]["from_id"] == "a"
+        assert hit_b["edge"]["to_id"] == "b"
+
+
+def test_subgraph():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "link")
+        db.add_edge("b", "c", "link")
+        db.add_edge("d", "a", "link")
+        sg = db.subgraph("a", max_depth=2, direction="outgoing")
+        assert set(sg["node_ids"]) == {"a", "b", "c"}
+        assert len(sg["edges"]) == 2  # a->b, b->c (d->a excluded, d not in subgraph)
+
+
+def test_add_edges():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        added = db.add_edges(
+            [
+                {"from_id": "a", "to_id": "b", "edge_type": "link"},
+                {"from_id": "b", "to_id": "c", "edge_type": "link", "weight": 0.5},
+            ]
+        )
+        assert added == 2
+        assert db.edge_count() == 2
+        edge = db.get_edge("b", "c", "link")
+        assert edge["weight"] == pytest.approx(0.5, rel=1e-5)
+
+
+def test_edge_types():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "link")
+        db.add_edge("a", "c", "ref")
+        types = sorted(db.edge_types())
+        assert types == ["link", "ref"]
+
+
+def test_node_ids():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = make_db(tmpdir)
+        db.add_edge("a", "b", "link")
+        db.add_edge("c", "a", "ref")
+        ids = sorted(db.node_ids())
+        assert ids == ["a", "b", "c"]
