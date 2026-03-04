@@ -931,6 +931,7 @@ mod persistence_tests {
             d_proj: Some(16),
             seed: 12345,
             pool_factor: None,
+            max_tokens: None,
         };
 
         // Create with custom config

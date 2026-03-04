@@ -398,6 +398,7 @@ mod tests {
                 d_proj: None,
                 seed: 42,
                 pool_factor: None,
+                max_tokens: None,
             },
         )
         .unwrap();
@@ -418,6 +419,7 @@ mod tests {
                 d_proj: None,
                 seed: 42,
                 pool_factor: None,
+                max_tokens: None,
             },
         )
         .unwrap();
@@ -618,6 +620,7 @@ mod tests {
                 d_proj: Some(16),
                 seed: 42,
                 pool_factor: None,
+                max_tokens: None,
             },
         )
         .unwrap();

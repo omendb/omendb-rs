@@ -557,6 +557,7 @@ pub struct PersistedMuveraConfig {
     pub token_dim: usize,
     pub d_proj: Option<u8>,
     pub pool_factor: Option<u8>,
+    pub max_tokens: Option<usize>,
 }
 
 /// Snapshot data loaded from OmenFile
@@ -850,6 +851,11 @@ impl OmenFile {
             .config
             .get("muvera_pool_factor")
             .map(|&v| v as u8);
+        let max_tokens = self
+            .manifest
+            .config
+            .get("muvera_max_tokens")
+            .map(|&v| v as usize);
 
         if let (Some(reps), Some(bits), Some(seed), Some(token_dim)) = (reps, bits, seed, token_dim)
         {
@@ -860,6 +866,7 @@ impl OmenFile {
                 token_dim: token_dim as usize,
                 d_proj,
                 pool_factor,
+                max_tokens,
             });
         }
 
@@ -1498,6 +1505,11 @@ impl OmenFile {
                     .config
                     .insert("muvera_pool_factor".to_string(), pf as u64);
             }
+            if let Some(mt) = cfg.max_tokens {
+                manifest
+                    .config
+                    .insert("muvera_max_tokens".to_string(), mt as u64);
+            }
         }
 
         // Write Manifest with CRC header
@@ -1754,6 +1766,11 @@ impl OmenFile {
                 manifest
                     .config
                     .insert("muvera_pool_factor".to_string(), pf as u64);
+            }
+            if let Some(mt) = cfg.max_tokens {
+                manifest
+                    .config
+                    .insert("muvera_max_tokens".to_string(), mt as u64);
             }
         }
 

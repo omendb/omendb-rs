@@ -6,9 +6,7 @@
 use super::helpers;
 use super::record_store::{Record, RecordStore};
 use super::VectorStore;
-use super::{
-    DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M, DEFAULT_MAX_TOKENS,
-};
+use super::{DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M};
 use crate::omen::{
     parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
     CheckpointOptions, OmenFile, PersistedMuveraConfig, WalEntryType,
@@ -446,6 +444,7 @@ impl VectorStore {
                     d_proj: mv_cfg.d_proj,
                     seed: mv_cfg.seed,
                     pool_factor: mv_cfg.pool_factor,
+                    max_tokens: mv_cfg.max_tokens,
                 };
                 let encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
 
@@ -544,7 +543,6 @@ impl VectorStore {
             multivec_storage,
             sparse_index,
             edge_store,
-            max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
             rescore: quantization,
             oversample: 3.0,
@@ -660,7 +658,6 @@ impl VectorStore {
             multivec_storage: None,
             sparse_index: None,
             edge_store: None,
-            max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
             rescore,
             oversample,
@@ -711,7 +708,6 @@ impl VectorStore {
             multivec_storage: None,
             sparse_index: None,
             edge_store: None,
-            max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
             rescore,
             oversample,
@@ -827,6 +823,7 @@ impl VectorStore {
                             token_dim: enc.token_dimension(),
                             d_proj: config.d_proj,
                             pool_factor: config.pool_factor,
+                            max_tokens: config.max_tokens,
                         }),
                     )
                 } else {

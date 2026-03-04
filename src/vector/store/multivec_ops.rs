@@ -106,24 +106,26 @@ impl VectorStore {
 
         let token_dim = encoder.token_dimension();
 
-        // Get pool_factor from config before validation so we can compute effective limit
+        // Get config limits before validation
         let pool_factor = encoder.config().pool_factor;
-        // Pre-pooling limit: if pool_factor halves tokens, allow 2x input tokens
-        let pre_pool_limit =
-            pool_factor.map_or(self.max_tokens, |pf| self.max_tokens * pf as usize);
+        let max_tokens = encoder.config().max_tokens;
 
         // Validate all documents first
         for (i, (id, tokens, _)) in batch.iter().enumerate() {
             if tokens.is_empty() {
                 anyhow::bail!("Document '{id}' (index {i}) has empty tokens");
             }
-            if tokens.len() > pre_pool_limit {
-                anyhow::bail!(
-                    "Document '{}' has {} tokens, exceeds maximum {} (configure with max_tokens)",
-                    id,
-                    tokens.len(),
-                    pre_pool_limit
-                );
+            if let Some(limit) = max_tokens {
+                // Adjust limit for pool_factor so we don't run k-means just to check
+                let pre_pool_limit = pool_factor.map_or(limit, |pf| limit * pf as usize);
+                if tokens.len() > pre_pool_limit {
+                    anyhow::bail!(
+                        "Document '{}' has {} tokens, exceeds max_tokens {}",
+                        id,
+                        tokens.len(),
+                        limit
+                    );
+                }
             }
             for (j, token) in tokens.iter().enumerate() {
                 if token.len() != token_dim {
@@ -524,13 +526,15 @@ impl VectorStore {
             tokens.iter().map(|t| t.to_vec()).collect()
         };
 
-        // Check token count post-pooling so pool_factor is accounted for
-        if pooled_tokens.len() > self.max_tokens {
-            anyhow::bail!(
-                "Token count {} exceeds maximum {} (configure with max_tokens)",
-                pooled_tokens.len(),
-                self.max_tokens
-            );
+        // Check post-pooling token count against configured limit
+        if let Some(limit) = encoder.config().max_tokens {
+            if pooled_tokens.len() > limit {
+                anyhow::bail!(
+                    "Token count {} exceeds max_tokens {}",
+                    pooled_tokens.len(),
+                    limit
+                );
+            }
         }
 
         // Create refs from the pooled/original tokens

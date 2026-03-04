@@ -130,9 +130,6 @@ pub struct VectorStore {
     /// Typed directed edge graph over document IDs.
     pub(crate) edge_store: Option<EdgeStore>,
 
-    /// Maximum tokens per document (default: 512, matches ColBERT).
-    max_tokens: usize,
-
     /// Override for segment capacity (vectors per segment before freezing).
     /// None = use SegmentConfig::DEFAULT_CAPACITY (100K).
     segment_capacity: Option<usize>,
@@ -149,9 +146,6 @@ pub struct VectorStore {
     /// Range: 0.0–1.0. Default: 0.25 (compact when >25% of slots are tombstones).
     auto_compact_threshold: f32,
 }
-
-/// Default maximum tokens per multi-vector document.
-const DEFAULT_MAX_TOKENS: usize = 512;
 
 /// WAL auto-checkpoint threshold (entries). Triggers flush when exceeded to prevent
 /// unbounded WAL growth. 10K entries ≈ 50-100MB depending on vector dimensions.
@@ -180,7 +174,6 @@ impl VectorStore {
             multivec_storage: None,
             sparse_index: None,
             edge_store: None,
-            max_tokens: DEFAULT_MAX_TOKENS,
             segment_capacity: None,
             rescore: false,
             oversample: 3.0,
@@ -300,24 +293,6 @@ impl VectorStore {
     #[must_use]
     pub fn with_segment_capacity(mut self, capacity: usize) -> Self {
         self.segment_capacity = Some(capacity);
-        self
-    }
-
-    /// Set maximum token count per multi-vector document (post-pooling).
-    ///
-    /// Documents exceeding this limit after pooling are rejected. Default is 512.
-    /// Set to the embedder's `doc_max_length` to avoid silent truncation.
-    ///
-    /// Not persisted — must be set on every open when writing documents.
-    ///
-    /// ```rust,ignore
-    /// VectorStore::multi_vector_with(token_dim, config)?
-    ///     .with_max_tokens(embedder::MODEL.doc_max_length)
-    ///     .persist(&path)?
-    /// ```
-    #[must_use]
-    pub fn with_max_tokens(mut self, n: usize) -> Self {
-        self.max_tokens = n;
         self
     }
 

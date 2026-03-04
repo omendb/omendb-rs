@@ -73,6 +73,13 @@ pub struct MultiVectorConfig {
     /// - Some(3): 66% reduction, 99% quality
     /// - Some(4): 75% reduction, 97% quality
     pub pool_factor: Option<u8>,
+
+    /// Maximum token count per document after pooling. None = no limit.
+    ///
+    /// Set to the embedder's `doc_max_length` to reject oversized documents at
+    /// insert time rather than silently truncating at the tokenizer.
+    /// Persisted with the store — no need to set on every open.
+    pub max_tokens: Option<usize>,
 }
 
 impl Default for MultiVectorConfig {
@@ -83,6 +90,7 @@ impl Default for MultiVectorConfig {
             d_proj: Some(16),
             seed: 42,
             pool_factor: None,
+            max_tokens: None,
         }
     }
 }
@@ -100,6 +108,7 @@ impl MultiVectorConfig {
             d_proj: Some(16),
             seed: 42,
             pool_factor: None,
+            max_tokens: None,
         }
     }
 
@@ -127,6 +136,7 @@ impl MultiVectorConfig {
             d_proj: Some(32),
             seed: 42,
             pool_factor: None,
+            max_tokens: None,
         }
     }
 
@@ -216,6 +226,7 @@ mod tests {
             d_proj: Some(24),
             seed: 123,
             pool_factor: Some(2),
+            max_tokens: None,
         };
         assert_eq!(config.repetitions, 20);
         assert_eq!(config.partitions(), 32);
