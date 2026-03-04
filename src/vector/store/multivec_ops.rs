@@ -119,10 +119,10 @@ impl VectorStore {
             }
             if tokens.len() > pre_pool_limit {
                 anyhow::bail!(
-                    "Document '{}' has {} tokens, exceeds maximum {}",
+                    "Document '{}' has {} tokens, exceeds maximum {} (configure with max_tokens)",
                     id,
                     tokens.len(),
-                    self.max_tokens
+                    pre_pool_limit
                 );
             }
             for (j, token) in tokens.iter().enumerate() {

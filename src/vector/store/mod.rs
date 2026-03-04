@@ -306,7 +306,9 @@ impl VectorStore {
     /// Set maximum token count per multi-vector document (post-pooling).
     ///
     /// Documents exceeding this limit after pooling are rejected. Default is 512.
-    /// Set to the embedder's `doc_max_length` to avoid silent truncation:
+    /// Set to the embedder's `doc_max_length` to avoid silent truncation.
+    ///
+    /// Not persisted — must be set on every open when writing documents.
     ///
     /// ```rust,ignore
     /// VectorStore::multi_vector_with(token_dim, config)?
