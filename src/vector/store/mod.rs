@@ -303,6 +303,22 @@ impl VectorStore {
         self
     }
 
+    /// Set maximum token count per multi-vector document (post-pooling).
+    ///
+    /// Documents exceeding this limit after pooling are rejected. Default is 512.
+    /// Set to the embedder's `doc_max_length` to avoid silent truncation:
+    ///
+    /// ```rust,ignore
+    /// VectorStore::multi_vector_with(token_dim, config)?
+    ///     .with_max_tokens(embedder::MODEL.doc_max_length)
+    ///     .persist(&path)?
+    /// ```
+    #[must_use]
+    pub fn with_max_tokens(mut self, n: usize) -> Self {
+        self.max_tokens = n;
+        self
+    }
+
     /// Build a SegmentConfig from current store settings
     fn segment_config(&self, dimensions: usize) -> SegmentConfig {
         let mut config = SegmentConfig::new(dimensions)

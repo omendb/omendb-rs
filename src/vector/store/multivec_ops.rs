@@ -106,12 +106,18 @@ impl VectorStore {
 
         let token_dim = encoder.token_dimension();
 
+        // Get pool_factor from config before validation so we can compute effective limit
+        let pool_factor = encoder.config().pool_factor;
+        // Pre-pooling limit: if pool_factor halves tokens, allow 2x input tokens
+        let pre_pool_limit =
+            pool_factor.map_or(self.max_tokens, |pf| self.max_tokens * pf as usize);
+
         // Validate all documents first
         for (i, (id, tokens, _)) in batch.iter().enumerate() {
             if tokens.is_empty() {
                 anyhow::bail!("Document '{id}' (index {i}) has empty tokens");
             }
-            if tokens.len() > self.max_tokens {
+            if tokens.len() > pre_pool_limit {
                 anyhow::bail!(
                     "Document '{}' has {} tokens, exceeds maximum {}",
                     id,
@@ -131,9 +137,6 @@ impl VectorStore {
                 }
             }
         }
-
-        // Get pool_factor from config
-        let pool_factor = encoder.config().pool_factor;
 
         // Encode all documents to FDEs in parallel, applying pooling if configured
         let pooled_and_fdes: Vec<(Vec<Vec<f32>>, Vec<f32>)> = batch
@@ -502,14 +505,6 @@ impl VectorStore {
             anyhow::bail!("Cannot store empty token set");
         }
 
-        if tokens.len() > self.max_tokens {
-            anyhow::bail!(
-                "Token count {} exceeds maximum {} (configure with max_tokens)",
-                tokens.len(),
-                self.max_tokens
-            );
-        }
-
         let token_dim = encoder.token_dimension();
         for (i, token) in tokens.iter().enumerate() {
             if token.len() != token_dim {
@@ -528,6 +523,15 @@ impl VectorStore {
         } else {
             tokens.iter().map(|t| t.to_vec()).collect()
         };
+
+        // Check token count post-pooling so pool_factor is accounted for
+        if pooled_tokens.len() > self.max_tokens {
+            anyhow::bail!(
+                "Token count {} exceeds maximum {} (configure with max_tokens)",
+                pooled_tokens.len(),
+                self.max_tokens
+            );
+        }
 
         // Create refs from the pooled/original tokens
         let final_refs: Vec<&[f32]> = pooled_tokens.iter().map(std::vec::Vec::as_slice).collect();
