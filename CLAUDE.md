@@ -164,18 +164,24 @@ All version locations must match and be higher than published PyPI version.
 ## Release Process
 
 ```bash
-./scripts/sync-version.sh 0.0.10   # Bump all 9 version locations
-git add -A && git commit -m "chore: Bump to 0.0.10"
-git push
+./scripts/sync-version.sh 0.0.X   # Bump all version locations
+git add -A && git commit -m "chore: Bump to 0.0.X"
+git tag v0.0.X -m "v0.0.X"
+git push && git push --tags
+# Then manually trigger the release workflow — pushing tags does NOT auto-trigger it
 gh workflow run release.yml
 ```
 
+**IMPORTANT:** `release.yml` is `workflow_dispatch` only — it NEVER triggers automatically
+on tag push. Pushing tags is safe. Always trigger the workflow explicitly after pushing.
+Do NOT suggest "push tags to trigger release" — this is wrong.
+
 ## CI
 
-| Workflow      | Trigger | What                                        |
-| ------------- | ------- | ------------------------------------------- |
-| `ci.yml`      | Push/PR | fmt, clippy, test (Rust + Python + Node)    |
-| `release.yml` | Manual  | Build wheels, publish to PyPI/crates.io/npm |
+| Workflow      | Trigger     | What                                        |
+| ------------- | ----------- | ------------------------------------------- |
+| `ci.yml`      | Push/PR     | fmt, clippy, test (Rust + Python + Node)    |
+| `release.yml` | Manual only | Build wheels, publish to PyPI/crates.io/npm |
 
 ## Dependencies
 
