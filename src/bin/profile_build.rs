@@ -73,7 +73,7 @@ fn main() {
 
             store.set_batch(batch).expect("set_batch");
 
-            if ingested % 100_000 == 0 {
+            if ingested.is_multiple_of(100_000) {
                 let elapsed = t0.elapsed().as_secs_f64();
                 eprintln!(
                     "  {}K  ({:.0} vec/s)",
