@@ -264,6 +264,8 @@ impl WalEntry {
 /// meaning all current WAL entries are new and must be replayed. If epochs match, the WAL
 /// was not truncated after the snapshot and its entries are already incorporated — skip replay.
 const WAL_META_SIZE: usize = 32;
+/// Legacy 3-field format: [checkpoint_offset: u64] [max_timestamp: u64] [entry_count: u64]
+const WAL_META_SIZE_V1: usize = 24;
 
 fn meta_path(wal_path: &std::path::Path) -> std::path::PathBuf {
     let mut p = wal_path.as_os_str().to_os_string();
@@ -274,7 +276,7 @@ fn meta_path(wal_path: &std::path::Path) -> std::path::PathBuf {
 fn read_wal_meta(path: &std::path::Path) -> Option<(u64, u64, u64, u64)> {
     let data = std::fs::read(path).ok()?;
     // Support both old 24-byte format (epoch defaults to 0) and new 32-byte format
-    if data.len() != WAL_META_SIZE && data.len() != 24 {
+    if data.len() != WAL_META_SIZE && data.len() != WAL_META_SIZE_V1 {
         return None;
     }
     let checkpoint_offset = u64::from_le_bytes(data[0..8].try_into().ok()?);

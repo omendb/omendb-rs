@@ -964,7 +964,7 @@ impl OmenFile {
                 w.write_all(&(dirty_buf.len() as u32).to_le_bytes())?;
                 w.write_all(&dirty_buf)?;
 
-                // wal_truncation_epoch (version 3 addition)
+                // wal_truncation_epoch (added to v2 format; absent in older v2 snapshots — defaults to 0 on load)
                 w.write_all(&wal_truncation_epoch.to_le_bytes())?;
 
                 w.flush()?;
@@ -1096,7 +1096,7 @@ impl OmenFile {
         cursor.read_exact(&mut dirty_buf)?;
         let dirty_since_flush = RoaringBitmap::deserialize_from(&dirty_buf[..])?;
 
-        // wal_truncation_epoch section (version 3+; older snapshots default to 0)
+        // wal_truncation_epoch section (absent in older v2 snapshots — defaults to 0)
         let mut epoch_buf = [0u8; 8];
         let wal_truncation_epoch = if cursor.read_exact(&mut epoch_buf).is_ok() {
             u64::from_le_bytes(epoch_buf)
