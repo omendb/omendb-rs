@@ -443,6 +443,19 @@ impl Wal {
         self.truncation_epoch
     }
 
+    /// Return the highest timestamp currently present in the WAL.
+    ///
+    /// Used by full-manifest checkpoints to record which WAL entries were already
+    /// incorporated into the published manifest.
+    #[must_use]
+    pub fn max_timestamp(&self) -> Option<u64> {
+        if self.entry_count == 0 {
+            None
+        } else {
+            Some(self.next_timestamp.saturating_sub(1))
+        }
+    }
+
     /// Read all entries after last checkpoint
     ///
     /// Note: Entries are validated via checksum. Invalid entries are skipped.

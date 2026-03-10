@@ -73,6 +73,7 @@ impl VectorStore {
         //   WAL epoch > snapshot epoch → WAL was truncated after snapshot, entries are new → replay
         //   WAL epoch == snapshot epoch → WAL not truncated after snapshot, entries stale → skip
         let mut slim_wal_epoch: u64 = 0;
+        let manifest_wal_cutoff = storage.manifest_wal_replay_cutoff();
         if storage.records_newer_than_omen() {
             match storage.load_records_snapshot() {
                 Ok(Some(slim)) => {
@@ -97,6 +98,23 @@ impl VectorStore {
         }
 
         let mut dimensions = snapshot.dimensions as usize;
+        let current_wal_epoch = storage.wal_truncation_epoch();
+
+        if !slim_snapshot_loaded {
+            if let Some((manifest_wal_epoch, _)) = manifest_wal_cutoff {
+                if current_wal_epoch > manifest_wal_epoch {
+                    let referenced_slots: RoaringBitmap =
+                        snapshot.id_to_slot.values().copied().collect();
+                    for (slot, vector) in snapshot.vectors.iter_mut().enumerate() {
+                        let slot_u32 = slot as u32;
+                        if !referenced_slots.contains(slot_u32) {
+                            *vector = None;
+                            snapshot.metadata.remove(&slot_u32);
+                        }
+                    }
+                }
+            }
+        }
 
         // Get HNSW parameters from header
         let header = storage.header();
@@ -166,7 +184,6 @@ impl VectorStore {
         // slot and marks the old one deleted, corrupting the segment rebuild. Skipping stale
         // WAL entries prevents this. Old snapshots (wal_truncation_epoch == 0) conservatively
         // skip WAL replay to maintain the prior safe-but-lossy behavior.
-        let current_wal_epoch = storage.wal_truncation_epoch();
         let wal_entries = if slim_snapshot_loaded && current_wal_epoch <= slim_wal_epoch {
             tracing::debug!(
                 current_wal_epoch,
@@ -182,7 +199,17 @@ impl VectorStore {
                     "Slim snapshot: WAL epoch advanced, replaying new WAL entries"
                 );
             }
-            storage.pending_wal_entries()?
+            let mut entries = storage.pending_wal_entries()?;
+            if !slim_snapshot_loaded {
+                if let Some((manifest_wal_epoch, manifest_wal_max_ts)) = manifest_wal_cutoff {
+                    if current_wal_epoch == manifest_wal_epoch {
+                        if let Some(max_ts) = manifest_wal_max_ts {
+                            entries.retain(|entry| entry.header.timestamp > max_ts);
+                        }
+                    }
+                }
+            }
+            entries
         };
         let mut wal_modified_slots: Vec<u32> = Vec::new();
         let mut wal_edge_store: Option<EdgeStore> = None;

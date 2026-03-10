@@ -48,6 +48,18 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
     })
 }
 
+const MANIFEST_WAL_EPOCH_KEY: &str = "manifest_wal_epoch";
+const MANIFEST_WAL_MAX_TS_KEY: &str = "manifest_wal_max_ts";
+
+fn set_manifest_wal_replay_cutoff(config: &mut HashMap<String, u64>, wal: &Wal) {
+    config.insert(MANIFEST_WAL_EPOCH_KEY.to_string(), wal.truncation_epoch());
+    if let Some(max_ts) = wal.max_timestamp() {
+        config.insert(MANIFEST_WAL_MAX_TS_KEY.to_string(), max_ts);
+    } else {
+        config.remove(MANIFEST_WAL_MAX_TS_KEY);
+    }
+}
+
 // Note: DatabaseState removed in Phase 5 - state now managed by RecordStore at VectorStore level.
 // OmenFile is pure I/O: WAL append + checkpoint_from_snapshot.
 
@@ -1477,6 +1489,7 @@ impl OmenFile {
         ] {
             manifest.config.insert(key.to_string(), val);
         }
+        set_manifest_wal_replay_cutoff(&mut manifest.config, &self.wal);
         // Only mark vec_file if .vecs was actually created
         if self.vec_mmap.is_some() {
             manifest.config.insert("vec_file".to_string(), 1);
@@ -1534,15 +1547,6 @@ impl OmenFile {
         writer.file.sync_all()?;
         drop(temp_file);
 
-        // Write a WAL checkpoint entry BEFORE the atomic rename.
-        // If the process crashes between rename and WAL truncation, recovery loads the
-        // new manifest (not slim, so WAL replay runs). Without this checkpoint entry,
-        // entries_after_checkpoint() would return the stale WAL data entries and
-        // double-apply them (RecordStore::set is not idempotent). With the checkpoint
-        // entry written first, entries_after_checkpoint() returns nothing for that window.
-        self.wal.append(WalEntry::checkpoint(0))?;
-        self.wal.sync()?;
-
         // Close old file handle (releases advisory lock)
         self.file = None;
 
@@ -1570,8 +1574,9 @@ impl OmenFile {
         self.manifest = manifest;
         self.header.count = live_count as u64;
 
-        // Truncate WAL. An empty WAL replays nothing; the pre-rename checkpoint entry
-        // already covers the crash window between rename and truncation.
+        // Truncate WAL after the new manifest is durable. Recovery filters stale same-epoch
+        // WAL entries using the cutoff recorded in the published manifest, so there is no
+        // need for a pre-rename checkpoint marker.
         self.wal.truncate()?;
 
         // Full flush complete — reset accumulated dirty set for the next cycle.
@@ -1743,6 +1748,7 @@ impl OmenFile {
         ] {
             manifest.config.insert(key.to_string(), val);
         }
+        set_manifest_wal_replay_cutoff(&mut manifest.config, &self.wal);
 
         // Store MUVERA config in manifest.config
         if let Some(cfg) = options.multivec_config {
@@ -1797,10 +1803,6 @@ impl OmenFile {
         writer.file.sync_all()?;
         drop(temp_file);
 
-        // Write WAL checkpoint BEFORE rename — same crash-safety reason as write_omen_manifest.
-        self.wal.append(WalEntry::checkpoint(0))?;
-        self.wal.sync()?;
-
         // Close old file handle (releases advisory lock)
         self.file = None;
 
@@ -1829,8 +1831,9 @@ impl OmenFile {
         self.manifest = manifest;
         self.header.count = live_count as u64;
 
-        // Truncate WAL. An empty WAL replays nothing; the pre-rename checkpoint entry
-        // already covers the crash window between rename and truncation.
+        // Truncate WAL after the new manifest is durable. Recovery filters stale same-epoch
+        // WAL entries using the cutoff recorded in the published manifest, so there is no
+        // need for a pre-rename checkpoint marker.
         self.wal.truncate()?;
 
         // Full flush complete — reset accumulated dirty set for the next cycle.
@@ -1848,6 +1851,14 @@ impl OmenFile {
     /// Return the WAL truncation epoch for slim snapshot recovery.
     pub fn wal_truncation_epoch(&self) -> u64 {
         self.wal.truncation_epoch()
+    }
+
+    /// Return the replay cutoff recorded in the published manifest for full checkpoints.
+    #[must_use]
+    pub fn manifest_wal_replay_cutoff(&self) -> Option<(u64, Option<u64>)> {
+        let epoch = self.config.get(MANIFEST_WAL_EPOCH_KEY).copied()?;
+        let max_ts = self.config.get(MANIFEST_WAL_MAX_TS_KEY).copied();
+        Some((epoch, max_ts))
     }
 }
 

@@ -410,3 +410,85 @@ fn test_set_writes_to_wal() {
         assert_eq!(store.len(), 1, "Should have 1 vector after WAL replay");
     }
 }
+
+#[test]
+fn test_recovery_skips_stale_wal_after_full_flush_publish() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("stale_wal_after_publish");
+    let wal_path = db_path.with_extension("wal");
+    let wal_meta_path = db_path.with_extension("wal.meta");
+
+    let stale_wal = {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "vec1",
+                Vector::new(vec![1.0, 2.0, 3.0, 4.0]),
+                serde_json::json!({"version": 1}),
+            )
+            .unwrap();
+        let bytes = std::fs::read(&wal_path).unwrap();
+        store.flush().unwrap();
+        bytes
+    };
+
+    std::fs::write(&wal_path, stale_wal).unwrap();
+    let _ = std::fs::remove_file(&wal_meta_path);
+
+    let store = VectorStore::open(&db_path).unwrap();
+    assert_eq!(store.len(), 1);
+    assert_eq!(store.records.slot_count(), 1);
+    assert_eq!(store.records.get_slot("vec1"), Some(0));
+
+    let (vec, meta) = store.get("vec1").unwrap();
+    assert_eq!(vec.data, vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(meta["version"], 1);
+}
+
+#[test]
+fn test_recovery_replays_wal_if_manifest_publish_did_not_happen() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("manifest_publish_recovery");
+    let omen_path = db_path.with_extension("omen");
+    let wal_path = db_path.with_extension("wal");
+    let wal_meta_path = db_path.with_extension("wal.meta");
+
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "base",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "base"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+    }
+
+    let old_manifest = std::fs::read(&omen_path).unwrap();
+
+    let (pending_wal, pending_meta) = {
+        let mut store = VectorStore::open(&db_path).unwrap();
+        store
+            .set(
+                "new_doc",
+                Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "wal"}),
+            )
+            .unwrap();
+        let wal_bytes = std::fs::read(&wal_path).unwrap();
+        let meta_bytes = std::fs::read(&wal_meta_path).unwrap();
+        store.flush().unwrap();
+        (wal_bytes, meta_bytes)
+    };
+
+    std::fs::write(&omen_path, old_manifest).unwrap();
+    std::fs::write(&wal_path, pending_wal).unwrap();
+    std::fs::write(&wal_meta_path, pending_meta).unwrap();
+
+    let store = VectorStore::open(&db_path).unwrap();
+    assert_eq!(store.len(), 2);
+    assert!(store.get("base").is_some());
+    assert!(store.get("new_doc").is_some());
+    assert!(store.records.get_slot("new_doc").is_some());
+}
