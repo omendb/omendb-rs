@@ -254,7 +254,7 @@ impl WalEntry {
     }
 }
 
-/// WAL metadata for O(1) open (stored in .wal.meta file)
+/// WAL sidecar metadata (stored in `.wal.meta`)
 ///
 /// 32 bytes: [checkpoint_offset: u64] [max_timestamp: u64] [entry_count: u64] [truncation_epoch: u64]
 ///
@@ -263,6 +263,10 @@ impl WalEntry {
 /// greater than the snapshot's epoch, the WAL was truncated after the snapshot was taken,
 /// meaning all current WAL entries are new and must be replayed. If epochs match, the WAL
 /// was not truncated after the snapshot and its entries are already incorporated — skip replay.
+///
+/// Only `truncation_epoch` is authoritative across restarts. `max_timestamp` and
+/// `entry_count` are rebuilt from the WAL body on open so restart behavior does not depend
+/// on syncing a second metadata file on every append.
 const WAL_META_SIZE: usize = 32;
 /// Legacy 3-field format: [checkpoint_offset: u64] [max_timestamp: u64] [entry_count: u64]
 const WAL_META_SIZE_V1: usize = 24;
@@ -347,14 +351,13 @@ impl Wal {
         };
 
         if file_len > 0 {
-            // Try O(1) open via meta file, fall back to full scan
-            if let Some((_cp_offset, max_ts, count, epoch)) = read_wal_meta(&meta_path(&wal.path)) {
-                wal.next_timestamp = max_ts + 1;
-                wal.entry_count = count;
+            if let Some((_cp_offset, _max_ts, _count, epoch)) = read_wal_meta(&meta_path(&wal.path))
+            {
                 wal.truncation_epoch = epoch;
-            } else {
-                wal.scan_for_timestamp()?;
             }
+            // Rebuild max timestamp and entry count from the WAL body so restart behavior
+            // does not depend on how recently `.wal.meta` was refreshed.
+            wal.scan_for_timestamp()?;
         }
 
         Ok(wal)
@@ -426,10 +429,10 @@ impl Wal {
 
     /// Flush WAL to disk
     ///
-    /// Only fsyncs the WAL data file. `.wal.meta` is written on truncation/checkpoint
-    /// only — not on every sync — to avoid a second fsync per write. Stale meta is safe:
-    /// timestamps are session-scoped (see truncate()), entry_count stale only delays
-    /// auto-checkpoint slightly, and truncation_epoch is always correct after truncate().
+    /// Only fsyncs the WAL data file. `.wal.meta` is refreshed on truncation/checkpoint
+    /// only — not on every sync — to avoid a second fsync per write. Restarted WAL state
+    /// rebuilds max timestamp and entry count from the WAL body; the sidecar is used for
+    /// truncation epoch only.
     pub fn sync(&mut self) -> io::Result<()> {
         self.file.sync_all()
     }
@@ -877,6 +880,33 @@ mod tests {
                 entries.len() <= 2,
                 "Should have at most 2 entries after skipping corrupted ones"
             );
+        }
+    }
+
+    #[test]
+    fn test_wal_reopen_recovers_entry_count_and_timestamps() {
+        let dir = tempdir().unwrap();
+        let wal_path = dir.path().join("test_reopen_counts.wal");
+
+        {
+            let mut wal = Wal::open(&wal_path).unwrap();
+            wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
+                .unwrap();
+            wal.append(WalEntry::delete_node(0, "vec1")).unwrap();
+            wal.sync().unwrap();
+            assert_eq!(wal.len(), 2);
+            assert_eq!(wal.max_timestamp(), Some(1));
+        }
+
+        {
+            let mut wal = Wal::open(&wal_path).unwrap();
+            assert_eq!(wal.len(), 2);
+            assert_eq!(wal.max_timestamp(), Some(1));
+
+            wal.append(WalEntry::insert_node(0, "vec2", 1, &[4.0, 5.0, 6.0], b"{}"))
+                .unwrap();
+            assert_eq!(wal.len(), 3);
+            assert_eq!(wal.max_timestamp(), Some(2));
         }
     }
 }
