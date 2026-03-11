@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """OmenDB Performance Benchmark
 
-Uses real SIFT embeddings for all benchmarks. Skips scales with no dataset.
+Standard benchmarks use real SIFT embeddings when available. Exploratory multi-dimension
+and synthetic sweeps stay explicitly labeled so history comparisons cannot mix them
+with authoritative SIFT baselines.
 
 Usage:
     python benchmark.py              # SIFT-100K benchmark (100K, 128D)
     python benchmark.py --publish    # 5 runs, median ± IQR (publishable numbers)
     python benchmark.py --vectors 1000000  # SIFT-1M benchmark
-    python benchmark.py --full       # Multi-dimension (random vectors)
+    python benchmark.py --full       # Exploratory multi-dimension/synthetic sweep
     python benchmark.py --scale      # Scale tests (SIFT data only, skips missing sizes)
     python benchmark.py --append history.json  # Append results to history file
 """
@@ -33,6 +35,7 @@ SIFT_DATASETS: dict[int, str] = {
     100_000: "sift-100k.npz",
     1_000_000: "sift-1m.npz",
 }
+SYNTHETIC_DATASET = "synthetic-random"
 
 
 def load_sift(n_vectors: int) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
@@ -45,6 +48,16 @@ def load_sift(n_vectors: int) -> tuple[np.ndarray, np.ndarray, np.ndarray] | Non
         return None
     data = np.load(path)
     return data["vectors"], data["queries"], data["ground_truth"]
+
+
+def dataset_name_for_run(n_vectors: int, sift_data: object | None) -> tuple[str, str]:
+    """Return (dataset_name, dataset_family) for benchmark result metadata."""
+    if sift_data is None:
+        return SYNTHETIC_DATASET, "synthetic"
+
+    filename = SIFT_DATASETS.get(n_vectors)
+    dataset_name = Path(filename).stem if filename else "sift"
+    return dataset_name, "sift"
 
 
 def get_benchmark_metadata() -> dict:
@@ -351,10 +364,12 @@ def run_benchmark(
 ):
     """Run full benchmark suite for given parameters."""
     mode = f"SQ{quantize_bits}" if quantize_bits > 0 else "f32"
-    dataset = "SIFT" if sift_data else "random"
+    dataset_name, dataset_family = dataset_name_for_run(n_vectors, sift_data)
     if verbose:
         print(f"\n{'=' * 60}")
-        print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode}, {dataset})")
+        print(
+            f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode}, {dataset_name})"
+        )
         print(f"{'=' * 60}")
 
     if sift_data:
@@ -406,6 +421,8 @@ def run_benchmark(
             "dimensions": dim,
             "n_queries": n_queries,
             "quantize_bits": quantize_bits,
+            "dataset": dataset_name,
+            "dataset_family": dataset_family,
         },
         "build": {k: v for k, v in build.items() if k != "db"},
         "search": search,
@@ -523,17 +540,32 @@ def check_regressions(results: list, history_path: Path) -> bool:
     # Get previous entry (before the one we just added)
     prev = history[-2]
 
-    # Build lookup of previous results by config
+    # Build lookup of previous results by config. Results are only comparable when
+    # vector count, dimensions, quantization mode, and dataset identity all match.
     prev_by_config = {}
     for r in prev.get("results", []):
         cfg = r.get("config", {})
-        key = (cfg.get("n_vectors"), cfg.get("dimensions"))
+        key = (
+            cfg.get("n_vectors"),
+            cfg.get("dimensions"),
+            cfg.get("n_queries"),
+            cfg.get("quantize_bits"),
+            cfg.get("dataset_family"),
+            cfg.get("dataset"),
+        )
         prev_by_config[key] = r
 
     regressions = []
     for r in results:
         cfg = r.get("config", {})
-        key = (cfg.get("n_vectors"), cfg.get("dimensions"))
+        key = (
+            cfg.get("n_vectors"),
+            cfg.get("dimensions"),
+            cfg.get("n_queries"),
+            cfg.get("quantize_bits"),
+            cfg.get("dataset_family"),
+            cfg.get("dataset"),
+        )
 
         prev_r = prev_by_config.get(key)
         if not prev_r:
@@ -547,7 +579,7 @@ def check_regressions(results: list, history_path: Path) -> bool:
             pre = prev_recall.get("recall_at_k", 0)
             if pre > 0 and cur < pre * 0.95:
                 regressions.append(
-                    f"  Recall@10 regression at {key[0]:,}/{key[1]}D: {pre:.1%} → {cur:.1%} ({(cur - pre) / pre:+.1%})"
+                    f"  Recall@10 regression at {key[0]:,}/{key[1]}D/{key[5]} ({key[2]} queries): {pre:.1%} → {cur:.1%} ({(cur - pre) / pre:+.1%})"
                 )
 
         # Check search QPS regression (>20% drop is significant)
@@ -558,7 +590,7 @@ def check_regressions(results: list, history_path: Path) -> bool:
             pre_qps = prev_search.get("qps", 0)
             if pre_qps > 0 and cur_qps < pre_qps * 0.80:
                 regressions.append(
-                    f"  Search QPS regression at {key[0]:,}/{key[1]}D: {pre_qps:,.0f} → {cur_qps:,.0f} ({(cur_qps - pre_qps) / pre_qps:+.0%})"
+                    f"  Search QPS regression at {key[0]:,}/{key[1]}D/{key[5]} ({key[2]} queries): {pre_qps:,.0f} → {cur_qps:,.0f} ({(cur_qps - pre_qps) / pre_qps:+.0%})"
                 )
 
         # Check build throughput regression (>20% drop is significant)
@@ -569,7 +601,7 @@ def check_regressions(results: list, history_path: Path) -> bool:
             pre_vps = prev_build.get("vec_per_s", 0)
             if pre_vps > 0 and cur_vps < pre_vps * 0.80:
                 regressions.append(
-                    f"  Build regression at {key[0]:,}/{key[1]}D: {pre_vps:,.0f} → {cur_vps:,.0f} ({(cur_vps - pre_vps) / pre_vps:+.0%})"
+                    f"  Build regression at {key[0]:,}/{key[1]}D/{key[5]} ({key[2]} queries): {pre_vps:,.0f} → {cur_vps:,.0f} ({(cur_vps - pre_vps) / pre_vps:+.0%})"
                 )
 
     if regressions:
@@ -643,7 +675,11 @@ def _median_result(runs_results: list[dict]) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="OmenDB Performance Benchmark")
-    parser.add_argument("--full", action="store_true", help="Run full benchmark suite")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Run exploratory multi-dimension benchmark suite (synthetic vectors)",
+    )
     parser.add_argument(
         "--scale", action="store_true", help="Run scale tests (10K, 50K, 100K at 128D)"
     )
@@ -706,6 +742,10 @@ def main():
             result = run_benchmark(n, 128, sift_data=sift_data)
             all_results.append(result)
     elif args.full:
+        print("\n" + "=" * 60)
+        print("Exploratory Full Sweep (synthetic vectors)")
+        print("=" * 60)
+
         # Multiple dimensions
         for dim in [128, 384, 768, 1536]:
             result = run_benchmark(10000, dim)
@@ -713,7 +753,7 @@ def main():
 
         # Multiple scales at 768D
         print("\n" + "=" * 60)
-        print("Scale Test (768D)")
+        print("Scale Test (768D, synthetic vectors)")
         print("=" * 60)
         for n in [10000, 50000, 100000]:
             result = run_benchmark(n, 768)

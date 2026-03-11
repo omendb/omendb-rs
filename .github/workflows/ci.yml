@@ -90,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -147,7 +147,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -185,36 +185,72 @@ jobs:
         working-directory: python
         run: uv run pytest tests/ -x --timeout=60 -m "not slow and not soak"
 
+  durability:
+    name: Test (Durability)
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync
+
+      - name: Build
+        working-directory: python
+        run: uv run maturin develop --release
+
+      - name: Crash recovery tests
+        working-directory: python
+        run: uv run pytest tests/test_crash_recovery.py -x --timeout=120
+        timeout-minutes: 20
+
   # ==========================================================================
   # Stage 2: Node.js bindings (parallel with Rust tests)
   # ==========================================================================
 
   node:
     name: Test (Node.js)
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: [fmt, clippy]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
 
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_NIGHTLY }}
 
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: oven-sh/setup-bun@v2
+
       - name: Install dependencies
         working-directory: node
-        run: npm install
+        run: bun install --frozen-lockfile
 
       - name: Build
         working-directory: node
-        run: npm run build
+        run: bun run build
 
       - name: Test
         working-directory: node
-        run: npm test
+        run: bun test
 
   examples:
     name: Examples

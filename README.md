@@ -319,7 +319,8 @@ Batch search uses Rayon for parallel execution across all cores. Scales to 1M+ v
 - **Parameters**: M=16, ef_construction=100, ef_search=100, k=10
 - **Batch**: parallel via Rayon
 - **Recall**: validated against brute-force ground truth
-- **Reproduce**: `cd python && uv run python benchmark.py`
+- **Reproduce**: `cd python && uv run python benchmark.py` (authoritative SIFT path)
+- **Synthetic sweeps**: `uv run python benchmark.py --full` is exploratory and not comparable to SIFT history
 
 </details>
 
