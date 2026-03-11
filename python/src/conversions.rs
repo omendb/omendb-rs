@@ -239,7 +239,14 @@ pub(crate) fn call_embedding_fn(
 pub(crate) fn convert_error(err: anyhow::Error) -> PyErr {
     let msg = err.to_string();
     // Map to appropriate Python exception types
-    if msg.contains("dimension") || msg.contains("not found") || msg.contains("does not exist") {
+    if msg.contains("dimension")
+        || msg.contains("not found")
+        || msg.contains("does not exist")
+        || msg.contains("k=0")
+        || msg.contains("Requirement: k > 0")
+        || msg.contains("zero vector")
+        || msg.contains("NaN or Infinity")
+    {
         PyValueError::new_err(msg)
     } else {
         pyo3::exceptions::PyRuntimeError::new_err(msg)

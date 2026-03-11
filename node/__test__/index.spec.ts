@@ -165,6 +165,15 @@ describe("VectorDatabase", () => {
 				expect(results.every((r) => r.distance <= 0.1)).toBe(true);
 			});
 
+			it("should reject cosine zero-vector queries", async () => {
+				const cosineDb = open(":memory:", { dimensions: 3, metric: "cosine" });
+				await cosineDb.set([{ id: "doc", vector: [1, 0, 0] }]);
+
+				await expect(cosineDb.search([0, 0, 0], 1)).rejects.toThrow(
+					/zero vector/i,
+				);
+			});
+
 			it("should filter with $not operator", async () => {
 				await db.set([
 					{ id: "a1", vector: Array(128).fill(0.3), metadata: { type: "A" } },

@@ -123,7 +123,12 @@ pub(crate) fn parse_quantization(value: &serde_json::Value) -> Result<bool> {
 /// Convert Rust error to napi Error with appropriate status
 pub(crate) fn convert_error(err: anyhow::Error) -> Error {
     let msg = err.to_string();
-    if msg.contains("dimension") {
+    if msg.contains("dimension")
+        || msg.contains("k=0")
+        || msg.contains("Requirement: k > 0")
+        || msg.contains("zero vector")
+        || msg.contains("NaN or Infinity")
+    {
         Error::new(Status::InvalidArg, msg)
     } else {
         Error::new(Status::GenericFailure, msg)

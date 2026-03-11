@@ -2,6 +2,10 @@
 //!
 //! These functions have no VectorStore dependency and can be tested in isolation.
 
+use crate::distance::norm_squared;
+use crate::omen::Metric;
+use crate::vector::types::Vector;
+use anyhow::{bail, Result};
 use serde_json::Value as JsonValue;
 
 /// Compute effective ef_search value.
@@ -10,6 +14,36 @@ use serde_json::Value as JsonValue;
 #[inline]
 pub(crate) fn compute_effective_ef(ef: Option<usize>, stored_ef: usize, k: usize) -> usize {
     ef.unwrap_or(stored_ef).max(k)
+}
+
+/// Validate a public dense-search query before dispatching to brute-force or HNSW.
+pub(crate) fn validate_search_query(
+    metric: Metric,
+    query: &Vector,
+    expected_dim: usize,
+    k: usize,
+) -> Result<()> {
+    if k == 0 {
+        bail!("Invalid search parameters: k=0. Requirement: k > 0");
+    }
+
+    if query.dim() != expected_dim {
+        bail!(
+            "Query dimension mismatch: expected {}, got {}",
+            expected_dim,
+            query.dim()
+        );
+    }
+
+    if query.data.iter().any(|x| !x.is_finite()) {
+        bail!("Query vector contains invalid values (NaN or Infinity)");
+    }
+
+    if matches!(metric, Metric::Cosine) && norm_squared(&query.data) == 0.0 {
+        bail!("Cannot search cosine index with zero vector query");
+    }
+
+    Ok(())
 }
 
 /// Convert stored quantization mode ID to bool.

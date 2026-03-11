@@ -114,6 +114,20 @@ fn test_hnsw_index_search_infinity_rejected() {
 }
 
 #[test]
+fn test_hnsw_index_cosine_zero_query_rejected() {
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(3, params, Metric::Cosine, false).unwrap();
+
+    index.insert(&[1.0, 0.0, 0.0]).unwrap();
+
+    let result = index.search(&[0.0, 0.0, 0.0], 1, 100);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(matches!(err, HNSWError::InvalidParams(_)));
+    assert!(err.to_string().contains("non-zero norm"));
+}
+
+#[test]
 fn test_hnsw_index_search_invalid_params_ef_less_than_k() {
     let params = HNSWParams::default();
     let mut index = HNSWIndex::new(3, params, Metric::L2, false).unwrap();

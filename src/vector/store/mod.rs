@@ -367,13 +367,7 @@ impl VectorStore {
         k: usize,
         ef: usize,
     ) -> Result<Vec<(usize, f32)>> {
-        if query.dim() != self.dimensions() {
-            anyhow::bail!(
-                "Query dimension mismatch: expected {}, got {}",
-                self.dimensions(),
-                query.dim()
-            );
-        }
+        helpers::validate_search_query(self.distance_metric, query, self.dimensions(), k)?;
 
         let (search_k, needs_rescore) = if self.rescore && self.pending_quantization {
             let oversampled = (k as f32 * self.oversample).ceil() as usize;
@@ -425,6 +419,7 @@ impl VectorStore {
         filter: &MetadataFilter,
         ef: Option<usize>,
     ) -> Result<Vec<SearchResult>> {
+        helpers::validate_search_query(self.distance_metric, query, self.dimensions(), k)?;
         let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
 
         search::knn_search_filtered_core(
@@ -534,13 +529,7 @@ impl VectorStore {
         query: &Vector,
         k: usize,
     ) -> Result<Vec<(usize, f32)>> {
-        if query.dim() != self.dimensions() {
-            anyhow::bail!(
-                "Query dimension mismatch: expected {}, got {}",
-                self.dimensions(),
-                query.dim()
-            );
-        }
+        helpers::validate_search_query(self.distance_metric, query, self.dimensions(), k)?;
 
         Ok(search::brute_force_search(
             &self.records,

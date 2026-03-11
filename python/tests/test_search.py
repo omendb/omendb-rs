@@ -344,6 +344,36 @@ def test_search_max_distance_cosine_metric(temp_db_path):
     gc.collect()
 
 
+def test_search_cosine_zero_query_rejected(temp_db_path):
+    import gc
+
+    import omendb
+
+    db = omendb.open(temp_db_path, dimensions=3, metric="cosine")
+    db.set([{"id": "doc", "vector": [1.0, 0.0, 0.0], "metadata": {}}])
+
+    with pytest.raises(ValueError, match="zero vector"):
+        db.search([0.0, 0.0, 0.0], k=1)
+
+    del db
+    gc.collect()
+
+
+def test_search_nan_query_rejected(temp_db_path):
+    import gc
+
+    import omendb
+
+    db = omendb.open(temp_db_path, dimensions=3)
+    db.set([{"id": "doc", "vector": [1.0, 0.0, 0.0], "metadata": {}}])
+
+    with pytest.raises(ValueError, match="NaN or Infinity"):
+        db.search([1.0, float("nan"), 0.0], k=1)
+
+    del db
+    gc.collect()
+
+
 def test_search_max_distance_dot_metric(temp_db_path):
     """Test max_distance with dot product (inner product) metric"""
     import gc

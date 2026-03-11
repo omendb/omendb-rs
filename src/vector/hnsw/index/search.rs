@@ -388,7 +388,7 @@ impl HNSWIndex {
         })
     }
 
-    /// Validate search parameters (k, ef, query dimensions, NaN/Inf)
+    /// Validate search parameters (k, ef, query dimensions, finite values, cosine query norm)
     ///
     /// Returns `SearchValidation::Empty` if index is empty (caller should return empty results).
     /// Returns `SearchValidation::Continue` if validation passes and search should proceed.
@@ -423,6 +423,15 @@ impl HNSWIndex {
         if query.iter().any(|x| !x.is_finite()) {
             error!("Invalid query vector: contains NaN or Inf values");
             return Err(HNSWError::InvalidVector);
+        }
+
+        if matches!(self.distance_fn, crate::vector::hnsw::types::Metric::Cosine)
+            && dot_product(query, query) == 0.0
+        {
+            error!("Invalid cosine query vector: zero norm");
+            return Err(HNSWError::InvalidParams(
+                "Cosine query vector must have non-zero norm".to_string(),
+            ));
         }
 
         // Check both empty storage AND no entry point (all nodes deleted)

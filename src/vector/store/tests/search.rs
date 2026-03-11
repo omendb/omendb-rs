@@ -83,3 +83,67 @@ fn test_search_with_filter() {
         assert_eq!(result.metadata.get("author").unwrap(), "Alice");
     }
 }
+
+#[test]
+fn test_vector_store_cosine_zero_query_rejected_in_brute_force_path() {
+    let mut store = VectorStore::new_with_params(3, 16, 100, 100, Metric::Cosine);
+    store
+        .records
+        .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
+        .unwrap();
+
+    let err = store
+        .search(&Vector::new(vec![0.0, 0.0, 0.0]), 1, None)
+        .unwrap_err();
+
+    assert!(err.to_string().contains("zero vector"));
+}
+
+#[test]
+fn test_vector_store_search_with_options_rejects_non_finite_query() {
+    let mut store = VectorStore::new(3);
+    store
+        .records
+        .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
+        .unwrap();
+
+    let err = store
+        .search_with_options(&Vector::new(vec![1.0, f32::NAN, 0.0]), 1, None, None, None)
+        .unwrap_err();
+
+    assert!(err.to_string().contains("NaN or Infinity"));
+}
+
+#[test]
+fn test_vector_store_search_batch_reports_invalid_query() {
+    let mut store = VectorStore::new_with_params(3, 16, 100, 100, Metric::Cosine);
+    store
+        .records
+        .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
+        .unwrap();
+
+    let queries = vec![Vector::new(vec![0.0, 0.0, 0.0])];
+    let results = store.search_batch(&queries, 1, None);
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0]
+        .as_ref()
+        .unwrap_err()
+        .to_string()
+        .contains("zero vector"));
+}
+
+#[test]
+fn test_vector_store_search_rejects_k_zero_without_segments() {
+    let mut store = VectorStore::new(3);
+    store
+        .records
+        .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
+        .unwrap();
+
+    let err = store
+        .search(&Vector::new(vec![1.0, 0.0, 0.0]), 0, None)
+        .unwrap_err();
+
+    assert!(err.to_string().contains("k=0"));
+}
