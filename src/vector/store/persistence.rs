@@ -776,6 +776,10 @@ impl VectorStore {
             .as_ref()
             .is_some_and(|index| !index.is_empty())
             || self
+                .multivec_storage
+                .as_ref()
+                .is_some_and(|storage| !storage.is_empty())
+            || self
                 .edge_store
                 .as_ref()
                 .is_some_and(|store| store.edge_count() > 0);
@@ -783,8 +787,9 @@ impl VectorStore {
         if has_vec {
             if requires_full_checkpoint {
                 // The fast checkpoint path persists only dense slots + the slim `.records`
-                // snapshot. Sparse and edge state is durable only via the full manifest path,
-                // so truncating the WAL here would otherwise drop that state on reopen.
+                // snapshot. Sparse postings, multivec token payloads, and edge state are
+                // durable only via the full manifest path, so truncating the WAL here would
+                // otherwise drop that state on reopen.
                 return self.flush_internal(false);
             }
 

@@ -918,6 +918,60 @@ mod persistence_tests {
     }
 
     #[test]
+    fn test_multivec_checkpoint_wal_preserves_token_storage() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_multivec_checkpoint_wal.omen");
+
+        {
+            let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
+            store = store.persist(&path).unwrap();
+
+            store
+                .store(
+                    "base",
+                    vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]],
+                    serde_json::json!({"phase": "base"}),
+                )
+                .unwrap();
+            store.flush().unwrap();
+
+            store
+                .store(
+                    "post_ckpt",
+                    vec![vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]],
+                    serde_json::json!({"phase": "post"}),
+                )
+                .unwrap();
+
+            let query = vec![vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
+            let query_refs: Vec<&[f32]> = query.iter().map(|v| v.as_slice()).collect();
+
+            let before = store.search_multi(&query_refs, 2).unwrap();
+            assert_eq!(before.len(), 2);
+            assert_eq!(before[0].id, "post_ckpt");
+
+            store.checkpoint_wal().unwrap();
+        }
+
+        {
+            let store = VectorStore::open(&path).unwrap();
+            assert!(store.is_multi_vector());
+            assert_eq!(store.len(), 2);
+
+            let query = vec![vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
+            let query_refs: Vec<&[f32]> = query.iter().map(|v| v.as_slice()).collect();
+
+            let approx = store.search_multi_approx(&query_refs, 2).unwrap();
+            assert_eq!(approx.len(), 2);
+            assert_eq!(approx[0].id, "post_ckpt");
+
+            let reranked = store.search_multi(&query_refs, 2).unwrap();
+            assert_eq!(reranked.len(), 2);
+            assert_eq!(reranked[0].id, "post_ckpt");
+        }
+    }
+
+    #[test]
     fn test_multivec_config_persisted_correctly() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test_config.omen");
