@@ -301,26 +301,29 @@ results = mvdb.search([[0.1]*128, [0.15]*128], k=5)  # MaxSim scoring
 
 ## Performance
 
-SIFT-100K · 128D · M=16 · ef_construction=100 · ef_search=100 · k=10 · Apple M3 Max
+Authoritative baseline: SIFT-100K · 128D · M=16 · ef_construction=100 · ef_search=100 · k=10 · Fedora i9-13900KF (5-run median)
 
 | Mode | Build      | Single     | Batch      | Recall@10 |
 | ---- | ---------- | ---------- | ---------- | --------- |
-| fp32 | 59,789 v/s | 7,644 QPS  | 64,570 QPS | 99.8%     |
-| SQ8  | 59,905 v/s | 15,403 QPS | 95,442 QPS | 99.8%     |
+| fp32 | 24,881 v/s | 2,324 QPS  | 39,905 QPS | 99.8%     |
+| SQ8  | pending refreshed Linux run | pending | pending | pending |
 
 Batch search uses Rayon for parallel execution across all cores. Scales to 1M+ vectors.
+Apple Silicon runs are still useful for local reference, but Fedora/Linux medians are the authoritative comparison baseline.
 
 **Filtered search** (ACORN-1, 10% selectivity): predicate-aware graph traversal, no post-filter overhead.
 
 <details>
-<summary>Benchmark methodology</summary>
+<summary>Benchmark methodology and reference runs</summary>
 
 - **Dataset**: SIFT-100K (real 128D embeddings, not random vectors)
 - **Parameters**: M=16, ef_construction=100, ef_search=100, k=10
 - **Batch**: parallel via Rayon
 - **Recall**: validated against brute-force ground truth
-- **Reproduce**: `cd python && uv run python benchmark.py` (authoritative SIFT path)
+- **Authoritative runs**: Fedora/Linux medians from `cd python && uv run python benchmark.py --publish`
+- **Local reproduction**: `cd python && uv run python benchmark.py`
 - **Synthetic sweeps**: `uv run python benchmark.py --full` is exploratory and not comparable to SIFT history
+- **Current Apple M3 Max reference**: fp32 `59,789 v/s`, `7,644 QPS`, `64,570 QPS`, `99.8%`; SQ8 `59,905 v/s`, `15,403 QPS`, `95,442 QPS`, `99.8%`
 
 </details>
 

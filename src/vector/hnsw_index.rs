@@ -63,6 +63,8 @@ pub enum HNSWQuantization {
 ///     .ef_construction(100)
 ///     .metric(Metric::Cosine)
 ///     .quantization(HNSWQuantization::SQ8)
+///     // Optional: faster SQ8 builds at some graph-quality cost.
+///     .quantized_construction(true)
 ///     .build()?;
 /// ```
 #[derive(Debug, Clone)]

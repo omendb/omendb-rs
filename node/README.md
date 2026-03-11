@@ -374,13 +374,16 @@ const merged = db.mergeFrom(otherDb);
 
 ## Performance
 
-**10K vectors, 128D, M=16, ef=100. Measured 2026-01-20 (Apple M3 Max):**
+Node bindings call the same Rust core as the Rust and Python APIs, so authoritative ANN numbers are tracked at the repo root with the shared SIFT benchmark on Fedora/Linux medians.
 
-| Metric     | Value        |
-| ---------- | ------------ |
-| Search QPS | 11,542       |
-| Build      | 30,826 vec/s |
-| Recall@10  | 89.7%        |
+Use the shared benchmark for comparable performance claims:
+
+```bash
+cd python && uv run python benchmark.py
+cd python && uv run python benchmark.py --publish
+```
+
+Older Apple M3 Max wrapper numbers were local reference points only and are no longer treated as the authoritative baseline.
 
 ## License
 
