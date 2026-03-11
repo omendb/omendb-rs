@@ -249,7 +249,7 @@ class VectorDatabase:
             max_distance: Maximum distance threshold (single-vector stores only).
             rerank: Enable MaxSim reranking (multi-vector stores only, default: True).
             rerank_factor: Fetch k*rerank_factor candidates before reranking
-                          (multi-vector stores only, default: 32).
+                          (multi-vector stores only, default: 20).
 
         Returns:
             List of results with id, distance, score, metadata.
@@ -815,7 +815,6 @@ def open(
             - True: Enable with default config (repetitions=8, partition_bits=4)
             - MultiVectorConfig: Custom config dict
             - None/False: Disabled (default, single-vector mode)
-            Note: Multi-vector stores only support in-memory mode (:memory:).
         config: Advanced config dict (deprecated).
         embedding_fn: Optional callable that embeds text to vectors.
             Signature: (texts: list[str]) -> list[list[float]] or 2D numpy array.

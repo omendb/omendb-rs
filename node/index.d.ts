@@ -347,7 +347,7 @@ export declare class VectorDatabase {
    * @param query - Query tokens (number[][] or Float32Array[])
    * @param k - Number of results to return
    * @param rerank - Enable MaxSim reranking for better quality (default: true)
-   * @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 32)
+   * @param rerankFactor - Fetch k*rerankFactor candidates before reranking (default: 20)
    * @returns Array of {id, distance, metadata}
    */
   searchMulti(query: Array<Array<number>> | Array<Float32Array>, k: number, rerank?: boolean | undefined | null, rerankFactor?: number | undefined | null): Array<SearchResult>
@@ -538,12 +538,13 @@ export interface OpenOptions {
   metric?: string
   /**
    * Enable multi-vector mode for ColBERT-style retrieval
-   * - true: Enable with default config (repetitions=8, partition_bits=4, dProj=16)
-   * - { repetitions?, partitionBits?, seed?, dProj? }: Custom config
+   * - true: Enable with default config (repetitions=8, partitionBits=4, dProj=16)
+   * - { repetitions?, partitionBits?, seed?, dProj?, poolFactor? }: Custom config
    * - dProj: Dimension projection (16 = 8x smaller FDE, null = full token dim)
+   * - poolFactor: Optional token pooling ratio (2 halves stored tokens)
    * - false/null: Disabled (default, single-vector mode)
    */
-  multiVector?: boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null } | null | undefined
+  multiVector?: boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null; poolFactor?: number | null } | null | undefined
   /** SQ8 refiner: rescore with full precision (default: true when quantized) */
   rescore?: boolean
   /** Candidate multiplier for rescoring (default: 3.0) */
