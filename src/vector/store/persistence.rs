@@ -60,9 +60,6 @@ impl VectorStore {
             OmenFile::create(path, 0)?
         };
 
-        // Load persisted snapshot (checkpoint data only, not WAL)
-        let mut snapshot = storage.load_persisted_snapshot()?;
-
         // Load slim records snapshot if it was written more recently than the manifest.
         // This happens when auto-checkpoint ran after the last flush(). The snapshot captures
         // full id_to_slot/metadata state, and dirty_since_flush drives partial segment rebuild.
@@ -73,28 +70,37 @@ impl VectorStore {
         //   WAL epoch > snapshot epoch → WAL was truncated after snapshot, entries are new → replay
         //   WAL epoch == snapshot epoch → WAL not truncated after snapshot, entries stale → skip
         let mut slim_wal_epoch: u64 = 0;
+        let mut slim_live_slots = RoaringBitmap::new();
+        let mut slim_snapshot = None;
         let manifest_wal_cutoff = storage.manifest_wal_replay_cutoff();
         if storage.records_newer_than_omen() {
             match storage.load_records_snapshot() {
                 Ok(Some(slim)) => {
-                    tracing::info!(
-                        records = slim.id_to_slot.len(),
-                        dirty_slots = slim.dirty_since_flush.len(),
-                        wal_epoch = slim.wal_truncation_epoch,
-                        "Loaded slim records snapshot for recovery"
-                    );
-                    slim_wal_epoch = slim.wal_truncation_epoch;
-                    slim_dirty_slots = slim.dirty_since_flush.into_iter().collect();
-                    snapshot.id_to_slot = slim.id_to_slot;
-                    snapshot.deleted = slim.deleted;
-                    snapshot.metadata = slim.metadata;
-                    slim_snapshot_loaded = true;
+                    slim_live_slots = slim.id_to_slot.values().copied().collect();
+                    slim_snapshot = Some(slim);
                 }
                 Ok(None) => {}
                 Err(e) => {
                     tracing::warn!("Failed to load slim records snapshot, using manifest: {e}");
                 }
             }
+        }
+        let mut snapshot = storage.load_persisted_snapshot_with_live_slots(
+            (!slim_live_slots.is_empty()).then_some(&slim_live_slots),
+        )?;
+        if let Some(slim) = slim_snapshot {
+            tracing::info!(
+                records = slim.id_to_slot.len(),
+                dirty_slots = slim.dirty_since_flush.len(),
+                wal_epoch = slim.wal_truncation_epoch,
+                "Loaded slim records snapshot for recovery"
+            );
+            slim_wal_epoch = slim.wal_truncation_epoch;
+            slim_dirty_slots = slim.dirty_since_flush.into_iter().collect();
+            snapshot.id_to_slot = slim.id_to_slot;
+            snapshot.deleted = slim.deleted;
+            snapshot.metadata = slim.metadata;
+            slim_snapshot_loaded = true;
         }
 
         let mut dimensions = snapshot.dimensions as usize;

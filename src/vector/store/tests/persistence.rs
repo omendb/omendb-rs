@@ -1,5 +1,6 @@
 use super::super::*;
 use super::random_vector;
+use crate::vector::sparse::SparseVector;
 
 #[test]
 fn test_open_new_database() {
@@ -491,4 +492,72 @@ fn test_recovery_replays_wal_if_manifest_publish_did_not_happen() {
     assert!(store.get("base").is_some());
     assert!(store.get("new_doc").is_some());
     assert!(store.records.get_slot("new_doc").is_some());
+}
+
+#[test]
+fn test_vector_only_checkpoint_recovers_legitimate_zero_vector() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("zero_vector_recovery");
+
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "base",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "base"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+
+        store
+            .set(
+                "zero",
+                Vector::new(vec![0.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "zero"}),
+            )
+            .unwrap();
+        store.checkpoint_wal().unwrap();
+    }
+
+    let store = VectorStore::open(&db_path).unwrap();
+    assert_eq!(store.len(), 2);
+
+    let (vector, metadata) = store.get("zero").unwrap();
+    assert_eq!(vector.data, vec![0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(metadata["phase"], "zero");
+}
+
+#[test]
+fn test_vector_only_checkpoint_recovers_sparse_placeholder() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("sparse_placeholder_recovery");
+
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "base",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "base"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+
+        store
+            .set_sparse(
+                "sparse_doc",
+                SparseVector::from_pairs(vec![(42, 1.5), (99, 0.5)]).unwrap(),
+                serde_json::json!({"phase": "sparse"}),
+            )
+            .unwrap();
+        store.checkpoint_wal().unwrap();
+    }
+
+    let store = VectorStore::open(&db_path).unwrap();
+    assert!(store.contains("sparse_doc"));
+
+    let (vector, metadata) = store.get("sparse_doc").unwrap();
+    assert_eq!(vector.data, vec![0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(metadata["phase"], "sparse");
 }

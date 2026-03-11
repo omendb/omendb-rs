@@ -707,11 +707,28 @@ impl OmenFile {
     /// Does NOT include WAL entries - caller must replay WAL separately.
     /// This is the Phase 5 API where state is managed externally by RecordStore.
     pub fn load_persisted_snapshot(&self) -> io::Result<OmenSnapshot> {
+        self.load_persisted_snapshot_with_live_slots(None)
+    }
+
+    /// Load the durable snapshot, treating any hinted live slots as authoritative for `.vecs`.
+    ///
+    /// Recovery uses this when a newer slim `.records` snapshot exists: slots introduced after
+    /// the last full manifest flush may legitimately contain all-zero vectors, so the stale
+    /// manifest alone is not enough to decide whether a zero-filled slot is live.
+    pub(crate) fn load_persisted_snapshot_with_live_slots(
+        &self,
+        extra_live_slots: Option<&RoaringBitmap>,
+    ) -> io::Result<OmenSnapshot> {
         let dim = self.header.dimensions as usize;
         let mut snapshot = OmenSnapshot {
             dimensions: self.header.dimensions,
             ..Default::default()
         };
+        let mut known_live_slots: RoaringBitmap =
+            self.manifest.id_to_index.values().copied().collect();
+        if let Some(extra_live_slots) = extra_live_slots {
+            known_live_slots |= extra_live_slots;
+        }
 
         // Load vectors from .vecs mmap (incremental format) or .omen manifest (legacy)
         let has_vec_file = self.manifest.config.get("vec_file").copied().unwrap_or(0) == 1;
@@ -730,13 +747,11 @@ impl OmenFile {
                         let end = start + slot_bytes;
                         if end <= vm.len() {
                             let vec = read_vector_from_bytes(&vm[start..end], dim);
-                            // Check for zero-filled deleted slots
+                            // Zero-filled slots can still be live when a newer slim `.records`
+                            // snapshot exists (for example, legitimate zero vectors or sparse
+                            // placeholders written after the last full manifest flush).
                             if vec.iter().any(|&v| v != 0.0)
-                                || self
-                                    .manifest
-                                    .id_to_index
-                                    .values()
-                                    .any(|&s| s == slot as u32)
+                                || known_live_slots.contains(slot as u32)
                             {
                                 snapshot.vectors[slot] = Some(vec);
                             }
