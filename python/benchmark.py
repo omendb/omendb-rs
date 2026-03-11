@@ -14,6 +14,8 @@ Usage:
     python benchmark.py --append history.json  # Append results to history file
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import platform
