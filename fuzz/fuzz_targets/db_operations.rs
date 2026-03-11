@@ -12,7 +12,7 @@ const DIMENSIONS: usize = 32;
 enum VectorOp {
     Insert { id: String, vector: Vec<f32> },
     Search { vector: Vec<f32>, k: usize },
-    Get { index: usize },
+    Get { id: String },
     Delete { id: String },
     Flush,
     Count,
@@ -41,8 +41,11 @@ impl<'a> Arbitrary<'a> for VectorOp {
                 Ok(VectorOp::Search { vector, k })
             }
             2 => {
-                let index: usize = u.int_in_range(0..=1000)?;
-                Ok(VectorOp::Get { index })
+                let id_len: usize = u.int_in_range(1..=32)?;
+                let id: String = (0..id_len)
+                    .map(|_| u.int_in_range(b'a'..=b'z').unwrap_or(b'a') as char)
+                    .collect();
+                Ok(VectorOp::Get { id })
             }
             3 => {
                 let id_len: usize = u.int_in_range(1..=32)?;
@@ -96,15 +99,15 @@ fuzz_target!(|data: &[u8]| {
             VectorOp::Insert { id, mut vector } => {
                 sanitize_vector(&mut vector);
                 let v = Vector::new(vector);
-                let _ = store.set(id, v, json!({}));
+                let _ = store.set(&id, v, json!({}));
             }
             VectorOp::Search { mut vector, k } => {
                 sanitize_vector(&mut vector);
                 let v = Vector::new(vector);
                 let _ = store.search(&v, k.min(100), None);
             }
-            VectorOp::Get { index } => {
-                let _ = store.get(index);
+            VectorOp::Get { id } => {
+                let _ = store.get(&id);
             }
             VectorOp::Delete { id } => {
                 let _ = store.delete(&id);

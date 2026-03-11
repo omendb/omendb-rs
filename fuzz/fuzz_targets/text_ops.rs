@@ -129,7 +129,7 @@ fuzz_target!(|data: &[u8]| {
                 // Also add to vector store for hybrid search
                 let mut vector: Vec<f32> = (0..DIMENSIONS).map(|i| (i as f32) * 0.1).collect();
                 sanitize_vector(&mut vector);
-                let _ = store.set_with_text(id, Vector::new(vector), &text, json!({}));
+                let _ = store.set_with_text(&id, Vector::new(vector), &text, json!({}));
             }
             TextOp::Search { query, k } => {
                 let _ = text_index.search(&query, k.min(100));

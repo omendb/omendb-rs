@@ -124,7 +124,7 @@ fn run_with_sq8(ops: Vec<QuantizedOp>) {
             QuantizedOp::Insert { id, mut vector } => {
                 sanitize_vector(&mut vector);
                 let v = Vector::new(vector);
-                let _ = store.set(id, v, json!({"test": true}));
+                let _ = store.set(&id, v, json!({"test": true}));
             }
             QuantizedOp::Search { mut vector, k } => {
                 sanitize_vector(&mut vector);
@@ -150,7 +150,7 @@ fn run_with_sq8(ops: Vec<QuantizedOp>) {
             QuantizedOp::InsertThenGetById { id, mut vector } => {
                 sanitize_vector(&mut vector);
                 let v = Vector::new(vector.clone());
-                if store.set(id.clone(), v, json!({})).is_ok() {
+                if store.set(&id, v, json!({})).is_ok() {
                     // After successful insert, get() MUST return Some
                     let result = store.get(&id);
                     assert!(
@@ -163,7 +163,7 @@ fn run_with_sq8(ops: Vec<QuantizedOp>) {
             QuantizedOp::InsertThenSearch { id, mut vector, k } => {
                 sanitize_vector(&mut vector);
                 let v = Vector::new(vector.clone());
-                if store.set(id.clone(), v.clone(), json!({})).is_ok() {
+                if store.set(&id, v.clone(), json!({})).is_ok() {
                     // Search for the exact vector should return it
                     if let Ok(results) = store.search(&v, k.min(100), None) {
                         // The inserted vector should be in top-k results
