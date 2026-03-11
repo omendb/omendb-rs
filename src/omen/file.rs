@@ -706,7 +706,7 @@ impl OmenFile {
     ///
     /// Does NOT include WAL entries - caller must replay WAL separately.
     /// This is the Phase 5 API where state is managed externally by RecordStore.
-    pub fn load_persisted_snapshot(&self) -> io::Result<OmenSnapshot> {
+    pub fn load_persisted_snapshot(&self) -> OmenSnapshot {
         self.load_persisted_snapshot_with_live_slots(None)
     }
 
@@ -718,7 +718,7 @@ impl OmenFile {
     pub(crate) fn load_persisted_snapshot_with_live_slots(
         &self,
         extra_live_slots: Option<&RoaringBitmap>,
-    ) -> io::Result<OmenSnapshot> {
+    ) -> OmenSnapshot {
         let dim = self.header.dimensions as usize;
         let mut snapshot = OmenSnapshot {
             dimensions: self.header.dimensions,
@@ -897,7 +897,7 @@ impl OmenFile {
             });
         }
 
-        Ok(snapshot)
+        snapshot
     }
 
     // Note: load_snapshot() removed in Phase 5. VectorStore uses load_persisted_snapshot().
@@ -2074,7 +2074,7 @@ mod tests {
         // Reopen and load snapshot
         {
             let db = OmenFile::open(&db_path).unwrap();
-            let snapshot = db.load_persisted_snapshot().unwrap();
+            let snapshot = db.load_persisted_snapshot();
 
             assert_eq!(snapshot.dimensions, 3);
             assert_eq!(snapshot.id_to_slot.len(), 2);
@@ -2355,7 +2355,7 @@ mod tests {
         {
             let db = OmenFile::open(&db_path).unwrap();
             assert_eq!(db.len(), 5);
-            let snapshot = db.load_persisted_snapshot().unwrap();
+            let snapshot = db.load_persisted_snapshot();
 
             // Live (even) slots have correct vectors
             for i in (0..10u32).step_by(2) {

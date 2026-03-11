@@ -1,6 +1,7 @@
 use super::super::*;
 use super::random_vector;
 use crate::vector::sparse::SparseVector;
+use crate::vector::store::edge_store::EdgeDirection;
 
 #[test]
 fn test_open_new_database() {
@@ -560,4 +561,95 @@ fn test_vector_only_checkpoint_recovers_sparse_placeholder() {
     let (vector, metadata) = store.get("sparse_doc").unwrap();
     assert_eq!(vector.data, vec![0.0, 0.0, 0.0, 0.0]);
     assert_eq!(metadata["phase"], "sparse");
+}
+
+#[test]
+fn test_vector_only_checkpoint_preserves_sparse_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("sparse_state_recovery");
+
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "base",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "base"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+
+        store
+            .set_sparse(
+                "sparse_doc",
+                SparseVector::from_pairs(vec![(42, 1.5), (99, 0.5)]).unwrap(),
+                serde_json::json!({"phase": "sparse"}),
+            )
+            .unwrap();
+        store.checkpoint_wal().unwrap();
+    }
+
+    let store = VectorStore::open(&db_path).unwrap();
+    assert!(store.has_sparse());
+
+    let query = SparseVector::from_pairs(vec![(42, 1.0)]).unwrap();
+    let results = store.sparse_search(&query, 10, None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "sparse_doc");
+}
+
+#[test]
+fn test_vector_only_checkpoint_preserves_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("edge_state_recovery");
+
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "a",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "base"}),
+            )
+            .unwrap();
+        store
+            .set(
+                "b",
+                Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "base"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+
+        store
+            .add_edge(
+                "a",
+                "b",
+                "link",
+                0.7,
+                Some(serde_json::json!({"phase": "edge"})),
+            )
+            .unwrap();
+        store
+            .set(
+                "pad",
+                Vector::new(vec![0.0, 0.0, 1.0, 0.0]),
+                serde_json::json!({"phase": "pad"}),
+            )
+            .unwrap();
+        store.checkpoint_wal().unwrap();
+    }
+
+    let store = VectorStore::open(&db_path).unwrap();
+    assert_eq!(store.edge_count(), 1);
+
+    let edges = store.get_edges("a", EdgeDirection::Outgoing, None);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].to_id, "b");
+    assert_eq!(edges[0].edge_type, "link");
+    assert_eq!(edges[0].weight, 0.7);
+    assert_eq!(
+        edges[0].metadata,
+        Some(serde_json::json!({"phase": "edge"}))
+    );
 }

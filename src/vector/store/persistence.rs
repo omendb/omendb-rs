@@ -87,7 +87,7 @@ impl VectorStore {
         }
         let mut snapshot = storage.load_persisted_snapshot_with_live_slots(
             (!slim_live_slots.is_empty()).then_some(&slim_live_slots),
-        )?;
+        );
         if let Some(slim) = slim_snapshot {
             tracing::info!(
                 records = slim.id_to_slot.len(),
@@ -771,8 +771,23 @@ impl VectorStore {
     /// Falls back to full flush on the first checkpoint (creates .vecs + manifest).
     pub(crate) fn checkpoint_wal(&mut self) -> Result<()> {
         let has_vec = self.storage.as_ref().is_some_and(OmenFile::has_vec_file);
+        let requires_full_checkpoint = self
+            .sparse_index
+            .as_ref()
+            .is_some_and(|index| !index.is_empty())
+            || self
+                .edge_store
+                .as_ref()
+                .is_some_and(|store| store.edge_count() > 0);
 
         if has_vec {
+            if requires_full_checkpoint {
+                // The fast checkpoint path persists only dense slots + the slim `.records`
+                // snapshot. Sparse and edge state is durable only via the full manifest path,
+                // so truncating the WAL here would otherwise drop that state on reopen.
+                return self.flush_internal(false);
+            }
+
             // Fast path: write dirty .vecs slots, sync WAL, skip manifest
             let dirty = self.records.take_dirty_slots();
             if dirty.is_empty() {
