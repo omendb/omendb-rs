@@ -225,7 +225,7 @@ impl HNSWIndex {
             // Find ef nearest neighbors at this level using reduced ef
             // Use distance-aware search to avoid recomputing in heuristic
             let candidates_with_distances =
-                self.search_layer_full_precision(vector, &nearest, ef, lc)?;
+                self.search_layer_for_construction(vector, &nearest, ef, lc)?;
 
             // Select M best neighbors using heuristic (distances already computed)
             let m = self.params.m_for_level(lc);
@@ -396,7 +396,7 @@ impl HNSWIndex {
             let mut nearest = vec![entry_point];
             for lc in ((*level + 1)..=entry_level).rev() {
                 nearest = self
-                    .search_layer_full_precision(&vector, &nearest, 1, lc)?
+                    .search_layer_for_construction(&vector, &nearest, 1, lc)?
                     .into_iter()
                     .map(|(id, _)| id)
                     .collect();
@@ -406,7 +406,7 @@ impl HNSWIndex {
             for lc in (0..=*level).rev() {
                 // Find ef_construction nearest neighbors at this level
                 // Use distance-aware search to avoid recomputing in heuristic
-                let candidates_with_distances = self.search_layer_full_precision(
+                let candidates_with_distances = self.search_layer_for_construction(
                     &vector,
                     &nearest,
                     self.params.ef_construction,
@@ -514,7 +514,7 @@ impl HNSWIndex {
         let mut nearest = vec![entry_point];
         for lc in ((level + 1)..=entry_level).rev() {
             nearest = self
-                .search_layer_full_precision(vector, &nearest, 1, lc)?
+                .search_layer_for_construction(vector, &nearest, 1, lc)?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect();
@@ -522,7 +522,7 @@ impl HNSWIndex {
         for lc in (0..=level).rev() {
             // Find ef_construction nearest neighbors at this level
             // Use distance-aware search to avoid recomputing in heuristic
-            let candidates_with_distances = self.search_layer_full_precision(
+            let candidates_with_distances = self.search_layer_for_construction(
                 vector,
                 &nearest,
                 self.params.ef_construction,

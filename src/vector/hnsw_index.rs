@@ -74,6 +74,7 @@ pub struct HNSWIndexBuilder {
     ef_search: usize,
     metric: Metric,
     quantization: HNSWQuantization,
+    quantized_construction: bool,
 }
 
 impl Default for HNSWIndexBuilder {
@@ -86,6 +87,7 @@ impl Default for HNSWIndexBuilder {
             ef_search: DEFAULT_EF_SEARCH,
             metric: Metric::L2,
             quantization: HNSWQuantization::None,
+            quantized_construction: false,
         }
     }
 }
@@ -155,6 +157,15 @@ impl HNSWIndexBuilder {
         self
     }
 
+    /// Use SQ8 distances during graph construction when quantization is enabled.
+    ///
+    /// Defaults to false because full-precision construction produces the best graph quality.
+    #[must_use]
+    pub fn quantized_construction(mut self, enabled: bool) -> Self {
+        self.quantized_construction = enabled;
+        self
+    }
+
     /// Build the HNSWIndex
     ///
     /// # Errors
@@ -170,6 +181,7 @@ impl HNSWIndexBuilder {
             ml: 1.0 / (self.m as f32).ln(),
             seed: 42,
             max_level: 8,
+            use_quantized_construction: self.quantized_construction,
         };
 
         let index = match self.quantization {
@@ -244,6 +256,7 @@ impl HNSWIndex {
             ml: 1.0 / (m as f32).ln(),
             seed: 42,
             max_level: 8,
+            use_quantized_construction: false,
         };
 
         let index = CoreHNSW::new(dimensions, params, distance_fn, false)?;
@@ -282,6 +295,7 @@ impl HNSWIndex {
             ml: 1.0 / (m as f32).ln(),
             seed: 42,
             max_level: 8,
+            use_quantized_construction: false,
         };
 
         let index = CoreHNSW::new(dimensions, params, distance_fn, false)?;

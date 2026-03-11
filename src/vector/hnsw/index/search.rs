@@ -792,6 +792,25 @@ impl HNSWIndex {
         })
     }
 
+    /// Search layer using the configured construction-distance mode.
+    ///
+    /// Full precision remains the default because it yields the best graph quality.
+    /// SQ8 indexes can opt into quantized construction for faster builds once the
+    /// quantizer has been trained.
+    pub(super) fn search_layer_for_construction(
+        &self,
+        query: &[f32],
+        entry_points: &[u32],
+        ef: usize,
+        level: u8,
+    ) -> Result<Vec<(u32, f32)>> {
+        if self.storage.is_sq8() && self.params.use_quantized_construction {
+            self.search_layer(query, entry_points, ef, level)
+        } else {
+            self.search_layer_full_precision(query, entry_points, ef, level)
+        }
+    }
+
     #[inline(never)]
     fn search_layer_mono<D: Distance>(
         &self,

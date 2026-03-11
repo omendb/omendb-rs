@@ -438,6 +438,27 @@ fn test_save_load_small() {
 }
 
 #[test]
+fn test_save_load_preserves_quantized_construction_flag() {
+    use tempfile::NamedTempFile;
+
+    let params = HNSWParams::default().with_quantized_construction(true);
+    let mut index = HNSWIndex::new_with_sq8(8, params, Metric::L2).unwrap();
+
+    for i in 0..32 {
+        let vec = vec![i as f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        index.insert(&vec).unwrap();
+    }
+
+    let temp_file = NamedTempFile::new().unwrap();
+    index.save(temp_file.path()).unwrap();
+
+    let loaded = HNSWIndex::load(temp_file.path()).unwrap();
+
+    assert!(loaded.is_sq8());
+    assert!(loaded.params().use_quantized_construction);
+}
+
+#[test]
 fn test_save_load_preserves_graph() {
     use tempfile::NamedTempFile;
 

@@ -33,6 +33,13 @@ pub struct HNSWParams {
 
     /// Maximum allowed level (typically 6-8 for millions of vectors)
     pub max_level: u8,
+
+    /// Use SQ8 distances during graph construction when quantization is enabled.
+    ///
+    /// Defaults to false because full-precision construction yields the highest-quality
+    /// graph. Enabling this is an opt-in speed/recall tradeoff for SQ8 indexes.
+    #[serde(default)]
+    pub use_quantized_construction: bool,
 }
 
 impl Default for HNSWParams {
@@ -44,6 +51,7 @@ impl Default for HNSWParams {
             ml: 1.0 / (m as f32).ln(),
             seed: 42,
             max_level: 8, // Support up to ~100M vectors
+            use_quantized_construction: false,
         }
     }
 }
@@ -59,6 +67,7 @@ impl HNSWParams {
             ml: 1.0 / (m as f32).ln(),
             seed: 42,
             max_level: 8,
+            use_quantized_construction: false,
         }
     }
 
@@ -72,6 +81,7 @@ impl HNSWParams {
             ml: 1.0 / (m as f32).ln(),
             seed: 42,
             max_level: 6,
+            use_quantized_construction: false,
         }
     }
 
@@ -87,6 +97,15 @@ impl HNSWParams {
     #[must_use]
     pub fn with_ef_construction(mut self, ef: usize) -> Self {
         self.ef_construction = ef;
+        self
+    }
+
+    /// Builder: enable or disable SQ8 distances during graph construction.
+    ///
+    /// This only has an effect when the index itself is quantized.
+    #[must_use]
+    pub fn with_quantized_construction(mut self, enabled: bool) -> Self {
+        self.use_quantized_construction = enabled;
         self
     }
 

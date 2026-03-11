@@ -772,6 +772,12 @@ impl HNSWIndex {
         use_quantization: bool,
         vectors: Vec<Vec<f32>>,
     ) -> Result<Self> {
+        if use_quantization && params.use_quantized_construction {
+            let mut index = Self::new_with_sq8(dimensions, params, distance_fn)?;
+            let _ = index.batch_insert(vectors)?;
+            return Ok(index);
+        }
+
         let builder = ParallelBuilder::new(dimensions, params, distance_fn, use_quantization)?;
         builder.build(vectors)
     }
@@ -949,5 +955,21 @@ mod tests {
             "Graph not fully connected: {:.1}%",
             connectivity * 100.0
         );
+    }
+
+    #[test]
+    fn test_parallel_build_sq8_quantized_construction_opt_in() {
+        let vectors = random_vectors(300, 32);
+        let query = vectors[0].clone();
+        let params = HNSWParams::default().with_quantized_construction(true);
+
+        let index = HNSWIndex::build_parallel(32, params, Metric::L2, true, vectors).unwrap();
+
+        assert!(index.is_sq8());
+        assert!(index.params().use_quantized_construction);
+
+        let results = index.search(&query, 5, 50).unwrap();
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].id, 0);
     }
 }
