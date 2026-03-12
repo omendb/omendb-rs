@@ -103,9 +103,9 @@ Apple M3 Max runs are useful as local reference, but Fedora/Linux medians are th
 ## Testing
 
 ```bash
-cargo test --lib                              # 525+ Rust tests
-cd python && uv run pytest tests/ -x          # 322+ Python tests
-cd node && bun test                           # 111+ Node tests
+cargo test --lib                              # 594+ Rust tests
+cd python && uv run pytest tests/ -x          # 345+ Python tests
+cd node && bun test                           # 136+ Node tests
 cd python && uv run pytest tests/test_recall.py  # Recall verification
 ```
 
@@ -118,14 +118,14 @@ Before ANY release, complete ALL of these checks:
 ### 1. Run ALL Test Suites
 
 ```bash
-# Rust (must pass 525+ tests)
+# Rust (must pass 594+ tests)
 cargo test --lib
 cargo clippy --lib -- -D warnings
 
-# Python (must pass 322+ tests)
+# Python (must pass 345+ tests)
 cd python && uv run pytest tests/ -x
 
-# Node (must pass 111+ tests)
+# Node (must pass 136+ tests)
 cd node && bun test
 ```
 

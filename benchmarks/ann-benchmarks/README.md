@@ -55,7 +55,9 @@ Note: Angular datasets map to OmenDB's cosine metric. Results may vary due to im
 
 ## Results
 
-Fashion-MNIST (60K vectors, 784D, M3 Max):
+Historical local reference only, not the authoritative OmenDB baseline:
+
+Fashion-MNIST (60K vectors, 784D, Apple M3 Max):
 
 | ef  | QPS   | Recall@10 |
 | --- | ----- | --------- |
@@ -63,6 +65,8 @@ Fashion-MNIST (60K vectors, 784D, M3 Max):
 | 20  | 8,905 | 99.3%     |
 | 100 | 3,275 | 99.9%     |
 | 200 | 2,089 | 100.0%    |
+
+Use the root SIFT benchmark for authoritative release comparisons. ann-benchmarks runs are useful for cross-database exploration, not for replacing the published Fedora/Linux baseline.
 
 ## Files
 

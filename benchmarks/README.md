@@ -31,6 +31,8 @@ Each run appends one line to `history.jsonl`:
 {"ts": "2025-12-10 06:42:55", "sys": {"cpu": "Apple M3 Max", "cores": 16, ...}, "git": {"commit": "bd053bd", "branch": "main", "dirty": true}, "results": {"128D": {"s": 8170, "b": 78652}, ...}}
 ```
 
+This JSON blob is just an example payload shape, not an authoritative baseline. Use the root README and published SIFT runs for benchmark claims.
+
 ## Agent-Friendly
 
 ```bash
@@ -54,3 +56,5 @@ Recent Benchmarks (Single / Batch QPS)
 |------------|---------|----------|---------------|---------------|---------------|
 | 2025-12-10 | bd053bd | Apple    | 8,170/78,652 | 2,511/12,935 | 1,167/ 4,472 |
 ```
+
+History views can include local Apple runs, but the authoritative comparison baseline for OmenDB remains the published Fedora/Linux SIFT medians.
