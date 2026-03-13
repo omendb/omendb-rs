@@ -591,7 +591,10 @@ impl Wal {
 ///
 /// Returns `Ok(true)` when the entry was skipped and the caller should continue
 /// scanning from the next record.
-fn skip_unknown_entry(file: &mut File, header_buf: &[u8; WalEntryHeader::SIZE]) -> io::Result<bool> {
+fn skip_unknown_entry(
+    file: &mut File,
+    header_buf: &[u8; WalEntryHeader::SIZE],
+) -> io::Result<bool> {
     // Maximum reasonable entry size (100MB) - protects against corrupted data_len
     const MAX_ENTRY_SIZE: u32 = 100 * 1024 * 1024;
 
@@ -599,7 +602,12 @@ fn skip_unknown_entry(file: &mut File, header_buf: &[u8; WalEntryHeader::SIZE]) 
         return Ok(false);
     }
 
-    let data_len = u32::from_le_bytes([header_buf[12], header_buf[13], header_buf[14], header_buf[15]]);
+    let data_len = u32::from_le_bytes([
+        header_buf[12],
+        header_buf[13],
+        header_buf[14],
+        header_buf[15],
+    ]);
     if data_len > MAX_ENTRY_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
