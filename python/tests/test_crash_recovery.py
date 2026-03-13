@@ -15,7 +15,7 @@ import tempfile
 
 import pytest
 
-pytestmark = pytest.mark.slow  # Uses multiprocessing, skip in CI
+pytestmark = pytest.mark.slow  # Uses multiprocessing; covered by a dedicated durability CI job
 
 
 def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str):

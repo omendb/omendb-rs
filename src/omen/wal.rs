@@ -378,6 +378,10 @@ impl Wal {
         loop {
             match file.read_exact(&mut header_buf) {
                 Ok(()) => {
+                    if skip_unknown_entry(file, &header_buf)? {
+                        continue;
+                    }
+
                     let header = WalEntryHeader::from_bytes(&header_buf)?;
 
                     // Sanity check: reject obviously corrupted entries
@@ -477,23 +481,7 @@ impl Wal {
         loop {
             match file.read_exact(&mut header_buf) {
                 Ok(()) => {
-                    // Check for unknown entry type — skip it (forward compat with future versions).
-                    let entry_type_byte = header_buf[0];
-                    if WalEntryType::from_byte(entry_type_byte).is_none() {
-                        let data_len = u32::from_le_bytes([
-                            header_buf[12],
-                            header_buf[13],
-                            header_buf[14],
-                            header_buf[15],
-                        ]);
-                        if data_len > MAX_ENTRY_SIZE {
-                            // Oversized unknown entry — treat as corruption boundary,
-                            // stop replay to avoid seeking into garbage.
-                            break;
-                        }
-                        if data_len > 0 {
-                            file.seek(SeekFrom::Current(data_len as i64))?;
-                        }
+                    if skip_unknown_entry(file, &header_buf)? {
                         continue;
                     }
 
@@ -565,8 +553,13 @@ impl Wal {
         self.entry_count = 0;
         // next_timestamp intentionally resets to 0 — timestamps are session-scoped,
         // not globally monotonic. Recovery uses Checkpoint entry type, not timestamps.
+        let previous_epoch = self.truncation_epoch;
         self.truncation_epoch += 1;
-        self.write_meta()
+        if let Err(err) = self.write_meta() {
+            self.truncation_epoch = previous_epoch;
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Write .wal.meta using the cached file handle (avoids open() syscall on each checkpoint).
@@ -592,6 +585,33 @@ impl Wal {
             f.sync_all()
         }
     }
+}
+
+/// Skip unknown WAL entry types for forward compatibility.
+///
+/// Returns `Ok(true)` when the entry was skipped and the caller should continue
+/// scanning from the next record.
+fn skip_unknown_entry(file: &mut File, header_buf: &[u8; WalEntryHeader::SIZE]) -> io::Result<bool> {
+    // Maximum reasonable entry size (100MB) - protects against corrupted data_len
+    const MAX_ENTRY_SIZE: u32 = 100 * 1024 * 1024;
+
+    if WalEntryType::from_byte(header_buf[0]).is_some() {
+        return Ok(false);
+    }
+
+    let data_len = u32::from_le_bytes([header_buf[12], header_buf[13], header_buf[14], header_buf[15]]);
+    if data_len > MAX_ENTRY_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("WAL entry has suspicious data_len: {data_len} bytes (max: {MAX_ENTRY_SIZE})"),
+        ));
+    }
+
+    if data_len > 0 {
+        file.seek(SeekFrom::Current(data_len as i64))?;
+    }
+
+    Ok(true)
 }
 
 /// Maximum string ID length (64KB) - prevents DoS via malicious length field
@@ -908,5 +928,64 @@ mod tests {
             assert_eq!(wal.len(), 3);
             assert_eq!(wal.max_timestamp(), Some(2));
         }
+    }
+
+    #[test]
+    fn test_wal_reopen_skips_unknown_entry_types_when_scanning() {
+        use std::io::Write;
+
+        let dir = tempdir().unwrap();
+        let wal_path = dir.path().join("test_unknown_entry.wal");
+
+        {
+            let mut wal = Wal::open(&wal_path).unwrap();
+            wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
+                .unwrap();
+            wal.sync().unwrap();
+        }
+
+        {
+            let mut file = OpenOptions::new().append(true).open(&wal_path).unwrap();
+            let mut header = [0u8; WalEntryHeader::SIZE];
+            header[0] = 0xFF;
+            header[4..12].copy_from_slice(&99u64.to_le_bytes());
+            header[12..16].copy_from_slice(&4u32.to_le_bytes());
+            file.write_all(&header).unwrap();
+            file.write_all(&[1, 2, 3, 4]).unwrap();
+            file.sync_all().unwrap();
+        }
+
+        {
+            let mut wal = Wal::open(&wal_path).unwrap();
+            assert_eq!(wal.len(), 1);
+            assert_eq!(wal.max_timestamp(), Some(0));
+
+            wal.append(WalEntry::delete_node(0, "vec1")).unwrap();
+            assert_eq!(wal.len(), 2);
+            assert_eq!(wal.max_timestamp(), Some(1));
+        }
+    }
+
+    #[test]
+    fn test_truncate_rolls_back_epoch_on_meta_write_failure() {
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let wal_path = dir.path().join("test_truncate_epoch_rollback.wal");
+
+        let mut wal = Wal::open(&wal_path).unwrap();
+        wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
+            .unwrap();
+        wal.sync().unwrap();
+
+        let original_epoch = wal.truncation_epoch();
+        let meta_path = meta_path(&wal_path);
+        wal.meta_file = None;
+        fs::remove_file(&meta_path).unwrap();
+        fs::create_dir(&meta_path).unwrap();
+
+        let err = wal.truncate().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::IsADirectory);
+        assert_eq!(wal.truncation_epoch(), original_epoch);
     }
 }

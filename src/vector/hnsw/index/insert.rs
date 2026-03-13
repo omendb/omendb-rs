@@ -244,21 +244,21 @@ impl HNSWIndex {
         Ok(())
     }
 
-    /// Batch insert multiple vectors with parallel graph construction
+    /// Batch insert multiple vectors with batched sequential graph construction
     ///
-    /// This method achieves 10-50x speedup over incremental insertion by:
+    /// This method reduces overhead versus repeated single inserts by:
     /// 1. Storing all vectors first (no graph construction)
-    /// 2. Building the HNSW graph in parallel using lock-free storage
+    /// 2. Building the HNSW graph in one batched pass
     ///
     /// # Performance
     /// - Small batches (<100): Use `insert()` for simplicity
-    /// - Medium batches (100-10K): 8-12x speedup expected
-    /// - Large batches (10K+): 20-50x speedup expected
+    /// - Medium/large batches amortize allocation and bookkeeping costs
+    /// - For true parallel construction, use `HNSWIndex::build_parallel()`
     ///
     /// # Algorithm
     /// - Pre-allocate all nodes and levels (deterministic)
-    /// - Parallel graph construction with thread-safe neighbor updates
-    /// - Lock ordering prevents deadlocks
+    /// - Build graph connections in a single batched pass
+    /// - Reuse stored vectors and inline reverse-link pruning
     ///
     /// # Arguments
     /// * `vectors` - Batch of vectors to insert
@@ -275,7 +275,7 @@ impl HNSWIndex {
         }
 
         let batch_size = vectors.len();
-        info!(batch_size, "Starting parallel batch insertion");
+        info!(batch_size, "Starting batched HNSW insertion");
 
         // Parallel validation (fast, no graph modifications)
         let dimensions = self.dimensions();
@@ -354,7 +354,7 @@ impl HNSWIndex {
             "Vector storage complete"
         );
 
-        // Phase 2: Build graph in parallel (the key optimization!)
+        // Phase 2: Build graph connections in a single batched pass
         let graph_start = std::time::Instant::now();
 
         // If this is the only node, no graph to build
@@ -363,7 +363,7 @@ impl HNSWIndex {
             return Ok(node_ids);
         }
 
-        // Parallel graph construction
+        // Batched graph construction
         let nodes_to_insert: Vec<(u32, u8)> = node_ids
             .iter()
             .zip(node_levels.iter())
@@ -378,9 +378,9 @@ impl HNSWIndex {
             batch_size
         };
 
-        // Parallel insertion into graph
-        // Note: NodeStorage is Send+Sync safe, but we need to use sequential insert
-        // for proper graph construction. True parallel would need atomic neighbor ops.
+        // Sequential insertion into graph.
+        // NodeStorage is Send+Sync safe, but this path mutates neighbor lists directly
+        // and therefore does not use the lock-based ParallelBuilder implementation.
         for (node_id, level) in &nodes_to_insert {
             // Get vector for this node
             let vector = self
@@ -465,7 +465,7 @@ impl HNSWIndex {
                     total = batch_size,
                     percent = (count as usize * 100) / batch_size,
                     rate_vec_per_sec = rate as u64,
-                    "Parallel graph construction progress"
+                    "Batched graph construction progress"
                 );
             }
         }
@@ -491,7 +491,7 @@ impl HNSWIndex {
             inserted = node_ids.len(),
             duration_secs = total_time,
             rate_vec_per_sec = final_rate as u64,
-            "Batch insertion complete"
+            "Batched insertion complete"
         );
 
         Ok(node_ids)

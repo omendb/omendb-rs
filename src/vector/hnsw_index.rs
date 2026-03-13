@@ -162,6 +162,9 @@ impl HNSWIndexBuilder {
     /// Use SQ8 distances during graph construction when quantization is enabled.
     ///
     /// Defaults to false because full-precision construction produces the best graph quality.
+    /// When enabled, `build_parallel()` currently falls back to the sequential
+    /// batch-insert path because the parallel builder does not yet support
+    /// quantized-distance construction.
     #[must_use]
     pub fn quantized_construction(mut self, enabled: bool) -> Self {
         self.quantized_construction = enabled;

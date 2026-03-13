@@ -759,7 +759,9 @@ impl HNSWIndex {
     /// Build index from vectors using parallel construction
     ///
     /// This is the fastest way to build an index from a batch of vectors.
-    /// Uses parallel graph construction with fine-grained locking.
+    /// Uses parallel graph construction with fine-grained locking unless
+    /// SQ8 quantized construction is requested, which currently falls back
+    /// to the sequential builder so construction distances can stay quantized.
     ///
     /// # Performance
     /// - Warm start: first 512 vectors inserted sequentially
@@ -773,6 +775,9 @@ impl HNSWIndex {
         vectors: Vec<Vec<f32>>,
     ) -> Result<Self> {
         if use_quantization && params.use_quantized_construction {
+            info!(
+                "SQ8 quantized construction currently uses the sequential builder; skipping ParallelBuilder"
+            );
             let mut index = Self::new_with_sq8(dimensions, params, distance_fn)?;
             let _ = index.batch_insert(vectors)?;
             return Ok(index);
