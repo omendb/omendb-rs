@@ -156,7 +156,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7.5.0
 
       - name: Install dependencies
         working-directory: python
@@ -191,7 +191,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7.5.0
 
       - name: Install dependencies
         working-directory: python
@@ -247,7 +247,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7.5.0
 
       - uses: actions/setup-node@v6
         with:
