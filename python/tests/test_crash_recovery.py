@@ -17,6 +17,7 @@ import time
 import pytest
 
 pytestmark = pytest.mark.slow  # Uses multiprocessing; covered by a dedicated durability CI job
+MP_CTX = multiprocessing.get_context("spawn")
 
 
 def open_with_lock_retry(db_path: str, dims: int, timeout_s: float = 10.0):
@@ -36,6 +37,20 @@ def open_with_lock_retry(db_path: str, dims: int, timeout_s: float = 10.0):
             time.sleep(0.1)
 
     raise last_error or RuntimeError("Database remained locked after crash recovery wait")
+
+
+def run_child_process(target, args: tuple, timeout_s: float):
+    """Run a child process with spawn and fail fast if it does not exit."""
+    process = MP_CTX.Process(target=target, args=args)
+    process.start()
+    process.join(timeout=timeout_s)
+
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=5)
+        raise AssertionError(f"child process did not exit within {timeout_s} seconds")
+
+    return process
 
 
 def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str):
@@ -119,11 +134,7 @@ class TestCrashRecoveryBasic:
         count = 100
 
         # Run child process that saves then crashes
-        p = multiprocessing.Process(
-            target=child_insert_save_crash, args=(temp_db_path, dims, count)
-        )
-        p.start()
-        p.join(timeout=30)
+        p = run_child_process(child_insert_save_crash, (temp_db_path, dims, count), 30)
 
         # Child should have been killed by SIGKILL
         assert p.exitcode == -signal.SIGKILL or p.exitcode != 0
@@ -147,11 +158,7 @@ class TestCrashRecoveryBasic:
         count = 50
 
         # Run child that crashes without saving
-        p = multiprocessing.Process(
-            target=child_insert_and_crash, args=(temp_db_path, dims, count, "sigkill")
-        )
-        p.start()
-        p.join(timeout=30)
+        run_child_process(child_insert_and_crash, (temp_db_path, dims, count, "sigkill"), 30)
 
         db = open_with_lock_retry(temp_db_path, dims)
 
@@ -190,11 +197,7 @@ class TestCrashRecoveryWithExistingData:
         del db
 
         # Then: child process tries to add more but crashes
-        p = multiprocessing.Process(
-            target=child_insert_and_crash, args=(temp_db_path, dims, 50, "sigkill")
-        )
-        p.start()
-        p.join(timeout=30)
+        run_child_process(child_insert_and_crash, (temp_db_path, dims, 50, "sigkill"), 30)
 
         # Verify: initial data should still be there
         db2 = open_with_lock_retry(temp_db_path, dims)
@@ -225,11 +228,7 @@ class TestCrashRecoveryWithExistingData:
 
         # Child tries to delete but crashes
         ids_to_delete = [f"vec_{i}" for i in range(50)]  # Delete first 50
-        p = multiprocessing.Process(
-            target=child_delete_and_crash, args=(temp_db_path, dims, ids_to_delete)
-        )
-        p.start()
-        p.join(timeout=30)
+        run_child_process(child_delete_and_crash, (temp_db_path, dims, ids_to_delete), 30)
 
         # With seerdb WAL, deletes persist immediately (durable database behavior)
         # This is CORRECT behavior - all writes are durable by default
@@ -254,11 +253,7 @@ class TestCrashRecoveryEdgeCases:
 
         # Multiple crash cycles
         for _cycle in range(3):
-            p = multiprocessing.Process(
-                target=child_insert_and_crash, args=(temp_db_path, dims, 10, "sigkill")
-            )
-            p.start()
-            p.join(timeout=30)
+            run_child_process(child_insert_and_crash, (temp_db_path, dims, 10, "sigkill"), 30)
 
         # Original data should survive
         db2 = open_with_lock_retry(temp_db_path, dims)
@@ -278,11 +273,7 @@ class TestCrashRecoveryEdgeCases:
 
         # Rapid crash cycles (using quick exit instead of SIGKILL for speed)
         for _i in range(5):
-            p = multiprocessing.Process(
-                target=child_insert_and_crash, args=(temp_db_path, dims, 5, "exit")
-            )
-            p.start()
-            p.join(timeout=10)
+            run_child_process(child_insert_and_crash, (temp_db_path, dims, 5, "exit"), 10)
 
         # Database should be intact
         db2 = open_with_lock_retry(temp_db_path, dims)
@@ -302,11 +293,7 @@ class TestCrashRecoveryEdgeCases:
         del db
 
         # Try to insert 10K vectors then crash
-        p = multiprocessing.Process(
-            target=child_insert_and_crash, args=(temp_db_path, dims, 10000, "sigkill")
-        )
-        p.start()
-        p.join(timeout=60)
+        run_child_process(child_insert_and_crash, (temp_db_path, dims, 10000, "sigkill"), 60)
 
         # Original data must survive (seerdb may also persist crash data via WAL)
         db2 = open_with_lock_retry(temp_db_path, dims)
@@ -348,11 +335,7 @@ class TestDatabaseIntegrity:
         del db
 
         # Crash while open
-        p = multiprocessing.Process(
-            target=child_insert_and_crash, args=(temp_db_path, dims, 50, "sigkill")
-        )
-        p.start()
-        p.join(timeout=30)
+        run_child_process(child_insert_and_crash, (temp_db_path, dims, 50, "sigkill"), 30)
 
         # Verify database opens without error
         try:
@@ -384,11 +367,7 @@ class TestDatabaseIntegrity:
         del db
 
         # Crash with unsaved additions
-        p = multiprocessing.Process(
-            target=child_insert_and_crash, args=(temp_db_path, dims, 10, "sigkill")
-        )
-        p.start()
-        p.join(timeout=30)
+        run_child_process(child_insert_and_crash, (temp_db_path, dims, 10, "sigkill"), 30)
 
         # Search should return correct results
         db2 = open_with_lock_retry(temp_db_path, dims)
