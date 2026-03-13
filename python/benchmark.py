@@ -211,7 +211,11 @@ def benchmark_search(db, queries: np.ndarray, k: int = 10, warmup: int = 10) -> 
 
 
 def benchmark_filtered_search(
-    db, queries: np.ndarray, filter_dict: dict, k: int = 10, warmup: int = 10
+    db,
+    queries: np.ndarray,
+    filter_dict: dict,
+    k: int = 10,
+    warmup: int = 10,
 ) -> dict:
     """Benchmark filtered search performance."""
     n_queries = len(queries)
@@ -369,9 +373,7 @@ def run_benchmark(
     dataset_name, dataset_family = dataset_name_for_run(n_vectors, sift_data)
     if verbose:
         print(f"\n{'=' * 60}")
-        print(
-            f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode}, {dataset_name})"
-        )
+        print(f"OmenDB Benchmark: {n_vectors:,} vectors, {dim}D ({mode}, {dataset_name})")
         print(f"{'=' * 60}")
 
     if sift_data:

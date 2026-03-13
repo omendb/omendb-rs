@@ -139,7 +139,7 @@ def test_invalid_direction_raises():
         db.add_edge("a", "b", "link")
         try:
             db.get_edges("a", "sideways")
-            assert False, "expected ValueError"
+            raise AssertionError("expected ValueError")
         except ValueError:
             pass
 

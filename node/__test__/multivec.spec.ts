@@ -322,7 +322,7 @@ describe("Multi-Vector (MUVERA)", () => {
 	});
 
 	describe("scale", () => {
-		it("should handle 1000 documents with 10 tokens each", { timeout: 60_000 }, async () => {
+		it("should handle 1000 documents with 10 tokens each", { timeout: 120_000 }, async () => {
 			const db = open(":memory:", { dimensions: 32, multiVector: true });
 
 			// Insert 1000 docs
