@@ -48,6 +48,7 @@ def test_set_with_text_auto_enables():
         assert count == 2
         assert len(db) == 2
         assert db.has_text_search()  # Auto-enabled
+        db.close()
 
 
 def test_text_search():
@@ -90,6 +91,7 @@ def test_text_search():
             # search_text now returns metadata
             assert "metadata" in r
             assert "text" in r["metadata"]
+        db.close()
 
 
 def test_update_text():
@@ -128,6 +130,7 @@ def test_update_text():
         assert len(results) == 1
         assert results[0]["id"] == "doc1"
         assert results[0]["metadata"]["text"] == "JavaScript web development"
+        db.close()
 
 
 def test_hybrid_search_basic():
@@ -169,6 +172,7 @@ def test_hybrid_search_basic():
             assert "score" in r
             assert "metadata" in r
             assert r["score"] > 0
+        db.close()
 
 
 def test_hybrid_search_with_alpha():
@@ -211,6 +215,7 @@ def test_hybrid_search_with_alpha():
         for r in results_text:
             assert "score" in r
             assert r["score"] > 0
+        db.close()
 
 
 def test_hybrid_search_with_rrf_k():
@@ -238,6 +243,7 @@ def test_hybrid_search_with_rrf_k():
 
         assert len(results_default) >= 1
         assert len(results_custom) >= 1
+        db.close()
 
 
 def test_hybrid_search_with_filter():
@@ -280,6 +286,7 @@ def test_hybrid_search_with_filter():
         assert len(results) >= 1
         for r in results:
             assert r["metadata"]["year"] == 2024
+        db.close()
 
 
 def test_hybrid_search_metadata_in_results():
@@ -310,6 +317,7 @@ def test_hybrid_search_metadata_in_results():
         assert result["metadata"]["title"] == "Test Doc"
         assert result["metadata"]["tags"] == ["a", "b"]
         assert result["metadata"]["count"] == 42
+        db.close()
 
 
 def test_hybrid_search_empty_results():
@@ -330,6 +338,7 @@ def test_hybrid_search_empty_results():
 
         # Should return empty or no matches
         assert len(results) == 0
+        db.close()
 
 
 def test_hybrid_search_all_params():
@@ -368,6 +377,7 @@ def test_hybrid_search_all_params():
         assert len(results) >= 1
         for r in results:
             assert r["metadata"]["score"] >= 50
+        db.close()
 
 
 def test_hybrid_search_with_subscores():
@@ -438,6 +448,7 @@ def test_hybrid_search_with_subscores():
 
         # doc1 should rank highest (both vector similarity and text match)
         assert results[0]["id"] == "doc1"
+        db.close()
 
 
 def test_hybrid_search_subscores_with_filter():
@@ -477,6 +488,7 @@ def test_hybrid_search_subscores_with_filter():
         assert results[0]["id"] == "doc1"
         assert results[0]["keyword_score"] is not None
         assert results[0]["semantic_score"] is not None
+        db.close()
 
 
 if __name__ == "__main__":

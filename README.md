@@ -385,6 +385,8 @@ See complete working examples:
 pip install omendb[langchain]
 ```
 
+LangChain integration requires Python 3.10+.
+
 ```python
 from langchain_openai import OpenAIEmbeddings
 from omendb.langchain import OmenDBVectorStore
