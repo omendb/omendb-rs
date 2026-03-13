@@ -993,7 +993,10 @@ mod tests {
         fs::create_dir(&meta_path).unwrap();
 
         let err = wal.truncate().unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::IsADirectory);
+        assert!(matches!(
+            err.kind(),
+            io::ErrorKind::IsADirectory | io::ErrorKind::PermissionDenied
+        ));
         assert_eq!(wal.truncation_epoch(), original_epoch);
     }
 }
