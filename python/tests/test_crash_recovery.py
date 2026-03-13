@@ -12,10 +12,30 @@ import os
 import shutil
 import signal
 import tempfile
+import time
 
 import pytest
 
 pytestmark = pytest.mark.slow  # Uses multiprocessing; covered by a dedicated durability CI job
+
+
+def open_with_lock_retry(db_path: str, dims: int, timeout_s: float = 10.0):
+    """Retry open briefly after crash until the OS releases the file lock."""
+    import omendb
+
+    deadline = time.monotonic() + timeout_s
+    last_error = None
+
+    while time.monotonic() < deadline:
+        try:
+            return omendb.open(db_path, dimensions=dims)
+        except RuntimeError as err:
+            if "locked by another process" not in str(err):
+                raise
+            last_error = err
+            time.sleep(0.1)
+
+    raise last_error or RuntimeError("Database remained locked after crash recovery wait")
 
 
 def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str):
@@ -108,10 +128,7 @@ class TestCrashRecoveryBasic:
         # Child should have been killed by SIGKILL
         assert p.exitcode == -signal.SIGKILL or p.exitcode != 0
 
-        # Reopen and verify all data survived
-        import omendb
-
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = open_with_lock_retry(temp_db_path, dims)
 
         assert len(db) == count, f"Expected {count} vectors, got {len(db)}"
 
@@ -136,10 +153,7 @@ class TestCrashRecoveryBasic:
         p.start()
         p.join(timeout=30)
 
-        # Reopen - database may be empty or have partial data
-        import omendb
-
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = open_with_lock_retry(temp_db_path, dims)
 
         # Unsaved data is NOT expected to survive
         # This test documents current behavior
@@ -183,7 +197,7 @@ class TestCrashRecoveryWithExistingData:
         p.join(timeout=30)
 
         # Verify: initial data should still be there
-        db2 = omendb.open(temp_db_path, dimensions=dims)
+        db2 = open_with_lock_retry(temp_db_path, dims)
 
         # Initial 50 must survive (seerdb may also persist crash data via WAL)
         assert len(db2) >= 50, f"Lost initial data! Only {len(db2)} vectors"
@@ -219,7 +233,7 @@ class TestCrashRecoveryWithExistingData:
 
         # With seerdb WAL, deletes persist immediately (durable database behavior)
         # This is CORRECT behavior - all writes are durable by default
-        db2 = omendb.open(temp_db_path, dimensions=dims)
+        db2 = open_with_lock_retry(temp_db_path, dims)
         # Deletes should have persisted (seerdb durability)
         assert len(db2) == 50, f"Expected 50 vectors after delete, got {len(db2)}"
 
@@ -247,7 +261,7 @@ class TestCrashRecoveryEdgeCases:
             p.join(timeout=30)
 
         # Original data should survive
-        db2 = omendb.open(temp_db_path, dimensions=dims)
+        db2 = open_with_lock_retry(temp_db_path, dims)
         results = db2.search([1.0] * dims, k=1)
         assert results[0]["id"] == "survivor"
 
@@ -271,7 +285,7 @@ class TestCrashRecoveryEdgeCases:
             p.join(timeout=10)
 
         # Database should be intact
-        db2 = omendb.open(temp_db_path, dimensions=dims)
+        db2 = open_with_lock_retry(temp_db_path, dims)
         assert len(db2) >= 1  # At least anchor
         results = db2.search([0.5] * dims, k=1)
         assert results[0]["id"] == "anchor"
@@ -295,7 +309,7 @@ class TestCrashRecoveryEdgeCases:
         p.join(timeout=60)
 
         # Original data must survive (seerdb may also persist crash data via WAL)
-        db2 = omendb.open(temp_db_path, dimensions=dims)
+        db2 = open_with_lock_retry(temp_db_path, dims)
         assert len(db2) >= 100, f"Lost data during large batch crash: {len(db2)}"
 
         # Database should be openable and functional (not corrupt)
@@ -342,7 +356,7 @@ class TestDatabaseIntegrity:
 
         # Verify database opens without error
         try:
-            db2 = omendb.open(temp_db_path, dimensions=dims)
+            db2 = open_with_lock_retry(temp_db_path, dims)
             # All operations should work
             _ = len(db2)
             _ = db2.search([0.5] * dims, k=10)
@@ -377,7 +391,7 @@ class TestDatabaseIntegrity:
         p.join(timeout=30)
 
         # Search should return correct results
-        db2 = omendb.open(temp_db_path, dimensions=dims)
+        db2 = open_with_lock_retry(temp_db_path, dims)
 
         # Query for north direction
         results = db2.search([1.0, 0.0, 0.0, 0.0], k=1)
