@@ -122,6 +122,9 @@ jobs:
 
           echo "Proceeding with release"
 
+      - name: Verify release notes exist
+        run: ./scripts/release-notes.sh "${{ steps.version.outputs.version }}" --body-only >/tmp/release-notes.md
+
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -769,6 +772,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Generate release notes
+        run: ./scripts/release-notes.sh "${{ needs.verify.outputs.version }}" --body-only > release-notes.md
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -781,5 +787,5 @@ jobs:
           echo "Creating release $VERSION"
           gh release create "$VERSION" \
             --title "$VERSION" \
-            --generate-notes \
+            --notes-file release-notes.md \
             --latest

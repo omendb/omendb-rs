@@ -3,24 +3,23 @@
 ## Quick Release
 
 ```bash
-# 1. Update CHANGELOG.md with release notes
+# 1. Add a ## vX.Y.Z section to CHANGELOG.md
 # 2. Update VERSION file to new version
 echo "0.0.27" > VERSION
 
 # 3. Sync all version locations
 ./scripts/sync-version.sh
 
-# 4. Review and commit
+# 4. Preview GitHub release notes
+./scripts/release-notes.sh 0.0.27 --body-only
+
+# 5. Review and commit
 git diff
 git add -A && git commit -m "chore: Bump to 0.0.27"
 git push
 
-# 5. Trigger release (GitHub UI or CLI)
+# 6. Trigger release (GitHub UI or CLI)
 gh workflow run release.yml
-
-# 6. After successful release, tag the commit
-git tag v0.0.27
-git push origin v0.0.27
 ```
 
 ## Pre-Release Checklist
@@ -29,7 +28,7 @@ git push origin v0.0.27
 - [ ] Clippy clean (`cargo clippy --lib -- -D warnings`)
 - [ ] Python tests pass, 313+ (`cd python && uv run pytest tests/ -x`)
 - [ ] Node tests pass, 104+ (`cd node && bun test`)
-- [ ] CHANGELOG.md updated with release notes
+- [ ] `CHANGELOG.md` has a `## vX.Y.Z` section for the release
 - [ ] Version synced across all locations
 
 ## Version Locations
@@ -65,10 +64,12 @@ All locations must match the VERSION file:
 The GitHub Actions release workflow (`release.yml`):
 
 1. **Verify** - Checks all version locations match VERSION
-2. **Check not published** - Ensures version isn't already on PyPI/crates.io
-3. **Lint & Test** - fmt, clippy, cargo test
-4. **Build** - Python wheels (Linux/macOS), Node binaries
-5. **Publish** - crates.io → PyPI → npm (sequential)
+2. **Validate release notes** - Extracts the current version section from `CHANGELOG.md`
+3. **Check not published** - Ensures version isn't already on PyPI/crates.io
+4. **Lint & Test** - fmt, clippy, cargo test
+5. **Build** - Python wheels (Linux/macOS), Node binaries
+6. **Publish** - crates.io → PyPI → npm (sequential)
+7. **Tag + release** - Creates the git tag and GitHub release from `CHANGELOG.md`
 
 ### Dry Run
 
@@ -76,6 +77,12 @@ Test the build without publishing:
 
 ```bash
 gh workflow run release.yml -f dry-run=true
+```
+
+Preview the exact GitHub release body locally:
+
+```bash
+./scripts/release-notes.sh 0.0.27 --body-only
 ```
 
 ## Troubleshooting

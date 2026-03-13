@@ -1,6 +1,46 @@
 # Changelog
 
-## v0.0.27 (Unreleased)
+## v0.0.32
+
+### Durability and Recovery
+
+- Fix manifest-first checkpoint recovery so committed writes are not lost on reopen
+- Recover legitimate zero vectors from slim snapshots instead of dropping them during reload
+- Fall back to full checkpoints whenever sparse, edge, or multi-vector state is live so fast checkpoints do not discard non-dense data
+- Rebuild WAL counters from the WAL body on reopen and roll back the in-memory truncation epoch if `.wal.meta` persistence fails
+- Skip unknown future WAL entry types while scanning timestamps so newer WAL formats do not hard-fail older readers immediately
+
+### Search and Indexing
+
+- Reject invalid dense search requests earlier: `k=0`, non-finite query values, and zero-norm cosine queries now fail explicitly
+- Add opt-in SQ8 construction mode for HNSW builds
+- Align public multi-vector docs and types, including `poolFactor`
+
+### Release and CI
+
+- Refresh Rust, Python, and Node dependency locks plus fuzz targets
+- Tighten benchmark/CI trust checks and align published benchmark docs with Linux as the authoritative baseline
+- Keep `python/benchmark.py` compatible with Python 3.9 and clean up Python release packaging
+- Harden crash-recovery CI by using spawned child processes for kill/reopen tests and stabilize the slow Node multi-vector lane
+- Upgrade GitHub setup actions to current majors and use this changelog as the release-note source
+
+## v0.0.31
+
+### Features
+
+- Add EdgeStore typed directed graph primitives for Rust, Python, and Node
+- Add shortest path, subgraph, batch edge operations, and degree queries
+- Expose `with_max_tokens` and move token limits into `MultiVectorConfig`
+
+### Correctness and Robustness
+
+- Fix EdgeStore WAL replay ordering so edge deletes are applied before inserts
+- Deduplicate self-edges correctly and tighten EdgeStore error propagation
+- Make WAL parsing more forward-compatible and clarify metadata/version constants
+- Apply multi-vector token limits after pooling instead of before
+- Improve EdgeStore coverage with WAL edge-case tests, property tests, and stress tests
+
+## v0.0.27
 
 ### Bug Fixes
 
