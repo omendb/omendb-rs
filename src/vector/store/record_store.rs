@@ -259,7 +259,7 @@ impl RecordStore {
     pub fn iter_live(&self) -> impl Iterator<Item = (u32, Record)> {
         let slots = self.slots.read().clone();
         let deleted = self.deleted.read().clone();
-        
+
         slots.into_iter().enumerate().filter_map(move |(slot, record_opt)| {
             let slot = slot as u32;
             if deleted.contains(slot) {
