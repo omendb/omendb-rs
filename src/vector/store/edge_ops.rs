@@ -97,12 +97,11 @@ impl VectorStore {
             .expect("checked above")
             .remove_edge(from_id, to_id, edge_type);
 
-        if removed {
-            if let Some(ref mut storage) = *self.storage.write() {
+        if removed
+            && let Some(ref mut storage) = *self.storage.write() {
                 storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
                 storage.wal_sync()?;
             }
-        }
 
         Ok(removed)
     }

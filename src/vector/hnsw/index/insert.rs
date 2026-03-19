@@ -430,9 +430,9 @@ impl HNSWIndex {
                         let mut neighbor_neighbors = existing.into_owned();
                         neighbor_neighbors.push(*node_id);
                         // Prune if over capacity (must recompute distances for pruning)
-                        if neighbor_neighbors.len() > m {
-                            if let Some(neighbor_vec) = self.storage.get_dequantized(neighbor_id) {
-                                if let Ok(pruned) = self.select_neighbors_heuristic(
+                        if neighbor_neighbors.len() > m
+                            && let Some(neighbor_vec) = self.storage.get_dequantized(neighbor_id)
+                                && let Ok(pruned) = self.select_neighbors_heuristic(
                                     neighbor_id,
                                     &neighbor_neighbors,
                                     m,
@@ -441,8 +441,6 @@ impl HNSWIndex {
                                 ) {
                                     neighbor_neighbors = pruned;
                                 }
-                            }
-                        }
                         self.storage
                             .set_neighbors_at_level(neighbor_id, lc, neighbor_neighbors);
                     }
@@ -471,14 +469,13 @@ impl HNSWIndex {
         }
 
         // Update entry point AFTER graph construction (critical for incremental inserts)
-        if let Some((new_entry, new_level)) = highest_level_node {
-            if let Some(current_entry) = self.entry_point {
+        if let Some((new_entry, new_level)) = highest_level_node
+            && let Some(current_entry) = self.entry_point {
                 let current_level = self.storage.level(current_entry);
                 if new_level > current_level {
                     self.entry_point = Some(new_entry);
                 }
             }
-        }
 
         // Note: Post-insert pruning pass removed - inline pruning during reverse link
         // addition (lines 412-424) already ensures neighbors never exceed M.

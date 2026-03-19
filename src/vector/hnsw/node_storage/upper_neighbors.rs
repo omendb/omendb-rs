@@ -144,7 +144,7 @@ impl UpperNeighborsStorage {
             #[cfg(feature = "mmap")]
             Self::Mmap(mmap) => mmap
                 .neighbors_at_level_cow(id, level, max_neighbors_upper)
-                .unwrap_or_else(|| Cow::Borrowed(&[])),
+                .unwrap_or(Cow::Borrowed(&[])),
         }
     }
 

@@ -363,11 +363,10 @@ impl ParallelBuilder {
 
             // Greedy search
             while let Some(Reverse(current)) = buffers.candidates.pop() {
-                if let Some(&farthest) = buffers.working.peek() {
-                    if current.distance > farthest.distance {
+                if let Some(&farthest) = buffers.working.peek()
+                    && current.distance > farthest.distance {
                         break;
                     }
-                }
 
                 // Get neighbors using lock-free atomic reads
                 // NeighborStorage uses atomic operations for both level 0 and upper levels

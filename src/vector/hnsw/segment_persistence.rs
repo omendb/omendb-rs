@@ -390,11 +390,10 @@ impl FrozenSegment {
         })?;
 
         // Fsync parent directory to ensure rename is durable (required on Linux ext4/btrfs)
-        if let Some(parent) = path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
+        if let Some(parent) = path.parent()
+            && let Ok(dir) = std::fs::File::open(parent) {
                 let _ = dir.sync_all();
             }
-        }
 
         let elapsed = start.elapsed();
         info!(

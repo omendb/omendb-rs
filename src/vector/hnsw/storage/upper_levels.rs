@@ -136,8 +136,8 @@ impl UpperLevelStorage {
         }
         let _lock = self.locks[idx].lock();
 
-        if let Some(Some(links)) = self.nodes.get(idx) {
-            if level <= links.max_level {
+        if let Some(Some(links)) = self.nodes.get(idx)
+            && level <= links.max_level {
                 let level_idx = (level - 1) as usize;
                 let count = links.counts[level_idx].load(Ordering::Relaxed) as usize;
                 if count >= self.max_m {
@@ -148,7 +148,6 @@ impl UpperLevelStorage {
                 links.counts[level_idx].store((count + 1) as u8, Ordering::Release);
                 return true;
             }
-        }
         false
     }
 
@@ -156,8 +155,8 @@ impl UpperLevelStorage {
     #[inline]
     pub fn add_neighbor_unlocked(&self, node_id: u32, level: u8, neighbor: u32) -> bool {
         let idx = node_id as usize;
-        if let Some(Some(links)) = self.nodes.get(idx) {
-            if level <= links.max_level {
+        if let Some(Some(links)) = self.nodes.get(idx)
+            && level <= links.max_level {
                 let level_idx = (level - 1) as usize;
                 let count = links.counts[level_idx].load(Ordering::Relaxed) as usize;
                 if count >= self.max_m {
@@ -168,7 +167,6 @@ impl UpperLevelStorage {
                 links.counts[level_idx].store((count + 1) as u8, Ordering::Release);
                 return true;
             }
-        }
         false
     }
 
@@ -179,8 +177,8 @@ impl UpperLevelStorage {
             return;
         }
         let _lock = self.locks[idx].lock();
-        if let Some(Some(links)) = self.nodes.get(idx) {
-            if level <= links.max_level {
+        if let Some(Some(links)) = self.nodes.get(idx)
+            && level <= links.max_level {
                 let level_idx = (level - 1) as usize;
                 let base = level_idx * self.max_m;
                 let count = neighbors.len().min(self.max_m);
@@ -189,7 +187,6 @@ impl UpperLevelStorage {
                 }
                 links.counts[level_idx].store(count as u8, Ordering::Release);
             }
-        }
     }
 
     /// Remove a neighbor at upper level
@@ -199,8 +196,8 @@ impl UpperLevelStorage {
             return;
         }
         let _lock = self.locks[idx].lock();
-        if let Some(Some(links)) = self.nodes.get(idx) {
-            if level <= links.max_level {
+        if let Some(Some(links)) = self.nodes.get(idx)
+            && level <= links.max_level {
                 let level_idx = (level - 1) as usize;
                 let base = level_idx * self.max_m;
                 let count = links.counts[level_idx].load(Ordering::Relaxed) as usize;
@@ -213,7 +210,6 @@ impl UpperLevelStorage {
                     }
                 }
             }
-        }
     }
 
     /// Get write lock for a node

@@ -230,14 +230,13 @@ impl EdgeStore {
         };
 
         if removed {
-            if let Some(list) = self.incoming.get_mut(to_id) {
-                if let Some(pos) = list
+            if let Some(list) = self.incoming.get_mut(to_id)
+                && let Some(pos) = list
                     .iter()
                     .position(|r| r.peer_id == from_id && r.edge_type == edge_type)
                 {
                     list.swap_remove(pos);
                 }
-            }
             self.edge_count = self.edge_count.saturating_sub(1);
         }
 
@@ -595,8 +594,8 @@ impl EdgeStore {
                 }
             }
             // For Both direction, also collect incoming edges where peer is in set
-            if direction == EdgeDirection::Both || direction == EdgeDirection::Incoming {
-                if let Some(records) = self.incoming.get(node.as_str()) {
+            if (direction == EdgeDirection::Both || direction == EdgeDirection::Incoming)
+                && let Some(records) = self.incoming.get(node.as_str()) {
                     for r in records {
                         if node_set.contains(&r.peer_id)
                             && edge_type.is_none_or(|t| r.edge_type == t)
@@ -614,7 +613,6 @@ impl EdgeStore {
                         }
                     }
                 }
-            }
         }
 
         Subgraph {

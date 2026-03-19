@@ -1004,11 +1004,10 @@ impl OmenFile {
         })?;
 
         // Fsync parent directory to durabilize the rename
-        if let Some(parent) = self.records_path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
+        if let Some(parent) = self.records_path.parent()
+            && let Ok(dir) = std::fs::File::open(parent) {
                 let _ = dir.sync_all();
             }
-        }
 
         Ok(())
     }
@@ -1477,11 +1476,10 @@ impl OmenFile {
         let deleted_bitmap = records.deleted_bitmap();
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
         for (idx, json) in records.iter_metadata() {
-            if !deleted_bitmap.contains(idx) {
-                if let Ok(bytes) = serde_json::to_vec(&json) {
+            if !deleted_bitmap.contains(idx)
+                && let Ok(bytes) = serde_json::to_vec(&json) {
                     metadata_bytes.insert(idx, bytes);
                 }
-            }
         }
         manifest.metadata = metadata_bytes;
         manifest.deleted.clone_from(&deleted_bitmap);
@@ -1569,11 +1567,10 @@ impl OmenFile {
         std::fs::rename(&temp_path, &self.path)?;
 
         // Fsync parent directory
-        if let Some(parent) = self.path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
+        if let Some(parent) = self.path.parent()
+            && let Ok(dir) = std::fs::File::open(parent) {
                 let _ = dir.sync_all();
             }
-        }
 
         // Re-open with lock + mmap
         let mut opts = OpenOptions::new();
@@ -1730,11 +1727,10 @@ impl OmenFile {
         // Convert metadata to bytes (skip deleted slots)
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
         for (&idx, json) in metadata {
-            if !deleted_bitmap.contains(idx) {
-                if let Ok(bytes) = serde_json::to_vec(json) {
+            if !deleted_bitmap.contains(idx)
+                && let Ok(bytes) = serde_json::to_vec(json) {
                     metadata_bytes.insert(idx, bytes);
                 }
-            }
         }
         manifest.metadata = metadata_bytes;
         manifest.deleted = deleted_bitmap; // move — reuses the bitmap built above
@@ -1826,11 +1822,10 @@ impl OmenFile {
         std::fs::rename(&temp_path, &self.path)?;
 
         // Fsync parent directory to ensure rename is durable (required on Linux ext4)
-        if let Some(parent) = self.path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
+        if let Some(parent) = self.path.parent()
+            && let Ok(dir) = std::fs::File::open(parent) {
                 let _ = dir.sync_all();
             }
-        }
 
         // Re-open with lock + mmap
         let mut opts = OpenOptions::new();

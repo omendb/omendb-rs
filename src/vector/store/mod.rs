@@ -340,14 +340,13 @@ impl VectorStore {
     /// Frozen segments use mmap, so the OS handles paging. This bounds
     /// heap usage while allowing large datasets.
     fn check_memory_pressure(&self) {
-        if let Some(limit) = self.max_memory_bytes {
-            if let Some(ref mut segments) = *self.segments.write() {
+        if let Some(limit) = self.max_memory_bytes
+            && let Some(ref mut segments) = *self.segments.write() {
                 let estimated = segments.total_memory();
                 if estimated > limit && segments.mutable_len() > 0 {
                     let _ = segments.freeze_mutable();
                 }
             }
-        }
     }
 
     /// K-nearest neighbors search using HNSW
@@ -440,7 +439,7 @@ impl VectorStore {
         let segments = self.segments.read();
         search::knn_search_filtered_core(
             &self.records,
-            &*self.metadata_index.read(),
+            &self.metadata_index.read(),
             segments.as_ref(),
             &query.data,
             k,

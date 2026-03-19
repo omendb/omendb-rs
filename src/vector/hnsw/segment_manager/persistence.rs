@@ -168,9 +168,8 @@ impl SegmentManager {
                 if let Some(id_str) = name_str
                     .strip_prefix("segment_")
                     .and_then(|s| s.strip_suffix(".bin"))
-                {
-                    if let Ok(id) = id_str.parse::<u64>() {
-                        if !active_ids.contains(&id) {
+                    && let Ok(id) = id_str.parse::<u64>()
+                        && !active_ids.contains(&id) {
                             if let Err(e) = fs::remove_file(entry.path()) {
                                 tracing::warn!(
                                     file = %name_str,
@@ -184,8 +183,6 @@ impl SegmentManager {
                                 );
                             }
                         }
-                    }
-                }
             }
         }
 

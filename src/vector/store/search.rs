@@ -158,8 +158,8 @@ pub(crate) fn knn_search_filtered_core(
     let filter_bitmap = filter.evaluate_bitmap(metadata_index);
 
     // Use segments (ACORN-1 filtered search)
-    if let Some(seg_mgr) = segments {
-        if !seg_mgr.is_empty() {
+    if let Some(seg_mgr) = segments
+        && !seg_mgr.is_empty() {
             let segment_results = if let Some(ref bitmap) = filter_bitmap {
                 // Fast path: bitmap-based filtering
                 let filter_fn =
@@ -191,7 +191,6 @@ pub(crate) fn knn_search_filtered_core(
                 return Ok(results);
             }
         }
-    }
 
     // Fallback: brute-force search with filtering
     Ok(brute_force_filtered(

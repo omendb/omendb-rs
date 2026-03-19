@@ -184,7 +184,7 @@ impl RecordStore {
         if self.deleted.read().contains(slot) {
             return None;
         }
-        self.slots.read().get(slot as usize).and_then(|r| r.clone())
+        self.slots.read().get(slot as usize).and_then(std::clone::Clone::clone)
     }
 
     /// Get a record by slot index
@@ -192,7 +192,7 @@ impl RecordStore {
         if self.deleted.read().contains(slot) {
             return None;
         }
-        self.slots.read().get(slot as usize).and_then(|r| r.clone())
+        self.slots.read().get(slot as usize).and_then(std::clone::Clone::clone)
     }
 
     /// Check if a slot is live (not deleted)
@@ -299,7 +299,7 @@ impl RecordStore {
     /// Return a copy of the ID→slot map
     pub fn id_to_slot_ref(&self) -> FxHashMap<String, u32> {
         let mut map = FxHashMap::default();
-        for entry in self.id_to_slot.iter() {
+        for entry in &self.id_to_slot {
             map.insert(entry.key().clone(), *entry.value());
         }
         map

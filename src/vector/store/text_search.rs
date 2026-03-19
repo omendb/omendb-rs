@@ -276,7 +276,7 @@ impl VectorStore {
             .filter_map(|(idx, distance)| {
                 self.records
                     .get_id(idx as u32)
-                    .map(|id| (id.to_string(), distance))
+                    .map(|id| (id.clone(), distance))
             })
             .collect()
     }

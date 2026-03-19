@@ -185,11 +185,10 @@ impl VectorStore {
                 }
                 *self.segments.write() = Some(segs);
 
-                if self.is_quantized() {
-                    if let Some(ref mut storage) = *self.storage.write() {
+                if self.is_quantized()
+                    && let Some(ref mut storage) = *self.storage.write() {
                         storage.put_quantization_mode(helpers::quantization_to_id(true))?;
                     }
-                }
 
                 result_indices.extend(slots.iter().map(|&s| s as usize));
             } else {

@@ -107,9 +107,9 @@ impl VectorStore {
         let mut dimensions = snapshot.dimensions as usize;
         let current_wal_epoch = storage.wal_truncation_epoch();
 
-        if !slim_snapshot_loaded {
-            if let Some((manifest_wal_epoch, _)) = manifest_wal_cutoff {
-                if current_wal_epoch > manifest_wal_epoch {
+        if !slim_snapshot_loaded
+            && let Some((manifest_wal_epoch, _)) = manifest_wal_cutoff
+                && current_wal_epoch > manifest_wal_epoch {
                     let referenced_slots: RoaringBitmap =
                         snapshot.id_to_slot.values().copied().collect();
                     for (slot, vector) in snapshot.vectors.iter_mut().enumerate() {
@@ -120,8 +120,6 @@ impl VectorStore {
                         }
                     }
                 }
-            }
-        }
 
         // Get HNSW parameters from header
         let header = storage.header();
@@ -207,15 +205,12 @@ impl VectorStore {
                 );
             }
             let mut entries = storage.pending_wal_entries()?;
-            if !slim_snapshot_loaded {
-                if let Some((manifest_wal_epoch, manifest_wal_max_ts)) = manifest_wal_cutoff {
-                    if current_wal_epoch == manifest_wal_epoch {
-                        if let Some(max_ts) = manifest_wal_max_ts {
+            if !slim_snapshot_loaded
+                && let Some((manifest_wal_epoch, manifest_wal_max_ts)) = manifest_wal_cutoff
+                    && current_wal_epoch == manifest_wal_epoch
+                        && let Some(max_ts) = manifest_wal_max_ts {
                             entries.retain(|entry| entry.header.timestamp > max_ts);
                         }
-                    }
-                }
-            }
             entries
         };
         let mut wal_modified_slots: Vec<u32> = Vec::new();
@@ -364,14 +359,13 @@ impl VectorStore {
                         let delta = active_count - loaded.len();
                         let mut inserted = 0;
                         for &slot in &modified_slots {
-                            if let Some(record) = records.get_by_slot(slot) {
-                                if !records.deleted_bitmap().contains(slot) {
+                            if let Some(record) = records.get_by_slot(slot)
+                                && !records.deleted_bitmap().contains(slot) {
                                     loaded.insert_with_slot(&record.vector, slot).map_err(|e| {
                                         anyhow::anyhow!("Failed to insert WAL delta vector: {e}")
                                     })?;
                                     inserted += 1;
                                 }
-                            }
                         }
                         tracing::info!(
                             frozen_segments = loaded.frozen_count(),
@@ -533,13 +527,12 @@ impl VectorStore {
             // This handles edges that were in the manifest snapshot but deleted via cascade.
             // Must happen before merging WAL inserts so that a delete→re-add sequence
             // correctly preserves the re-added edge.
-            if !wal_edge_deletes.is_empty() {
-                if let Some(ref mut store) = base {
+            if !wal_edge_deletes.is_empty()
+                && let Some(ref mut store) = base {
                     for (from_id, to_id, edge_type) in &wal_edge_deletes {
                         store.remove_edge(from_id, to_id, edge_type);
                     }
                 }
-            }
 
             if let Some(wal_es) = wal_edge_store {
                 // Merge WAL edges into base (or use WAL store directly if no base)
@@ -819,8 +812,8 @@ impl VectorStore {
             if dirty.is_empty() {
                 return Ok(());
             }
-            if let Some(ref mut storage) = *self.storage.write() {
-                if let Err(e) = storage.checkpoint_vectors_only(&self.records, &dirty) {
+            if let Some(ref mut storage) = *self.storage.write()
+                && let Err(e) = storage.checkpoint_vectors_only(&self.records, &dirty) {
                     // Restore dirty slots so the next checkpoint retries writing them.
                     // Without this, failed .vecs writes leave slots in id_to_slot but
                     // missing from dirty_since_flush, making them invisible to ANN search
@@ -828,7 +821,6 @@ impl VectorStore {
                     self.records.restore_dirty_slots(dirty);
                     return Err(e.into());
                 }
-            }
             Ok(())
         } else {
             // First checkpoint: full flush to create .vecs + manifest
@@ -841,8 +833,8 @@ impl VectorStore {
         // Save segments FIRST so their generation is current when the manifest is written.
         // Saving after the checkpoint writes the old generation to the manifest, causing a
         // generation mismatch on every open that forces a full HNSW rebuild.
-        if !skip_segments {
-            if let Some(ref mut segments) = *self.segments.write() {
+        if !skip_segments
+            && let Some(ref mut segments) = *self.segments.write() {
                 // Wait for any background merge to finish before saving
                 segments.drain_pending_merge();
 
@@ -859,7 +851,6 @@ impl VectorStore {
                     }
                 }
             }
-        }
 
         if let Some(ref mut storage) = *self.storage.write() {
             // Ensure dimensions are set in storage header

@@ -399,11 +399,9 @@ impl VectorStorage {
         if let Self::ScalarQuantized {
             params, trained, ..
         } = self
-        {
-            if *trained {
+            && *trained {
                 return Some(params);
             }
-        }
         None
     }
 

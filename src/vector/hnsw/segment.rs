@@ -331,11 +331,10 @@ impl FrozenSegment {
         // Reorder nodes into BFS traversal order so frozen segments are laid out
         // for cache-friendly reads. If optimization fails, keep the insertion-order
         // layout rather than failing freeze/persistence.
-        if !index.is_empty() {
-            if let Err(error) = index.optimize_cache_locality() {
+        if !index.is_empty()
+            && let Err(error) = index.optimize_cache_locality() {
                 tracing::warn!("Failed to reorder frozen segment for cache locality: {error}");
             }
-        }
 
         Self::from_parts(
             id,

@@ -165,7 +165,7 @@ impl VectorStore {
     /// Get the segment manager (for benchmarking/diagnostics)
     #[must_use]
     pub fn segments(&self) -> Option<MappedRwLockReadGuard<'_, crate::vector::hnsw::SegmentManager>> {
-        parking_lot::RwLockReadGuard::try_map(self.segments.read(), |segments| segments.as_ref())
+        parking_lot::RwLockReadGuard::try_map(self.segments.read(), std::option::Option::as_ref)
             .ok()
     }
 
