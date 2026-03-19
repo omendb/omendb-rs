@@ -946,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "omendb"
-version = "0.0.32"
+version = "0.0.33-rc1"
 dependencies = [
  "anyhow",
  "arc-swap",

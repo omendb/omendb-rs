@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.33-rc1
+
+### Release Candidate Checkpoint
+
+- Capture the current `main` line before the larger `SegmentManager` refactor begins
+- Include the recent concurrency, freeze-path, mmap-backed upper-layer, and search/build-path cleanup work
+- Validate the release candidate on Fedora/Linux as the authoritative publish benchmark host
+- Note that macOS publish numbers improved materially after clean reruns on Python `3.13.11`, but still trail the older local highs and will continue to be profiled after this checkpoint
+
 ## v0.0.32
 
 ### Durability and Recovery
