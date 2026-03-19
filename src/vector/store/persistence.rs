@@ -763,10 +763,11 @@ impl VectorStore {
     /// If the tombstone ratio exceeds `auto_compact_threshold` (default 25%),
     /// compaction runs automatically before persisting.
     pub fn flush(&self) -> Result<()> {
+        let _lock = self.write_lock.lock();
         let auto_compact_threshold =
             f32::from_bits(self.auto_compact_threshold.load(std::sync::atomic::Ordering::Relaxed));
         if self.records.deleted_count() > 0 && self.tombstone_ratio() > auto_compact_threshold {
-            self.compact()?;
+            self.compact_locked()?;
         }
         self.flush_internal(false)
     }
@@ -776,7 +777,13 @@ impl VectorStore {
     /// When .vecs exists, writes only dirty vector slots and syncs WAL — skipping
     /// the expensive manifest rewrite. On crash, WAL replay recovers IDs/metadata.
     /// Falls back to full flush on the first checkpoint (creates .vecs + manifest).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn checkpoint_wal(&self) -> Result<()> {
+        let _lock = self.write_lock.lock();
+        self.checkpoint_wal_locked()
+    }
+
+    pub(super) fn checkpoint_wal_locked(&self) -> Result<()> {
         let has_vec = self
             .storage
             .read()
@@ -829,6 +836,7 @@ impl VectorStore {
         }
     }
 
+    // Caller must hold write_lock when mutations can race with search/CRUD.
     fn flush_internal(&self, skip_segments: bool) -> Result<()> {
         // Save segments FIRST so their generation is current when the manifest is written.
         // Saving after the checkpoint writes the old generation to the manifest, causing a

@@ -62,8 +62,13 @@ impl VectorStore {
         Ok(all_slots)
     }
 
-    /// Rebuild HNSW index from existing vectors
+    /// Rebuild HNSW index from existing vectors.
     pub fn rebuild_index(&self) -> Result<()> {
+        let _lock = self.write_lock.lock();
+        self.rebuild_index_locked()
+    }
+
+    pub(super) fn rebuild_index_locked(&self) -> Result<()> {
         if self.records.is_empty() {
             return Ok(());
         }
@@ -173,9 +178,15 @@ impl VectorStore {
 
     /// Ensure HNSW index is ready for search
     pub fn ensure_index_ready(&self) -> Result<()> {
-        if self.needs_index_rebuild() {
-            self.rebuild_index()?;
+        if !self.needs_index_rebuild() {
+            return Ok(());
         }
+
+        let _lock = self.write_lock.lock();
+        if self.needs_index_rebuild() {
+            self.rebuild_index_locked()?;
+        }
+
         Ok(())
     }
 
@@ -193,9 +204,11 @@ impl VectorStore {
     /// For segment-based storage, this merges all frozen segments into one
     /// for better search locality. Returns the number of vectors in the merged segment.
     pub fn optimize(&self) -> Result<usize> {
+        let _lock = self.write_lock.lock();
+
         // Compact first if there are pending deletes to ensure consistent slot state
         if self.records.deleted_count() > 0 {
-            self.compact()?;
+            self.compact_locked()?;
         }
 
         if let Some(ref mut segments) = *self.segments.write() {
@@ -246,6 +259,11 @@ impl VectorStore {
     /// number of live records. Call periodically after bulk deletes, not after
     /// every delete.
     pub fn compact(&self) -> Result<usize> {
+        let _lock = self.write_lock.lock();
+        self.compact_locked()
+    }
+
+    pub(super) fn compact_locked(&self) -> Result<usize> {
         // Count tombstones before compacting
         let removed_count = self.records.deleted_count() as usize;
 
@@ -280,7 +298,7 @@ impl VectorStore {
         if self.records.is_empty() {
             *self.segments.write() = None;
         } else {
-            self.rebuild_index()?;
+            self.rebuild_index_locked()?;
         }
 
         // Rebuild metadata index from compacted records
@@ -311,7 +329,7 @@ impl VectorStore {
     ///
     /// `flush()` triggers compaction when the tombstone ratio exceeds this value.
     /// Default: 0.25. Set to 1.0 to disable auto-compact.
-    pub fn set_auto_compact_threshold(&mut self, threshold: f32) {
+    pub fn set_auto_compact_threshold(&self, threshold: f32) {
         self.auto_compact_threshold
             .store(threshold.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
     }

@@ -96,7 +96,7 @@ impl VectorStore {
         };
 
         if needs_checkpoint {
-            self.checkpoint_wal()?;
+            self.checkpoint_wal_locked()?;
         }
 
         self.check_memory_pressure();
@@ -234,7 +234,7 @@ impl VectorStore {
             .as_ref()
             .is_some_and(|s| s.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES);
         if needs_checkpoint {
-            self.checkpoint_wal()?;
+            self.checkpoint_wal_locked()?;
         }
 
         Ok(result_indices)
@@ -290,7 +290,7 @@ impl VectorStore {
             self.records.update_metadata(slot, new_metadata.clone())?;
 
             if needs_checkpoint {
-                self.checkpoint_wal()?;
+                self.checkpoint_wal_locked()?;
             }
         }
 
@@ -339,7 +339,7 @@ impl VectorStore {
         }
 
         if needs_checkpoint {
-            self.checkpoint_wal()?;
+            self.checkpoint_wal_locked()?;
         }
 
         Ok(())
