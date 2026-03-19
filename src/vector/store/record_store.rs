@@ -4,10 +4,14 @@
 //! HNSW owns: graph structure only.
 //! OmenFile: pure I/O (no state duplication).
 
+use dashmap::DashMap;
+use parking_lot::RwLock;
 use roaring::RoaringBitmap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::hash::BuildHasherDefault;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// A single record in the store
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,34 +40,34 @@ impl Record {
 #[derive(Debug)]
 pub struct RecordStore {
     /// Slot-based storage - Some(record) for live, None for deleted/empty
-    slots: Vec<Option<Record>>,
+    slots: RwLock<Vec<Option<Record>>>,
 
     /// Single deleted bitmap (RoaringBitmap for O(1) operations)
-    deleted: RoaringBitmap,
+    deleted: RwLock<RoaringBitmap>,
 
-    /// Single ID to slot mapping
-    id_to_slot: FxHashMap<String, u32>,
+    /// Single ID to slot mapping - Thread-safe for concurrent lookups
+    id_to_slot: DashMap<String, u32, BuildHasherDefault<FxHasher>>,
 
-    /// Derived live count (cached for O(1) len())
-    live_count: u32,
+    /// Derived live count (cached for O(1) len()) - Atomic for concurrent reads
+    live_count: AtomicU32,
 
     /// Vector dimensions (fixed after first insert)
-    dimensions: u32,
+    dimensions: AtomicU32,
 
     /// Slots modified since last checkpoint (for incremental persistence)
-    dirty_slots: RoaringBitmap,
+    dirty_slots: RwLock<RoaringBitmap>,
 }
 
 impl RecordStore {
     /// Create a new empty RecordStore
     pub fn new(dimensions: u32) -> Self {
         Self {
-            slots: Vec::new(),
-            deleted: RoaringBitmap::new(),
-            id_to_slot: FxHashMap::default(),
-            live_count: 0,
-            dimensions,
-            dirty_slots: RoaringBitmap::new(),
+            slots: RwLock::new(Vec::new()),
+            deleted: RwLock::new(RoaringBitmap::new()),
+            id_to_slot: DashMap::default(),
+            live_count: AtomicU32::new(0),
+            dimensions: AtomicU32::new(dimensions),
+            dirty_slots: RwLock::new(RoaringBitmap::new()),
         }
     }
 
@@ -74,7 +78,7 @@ impl RecordStore {
         dimensions: u32,
     ) -> Self {
         // Rebuild id_to_slot mapping from slots
-        let mut id_to_slot = FxHashMap::default();
+        let id_to_slot = DashMap::default();
         let mut live_count = 0u32;
 
         for (slot, record_opt) in slots.iter().enumerate() {
@@ -82,19 +86,19 @@ impl RecordStore {
             if deleted.contains(slot) {
                 continue;
             }
-            if let Some(ref record) = record_opt {
+            if let Some(record) = record_opt {
                 id_to_slot.insert(record.id.clone(), slot);
                 live_count += 1;
             }
         }
 
         Self {
-            slots,
-            deleted,
+            slots: RwLock::new(slots),
+            deleted: RwLock::new(deleted),
             id_to_slot,
-            live_count,
-            dimensions,
-            dirty_slots: RoaringBitmap::new(),
+            live_count: AtomicU32::new(live_count),
+            dimensions: AtomicU32::new(dimensions),
+            dirty_slots: RwLock::new(RoaringBitmap::new()),
         }
     }
 
@@ -103,254 +107,271 @@ impl RecordStore {
     /// Returns the slot index where the record was stored.
     /// For updates, returns existing slot. For inserts, returns new slot.
     pub fn set(
-        &mut self,
+        &self,
         id: String,
         vector: Vec<f32>,
         metadata: Option<JsonValue>,
     ) -> anyhow::Result<u32> {
         // Validate dimensions
-        if self.dimensions == 0 {
-            self.dimensions = vector.len() as u32;
-        } else if vector.len() != self.dimensions as usize {
+        let current_dims = self.dimensions.load(Ordering::Relaxed);
+        if current_dims == 0 {
+            let new_dims = vector.len() as u32;
+            if self
+                .dimensions
+                .compare_exchange(0, new_dims, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                // Someone else set it, check if it matches
+                let final_dims = self.dimensions.load(Ordering::SeqCst);
+                if vector.len() as u32 != final_dims {
+                    anyhow::bail!(
+                        "Vector dimension mismatch: expected {}, got {}",
+                        final_dims,
+                        vector.len()
+                    );
+                }
+            }
+        } else if vector.len() as u32 != current_dims {
             anyhow::bail!(
                 "Vector dimension mismatch: expected {}, got {}",
-                self.dimensions,
+                current_dims,
                 vector.len()
             );
         }
 
         // Check for existing record (update case)
-        // IMPORTANT: We do NOT reuse slots on update to maintain HNSW node ID == RecordStore slot.
-        // HNSW assigns sequential node IDs, so RecordStore must do the same.
-        // On update: mark old slot deleted, insert at new slot.
-        if let Some(&old_slot) = self.id_to_slot.get(&id) {
-            // Mark old slot as deleted (don't clear data yet - compaction handles that)
-            if !self.deleted.contains(old_slot) {
-                self.deleted.insert(old_slot);
-                self.dirty_slots.insert(old_slot);
-                self.live_count -= 1;
+        if let Some(old_slot_ref) = self.id_to_slot.get(&id) {
+            let old_slot = *old_slot_ref;
+            let mut deleted = self.deleted.write();
+            if !deleted.contains(old_slot) {
+                deleted.insert(old_slot);
+                self.dirty_slots.write().insert(old_slot);
+                self.live_count.fetch_sub(1, Ordering::Relaxed);
             }
-            // Fall through to insert at new slot
         }
 
-        // Insert at new slot (both new records and updates)
-        let slot = self.slots.len() as u32;
-        self.slots
-            .push(Some(Record::new(id.clone(), vector, metadata)));
+        // Insert at new slot
+        let mut slots = self.slots.write();
+        let slot = slots.len() as u32;
+        slots.push(Some(Record::new(id.clone(), vector, metadata)));
         self.id_to_slot.insert(id, slot);
-        self.live_count += 1;
-        self.dirty_slots.insert(slot);
+        self.live_count.fetch_add(1, Ordering::Relaxed);
+        self.dirty_slots.write().insert(slot);
 
         Ok(slot)
     }
 
     /// Delete a record by ID - O(1)
-    ///
-    /// Returns the slot index if found and deleted, None if not found.
-    pub fn delete(&mut self, id: &str) -> Option<u32> {
+    pub fn delete(&self, id: &str) -> Option<u32> {
         let slot = *self.id_to_slot.get(id)?;
 
-        // Already deleted?
-        if self.deleted.contains(slot) {
+        let mut deleted = self.deleted.write();
+        if deleted.contains(slot) {
             return None;
         }
 
-        // Mark as deleted
-        self.deleted.insert(slot);
-        self.dirty_slots.insert(slot);
-        self.live_count = self.live_count.saturating_sub(1);
-
-        // Remove from ID mapping so it can be re-inserted later
+        deleted.insert(slot);
+        self.dirty_slots.write().insert(slot);
+        self.live_count.fetch_sub(1, Ordering::Relaxed);
         self.id_to_slot.remove(id);
 
         Some(slot)
     }
 
     /// Get a record by ID
-    pub fn get(&self, id: &str) -> Option<&Record> {
-        let &slot = self.id_to_slot.get(id)?;
-        if self.deleted.contains(slot) {
+    pub fn get(&self, id: &str) -> Option<Record> {
+        let slot = *self.id_to_slot.get(id)?;
+        if self.deleted.read().contains(slot) {
             return None;
         }
-        self.slots.get(slot as usize).and_then(|r| r.as_ref())
+        self.slots.read().get(slot as usize).and_then(|r| r.clone())
     }
 
     /// Get a record by slot index
-    pub fn get_by_slot(&self, slot: u32) -> Option<&Record> {
-        if self.deleted.contains(slot) {
+    pub fn get_by_slot(&self, slot: u32) -> Option<Record> {
+        if self.deleted.read().contains(slot) {
             return None;
         }
-        self.slots.get(slot as usize).and_then(|r| r.as_ref())
+        self.slots.read().get(slot as usize).and_then(|r| r.clone())
     }
 
     /// Check if a slot is live (not deleted)
     #[inline]
     pub fn is_live(&self, slot: u32) -> bool {
-        !self.deleted.contains(slot) && (slot as usize) < self.slots.len()
+        !self.deleted.read().contains(slot) && (slot as usize) < self.slots.read().len()
     }
 
     /// Get the slot for a string ID
     #[inline]
     pub fn get_slot(&self, id: &str) -> Option<u32> {
-        self.id_to_slot.get(id).copied()
+        self.id_to_slot.get(id).map(|r| *r)
     }
 
     /// Get the ID for a slot
-    pub fn get_id(&self, slot: u32) -> Option<&str> {
+    pub fn get_id(&self, slot: u32) -> Option<String> {
         self.slots
+            .read()
             .get(slot as usize)
-            .and_then(|r| r.as_ref())
-            .map(|r| r.id.as_str())
+            .and_then(|r| r.as_ref().map(|r| r.id.clone()))
     }
 
     /// Get live record count - O(1)
     #[inline]
     pub fn len(&self) -> u32 {
-        self.live_count
+        self.live_count.load(Ordering::Relaxed)
     }
 
     /// Check if store is empty
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.live_count == 0
+        self.len() == 0
     }
 
     /// Get total slot count (including deleted)
     #[inline]
     pub fn slot_count(&self) -> u32 {
-        self.slots.len() as u32
+        self.slots.read().len() as u32
     }
 
     /// Get vector dimensions
     #[inline]
     pub fn dimensions(&self) -> u32 {
-        self.dimensions
+        self.dimensions.load(Ordering::Relaxed)
     }
 
     /// Set dimensions (only if currently 0)
-    pub fn set_dimensions(&mut self, dimensions: u32) {
-        if self.dimensions == 0 {
-            self.dimensions = dimensions;
-        }
+    pub fn set_dimensions(&self, dimensions: u32) {
+        let _ = self.dimensions.compare_exchange(
+            0,
+            dimensions,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
     }
 
     /// Get deleted count
     #[inline]
     pub fn deleted_count(&self) -> u32 {
-        self.deleted.len() as u32
+        self.deleted.read().len() as u32
     }
 
-    /// Iterate over live records with their slot indices
-    pub fn iter_live(&self) -> impl Iterator<Item = (u32, &Record)> {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, record_opt)| {
-                let slot = slot as u32;
-                if self.deleted.contains(slot) {
-                    return None;
-                }
-                record_opt.as_ref().map(|r| (slot, r))
-            })
+    /// Iterate over live records (returns clones for thread safety)
+    pub fn iter_live(&self) -> impl Iterator<Item = (u32, Record)> {
+        let slots = self.slots.read().clone();
+        let deleted = self.deleted.read().clone();
+        
+        slots.into_iter().enumerate().filter_map(move |(slot, record_opt)| {
+            let slot = slot as u32;
+            if deleted.contains(slot) {
+                return None;
+            }
+            record_opt.map(|r| (slot, r))
+        })
     }
 
-    /// Get reference to the deleted bitmap
-    #[inline]
-    pub fn deleted_bitmap(&self) -> &RoaringBitmap {
-        &self.deleted
+    /// Get a clone of the deleted bitmap
+    pub fn deleted_bitmap(&self) -> RoaringBitmap {
+        self.deleted.read().clone()
     }
 
     /// Update metadata for a record by slot
-    pub fn update_metadata(&mut self, slot: u32, metadata: JsonValue) -> anyhow::Result<()> {
-        let record = self
-            .slots
+    pub fn update_metadata(&self, slot: u32, metadata: JsonValue) -> anyhow::Result<()> {
+        let mut slots = self.slots.write();
+        let record = slots
             .get_mut(slot as usize)
             .and_then(|r| r.as_mut())
             .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
 
-        self.dirty_slots.insert(slot);
+        self.dirty_slots.write().insert(slot);
         record.metadata = Some(metadata);
         Ok(())
     }
 
-    /// Export vector references for checkpoint (zero-copy)
-    pub fn export_vector_refs(&self) -> Vec<Option<&[f32]>> {
+    /// Export vector references for checkpoint (returns owned copy for stability)
+    pub fn export_vectors(&self) -> Vec<Option<Vec<f32>>> {
         self.slots
+            .read()
             .iter()
-            .map(|opt| opt.as_ref().map(|r| r.vector.as_slice()))
+            .map(|opt| opt.as_ref().map(|r| r.vector.clone()))
             .collect()
     }
 
-    /// Borrow the ID→slot map (zero-copy for checkpoint I/O)
-    pub fn id_to_slot_ref(&self) -> &FxHashMap<String, u32> {
-        &self.id_to_slot
+    /// Return a copy of the ID→slot map
+    pub fn id_to_slot_ref(&self) -> FxHashMap<String, u32> {
+        let mut map = FxHashMap::default();
+        for entry in self.id_to_slot.iter() {
+            map.insert(entry.key().clone(), *entry.value());
+        }
+        map
     }
 
     /// Export deleted slots for checkpoint
     pub fn export_deleted(&self) -> Vec<u32> {
-        self.deleted.iter().collect()
+        self.deleted.read().iter().collect()
     }
 
-    /// Iterate (slot, &metadata) pairs (zero-copy for checkpoint I/O)
-    pub fn iter_metadata(&self) -> impl Iterator<Item = (u32, &JsonValue)> {
-        self.slots.iter().enumerate().filter_map(|(slot, opt)| {
+    /// Iterate (slot, metadata) pairs
+    pub fn iter_metadata(&self) -> Vec<(u32, JsonValue)> {
+        self.slots.read().iter().enumerate().filter_map(|(slot, opt)| {
             opt.as_ref()
-                .and_then(|r| r.metadata.as_ref())
+                .and_then(|r| r.metadata.clone())
                 .map(|m| (slot as u32, m))
-        })
+        }).collect()
     }
 
     /// Take dirty slots bitmap, resetting it to empty
-    pub fn take_dirty_slots(&mut self) -> RoaringBitmap {
-        std::mem::take(&mut self.dirty_slots)
+    pub fn take_dirty_slots(&self) -> RoaringBitmap {
+        std::mem::take(&mut *self.dirty_slots.write())
     }
 
-    /// Restore dirty slots after a failed checkpoint, so the next checkpoint retries them.
-    pub fn restore_dirty_slots(&mut self, slots: RoaringBitmap) {
-        self.dirty_slots |= slots;
+    /// Restore dirty slots
+    pub fn restore_dirty_slots(&self, slots: RoaringBitmap) {
+        *self.dirty_slots.write() |= slots;
     }
 
-    /// Get vector data for a slot (for checkpoint I/O)
-    pub fn get_vector(&self, slot: u32) -> Option<&[f32]> {
+    /// Get vector data for a slot
+    pub fn get_vector(&self, slot: u32) -> Option<Vec<f32>> {
         self.slots
+            .read()
             .get(slot as usize)?
             .as_ref()
-            .map(|r| r.vector.as_slice())
+            .map(|r| r.vector.clone())
     }
 
     /// Compact the store - removes deleted records and reassigns slots
-    ///
-    /// Returns mapping from old slot to new slot for live records.
-    pub fn compact(&mut self) -> FxHashMap<u32, u32> {
+    pub fn compact(&self) -> FxHashMap<u32, u32> {
         let mut old_to_new: FxHashMap<u32, u32> = FxHashMap::default();
-        let mut new_slots: Vec<Option<Record>> = Vec::with_capacity(self.live_count as usize);
-        let mut new_id_to_slot: FxHashMap<String, u32> = FxHashMap::default();
+        let mut new_slots: Vec<Option<Record>> = Vec::with_capacity(self.len() as usize);
+        let mut new_id_to_slot: Vec<(String, u32)> = Vec::with_capacity(self.len() as usize);
 
-        for (old_slot, record_opt) in self.slots.iter().enumerate() {
+        let slots = self.slots.read();
+        let deleted = self.deleted.read();
+
+        for (old_slot, record_opt) in slots.iter().enumerate() {
             let old_slot = old_slot as u32;
-
-            // Skip deleted slots
-            if self.deleted.contains(old_slot) {
+            if deleted.contains(old_slot) {
                 continue;
             }
 
             if let Some(record) = record_opt {
                 let new_slot = new_slots.len() as u32;
                 old_to_new.insert(old_slot, new_slot);
-                new_id_to_slot.insert(record.id.clone(), new_slot);
+                new_id_to_slot.push((record.id.clone(), new_slot));
                 new_slots.push(Some(record.clone()));
             }
         }
 
+        drop(slots);
+        drop(deleted);
+
         // Update state
-        self.slots = new_slots;
-        self.id_to_slot = new_id_to_slot;
-        self.deleted.clear();
-        // Mark every live slot dirty so checkpoint_incremental rewrites .vecs at the new
-        // positions. Clearing dirty_slots here would leave the manifest pointing at new
-        // compact slot indices while .vecs still has vectors at their old positions.
-        self.dirty_slots = (0..self.slots.len() as u32).collect();
-        // live_count stays the same
+        *self.slots.write() = new_slots;
+        self.id_to_slot.clear();
+        for (id, slot) in new_id_to_slot {
+            self.id_to_slot.insert(id, slot);
+        }
+        self.deleted.write().clear();
+        *self.dirty_slots.write() = (0..self.slots.read().len() as u32).collect();
 
         old_to_new
     }

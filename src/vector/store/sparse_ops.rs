@@ -17,7 +17,7 @@ impl VectorStore {
     /// Check if sparse index is enabled.
     #[must_use]
     pub fn has_sparse(&self) -> bool {
-        self.sparse_index.is_some()
+        self.sparse_index.read().is_some()
     }
 
     /// Enable sparse vector indexing.
@@ -26,8 +26,8 @@ impl VectorStore {
     /// Call explicitly if you need `has_sparse()` to return true before inserting,
     /// or before calling `sparse_search()` on an empty index.
     pub fn enable_sparse(&mut self) {
-        if self.sparse_index.is_none() {
-            self.sparse_index = Some(crate::vector::sparse::SparseIndex::new());
+        if self.sparse_index.read().is_none() {
+            *self.sparse_index.write() = Some(crate::vector::sparse::SparseIndex::new());
         }
     }
 
@@ -51,12 +51,12 @@ impl VectorStore {
 
         let slot = if let Some(slot) = self.records.get_slot(id) {
             // Existing ID: update in-place to preserve HNSW slot
-            self.metadata_index.remove(slot);
-            self.metadata_index.index_json(slot, &metadata);
+            self.metadata_index.write().remove(slot);
+            self.metadata_index.write().index_json(slot, &metadata);
             self.records.update_metadata(slot, metadata.clone())?;
 
             // WAL write for metadata update
-            if let Some(ref mut storage) = self.storage {
+            if let Some(ref mut storage) = *self.storage.write() {
                 if let Some(record) = self.records.get_by_slot(slot) {
                     let metadata_bytes = serde_json::to_vec(&metadata)?;
                     storage.wal_append_insert(id, &record.vector, Some(&metadata_bytes))?;
@@ -71,9 +71,9 @@ impl VectorStore {
             let slot =
                 self.records
                     .set(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
-            self.metadata_index.index_json(slot, &metadata);
+            self.metadata_index.write().index_json(slot, &metadata);
 
-            if let Some(ref mut storage) = self.storage {
+            if let Some(ref mut storage) = *self.storage.write() {
                 let metadata_bytes = serde_json::to_vec(&metadata)?;
                 storage.wal_append_insert(id, &zero_vec, Some(&metadata_bytes))?;
                 storage.wal_sync()?;
@@ -81,7 +81,7 @@ impl VectorStore {
             slot
         };
 
-        self.sparse_index.as_mut().unwrap().insert(slot, &sparse);
+        self.sparse_index.write().as_mut().unwrap().insert(slot, &sparse);
         Ok(())
     }
 
@@ -102,7 +102,7 @@ impl VectorStore {
             .map_err(|_| anyhow::anyhow!("slot index exceeds u32::MAX"))?;
 
         // Index sparse vector
-        self.sparse_index.as_mut().unwrap().insert(slot, &sparse);
+        self.sparse_index.write().as_mut().unwrap().insert(slot, &sparse);
 
         Ok(())
     }
@@ -118,13 +118,14 @@ impl VectorStore {
         k: usize,
         filter: Option<&MetadataFilter>,
     ) -> Result<Vec<SearchResult>> {
-        let sparse_index = self.sparse_index.as_ref().ok_or_else(|| {
+        let sparse_guard = self.sparse_index.read();
+        let sparse_index = sparse_guard.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Sparse index not enabled. Call enable_sparse() first")
         })?;
 
         let results = if let Some(f) = filter {
             // Try bitmap filter first
-            if let Some(bitmap) = f.evaluate_bitmap(&self.metadata_index) {
+            if let Some(bitmap) = f.evaluate_bitmap(&self.metadata_index.read()) {
                 sparse_index.search_with_bitmap(query, k, &bitmap)
             } else {
                 // Fall back to post-filtering: over-fetch then filter
@@ -133,12 +134,12 @@ impl VectorStore {
                     .into_iter()
                     .filter(|(slot, _)| {
                         self.records.is_live(*slot) && {
-                            let meta = self
+                            let metadata = self
                                 .records
                                 .get_by_slot(*slot)
-                                .and_then(|r| r.metadata.as_ref())
-                                .unwrap_or(&helpers::DEFAULT_METADATA);
-                            f.matches(meta)
+                                .and_then(|r| r.metadata)
+                                .unwrap_or_else(|| helpers::DEFAULT_METADATA.clone());
+                            f.matches(&metadata)
                         }
                     })
                     .take(k)

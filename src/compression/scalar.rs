@@ -351,123 +351,127 @@ impl ScalarParams {
     #[target_feature(enable = "avx2")]
     #[allow(clippy::unused_self)]
     unsafe fn int_dot_product_avx2(&self, query: &[u8], vec: &[u8]) -> u32 {
-        debug_assert_eq!(
-            query.len(),
-            vec.len(),
-            "AVX2 dot product: mismatched lengths"
-        );
-        let mut sum = _mm256_setzero_si256();
-        let mut i = 0;
+        unsafe {
+            debug_assert_eq!(
+                query.len(),
+                vec.len(),
+                "AVX2 dot product: mismatched lengths"
+            );
+            let mut sum = _mm256_setzero_si256();
+            let mut i = 0;
 
-        while i + 32 <= query.len() {
-            let q = _mm256_loadu_si256(query.as_ptr().add(i).cast());
-            let v = _mm256_loadu_si256(vec.as_ptr().add(i).cast());
+            while i + 32 <= query.len() {
+                let q = _mm256_loadu_si256(query.as_ptr().add(i).cast());
+                let v = _mm256_loadu_si256(vec.as_ptr().add(i).cast());
 
-            let q_lo = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(q, 0));
-            let q_hi = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(q, 1));
-            let v_lo = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(v, 0));
-            let v_hi = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(v, 1));
+                let q_lo = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(q, 0));
+                let q_hi = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(q, 1));
+                let v_lo = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(v, 0));
+                let v_hi = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(v, 1));
 
-            let prod_lo = _mm256_madd_epi16(q_lo, v_lo);
-            let prod_hi = _mm256_madd_epi16(q_hi, v_hi);
-            sum = _mm256_add_epi32(sum, prod_lo);
-            sum = _mm256_add_epi32(sum, prod_hi);
+                let prod_lo = _mm256_madd_epi16(q_lo, v_lo);
+                let prod_hi = _mm256_madd_epi16(q_hi, v_hi);
+                sum = _mm256_add_epi32(sum, prod_lo);
+                sum = _mm256_add_epi32(sum, prod_hi);
 
-            i += 32;
+                i += 32;
+            }
+
+            while i + 16 <= query.len() {
+                let q = _mm256_cvtepu8_epi16(_mm_loadu_si128(query.as_ptr().add(i).cast()));
+                let v = _mm256_cvtepu8_epi16(_mm_loadu_si128(vec.as_ptr().add(i).cast()));
+                let prod = _mm256_madd_epi16(q, v);
+                sum = _mm256_add_epi32(sum, prod);
+                i += 16;
+            }
+
+            let sum128 = _mm_add_epi32(
+                _mm256_extracti128_si256(sum, 0),
+                _mm256_extracti128_si256(sum, 1),
+            );
+            let sum64 = _mm_add_epi32(sum128, _mm_srli_si128(sum128, 8));
+            let sum32 = _mm_add_epi32(sum64, _mm_srli_si128(sum64, 4));
+            let mut result = _mm_cvtsi128_si32(sum32) as u32;
+
+            for j in i..query.len() {
+                result += query[j] as u32 * vec[j] as u32;
+            }
+
+            result
         }
-
-        while i + 16 <= query.len() {
-            let q = _mm256_cvtepu8_epi16(_mm_loadu_si128(query.as_ptr().add(i).cast()));
-            let v = _mm256_cvtepu8_epi16(_mm_loadu_si128(vec.as_ptr().add(i).cast()));
-            let prod = _mm256_madd_epi16(q, v);
-            sum = _mm256_add_epi32(sum, prod);
-            i += 16;
-        }
-
-        let sum128 = _mm_add_epi32(
-            _mm256_extracti128_si256(sum, 0),
-            _mm256_extracti128_si256(sum, 1),
-        );
-        let sum64 = _mm_add_epi32(sum128, _mm_srli_si128(sum128, 8));
-        let sum32 = _mm_add_epi32(sum64, _mm_srli_si128(sum64, 4));
-        let mut result = _mm_cvtsi128_si32(sum32) as u32;
-
-        for j in i..query.len() {
-            result += query[j] as u32 * vec[j] as u32;
-        }
-
-        result
     }
 
     #[cfg(target_arch = "aarch64")]
     #[inline(always)]
     #[allow(clippy::unused_self)]
     unsafe fn int_dot_product_neon(&self, query: &[u8], vec: &[u8]) -> u32 {
-        use std::arch::aarch64::{
-            vaddq_u32, vaddvq_u32, vdupq_n_u32, vget_low_u8, vld1q_u8, vmull_high_u8, vmull_u8,
-            vpadalq_u16,
-        };
+        unsafe {
+            use std::arch::aarch64::{
+                vaddq_u32, vaddvq_u32, vdupq_n_u32, vget_low_u8, vld1q_u8, vmull_high_u8, vmull_u8,
+                vpadalq_u16,
+            };
 
-        // Use 4 accumulators to hide latency and increase ILP
-        let mut sum0 = vdupq_n_u32(0);
-        let mut sum1 = vdupq_n_u32(0);
-        let mut sum2 = vdupq_n_u32(0);
-        let mut sum3 = vdupq_n_u32(0);
-        let mut i = 0;
+            // Use 4 accumulators to hide latency and increase ILP
+            let mut sum0 = vdupq_n_u32(0);
+            let mut sum1 = vdupq_n_u32(0);
+            let mut sum2 = vdupq_n_u32(0);
+            let mut sum3 = vdupq_n_u32(0);
+            let mut i = 0;
 
-        // Process 64 elements per iteration (4x unrolling)
-        while i + 64 <= query.len() {
-            let q0 = vld1q_u8(query.as_ptr().add(i));
-            let v0 = vld1q_u8(vec.as_ptr().add(i));
-            let prod0_lo = vmull_u8(vget_low_u8(q0), vget_low_u8(v0));
-            let prod0_hi = vmull_high_u8(q0, v0);
-            sum0 = vpadalq_u16(sum0, prod0_lo);
-            sum0 = vpadalq_u16(sum0, prod0_hi);
+            // Process 64 elements per iteration (4x unrolling)
+            while i + 64 <= query.len() {
+                let q0 = vld1q_u8(query.as_ptr().add(i));
+                let v0 = vld1q_u8(vec.as_ptr().add(i));
+                let prod0_lo = vmull_u8(vget_low_u8(q0), vget_low_u8(v0));
+                let prod0_hi = vmull_high_u8(q0, v0);
+                sum0 = vpadalq_u16(sum0, prod0_lo);
+                sum0 = vpadalq_u16(sum0, prod0_hi);
 
-            let q1 = vld1q_u8(query.as_ptr().add(i + 16));
-            let v1 = vld1q_u8(vec.as_ptr().add(i + 16));
-            let prod1_lo = vmull_u8(vget_low_u8(q1), vget_low_u8(v1));
-            let prod1_hi = vmull_high_u8(q1, v1);
-            sum1 = vpadalq_u16(sum1, prod1_lo);
-            sum1 = vpadalq_u16(sum1, prod1_hi);
+                let q1 = vld1q_u8(query.as_ptr().add(i + 16));
+                let v1 = vld1q_u8(vec.as_ptr().add(i + 16));
+                let prod1_lo = vmull_u8(vget_low_u8(q1), vget_low_u8(v1));
+                let prod1_hi = vmull_high_u8(q1, v1);
+                sum1 = vpadalq_u16(sum1, prod1_lo);
+                sum1 = vpadalq_u16(sum1, prod1_hi);
 
-            let q2 = vld1q_u8(query.as_ptr().add(i + 32));
-            let v2 = vld1q_u8(vec.as_ptr().add(i + 32));
-            let prod2_lo = vmull_u8(vget_low_u8(q2), vget_low_u8(v2));
-            let prod2_hi = vmull_high_u8(q2, v2);
-            sum2 = vpadalq_u16(sum2, prod2_lo);
-            sum2 = vpadalq_u16(sum2, prod2_hi);
+                let q2 = vld1q_u8(query.as_ptr().add(i + 32));
+                let v2 = vld1q_u8(vec.as_ptr().add(i + 32));
+                let prod2_lo = vmull_u8(vget_low_u8(q2), vget_low_u8(v2));
+                let prod2_hi = vmull_high_u8(q2, v2);
+                sum2 = vpadalq_u16(sum2, prod2_lo);
+                sum2 = vpadalq_u16(sum2, prod2_hi);
 
-            let q3 = vld1q_u8(query.as_ptr().add(i + 48));
-            let v3 = vld1q_u8(vec.as_ptr().add(i + 48));
-            let prod3_lo = vmull_u8(vget_low_u8(q3), vget_low_u8(v3));
-            let prod3_hi = vmull_high_u8(q3, v3);
-            sum3 = vpadalq_u16(sum3, prod3_lo);
-            sum3 = vpadalq_u16(sum3, prod3_hi);
+                let q3 = vld1q_u8(query.as_ptr().add(i + 48));
+                let v3 = vld1q_u8(vec.as_ptr().add(i + 48));
+                let prod3_lo = vmull_u8(vget_low_u8(q3), vget_low_u8(v3));
+                let prod3_hi = vmull_high_u8(q3, v3);
+                sum3 = vpadalq_u16(sum3, prod3_lo);
+                sum3 = vpadalq_u16(sum3, prod3_hi);
 
-            i += 64;
+                i += 64;
+            }
+
+            while i + 16 <= query.len() {
+                let q = vld1q_u8(query.as_ptr().add(i));
+                let v = vld1q_u8(vec.as_ptr().add(i));
+                let prod_lo = vmull_u8(vget_low_u8(q), vget_low_u8(v));
+                let prod_hi = vmull_high_u8(q, v);
+                sum0 = vpadalq_u16(sum0, prod_lo);
+                sum0 = vpadalq_u16(sum0, prod_hi);
+                i += 16;
+            }
+
+            let sum01 = vaddq_u32(sum0, sum1);
+            let sum23 = vaddq_u32(sum2, sum3);
+            let sum_all = vaddq_u32(sum01, sum23);
+            let mut result = vaddvq_u32(sum_all);
+
+            for j in i..query.len() {
+                result += query[j] as u32 * vec[j] as u32;
+            }
+
+            result
         }
-
-        while i + 16 <= query.len() {
-            let q = vld1q_u8(query.as_ptr().add(i));
-            let v = vld1q_u8(vec.as_ptr().add(i));
-            let prod_lo = vmull_u8(vget_low_u8(q), vget_low_u8(v));
-            let prod_hi = vmull_high_u8(q, v);
-            sum0 = vpadalq_u16(sum0, prod_lo);
-            sum0 = vpadalq_u16(sum0, prod_hi);
-            i += 16;
-        }
-
-        let sum01 = vaddq_u32(sum0, sum1);
-        let sum23 = vaddq_u32(sum2, sum3);
-        let sum_all = vaddq_u32(sum01, sum23);
-        let mut result = vaddvq_u32(sum_all);
-
-        for j in i..query.len() {
-            result += query[j] as u32 * vec[j] as u32;
-        }
-
-        result
     }
 }
 

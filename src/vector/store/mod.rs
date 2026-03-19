@@ -44,9 +44,11 @@ use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
 use edge_store::EdgeStore;
+use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 /// Default HNSW M parameter (neighbors per node)
 const DEFAULT_HNSW_M: usize = 16;
@@ -86,33 +88,33 @@ impl SearchResult {
 /// Vector store with HNSW indexing
 pub struct VectorStore {
     /// Single source of truth for records (vectors, IDs, deleted, metadata)
-    records: RecordStore,
+    pub(crate) records: RecordStore,
 
     /// Segment manager for HNSW index (mutable + frozen segments)
-    pub(crate) segments: Option<SegmentManager>,
+    pub(crate) segments: RwLock<Option<SegmentManager>>,
 
     /// Roaring bitmap index for fast filtered search
-    metadata_index: MetadataIndex,
+    pub(crate) metadata_index: RwLock<MetadataIndex>,
 
     /// Persistent storage backend (.omen format)
-    storage: Option<OmenFile>,
+    pub(crate) storage: RwLock<Option<OmenFile>>,
 
     /// Storage path (for `TextIndex` subdirectory)
-    storage_path: Option<PathBuf>,
+    pub(crate) storage_path: Option<PathBuf>,
 
     /// Optional tantivy text index for hybrid search
-    text_index: Option<TextIndex>,
+    pub(crate) text_index: RwLock<Option<TextIndex>>,
 
     /// Text search configuration (used by `enable_text_search`)
-    text_search_config: Option<TextSearchConfig>,
+    text_search_config: RwLock<Option<TextSearchConfig>>,
 
     /// SQ8 quantization enabled (deferred until first insert for training)
-    pending_quantization: bool,
+    pending_quantization: AtomicBool,
 
     /// HNSW parameters for lazy initialization
-    hnsw_m: usize,
-    hnsw_ef_construction: usize,
-    hnsw_ef_search: usize,
+    hnsw_m: AtomicUsize,
+    hnsw_ef_construction: AtomicUsize,
+    hnsw_ef_search: AtomicUsize,
 
     /// Distance metric for similarity search (default: L2)
     distance_metric: Metric,
@@ -122,29 +124,32 @@ pub struct VectorStore {
     muvera_encoder: Option<MuveraEncoder>,
 
     /// Storage for original multi-vector tokens (for MaxSim reranking).
-    multivec_storage: Option<MultiVecStorage>,
+    pub(crate) multivec_storage: RwLock<Option<MultiVecStorage>>,
 
     /// Inverted index for sparse vector search (SPLADE, etc.)
-    sparse_index: Option<SparseIndex>,
+    pub(crate) sparse_index: RwLock<Option<SparseIndex>>,
 
     /// Typed directed edge graph over document IDs.
-    pub(crate) edge_store: Option<EdgeStore>,
+    pub(crate) edge_store: RwLock<Option<EdgeStore>>,
 
     /// Override for segment capacity (vectors per segment before freezing).
     /// None = use SegmentConfig::DEFAULT_CAPACITY (100K).
     segment_capacity: Option<usize>,
 
     /// SQ8 refiner: rescore candidates with original fp32 vectors (default: true when quantized)
-    rescore: bool,
+    rescore: AtomicBool,
     /// SQ8 refiner: candidate oversample multiplier (default: 3.0)
-    oversample: f32,
+    oversample: AtomicU32,
 
     /// Memory limit in bytes. When exceeded, triggers early freeze.
     max_memory_bytes: Option<usize>,
 
     /// Auto-compact threshold: tombstone ratio above which flush() triggers compaction.
     /// Range: 0.0–1.0. Default: 0.25 (compact when >25% of slots are tombstones).
-    auto_compact_threshold: f32,
+    auto_compact_threshold: AtomicU32,
+
+    /// Serializes all mutating operations (set, delete, flush, etc.)
+    pub(crate) write_lock: Mutex<()>,
 }
 
 /// WAL auto-checkpoint threshold (entries). Triggers flush when exceeded to prevent
@@ -159,26 +164,27 @@ impl VectorStore {
     fn with_defaults(dimensions: usize, distance_metric: Metric) -> Self {
         Self {
             records: RecordStore::new(dimensions as u32),
-            segments: None,
-            metadata_index: MetadataIndex::new(),
-            storage: None,
+            segments: RwLock::new(None),
+            metadata_index: RwLock::new(MetadataIndex::new()),
+            storage: RwLock::new(None),
             storage_path: None,
-            text_index: None,
-            text_search_config: None,
-            pending_quantization: false,
-            hnsw_m: DEFAULT_HNSW_M,
-            hnsw_ef_construction: DEFAULT_HNSW_EF_CONSTRUCTION,
-            hnsw_ef_search: DEFAULT_HNSW_EF_SEARCH,
+            text_index: RwLock::new(None),
+            text_search_config: RwLock::new(None),
+            pending_quantization: AtomicBool::new(false),
+            hnsw_m: AtomicUsize::new(DEFAULT_HNSW_M),
+            hnsw_ef_construction: AtomicUsize::new(DEFAULT_HNSW_EF_CONSTRUCTION),
+            hnsw_ef_search: AtomicUsize::new(DEFAULT_HNSW_EF_SEARCH),
             distance_metric,
             muvera_encoder: None,
-            multivec_storage: None,
-            sparse_index: None,
-            edge_store: None,
+            multivec_storage: RwLock::new(None),
+            sparse_index: RwLock::new(None),
+            edge_store: RwLock::new(None),
             segment_capacity: None,
-            rescore: false,
-            oversample: 3.0,
+            rescore: AtomicBool::new(false),
+            oversample: AtomicU32::new(3.0f32.to_bits()),
             max_memory_bytes: None,
-            auto_compact_threshold: 0.25,
+            auto_compact_threshold: AtomicU32::new(0.25f32.to_bits()),
+            write_lock: Mutex::new(()),
         }
     }
 
@@ -245,7 +251,7 @@ impl VectorStore {
 
         let mut store = Self::with_defaults(fde_dim, Metric::InnerProduct);
         store.muvera_encoder = Some(encoder);
-        store.multivec_storage = Some(MultiVecStorage::new(token_dim));
+        *store.multivec_storage.write() = Some(MultiVecStorage::new(token_dim));
         Ok(store)
     }
 
@@ -266,8 +272,8 @@ impl VectorStore {
     /// Quantization is trained on the first batch of vectors inserted.
     #[must_use]
     pub fn new_with_quantization(dimensions: usize) -> Self {
-        let mut store = Self::with_defaults(dimensions, Metric::L2);
-        store.pending_quantization = true;
+        let store = Self::with_defaults(dimensions, Metric::L2);
+        store.pending_quantization.store(true, Ordering::Relaxed);
         store
     }
 
@@ -282,10 +288,12 @@ impl VectorStore {
         ef_search: usize,
         distance_metric: Metric,
     ) -> Self {
-        let mut store = Self::with_defaults(dimensions, distance_metric);
-        store.hnsw_m = m;
-        store.hnsw_ef_construction = ef_construction;
-        store.hnsw_ef_search = ef_search;
+        let store = Self::with_defaults(dimensions, distance_metric);
+        store.hnsw_m.store(m, Ordering::Relaxed);
+        store
+            .hnsw_ef_construction
+            .store(ef_construction, Ordering::Relaxed);
+        store.hnsw_ef_search.store(ef_search, Ordering::Relaxed);
         store
     }
 
@@ -300,12 +308,12 @@ impl VectorStore {
     fn segment_config(&self, dimensions: usize) -> SegmentConfig {
         let mut config = SegmentConfig::new(dimensions)
             .with_params(HNSWParams {
-                m: self.hnsw_m,
-                ef_construction: self.hnsw_ef_construction,
+                m: self.hnsw_m.load(Ordering::Relaxed),
+                ef_construction: self.hnsw_ef_construction.load(Ordering::Relaxed),
                 ..Default::default()
             })
             .with_distance(self.distance_metric)
-            .with_quantization(self.pending_quantization);
+            .with_quantization(self.pending_quantization.load(Ordering::Relaxed));
         if let Some(cap) = self.segment_capacity {
             config = config.with_capacity(cap);
         }
@@ -331,9 +339,9 @@ impl VectorStore {
     ///
     /// Frozen segments use mmap, so the OS handles paging. This bounds
     /// heap usage while allowing large datasets.
-    fn check_memory_pressure(&mut self) {
+    fn check_memory_pressure(&self) {
         if let Some(limit) = self.max_memory_bytes {
-            if let Some(ref mut segments) = self.segments {
+            if let Some(ref mut segments) = *self.segments.write() {
                 let estimated = segments.total_memory();
                 if estimated > limit && segments.mutable_len() > 0 {
                     let _ = segments.freeze_mutable();
@@ -355,7 +363,8 @@ impl VectorStore {
         k: usize,
         ef: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
-        let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
+        let effective_ef =
+            helpers::compute_effective_ef(ef, self.hnsw_ef_search.load(Ordering::Relaxed), k);
         self.knn_search_ef(query, k, effective_ef)
     }
 
@@ -369,16 +378,21 @@ impl VectorStore {
     ) -> Result<Vec<(usize, f32)>> {
         helpers::validate_search_query(self.distance_metric, query, self.dimensions(), k)?;
 
-        let (search_k, needs_rescore) = if self.rescore && self.pending_quantization {
-            let oversampled = (k as f32 * self.oversample).ceil() as usize;
+        let (search_k, needs_rescore) = if self.rescore.load(Ordering::Relaxed)
+            && self.pending_quantization.load(Ordering::Relaxed)
+        {
+            let oversampled =
+                (k as f32 * f32::from_bits(self.oversample.load(Ordering::Relaxed))).ceil()
+                    as usize;
             (oversampled.max(k), true)
         } else {
             (k, false)
         };
 
+        let segments = self.segments.read();
         let results = search::knn_search_core(
             &self.records,
-            self.segments.as_ref(),
+            segments.as_ref(),
             &query.data,
             search_k,
             ef,
@@ -420,12 +434,14 @@ impl VectorStore {
         ef: Option<usize>,
     ) -> Result<Vec<SearchResult>> {
         helpers::validate_search_query(self.distance_metric, query, self.dimensions(), k)?;
-        let effective_ef = helpers::compute_effective_ef(ef, self.hnsw_ef_search, k);
+        let effective_ef =
+            helpers::compute_effective_ef(ef, self.hnsw_ef_search.load(Ordering::Relaxed), k);
 
+        let segments = self.segments.read();
         search::knn_search_filtered_core(
             &self.records,
-            &self.metadata_index,
-            self.segments.as_ref(),
+            &*self.metadata_index.read(),
+            segments.as_ref(),
             &query.data,
             k,
             effective_ef,

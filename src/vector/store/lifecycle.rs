@@ -40,7 +40,7 @@ impl VectorStore {
         let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
         let slots: Vec<u32> = all_slots.iter().map(|&s| s as u32).collect();
 
-        if self.segments.is_none() {
+        if self.segments.read().is_none() {
             // Build new segment with parallel construction
             let config = self.segment_config(dimensions);
 
@@ -49,8 +49,8 @@ impl VectorStore {
             if let Some(ref path) = self.storage_path {
                 segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
             }
-            self.segments = Some(segs);
-        } else if let Some(ref mut segments) = self.segments {
+            *self.segments.write() = Some(segs);
+        } else if let Some(ref mut segments) = *self.segments.write() {
             // Insert into existing segments
             for (vector, &slot) in vector_data.iter().zip(slots.iter()) {
                 segments
@@ -63,7 +63,7 @@ impl VectorStore {
     }
 
     /// Rebuild HNSW index from existing vectors
-    pub fn rebuild_index(&mut self) -> Result<()> {
+    pub fn rebuild_index(&self) -> Result<()> {
         if self.records.is_empty() {
             return Ok(());
         }
@@ -86,7 +86,7 @@ impl VectorStore {
         if let Some(ref path) = self.storage_path {
             segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
         }
-        self.segments = Some(segs);
+        *self.segments.write() = Some(segs);
 
         Ok(())
     }
@@ -141,12 +141,13 @@ impl VectorStore {
         }
 
         // Copy sparse vectors for merged IDs
-        if let Some(ref other_sparse) = other.sparse_index {
+        if let Some(other_sparse) = other.sparse_index.read().as_ref() {
             if !other_sparse.is_empty() {
-                if self.sparse_index.is_none() {
-                    self.sparse_index = Some(crate::vector::sparse::SparseIndex::new());
+                if self.sparse_index.read().is_none() {
+                    *self.sparse_index.write() = Some(crate::vector::sparse::SparseIndex::new());
                 }
-                let self_sparse = self.sparse_index.as_mut().unwrap();
+                let mut self_sparse = self.sparse_index.write();
+                let self_sparse = self_sparse.as_mut().unwrap();
                 for (other_slot, id) in &merged_slots {
                     if let Some(sv) = other_sparse.get(*other_slot) {
                         if let Some(new_slot) = self.records.get_slot(id) {
@@ -167,11 +168,11 @@ impl VectorStore {
     #[inline]
     #[must_use]
     pub fn needs_index_rebuild(&self) -> bool {
-        self.segments.is_none() && self.records.len() > 100
+        self.segments.read().is_none() && self.records.len() > 100
     }
 
     /// Ensure HNSW index is ready for search
-    pub fn ensure_index_ready(&mut self) -> Result<()> {
+    pub fn ensure_index_ready(&self) -> Result<()> {
         if self.needs_index_rebuild() {
             self.rebuild_index()?;
         }
@@ -191,13 +192,13 @@ impl VectorStore {
     ///
     /// For segment-based storage, this merges all frozen segments into one
     /// for better search locality. Returns the number of vectors in the merged segment.
-    pub fn optimize(&mut self) -> Result<usize> {
+    pub fn optimize(&self) -> Result<usize> {
         // Compact first if there are pending deletes to ensure consistent slot state
         if self.records.deleted_count() > 0 {
             self.compact()?;
         }
 
-        if let Some(ref mut segments) = self.segments {
+        if let Some(ref mut segments) = *self.segments.write() {
             // Flush mutable segment first
             segments.flush().map_err(|e| anyhow::anyhow!("{e}"))?;
             // Merge all frozen segments
@@ -244,7 +245,7 @@ impl VectorStore {
     /// Compaction rebuilds the HNSW index, which is O(n log n) where n is the
     /// number of live records. Call periodically after bulk deletes, not after
     /// every delete.
-    pub fn compact(&mut self) -> Result<usize> {
+    pub fn compact(&self) -> Result<usize> {
         // Count tombstones before compacting
         let removed_count = self.records.deleted_count() as usize;
 
@@ -256,17 +257,17 @@ impl VectorStore {
         let old_to_new = self.records.compact();
 
         // Compact multi-vector storage if present
-        if let Some(ref mut multivec_storage) = self.multivec_storage {
+        if let Some(ref mut multivec_storage) = *self.multivec_storage.write() {
             multivec_storage.compact(&old_to_new);
         }
 
         // Compact sparse index if present
-        if let Some(ref mut sparse_index) = self.sparse_index {
+        if let Some(ref mut sparse_index) = *self.sparse_index.write() {
             sparse_index.compact(&old_to_new);
         }
 
         // GC orphaned edges (safety net after slot reassignment)
-        if let Some(ref mut edge_store) = self.edge_store {
+        if let Some(ref mut edge_store) = *self.edge_store.write() {
             let live_ids: FxHashSet<String> = self
                 .records
                 .iter_live()
@@ -277,16 +278,16 @@ impl VectorStore {
 
         // Rebuild segments with new contiguous slots
         if self.records.is_empty() {
-            self.segments = None;
+            *self.segments.write() = None;
         } else {
             self.rebuild_index()?;
         }
 
         // Rebuild metadata index from compacted records
-        self.metadata_index = MetadataIndex::new();
+        *self.metadata_index.write() = MetadataIndex::new();
         for (slot, record) in self.records.iter_live() {
             if let Some(ref meta) = record.metadata {
-                self.metadata_index.index_json(slot, meta);
+                self.metadata_index.write().index_json(slot, meta);
             }
         }
 
@@ -311,6 +312,7 @@ impl VectorStore {
     /// `flush()` triggers compaction when the tombstone ratio exceeds this value.
     /// Default: 0.25. Set to 1.0 to disable auto-compact.
     pub fn set_auto_compact_threshold(&mut self, threshold: f32) {
-        self.auto_compact_threshold = threshold.clamp(0.0, 1.0);
+        self.auto_compact_threshold
+            .store(threshold.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
     }
 }

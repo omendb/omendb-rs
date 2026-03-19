@@ -555,7 +555,7 @@ mod tests {
             let num_q = rng.gen_range(5..=15);
             let query_vecs: Vec<Vec<f32>> = (0..num_q)
                 .map(|_| {
-                    let v: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect();
+                    let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
                     normalize(&v)
                 })
                 .collect();
@@ -565,7 +565,7 @@ mod tests {
             let num_d = rng.gen_range(20..=50);
             let doc_vecs: Vec<Vec<f32>> = (0..num_d)
                 .map(|_| {
-                    let v: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect();
+                    let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
                     normalize(&v)
                 })
                 .collect();
@@ -633,7 +633,7 @@ mod tests {
             let num_q = rng.gen_range(5..=15);
             let query_vecs: Vec<Vec<f32>> = (0..num_q)
                 .map(|_| {
-                    let v: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect();
+                    let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
                     normalize(&v)
                 })
                 .collect();
@@ -642,7 +642,7 @@ mod tests {
             let num_d = rng.gen_range(20..=50);
             let doc_vecs: Vec<Vec<f32>> = (0..num_d)
                 .map(|_| {
-                    let v: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect();
+                    let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
                     normalize(&v)
                 })
                 .collect();
@@ -788,7 +788,7 @@ mod tests {
 
         // Generate query with 10 tokens
         let query_vecs: Vec<Vec<f32>> = (0..10)
-            .map(|_| (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect())
+            .map(|_| (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect())
             .collect();
         let query: Vec<&[f32]> = query_vecs.iter().map(|v| v.as_slice()).collect();
 
@@ -797,7 +797,7 @@ mod tests {
             .map(|_| {
                 let num_tokens = rng.gen_range(5..20);
                 (0..num_tokens)
-                    .map(|_| (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect())
+                    .map(|_| (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect())
                     .collect()
             })
             .collect();

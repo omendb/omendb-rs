@@ -10,8 +10,8 @@ use super::{MetadataFilter, SegmentManager, Vector};
 impl VectorStore {
     /// Insert vector and return its slot ID (used in tests)
     #[allow(dead_code)]
-    pub(crate) fn insert(&mut self, vector: Vector) -> Result<usize> {
-        // Generate a unique ID for unnamed vectors
+    pub(crate) fn insert(&self, vector: Vector) -> Result<usize> {
+        // Serialized via set()
         let slot = self.records.slot_count();
         let id = format!("__auto_{slot}");
 
@@ -19,12 +19,9 @@ impl VectorStore {
     }
 
     /// Insert vector with string ID and metadata
-    ///
-    /// This is the primary method for inserting vectors with metadata support.
-    /// Returns error if ID already exists (use set for insert-or-update semantics).
     #[allow(dead_code)]
     pub(crate) fn insert_with_metadata(
-        &mut self,
+        &self,
         id: &str,
         vector: Vector,
         metadata: JsonValue,
@@ -37,21 +34,12 @@ impl VectorStore {
     }
 
     /// Upsert vector (insert or update) with string ID and metadata
-    ///
-    /// This is the recommended method for most use cases.
-    ///
-    /// # Durability
-    ///
-    /// Individual writes are buffered in the WAL but NOT synced to disk immediately.
-    /// For guaranteed durability, call [`flush()`](Self::flush) after critical writes.
-    /// Batch operations ([`set_batch`](Self::set_batch)) sync the WAL at batch end.
-    ///
-    /// Without explicit flush:
-    /// - Data is recoverable after normal shutdown
-    /// - Data may be lost on crash/power failure between set() and next flush/batch
-    pub fn set(&mut self, id: &str, vector: Vector, metadata: JsonValue) -> Result<usize> {
+    pub fn set(&self, id: &str, vector: Vector, metadata: JsonValue) -> Result<usize> {
+        let _lock = self.write_lock.lock();
+
         // Initialize segments if needed
-        if self.segments.is_none() {
+        let mut segments_guard = self.segments.write();
+        if segments_guard.is_none() {
             let dimensions = self.resolve_dimensions(vector.dim())?;
             self.records.set_dimensions(dimensions as u32);
 
@@ -63,7 +51,7 @@ impl VectorStore {
             if let Some(ref path) = self.storage_path {
                 segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
             }
-            self.segments = Some(segs);
+            *segments_guard = Some(segs);
         } else if vector.dim() != self.dimensions() {
             anyhow::bail!(
                 "Vector dimension mismatch: store expects {}, got {}",
@@ -75,16 +63,14 @@ impl VectorStore {
         // Check if this is an update
         let old_slot = self.records.get_slot(id);
 
-        // Upsert into RecordStore - creates new slot (both for insert and update)
-        // RecordStore marks old slot deleted internally to maintain slot == HNSW node ID
+        // Upsert into RecordStore
         let slot = self
             .records
             .set(id.to_string(), vector.data.clone(), Some(metadata.clone()))?
             as usize;
 
         // Insert into segments
-        if let Some(ref mut segments) = self.segments {
-            // Note: mark_deleted not needed - RecordStore filtering handles deleted nodes
+        if let Some(segments) = segments_guard.as_mut() {
             segments
                 .insert_with_slot(&vector.data, slot as u32)
                 .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
@@ -92,15 +78,15 @@ impl VectorStore {
 
         // Update metadata index and migrate sparse entry to new slot
         if let Some(old) = old_slot {
-            self.metadata_index.remove(old);
-            if let Some(ref mut sparse_index) = self.sparse_index {
+            self.metadata_index.write().remove(old);
+            if let Some(ref mut sparse_index) = *self.sparse_index.write() {
                 sparse_index.remap_slot(old, slot as u32);
             }
         }
-        self.metadata_index.index_json(slot as u32, &metadata);
+        self.metadata_index.write().index_json(slot as u32, &metadata);
 
         // WAL for crash durability
-        let needs_checkpoint = if let Some(ref mut storage) = self.storage {
+        let needs_checkpoint = if let Some(ref mut storage) = *self.storage.write() {
             let metadata_bytes = serde_json::to_vec(&metadata)?;
             storage.wal_append_insert(&id, &vector.data, Some(&metadata_bytes))?;
             storage.wal_sync()?;
@@ -118,30 +104,16 @@ impl VectorStore {
         Ok(slot)
     }
 
-    /// Batch set vectors (insert or update multiple vectors at once)
-    ///
-    /// This is the recommended method for bulk operations.
-    /// Uses parallel HNSW construction for both new and existing indexes.
-    ///
-    /// # Durability
-    ///
-    /// `set_batch()` does NOT write to the WAL and does NOT fsync. Data is durable
-    /// only after [`flush()`](Self::flush). This matches a transaction model where
-    /// `flush()` is the commit. An auto-checkpoint fires if a pre-existing WAL from
-    /// prior individual [`set()`](Self::set) calls exceeds the threshold.
-    ///
-    /// # Ordering Guarantee
-    ///
-    /// This method processes updates before inserts to ensure slot ordering is predictable.
-    /// **WARNING:** `set_multi_batch` in `multivec_ops.rs` depends on this ordering to
-    /// correctly align tokens with FDEs. Do not change without updating that code.
+    /// Batch set vectors
     pub fn set_batch<S: Into<String>>(
-        &mut self,
+        &self,
         batch: Vec<(S, Vector, JsonValue)>,
     ) -> Result<Vec<usize>> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
+
+        let _lock = self.write_lock.lock();
 
         // Convert IDs to String up front
         let batch: Vec<(String, Vector, JsonValue)> = batch
@@ -149,7 +121,7 @@ impl VectorStore {
             .map(|(id, vector, metadata)| (id.into(), vector, metadata))
             .collect();
 
-        // Separate batch into updates and inserts (updates processed first - see docstring)
+        // Separate batch into updates and inserts
         let mut updates: Vec<(u32, String, Vector, JsonValue)> = Vec::new();
         let mut inserts: Vec<(String, Vector, JsonValue)> = Vec::new();
 
@@ -165,24 +137,21 @@ impl VectorStore {
 
         // Process updates individually
         for (old_slot, id, vector, metadata) in updates {
-            // Update RecordStore - creates new slot, marks old as deleted
             let new_slot =
                 self.records
                     .set(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
 
-            // Insert into segments
-            if let Some(ref mut segments) = self.segments {
+            if let Some(ref mut segments) = *self.segments.write() {
                 segments
                     .insert_with_slot(&vector.data, new_slot)
                     .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
             }
 
-            // Update metadata index and migrate sparse entry
-            self.metadata_index.remove(old_slot);
-            if let Some(ref mut sparse_index) = self.sparse_index {
+            self.metadata_index.write().remove(old_slot);
+            if let Some(ref mut sparse_index) = *self.sparse_index.write() {
                 sparse_index.remap_slot(old_slot, new_slot);
             }
-            self.metadata_index.index_json(new_slot, &metadata);
+            self.metadata_index.write().index_json(new_slot, &metadata);
 
             result_indices.push(new_slot as usize);
         }
@@ -192,14 +161,10 @@ impl VectorStore {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
-            // Check if this is a new index (no existing segments)
-            let is_new_index = self.segments.is_none();
-
-            if is_new_index {
+            if self.segments.read().is_none() {
                 let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
                 self.records.set_dimensions(dimensions as u32);
 
-                // Insert into RecordStore first to get slots
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in &inserts {
                     let slot = self.records.set(
@@ -208,44 +173,33 @@ impl VectorStore {
                         Some(metadata.clone()),
                     )?;
                     slots.push(slot);
-                    self.metadata_index.index_json(slot, metadata);
+                    self.metadata_index.write().index_json(slot, metadata);
                 }
 
-                // Build segment config
                 let config = self.segment_config(dimensions);
-
-                // Use parallel build with slot mapping
                 let mut segs =
                     SegmentManager::build_parallel_with_slots(config, vectors_data, &slots)
                         .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?;
                 if let Some(ref path) = self.storage_path {
                     segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
                 }
-                self.segments = Some(segs);
+                *self.segments.write() = Some(segs);
 
-                // Handle quantization mode persistence
-                if self.pending_quantization {
-                    if let Some(ref mut storage) = self.storage {
+                if self.is_quantized() {
+                    if let Some(ref mut storage) = *self.storage.write() {
                         storage.put_quantization_mode(helpers::quantization_to_id(true))?;
                     }
                 }
 
                 result_indices.extend(slots.iter().map(|&s| s as usize));
             } else {
-                // Existing index - validate dimensions
                 let expected_dims = self.dimensions();
-                for (i, (_, vector, _)) in inserts.iter().enumerate() {
+                for (_, vector, _) in &inserts {
                     if vector.dim() != expected_dims {
-                        anyhow::bail!(
-                            "Vector {} dimension mismatch: expected {}, got {}",
-                            i,
-                            expected_dims,
-                            vector.dim()
-                        );
+                        anyhow::bail!("Vector dimension mismatch");
                     }
                 }
 
-                // Insert into RecordStore to get slots
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in &inserts {
                     let slot = self.records.set(
@@ -254,10 +208,9 @@ impl VectorStore {
                         Some(metadata.clone()),
                     )?;
                     slots.push(slot);
-                    self.metadata_index.index_json(slot, metadata);
+                    self.metadata_index.write().index_json(slot, metadata);
                 }
 
-                // Build HNSW index in parallel for this batch
                 let config = self.segment_config(expected_dims);
                 let batch_index = HNSWIndex::build_parallel(
                     config.dimensions,
@@ -265,11 +218,9 @@ impl VectorStore {
                     config.distance_fn,
                     config.quantization,
                     vectors_data,
-                )
-                .map_err(|e| anyhow::anyhow!("Batch parallel build failed: {e}"))?;
+                )?;
 
-                // Add parallel-built index as frozen segment with slot mapping
-                if let Some(ref mut segments) = self.segments {
+                if let Some(ref mut segments) = *self.segments.write() {
                     segments.add_frozen_from_index(batch_index, &slots);
                 }
 
@@ -279,6 +230,7 @@ impl VectorStore {
 
         let needs_checkpoint = self
             .storage
+            .read()
             .as_ref()
             .is_some_and(|s| s.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES);
         if needs_checkpoint {
@@ -288,19 +240,15 @@ impl VectorStore {
         Ok(result_indices)
     }
 
-    /// Update existing vector by string ID
-    ///
-    /// When a new vector is provided, this delegates to `set()` which performs a
-    /// full upsert: allocates a new slot, inserts into HNSW, and marks the old
-    /// slot as deleted. This ensures the HNSW index reflects the new position.
-    ///
-    /// Metadata-only updates are done in-place (no re-indexing needed).
+    /// Update existing vector
     pub fn update(
-        &mut self,
+        &self,
         id: &str,
         vector: Option<Vector>,
         metadata: Option<JsonValue>,
     ) -> Result<()> {
+        let _lock = self.write_lock.lock();
+
         let slot = self
             .records
             .get_slot(id)
@@ -311,7 +259,6 @@ impl VectorStore {
         }
 
         if let Some(new_vector) = vector {
-            // Delegate to set() which handles HNSW re-indexing via upsert
             let merged_metadata = match metadata {
                 Some(m) => m,
                 None => self
@@ -320,11 +267,12 @@ impl VectorStore {
                     .and_then(|r| r.metadata.clone())
                     .unwrap_or_else(|| serde_json::json!({})),
             };
+            drop(_lock); // Release to allow set() to re-acquire
             self.set(id, new_vector, merged_metadata)?;
         } else if let Some(ref new_metadata) = metadata {
-            let existing_vector = self.records.get_vector(slot).map(<[f32]>::to_vec);
+            let existing_vector = self.records.get_vector(slot);
 
-            let needs_checkpoint = if let Some(ref mut storage) = self.storage {
+            let needs_checkpoint = if let Some(ref mut storage) = *self.storage.write() {
                 if let Some(vec_data) = &existing_vector {
                     let metadata_bytes = serde_json::to_vec(new_metadata)?;
                     storage.wal_append_insert(id, vec_data, Some(&metadata_bytes))?;
@@ -337,8 +285,8 @@ impl VectorStore {
                 false
             };
 
-            self.metadata_index.remove(slot);
-            self.metadata_index.index_json(slot, new_metadata);
+            self.metadata_index.write().remove(slot);
+            self.metadata_index.write().index_json(slot, new_metadata);
             self.records.update_metadata(slot, new_metadata.clone())?;
 
             if needs_checkpoint {
@@ -349,40 +297,33 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Delete vector by string ID (lazy delete)
-    ///
-    /// This method:
-    /// 1. Marks the vector as deleted in bitmap (O(1) soft delete)
-    /// 2. Marks node as deleted in HNSW (filtered during search)
-    /// 3. Removes from text index if present
-    /// 4. Persists to WAL
-    ///
-    /// Deleted vectors are filtered during search. Call `compact()` to reclaim space.
-    pub fn delete(&mut self, id: &str) -> Result<()> {
-        // Delete from RecordStore (single source of truth)
+    /// Delete vector by string ID
+    pub fn delete(&self, id: &str) -> Result<()> {
+        let _lock = self.write_lock.lock();
+
         let slot = self
             .records
             .delete(id)
             .ok_or_else(|| anyhow::anyhow!("Vector with ID '{id}' not found"))?;
 
-        self.metadata_index.remove(slot);
+        self.metadata_index.write().remove(slot);
 
-        if let Some(ref mut sparse_index) = self.sparse_index {
+        if let Some(ref mut sparse_index) = *self.sparse_index.write() {
             sparse_index.remove(slot);
         }
 
-        // Collect edge WAL entries before removing (borrow checker: immutable then mutable)
         let edge_deletes: Vec<(String, String, String)> = self
             .edge_store
+            .read()
             .as_ref()
             .map(|es| es.edges_involving(id))
             .unwrap_or_default();
 
-        if let Some(ref mut edge_store) = self.edge_store {
+        if let Some(ref mut edge_store) = *self.edge_store.write() {
             edge_store.remove_all_for(id);
         }
 
-        let needs_checkpoint = if let Some(ref mut storage) = self.storage {
+        let needs_checkpoint = if let Some(ref mut storage) = *self.storage.write() {
             for (from_id, to_id, edge_type) in &edge_deletes {
                 storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
             }
@@ -393,7 +334,7 @@ impl VectorStore {
             false
         };
 
-        if let Some(ref mut text_index) = self.text_index {
+        if let Some(ref mut text_index) = *self.text_index.write() {
             text_index.delete_document(id)?;
         }
 
@@ -404,36 +345,31 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Delete multiple vectors by string IDs (lazy delete)
-    ///
-    /// Marks vectors as deleted in bitmap. Deleted vectors are filtered during search.
-    /// Call `compact()` to reclaim space after bulk deletes.
-    pub fn delete_batch(&mut self, ids: &[impl AsRef<str>]) -> Result<usize> {
-        // Delete from RecordStore and collect slots
-        let mut slots: Vec<u32> = Vec::with_capacity(ids.len());
-        let mut valid_ids: Vec<String> = Vec::with_capacity(ids.len());
+    /// Delete multiple vectors
+    pub fn delete_batch(&self, ids: &[impl AsRef<str>]) -> Result<usize> {
+        let _lock = self.write_lock.lock();
 
+        let mut valid_ids: Vec<String> = Vec::with_capacity(ids.len());
         let mut edge_deletes: Vec<(String, String, String)> = Vec::new();
 
         for id in ids {
             let id = id.as_ref();
             if let Some(slot) = self.records.delete(id) {
-                self.metadata_index.remove(slot);
-                if let Some(ref mut sparse_index) = self.sparse_index {
+                self.metadata_index.write().remove(slot);
+                if let Some(ref mut sparse_index) = *self.sparse_index.write() {
                     sparse_index.remove(slot);
                 }
-                if let Some(ref es) = self.edge_store {
+                if let Some(ref es) = *self.edge_store.read() {
                     edge_deletes.extend(es.edges_involving(id));
                 }
-                if let Some(ref mut edge_store) = self.edge_store {
+                if let Some(ref mut edge_store) = *self.edge_store.write() {
                     edge_store.remove_all_for(id);
                 }
-                slots.push(slot);
                 valid_ids.push(id.to_string());
             }
         }
 
-        if let Some(ref mut storage) = self.storage {
+        if let Some(ref mut storage) = *self.storage.write() {
             for (from_id, to_id, edge_type) in &edge_deletes {
                 storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
             }
@@ -445,10 +381,8 @@ impl VectorStore {
             }
         }
         for id in &valid_ids {
-            if let Some(ref mut text_index) = self.text_index {
-                if let Err(e) = text_index.delete_document(id) {
-                    tracing::warn!(id = %id, error = ?e, "Failed to delete from text index");
-                }
+            if let Some(ref mut text_index) = *self.text_index.write() {
+                let _ = text_index.delete_document(id);
             }
         }
 
@@ -456,17 +390,7 @@ impl VectorStore {
     }
 
     /// Delete vectors matching a metadata filter
-    ///
-    /// Evaluates the filter against all vectors and deletes those that match.
-    /// This is more efficient than manually iterating and calling delete_batch.
-    ///
-    /// # Arguments
-    /// * `filter` - MongoDB-style metadata filter
-    ///
-    /// # Returns
-    /// Number of vectors deleted
-    pub fn delete_by_filter(&mut self, filter: &MetadataFilter) -> Result<usize> {
-        // Find matching IDs
+    pub fn delete_by_filter(&self, filter: &MetadataFilter) -> Result<usize> {
         let ids_to_delete: Vec<String> = self
             .records
             .iter_live()
@@ -487,32 +411,7 @@ impl VectorStore {
         self.delete_batch(&ids_to_delete)
     }
 
-    /// Count vectors matching a metadata filter
-    ///
-    /// Evaluates the filter against all vectors and returns the count of matches.
-    /// More efficient than iterating and counting manually.
-    ///
-    /// # Arguments
-    /// * `filter` - MongoDB-style metadata filter
-    ///
-    /// # Returns
-    /// Number of vectors matching the filter
-    #[must_use]
-    pub fn count_by_filter(&self, filter: &MetadataFilter) -> usize {
-        self.records
-            .iter_live()
-            .filter(|(_, record)| {
-                record
-                    .metadata
-                    .as_ref()
-                    .is_some_and(|metadata| filter.matches(metadata))
-            })
-            .count()
-    }
-
     /// Get vector by string ID
-    ///
-    /// Returns owned data since vectors may be loaded from disk for quantized stores.
     #[must_use]
     pub fn get(&self, id: &str) -> Option<(Vector, JsonValue)> {
         let record = self.records.get(id)?;
@@ -520,7 +419,7 @@ impl VectorStore {
             .metadata
             .clone()
             .unwrap_or_else(helpers::default_metadata);
-        Some((Vector::new(record.vector.clone()), metadata))
+        Some((Vector::new(record.vector), metadata))
     }
 
     /// Get multiple vectors by string IDs
@@ -534,7 +433,7 @@ impl VectorStore {
 
     /// Get metadata by string ID (without loading vector data)
     #[must_use]
-    pub fn get_metadata_by_id(&self, id: &str) -> Option<&JsonValue> {
-        self.records.get(id).and_then(|r| r.metadata.as_ref())
+    pub fn get_metadata_by_id(&self, id: &str) -> Option<JsonValue> {
+        self.records.get(id).and_then(|r| r.metadata.clone())
     }
 }

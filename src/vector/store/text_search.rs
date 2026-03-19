@@ -34,15 +34,15 @@ impl VectorStore {
         &mut self,
         config: Option<TextSearchConfig>,
     ) -> Result<()> {
-        if self.text_index.is_some() {
+        if self.text_index.read().is_some() {
             return Ok(());
         }
 
         let config = config
-            .or_else(|| self.text_search_config.clone())
+            .or_else(|| self.text_search_config.read().clone())
             .unwrap_or_default();
 
-        self.text_index = if let Some(ref path) = self.storage_path {
+        *self.text_index.write() = if let Some(ref path) = self.storage_path {
             let text_path = path.join("text_index");
             Some(TextIndex::open_with_config(&text_path, &config)?)
         } else {
@@ -55,7 +55,7 @@ impl VectorStore {
     /// Check if text search is enabled.
     #[must_use]
     pub fn has_text_search(&self) -> bool {
-        self.text_index.is_some()
+        self.text_index.read().is_some()
     }
 
     /// Upsert vector with text content for hybrid search.
@@ -74,7 +74,8 @@ impl VectorStore {
         text: &str,
         metadata: JsonValue,
     ) -> Result<usize> {
-        let Some(ref mut text_index) = self.text_index else {
+        let mut text_index = self.text_index.write();
+        let Some(text_index) = text_index.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
 
@@ -90,7 +91,8 @@ impl VectorStore {
         &mut self,
         batch: Vec<(S, Vector, S, JsonValue)>,
     ) -> Result<Vec<usize>> {
-        let Some(ref mut text_index) = self.text_index else {
+        let mut text_index = self.text_index.write();
+        let Some(text_index) = text_index.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
 
@@ -121,7 +123,8 @@ impl VectorStore {
     /// * `id` - Document identifier (must match the id used in `store()`)
     /// * `text` - Text content to index for keyword search
     pub fn index_text(&mut self, id: &str, text: &str) -> Result<()> {
-        let Some(ref mut text_index) = self.text_index else {
+        let mut text_index = self.text_index.write();
+        let Some(text_index) = text_index.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
         text_index.index_document(id, text)
@@ -136,7 +139,8 @@ impl VectorStore {
     /// * `query` - Text query
     /// * `k` - Number of results to return
     pub fn search_text(&self, query: &str, k: usize) -> Result<Vec<(String, f32)>> {
-        let Some(ref text_index) = self.text_index else {
+        let text_index = self.text_index.read();
+        let Some(text_index) = text_index.as_ref() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
 
@@ -259,7 +263,7 @@ impl VectorStore {
                 self.dimensions()
             );
         }
-        if self.text_index.is_none() {
+        if self.text_index.read().is_none() {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         }
         Ok(())
@@ -323,8 +327,8 @@ fn filter_text_results_by_metadata(
         .filter(|(id, _)| {
             records
                 .get(id)
-                .and_then(|r| r.metadata.as_ref())
-                .is_some_and(|meta| filter.matches(meta))
+                .and_then(|r| r.metadata)
+                .is_some_and(|meta| filter.matches(&meta))
         })
         .collect()
 }

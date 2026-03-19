@@ -37,9 +37,9 @@ mod general {
 
             // Load and verify
             let loaded = VectorStore::open(&path).unwrap();
-            prop_assert_eq!(loaded.hnsw_m, m);
-            prop_assert_eq!(loaded.hnsw_ef_construction, ef_construction);
-            prop_assert_eq!(loaded.hnsw_ef_search, ef_search);
+            prop_assert_eq!(loaded.hnsw_m(), m);
+            prop_assert_eq!(loaded.hnsw_ef_construction(), ef_construction);
+            prop_assert_eq!(loaded.ef_search(), ef_search);
             prop_assert_eq!(loaded.len(), 10);
         }
 

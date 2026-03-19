@@ -49,7 +49,7 @@ impl VectorSection {
         let count = length / bytes_per_vector;
 
         // Check alignment
-        let ptr = mmap.as_ptr().add(offset);
+        let ptr = unsafe { mmap.as_ptr().add(offset) };
         if !(ptr as usize).is_multiple_of(std::mem::align_of::<f32>()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

@@ -175,8 +175,8 @@ impl VectorStore {
         }
 
         // Store pooled tokens in set_batch's processing order (updates first, then inserts)
-        let multivec_storage = self
-            .multivec_storage
+        let mut multivec_storage_guard = self.multivec_storage.write();
+        let multivec_storage = multivec_storage_guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
 
@@ -279,7 +279,7 @@ impl VectorStore {
         // Auto-boost ef_search for high-dimensional FDE vectors
         // Weaviate uses ef >= FDE_dim; we use fde_dim / 16 as a reasonable default
         let fde_dim = encoder.fde_dimension();
-        let boosted_ef = (fde_dim / 16).max(self.hnsw_ef_search);
+        let boosted_ef = (fde_dim / 16).max(self.ef_search());
 
         // Search HNSW with FDE using boosted ef
         let query_vec = Vector::new(query_fde);
@@ -291,7 +291,9 @@ impl VectorStore {
             .filter(|(slot, _)| self.records.is_live(*slot as u32))
             .map(|(slot, distance)| {
                 let record = self.records.get_by_slot(slot as u32);
-                let id = record.map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
+                let id = record
+                    .as_ref()
+                    .map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
                 let metadata = record
                     .and_then(|r| r.metadata.clone())
                     .unwrap_or(JsonValue::Null);
@@ -324,8 +326,8 @@ impl VectorStore {
                 "Store not configured for multi-vector. Use VectorStore::multi_vector()"
             )
         })?;
-        let multivec_storage = self
-            .multivec_storage
+        let multivec_storage_guard = self.multivec_storage.read();
+        let multivec_storage = multivec_storage_guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
 
@@ -350,7 +352,7 @@ impl VectorStore {
 
         // Auto-boost ef_search for high-dimensional FDE vectors
         let fde_dim = encoder.fde_dimension();
-        let boosted_ef = (fde_dim / 16).max(self.hnsw_ef_search).max(num_candidates);
+        let boosted_ef = (fde_dim / 16).max(self.ef_search()).max(num_candidates);
 
         let query_fde = encoder.encode_query(query_tokens);
         let query_vec = Vector::new(query_fde);
@@ -374,7 +376,9 @@ impl VectorStore {
             // Get document's original tokens from MultiVecStorage
             if let Some(doc_tokens) = multivec_storage.get_tokens(slot_u32) {
                 let record = self.records.get_by_slot(slot_u32);
-                let id = record.map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
+                let id = record
+                    .as_ref()
+                    .map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
                 let metadata = record
                     .and_then(|r| r.metadata.clone())
                     .unwrap_or(JsonValue::Null);
@@ -481,10 +485,12 @@ impl VectorStore {
         text: &str,
         metadata: JsonValue,
     ) -> Result<()> {
-        let Some(ref mut text_index) = self.text_index else {
+        let mut text_index_guard = self.text_index.write();
+        let Some(text_index) = text_index_guard.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
         text_index.index_document(id, text)?;
+        drop(text_index_guard);
         self.store(id, data, metadata)
     }
 
@@ -547,8 +553,8 @@ impl VectorStore {
         let slot = self.set(id, Vector::new(fde), metadata)?;
 
         // Then add tokens - slot already committed (store pooled tokens for reranking)
-        let multivec_storage = self
-            .multivec_storage
+        let mut multivec_storage_guard = self.multivec_storage.write();
+        let multivec_storage = multivec_storage_guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
         let token_slot = multivec_storage
@@ -692,8 +698,8 @@ impl VectorStore {
         query_tokens: &[&[f32]],
         k: usize,
     ) -> Result<Vec<SearchResult>> {
-        let multivec_storage = self
-            .multivec_storage
+        let multivec_storage_guard = self.multivec_storage.read();
+        let multivec_storage = multivec_storage_guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
 
@@ -757,8 +763,8 @@ impl VectorStore {
         k: usize,
         num_candidates: Option<usize>,
     ) -> Result<Vec<SearchResult>> {
-        let multivec_storage = self
-            .multivec_storage
+        let multivec_storage_guard = self.multivec_storage.read();
+        let multivec_storage = multivec_storage_guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
 
@@ -870,7 +876,8 @@ impl VectorStore {
     /// Internal: get multi-vector tokens.
     fn get_tokens_internal(&self, id: &str) -> Option<(Vec<Vec<f32>>, JsonValue)> {
         let slot = self.records.get_slot(id)?;
-        let multivec_storage = self.multivec_storage.as_ref()?;
+        let multivec_guard = self.multivec_storage.read();
+        let multivec_storage = multivec_guard.as_ref()?;
         let token_refs = multivec_storage.get_tokens(slot)?;
         let tokens: Vec<Vec<f32>> = token_refs.iter().map(|t| t.to_vec()).collect();
         let metadata = self
@@ -987,11 +994,12 @@ impl VectorStore {
         k: usize,
         num_candidates: Option<usize>,
     ) -> Result<Vec<SearchResult>> {
-        let multivec_storage = self
-            .multivec_storage
+        let multivec_storage_guard = self.multivec_storage.read();
+        let multivec_storage = multivec_storage_guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("MultiVecStorage not initialized"))?;
-        let sparse_index = self.sparse_index.as_ref().ok_or_else(|| {
+        let sparse_guard = self.sparse_index.read();
+        let sparse_index = sparse_guard.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Sparse index not enabled. Call enable_sparse() first")
         })?;
 
@@ -1016,7 +1024,9 @@ impl VectorStore {
             }
             if let Some(doc_tokens) = multivec_storage.get_tokens(*slot) {
                 let record = self.records.get_by_slot(*slot);
-                let id = record.map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
+                let id = record
+                    .as_ref()
+                    .map_or_else(|| format!("__slot_{slot}"), |r| r.id.clone());
                 let metadata = record
                     .and_then(|r| r.metadata.clone())
                     .unwrap_or(JsonValue::Null);

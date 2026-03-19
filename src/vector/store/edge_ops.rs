@@ -13,21 +13,22 @@ impl VectorStore {
     /// Called automatically by `add_edge()`. Call explicitly if you need
     /// `has_edges()` to return true before inserting any edges.
     pub fn enable_edges(&mut self) {
-        if self.edge_store.is_none() {
-            self.edge_store = Some(super::edge_store::EdgeStore::new());
+        if self.edge_store.read().is_none() {
+            *self.edge_store.write() = Some(super::edge_store::EdgeStore::new());
         }
     }
 
     /// Whether edge graph storage has been initialized.
     #[must_use]
     pub fn has_edges(&self) -> bool {
-        self.edge_store.is_some()
+        self.edge_store.read().is_some()
     }
 
     /// Total number of edges stored.
     #[must_use]
     pub fn edge_count(&self) -> usize {
         self.edge_store
+            .read()
             .as_ref()
             .map_or(0, super::edge_store::EdgeStore::edge_count)
     }
@@ -50,7 +51,7 @@ impl VectorStore {
     ) -> Result<()> {
         self.enable_edges();
 
-        if let Some(ref mut storage) = self.storage {
+        if let Some(ref mut storage) = *self.storage.write() {
             let meta_bytes = metadata.as_ref().map(serde_json::to_vec).transpose()?;
             storage.wal_append_insert_edge(
                 from_id,
@@ -63,6 +64,7 @@ impl VectorStore {
         }
 
         self.edge_store
+            .write()
             .as_mut()
             .expect("enable_edges() was just called")
             .add_edge(Edge {
@@ -84,18 +86,19 @@ impl VectorStore {
     ///
     /// Written to WAL immediately. Call [`flush()`](Self::flush) to persist to manifest.
     pub fn remove_edge(&mut self, from_id: &str, to_id: &str, edge_type: &str) -> Result<bool> {
-        if self.edge_store.is_none() {
+        if self.edge_store.read().is_none() {
             return Ok(false);
         }
 
         let removed = self
             .edge_store
+            .write()
             .as_mut()
             .expect("checked above")
             .remove_edge(from_id, to_id, edge_type);
 
         if removed {
-            if let Some(ref mut storage) = self.storage {
+            if let Some(ref mut storage) = *self.storage.write() {
                 storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
                 storage.wal_sync()?;
             }
@@ -113,6 +116,7 @@ impl VectorStore {
         edge_type: Option<&str>,
     ) -> Vec<Edge> {
         self.edge_store
+            .read()
             .as_ref()
             .map_or_else(Vec::new, |e| e.get_edges(id, direction, edge_type))
     }
@@ -128,7 +132,7 @@ impl VectorStore {
         max_depth: usize,
         edge_type_filter: Option<&str>,
     ) -> Vec<String> {
-        self.edge_store.as_ref().map_or_else(Vec::new, |e| {
+        self.edge_store.read().as_ref().map_or_else(Vec::new, |e| {
             e.traverse(start_id, direction, max_depth, edge_type_filter)
         })
     }
@@ -137,6 +141,7 @@ impl VectorStore {
     #[must_use]
     pub fn get_edge(&self, from_id: &str, to_id: &str, edge_type: &str) -> Option<Edge> {
         self.edge_store
+            .read()
             .as_ref()
             .and_then(|e| e.get_edge(from_id, to_id, edge_type))
     }
@@ -150,6 +155,7 @@ impl VectorStore {
         edge_type: Option<&str>,
     ) -> Vec<String> {
         self.edge_store
+            .read()
             .as_ref()
             .map_or_else(Vec::new, |e| e.neighbors(id, direction, edge_type))
     }
@@ -163,6 +169,7 @@ impl VectorStore {
         edge_type: Option<&str>,
     ) -> usize {
         self.edge_store
+            .read()
             .as_ref()
             .map_or(0, |e| e.node_degree(id, direction, edge_type))
     }
@@ -177,7 +184,7 @@ impl VectorStore {
         max_depth: usize,
         edge_type: Option<&str>,
     ) -> bool {
-        self.edge_store.as_ref().map_or(from_id == to_id, |e| {
+        self.edge_store.read().as_ref().map_or(from_id == to_id, |e| {
             e.has_path(from_id, to_id, direction, max_depth, edge_type)
         })
     }
@@ -196,6 +203,7 @@ impl VectorStore {
             return Some(vec![from_id.to_string()]);
         }
         self.edge_store
+            .read()
             .as_ref()
             .and_then(|e| e.shortest_path(from_id, to_id, direction, max_depth, edge_type))
     }
@@ -209,7 +217,7 @@ impl VectorStore {
         max_depth: usize,
         edge_type_filter: Option<&str>,
     ) -> Vec<TraversalHit> {
-        self.edge_store.as_ref().map_or_else(Vec::new, |e| {
+        self.edge_store.read().as_ref().map_or_else(Vec::new, |e| {
             e.traverse_edges(start_id, direction, max_depth, edge_type_filter)
         })
     }
@@ -223,7 +231,7 @@ impl VectorStore {
         direction: EdgeDirection,
         edge_type: Option<&str>,
     ) -> Subgraph {
-        self.edge_store.as_ref().map_or_else(
+        self.edge_store.read().as_ref().map_or_else(
             || Subgraph {
                 node_ids: vec![id.to_string()],
                 edges: Vec::new(),
@@ -239,7 +247,7 @@ impl VectorStore {
         }
         self.enable_edges();
 
-        if let Some(ref mut storage) = self.storage {
+        if let Some(ref mut storage) = *self.storage.write() {
             for edge in &edges {
                 let meta_bytes = edge.metadata.as_ref().map(serde_json::to_vec).transpose()?;
                 storage.wal_append_insert_edge(
@@ -255,6 +263,7 @@ impl VectorStore {
 
         let added = self
             .edge_store
+            .write()
             .as_mut()
             .expect("enable_edges() was just called")
             .add_edges(edges);
@@ -266,6 +275,7 @@ impl VectorStore {
     #[must_use]
     pub fn edge_types(&self) -> Vec<String> {
         self.edge_store
+            .read()
             .as_ref()
             .map_or_else(Vec::new, super::edge_store::EdgeStore::edge_types)
     }
@@ -274,6 +284,7 @@ impl VectorStore {
     #[must_use]
     pub fn node_ids(&self) -> Vec<String> {
         self.edge_store
+            .read()
             .as_ref()
             .map_or_else(Vec::new, super::edge_store::EdgeStore::node_ids)
     }
@@ -289,7 +300,8 @@ impl VectorStore {
         direction: EdgeDirection,
         edge_type_filter: Option<&str>,
     ) -> Vec<String> {
-        let Some(ref store) = self.edge_store else {
+        let edge_store = self.edge_store.read();
+        let Some(store) = edge_store.as_ref() else {
             return ids.to_vec();
         };
 

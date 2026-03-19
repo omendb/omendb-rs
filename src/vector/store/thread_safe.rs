@@ -1,7 +1,7 @@
 //! Thread-safe wrapper for VectorStore
 //!
-//! Provides `ThreadSafeVectorStore` - a wrapper that uses `Arc<RwLock<VectorStore>>`
-//! for safe concurrent access across threads.
+//! Provides `ThreadSafeVectorStore` - a thin `Arc<VectorStore>` wrapper for
+//! sharing an internally synchronized store across threads.
 //!
 //! # Usage
 //!
@@ -18,25 +18,24 @@
 //!     let results = store2.read().search(&query, 10).unwrap();
 //! });
 //!
-//! // Writes are exclusive
-//! store.write().set("id1", vec, metadata).unwrap();
+//! // Mutations are synchronized inside VectorStore
+//! store.read().set("id1", vec, metadata).unwrap();
 //! ```
 
 use super::{SearchResult, VectorStore, VectorStoreOptions};
 use crate::vector::types::Vector;
 use anyhow::Result;
-use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 use std::path::Path;
 use std::sync::Arc;
 
 /// Thread-safe wrapper for `VectorStore`
 ///
-/// Uses `Arc<RwLock<VectorStore>>` internally for safe concurrent access.
+/// Uses `Arc<VectorStore>` internally and relies on `VectorStore`'s internal
+/// synchronization for safe concurrent access.
 ///
 /// For basic operations, use the convenience methods directly on this type.
-/// For advanced operations, use `read()` or `write()` to get access to the
-/// underlying `VectorStore`.
+/// For advanced operations, use `read()` to access the underlying `VectorStore`.
 ///
 /// # Example
 ///
@@ -56,7 +55,7 @@ use std::sync::Arc;
 /// ```
 #[derive(Clone)]
 pub struct ThreadSafeVectorStore {
-    inner: Arc<RwLock<VectorStore>>,
+    inner: Arc<VectorStore>,
 }
 
 impl ThreadSafeVectorStore {
@@ -64,21 +63,21 @@ impl ThreadSafeVectorStore {
     #[must_use]
     pub fn new(dimensions: usize) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(VectorStore::new(dimensions))),
+            inner: Arc::new(VectorStore::new(dimensions)),
         }
     }
 
     /// Open existing store from path
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
-            inner: Arc::new(RwLock::new(VectorStore::open(path)?)),
+            inner: Arc::new(VectorStore::open(path)?),
         })
     }
 
     /// Build with options
     pub fn build_with_options(options: &VectorStoreOptions) -> Result<Self> {
         Ok(Self {
-            inner: Arc::new(RwLock::new(VectorStore::build_with_options(options)?)),
+            inner: Arc::new(VectorStore::build_with_options(options)?),
         })
     }
 
@@ -86,13 +85,13 @@ impl ThreadSafeVectorStore {
     #[must_use]
     pub fn from_store(store: VectorStore) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(store)),
+            inner: Arc::new(store),
         }
     }
 
     /// Insert vector with ID and metadata
     pub fn set(&self, id: &str, vector: Vector, metadata: JsonValue) -> Result<usize> {
-        self.inner.write().set(id, vector, metadata)
+        self.inner.set(id, vector, metadata)
     }
 
     /// Batch insert
@@ -100,66 +99,59 @@ impl ThreadSafeVectorStore {
         &self,
         batch: Vec<(S, Vector, JsonValue)>,
     ) -> Result<Vec<usize>> {
-        self.inner.write().set_batch(batch)
+        self.inner.set_batch(batch)
     }
 
     /// Delete by ID
     pub fn delete(&self, id: &str) -> Result<()> {
-        self.inner.write().delete(id)
+        self.inner.delete(id)
     }
 
     /// Flush to disk
     pub fn flush(&self) -> Result<()> {
-        self.inner.write().flush()
+        self.inner.flush()
     }
 
     /// Search for k nearest neighbors
     pub fn search(&self, query: &Vector, k: usize) -> Result<Vec<SearchResult>> {
-        self.inner.read().search(query, k, None)
+        self.inner.search(query, k, None)
     }
 
     /// Get by ID
     pub fn get(&self, id: &str) -> Option<(Vector, JsonValue)> {
-        self.inner.read().get(id)
+        self.inner.get(id)
     }
 
     /// Check if ID exists
     pub fn contains(&self, id: &str) -> bool {
-        self.inner.read().contains(id)
+        self.inner.contains(id)
     }
 
     /// Get count
     pub fn len(&self) -> usize {
-        self.inner.read().len()
+        self.inner.len()
     }
 
     /// Check if empty
     pub fn is_empty(&self) -> bool {
-        self.inner.read().is_empty()
+        self.inner.is_empty()
     }
 
     /// Get all IDs
     pub fn ids(&self) -> Vec<String> {
-        self.inner.read().ids()
+        self.inner.ids()
     }
 
     /// Get dimensions
     pub fn dimensions(&self) -> usize {
-        self.inner.read().records.dimensions() as usize
+        self.inner.dimensions()
     }
 
-    /// Get read lock to underlying store for advanced operations
+    /// Get shared access to the underlying store for advanced operations.
     ///
-    /// Use this for search methods with filters, ef parameters, hybrid search, etc.
-    pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, VectorStore> {
-        self.inner.read()
-    }
-
-    /// Get write lock to underlying store for advanced operations
-    ///
-    /// Use this for batch operations, rebuild_index, optimize, etc.
-    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, VectorStore> {
-        self.inner.write()
+    /// `VectorStore` handles its own synchronization internally.
+    pub fn read(&self) -> &VectorStore {
+        &self.inner
     }
 }
 

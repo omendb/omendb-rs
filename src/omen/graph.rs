@@ -50,7 +50,7 @@ impl GraphSection {
             });
         }
 
-        let ptr = mmap.as_ptr().add(offset);
+        let ptr = unsafe { mmap.as_ptr().add(offset) };
 
         // Calculate section boundaries with overflow checks
         let levels_size = usize::try_from(count).map_err(|_| {

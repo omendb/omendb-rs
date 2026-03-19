@@ -959,7 +959,7 @@ impl OmenFile {
                 let id_to_slot = records.id_to_slot_ref();
                 let count = id_to_slot.len() as u32;
                 w.write_all(&count.to_le_bytes())?;
-                for (id, slot) in id_to_slot {
+                for (id, slot) in &id_to_slot {
                     let id_bytes = id.as_bytes();
                     w.write_all(&(id_bytes.len() as u32).to_le_bytes())?;
                     w.write_all(id_bytes)?;
@@ -974,7 +974,7 @@ impl OmenFile {
                 w.write_all(&bitmap_buf)?;
 
                 // metadata section (zero-copy iterator — no HashMap clone)
-                let metadata: Vec<(u32, &serde_json::Value)> = records.iter_metadata().collect();
+                let metadata = records.iter_metadata();
                 let meta_count = metadata.len() as u32;
                 w.write_all(&meta_count.to_le_bytes())?;
                 for (slot, value) in &metadata {
@@ -1467,10 +1467,10 @@ impl OmenFile {
         // Zero-copy borrows — no HashMap/Vec clone; String clones are unavoidable (manifest owns)
         let id_to_slot = records.id_to_slot_ref();
         manifest.max_node_id = id_to_slot.values().copied().max().unwrap_or(0);
-        manifest.id_to_index = id_to_slot.iter().map(|(k, &v)| (k.clone(), v)).collect();
+        manifest.id_to_index = id_to_slot.iter().map(|(k, v)| (k.clone(), *v)).collect();
         manifest.index_to_id = id_to_slot
             .iter()
-            .map(|(id, &slot)| (slot, id.clone()))
+            .map(|(id, slot)| (*slot, id.clone()))
             .collect();
 
         // Convert metadata to bytes (skip deleted slots)
@@ -1478,13 +1478,13 @@ impl OmenFile {
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
         for (idx, json) in records.iter_metadata() {
             if !deleted_bitmap.contains(idx) {
-                if let Ok(bytes) = serde_json::to_vec(json) {
+                if let Ok(bytes) = serde_json::to_vec(&json) {
                     metadata_bytes.insert(idx, bytes);
                 }
             }
         }
         manifest.metadata = metadata_bytes;
-        manifest.deleted.clone_from(deleted_bitmap);
+        manifest.deleted.clone_from(&deleted_bitmap);
         manifest.metadata_index = options.metadata_index_bytes.map(<[u8]>::to_vec);
         manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
         manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);

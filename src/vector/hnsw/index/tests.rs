@@ -910,10 +910,10 @@ fn profile_persistence_comprehensive() {
     // Generate random vectors
     let mut rng = rand::thread_rng();
     let vectors: Vec<Vec<f32>> = (0..n)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
         .collect();
     let query_vecs: Vec<Vec<f32>> = (0..queries)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
         .collect();
 
     println!("=== 1. In-Memory Mode (no persistence) ===");
@@ -1108,10 +1108,10 @@ fn profile_persistence_impl(_n: usize) {
     // Generate random vectors
     let mut rng = rand::thread_rng();
     let vectors: Vec<Vec<f32>> = (0..n)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
         .collect();
     let query_vecs: Vec<Vec<f32>> = (0..queries)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
         .collect();
 
     // Create VectorStore with persistence

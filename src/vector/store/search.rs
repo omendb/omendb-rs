@@ -173,9 +173,9 @@ pub(crate) fn knn_search_filtered_core(
                     }
                     let metadata = records
                         .get_by_slot(slot)
-                        .and_then(|r| r.metadata.as_ref())
-                        .unwrap_or(&helpers::DEFAULT_METADATA);
-                    filter.matches(metadata)
+                        .and_then(|r| r.metadata)
+                        .unwrap_or_else(|| helpers::DEFAULT_METADATA.clone());
+                    filter.matches(&metadata)
                 };
                 seg_mgr.search_with_filter(query, k, ef, filter_fn)?
             };

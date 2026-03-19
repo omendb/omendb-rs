@@ -1,4 +1,6 @@
 use serde_json::Value as JsonValue;
+use parking_lot::MappedRwLockReadGuard;
+use std::sync::atomic::Ordering;
 
 use super::VectorStore;
 use crate::omen::{Metric, OmenFile};
@@ -104,54 +106,54 @@ impl VectorStore {
     }
 
     /// Set HNSW `ef_search` parameter (runtime tuning)
-    pub fn set_ef_search(&mut self, ef_search: usize) {
-        self.hnsw_ef_search = ef_search;
+    pub fn set_ef_search(&self, ef_search: usize) {
+        self.hnsw_ef_search.store(ef_search, Ordering::Relaxed);
     }
 
     /// Get HNSW `ef_search` parameter
     #[must_use]
     pub fn ef_search(&self) -> usize {
-        self.hnsw_ef_search
+        self.hnsw_ef_search.load(Ordering::Relaxed)
     }
 
     /// Get HNSW M parameter (neighbors per node)
     #[must_use]
     pub fn hnsw_m(&self) -> usize {
-        self.hnsw_m
+        self.hnsw_m.load(Ordering::Relaxed)
     }
 
     /// Get HNSW ef_construction parameter (build quality)
     #[must_use]
     pub fn hnsw_ef_construction(&self) -> usize {
-        self.hnsw_ef_construction
+        self.hnsw_ef_construction.load(Ordering::Relaxed)
     }
 
     /// Check if SQ8 quantization is enabled
     #[must_use]
     pub fn is_quantized(&self) -> bool {
-        self.pending_quantization
+        self.pending_quantization.load(Ordering::Relaxed)
     }
 
     /// Enable or disable SQ8 rescoring
-    pub fn set_rescore(&mut self, rescore: bool) {
-        self.rescore = rescore;
+    pub fn set_rescore(&self, rescore: bool) {
+        self.rescore.store(rescore, Ordering::Relaxed);
     }
 
     /// Set oversample factor for SQ8 rescoring
-    pub fn set_oversample(&mut self, oversample: f32) {
-        self.oversample = oversample;
+    pub fn set_oversample(&self, oversample: f32) {
+        self.oversample.store(oversample.to_bits(), Ordering::Relaxed);
     }
 
     /// Check if SQ8 rescoring is enabled
     #[must_use]
     pub fn rescore(&self) -> bool {
-        self.rescore
+        self.rescore.load(Ordering::Relaxed)
     }
 
     /// Get oversample factor for SQ8 rescoring
     #[must_use]
     pub fn oversample(&self) -> f32 {
-        self.oversample
+        f32::from_bits(self.oversample.load(Ordering::Relaxed))
     }
 
     /// Number of deleted (tombstoned) records
@@ -162,8 +164,9 @@ impl VectorStore {
 
     /// Get the segment manager (for benchmarking/diagnostics)
     #[must_use]
-    pub fn segments(&self) -> Option<&crate::vector::hnsw::SegmentManager> {
-        self.segments.as_ref()
+    pub fn segments(&self) -> Option<MappedRwLockReadGuard<'_, crate::vector::hnsw::SegmentManager>> {
+        parking_lot::RwLockReadGuard::try_map(self.segments.read(), |segments| segments.as_ref())
+            .ok()
     }
 
     /// Get comprehensive store diagnostics.
@@ -176,7 +179,7 @@ impl VectorStore {
             .sum::<usize>();
 
         let (frozen_count, mutable_vecs, graph_bytes, segment_capacity) =
-            if let Some(ref segments) = self.segments {
+            if let Some(segments) = self.segments.read().as_ref() {
                 let config = segments.config();
                 let graph = segments.total_memory() - vector_bytes;
                 (
@@ -195,7 +198,7 @@ impl VectorStore {
                 )
             };
 
-        let wal_entries = self.storage.as_ref().map_or(0, OmenFile::wal_len);
+        let wal_entries = self.storage.read().as_ref().map_or(0, OmenFile::wal_len);
 
         StoreInfo {
             vector_count: self.records.len() as usize,
@@ -208,11 +211,11 @@ impl VectorStore {
             graph_bytes,
             total_memory_bytes: vector_bytes + graph_bytes,
             wal_entries,
-            is_persistent: self.storage.is_some(),
-            hnsw_m: self.hnsw_m,
-            hnsw_ef_construction: self.hnsw_ef_construction,
-            hnsw_ef_search: self.hnsw_ef_search,
-            quantization: self.pending_quantization,
+            is_persistent: self.storage.read().is_some(),
+            hnsw_m: self.hnsw_m.load(Ordering::Relaxed),
+            hnsw_ef_construction: self.hnsw_ef_construction.load(Ordering::Relaxed),
+            hnsw_ef_search: self.hnsw_ef_search.load(Ordering::Relaxed),
+            quantization: self.pending_quantization.load(Ordering::Relaxed),
             segment_capacity,
         }
     }

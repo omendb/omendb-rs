@@ -19,6 +19,7 @@ use crate::vector::sparse::SparseIndex;
 use crate::vector::store::edge_store::{Edge, EdgeStore};
 use crate::vector::store::options::VectorStoreOptions;
 use anyhow::Result;
+use parking_lot::RwLock;
 use roaring::RoaringBitmap;
 use serde_json::Value as JsonValue;
 use std::path::Path;
@@ -160,7 +161,7 @@ impl VectorStore {
             let id = snapshot
                 .id_to_slot
                 .iter()
-                .find(|(_, &s)| s == slot_u32)
+                .find(|&(_, &s)| s == slot_u32)
                 .map(|(id, _)| id.clone());
 
             if let Some(id) = id {
@@ -320,7 +321,7 @@ impl VectorStore {
         };
 
         // Update deleted bitmap after WAL replay
-        deleted_bitmap.clone_from(records.deleted_bitmap());
+        deleted_bitmap.clone_from(&records.deleted_bitmap());
 
         // Build segments from vectors
         let active_count = records.len() as usize;
@@ -553,34 +554,37 @@ impl VectorStore {
 
         Ok(Self {
             records,
-            segments,
-            metadata_index,
-            storage: Some(storage),
+            segments: RwLock::new(segments),
+            metadata_index: RwLock::new(metadata_index),
+            storage: RwLock::new(Some(storage)),
             storage_path: Some(path.to_path_buf()),
-            text_index,
-            text_search_config: None,
-            pending_quantization: quantization,
-            hnsw_m: if hnsw_m > 0 { hnsw_m } else { DEFAULT_HNSW_M },
-            hnsw_ef_construction: if hnsw_ef_construction > 0 {
+            text_index: RwLock::new(text_index),
+            text_search_config: RwLock::new(None),
+            pending_quantization: (quantization).into(),
+            hnsw_m: (if hnsw_m > 0 { hnsw_m } else { DEFAULT_HNSW_M }).into(),
+            hnsw_ef_construction: (if hnsw_ef_construction > 0 {
                 hnsw_ef_construction
             } else {
                 DEFAULT_HNSW_EF_CONSTRUCTION
-            },
-            hnsw_ef_search: if hnsw_ef_search > 0 {
+            })
+            .into(),
+            hnsw_ef_search: (if hnsw_ef_search > 0 {
                 hnsw_ef_search
             } else {
                 DEFAULT_HNSW_EF_SEARCH
-            },
+            })
+            .into(),
             distance_metric,
             muvera_encoder,
-            multivec_storage,
-            sparse_index,
-            edge_store,
+            multivec_storage: RwLock::new(multivec_storage),
+            sparse_index: RwLock::new(sparse_index),
+            edge_store: RwLock::new(edge_store),
             segment_capacity: None,
-            rescore: quantization,
-            oversample: 3.0,
+            rescore: (quantization).into(),
+            oversample: (3.0f32.to_bits()).into(),
             max_memory_bytes: None,
-            auto_compact_threshold: 0.25,
+            auto_compact_threshold: (0.25f32.to_bits()).into(),
+            write_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -588,10 +592,10 @@ impl VectorStore {
     ///
     /// Like `open()` but ensures dimensions are set for new databases.
     pub fn open_with_dimensions(path: impl AsRef<Path>, dimensions: usize) -> Result<Self> {
-        let mut store = Self::open(path)?;
+        let store = Self::open(path)?;
         if store.dimensions() == 0 {
             store.records.set_dimensions(dimensions as u32);
-            if let Some(ref mut storage) = store.storage {
+            if let Some(ref mut storage) = *store.storage.write() {
                 storage.put_config("dimensions", dimensions as u64)?;
             }
         }
@@ -612,7 +616,7 @@ impl VectorStore {
             // Apply dimension if specified and store has none
             if store.dimensions() == 0 && options.dimensions > 0 {
                 store.records.set_dimensions(options.dimensions as u32);
-                if let Some(ref mut storage) = store.storage {
+                if let Some(ref mut storage) = *store.storage.write() {
                     storage.put_config("dimensions", options.dimensions as u64)?;
                 }
             }
@@ -624,10 +628,10 @@ impl VectorStore {
 
             // Apply rescore/oversample options
             if let Some(rescore) = options.rescore {
-                store.rescore = rescore;
+                store.set_rescore(rescore);
             }
             if let Some(oversample) = options.oversample {
-                store.oversample = oversample;
+                store.set_oversample(oversample);
             }
             store.max_memory_bytes = options.max_memory_bytes;
 
@@ -676,26 +680,27 @@ impl VectorStore {
 
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
-            segments: None,
-            metadata_index: MetadataIndex::new(),
-            storage: Some(storage),
+            segments: RwLock::new(None),
+            metadata_index: RwLock::new(MetadataIndex::new()),
+            storage: RwLock::new(Some(storage)),
             storage_path: Some(path.to_path_buf()),
-            text_index,
-            text_search_config: options.text_search_config.clone(),
-            pending_quantization,
-            hnsw_m: m,
-            hnsw_ef_construction: ef_construction,
-            hnsw_ef_search: ef_search,
+            text_index: RwLock::new(text_index),
+            text_search_config: RwLock::new(options.text_search_config.clone()),
+            pending_quantization: pending_quantization.into(),
+            hnsw_m: m.into(),
+            hnsw_ef_construction: ef_construction.into(),
+            hnsw_ef_search: ef_search.into(),
             distance_metric,
             muvera_encoder: None,
-            multivec_storage: None,
-            sparse_index: None,
-            edge_store: None,
+            multivec_storage: RwLock::new(None),
+            sparse_index: RwLock::new(None),
+            edge_store: RwLock::new(None),
             segment_capacity: None,
-            rescore,
-            oversample,
+            rescore: rescore.into(),
+            oversample: oversample.to_bits().into(),
             max_memory_bytes: options.max_memory_bytes,
-            auto_compact_threshold: 0.25,
+            auto_compact_threshold: (0.25f32.to_bits()).into(),
+            write_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -726,26 +731,27 @@ impl VectorStore {
 
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
-            segments: None,
-            metadata_index: MetadataIndex::new(),
-            storage: None,
+            segments: RwLock::new(None),
+            metadata_index: RwLock::new(MetadataIndex::new()),
+            storage: RwLock::new(None),
             storage_path: None,
-            text_index,
-            text_search_config: options.text_search_config.clone(),
-            pending_quantization,
-            hnsw_m: m,
-            hnsw_ef_construction: ef_construction,
-            hnsw_ef_search: ef_search,
+            text_index: RwLock::new(text_index),
+            text_search_config: RwLock::new(options.text_search_config.clone()),
+            pending_quantization: pending_quantization.into(),
+            hnsw_m: m.into(),
+            hnsw_ef_construction: ef_construction.into(),
+            hnsw_ef_search: ef_search.into(),
             distance_metric,
             muvera_encoder: None,
-            multivec_storage: None,
-            sparse_index: None,
-            edge_store: None,
+            multivec_storage: RwLock::new(None),
+            sparse_index: RwLock::new(None),
+            edge_store: RwLock::new(None),
             segment_capacity: None,
-            rescore,
-            oversample,
+            rescore: rescore.into(),
+            oversample: oversample.to_bits().into(),
             max_memory_bytes: options.max_memory_bytes,
-            auto_compact_threshold: 0.25,
+            auto_compact_threshold: (0.25f32.to_bits()).into(),
+            write_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -756,9 +762,10 @@ impl VectorStore {
     ///
     /// If the tombstone ratio exceeds `auto_compact_threshold` (default 25%),
     /// compaction runs automatically before persisting.
-    pub fn flush(&mut self) -> Result<()> {
-        if self.records.deleted_count() > 0 && self.tombstone_ratio() > self.auto_compact_threshold
-        {
+    pub fn flush(&self) -> Result<()> {
+        let auto_compact_threshold =
+            f32::from_bits(self.auto_compact_threshold.load(std::sync::atomic::Ordering::Relaxed));
+        if self.records.deleted_count() > 0 && self.tombstone_ratio() > auto_compact_threshold {
             self.compact()?;
         }
         self.flush_internal(false)
@@ -769,18 +776,25 @@ impl VectorStore {
     /// When .vecs exists, writes only dirty vector slots and syncs WAL — skipping
     /// the expensive manifest rewrite. On crash, WAL replay recovers IDs/metadata.
     /// Falls back to full flush on the first checkpoint (creates .vecs + manifest).
-    pub(crate) fn checkpoint_wal(&mut self) -> Result<()> {
-        let has_vec = self.storage.as_ref().is_some_and(OmenFile::has_vec_file);
+    pub(crate) fn checkpoint_wal(&self) -> Result<()> {
+        let has_vec = self
+            .storage
+            .read()
+            .as_ref()
+            .is_some_and(OmenFile::has_vec_file);
         let requires_full_checkpoint = self
             .sparse_index
+            .read()
             .as_ref()
             .is_some_and(|index| !index.is_empty())
             || self
                 .multivec_storage
+                .read()
                 .as_ref()
                 .is_some_and(|storage| !storage.is_empty())
             || self
                 .edge_store
+                .read()
                 .as_ref()
                 .is_some_and(|store| store.edge_count() > 0);
 
@@ -798,7 +812,7 @@ impl VectorStore {
             if dirty.is_empty() {
                 return Ok(());
             }
-            if let Some(ref mut storage) = self.storage {
+            if let Some(ref mut storage) = *self.storage.write() {
                 if let Err(e) = storage.checkpoint_vectors_only(&self.records, &dirty) {
                     // Restore dirty slots so the next checkpoint retries writing them.
                     // Without this, failed .vecs writes leave slots in id_to_slot but
@@ -815,12 +829,12 @@ impl VectorStore {
         }
     }
 
-    fn flush_internal(&mut self, skip_segments: bool) -> Result<()> {
+    fn flush_internal(&self, skip_segments: bool) -> Result<()> {
         // Save segments FIRST so their generation is current when the manifest is written.
         // Saving after the checkpoint writes the old generation to the manifest, causing a
         // generation mismatch on every open that forces a full HNSW rebuild.
         if !skip_segments {
-            if let Some(ref mut segments) = self.segments {
+            if let Some(ref mut segments) = *self.segments.write() {
                 // Wait for any background merge to finish before saving
                 segments.drain_pending_merge();
 
@@ -832,14 +846,14 @@ impl VectorStore {
                         .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
                     // Update config with new generation so the manifest checkpoint below
                     // writes the correct value.
-                    if let Some(ref mut storage) = self.storage {
+                    if let Some(ref mut storage) = *self.storage.write() {
                         storage.put_config("segments_generation", segments.generation())?;
                     }
                 }
             }
         }
 
-        if let Some(ref mut storage) = self.storage {
+        if let Some(ref mut storage) = *self.storage.write() {
             // Ensure dimensions are set in storage header
             let dims = self.records.dimensions();
             if dims > 0 {
@@ -848,9 +862,10 @@ impl VectorStore {
 
             // Persist HNSW parameters and metric to header
             storage.set_hnsw_params(
-                self.hnsw_m as u16,
-                self.hnsw_ef_construction as u16,
-                self.hnsw_ef_search as u16,
+                self.hnsw_m.load(std::sync::atomic::Ordering::Relaxed) as u16,
+                self.hnsw_ef_construction
+                    .load(std::sync::atomic::Ordering::Relaxed) as u16,
+                self.hnsw_ef_search.load(std::sync::atomic::Ordering::Relaxed) as u16,
             );
             storage.set_metric(self.distance_metric);
 
@@ -858,12 +873,13 @@ impl VectorStore {
             let dirty = self.records.take_dirty_slots();
 
             // Serialize MetadataIndex for fast recovery
-            let metadata_index_bytes = Some(self.metadata_index.to_bytes()?);
+            let metadata_index_bytes = Some(self.metadata_index.read().to_bytes()?);
 
             // Export multi-vector data if present
+            let multivec_guard = self.multivec_storage.read();
             let (multivec_bytes, multivec_offsets, multivec_config) =
-                if let (Some(ref mvs), Some(ref enc)) =
-                    (&self.multivec_storage, &self.muvera_encoder)
+                if let (Some(mvs), Some(enc)) =
+                    (multivec_guard.as_ref(), self.muvera_encoder.as_ref())
                 {
                     let config = enc.config();
                     (
@@ -886,6 +902,7 @@ impl VectorStore {
             // Export sparse index if present
             let sparse_index_bytes = self
                 .sparse_index
+                .read()
                 .as_ref()
                 .map(SparseIndex::to_bytes)
                 .transpose()?;
@@ -893,6 +910,7 @@ impl VectorStore {
             // Export edge store if present
             let edge_store_bytes = self
                 .edge_store
+                .read()
                 .as_ref()
                 .map(EdgeStore::to_bytes)
                 .transpose()?;
@@ -921,7 +939,7 @@ impl VectorStore {
             }
         }
 
-        if let Some(ref mut text_index) = self.text_index {
+        if let Some(ref mut text_index) = *self.text_index.write() {
             text_index.commit()?;
         }
 
@@ -931,7 +949,7 @@ impl VectorStore {
     /// Check if this store has persistent storage enabled
     #[must_use]
     pub fn is_persistent(&self) -> bool {
-        self.storage.is_some()
+        self.storage.read().is_some()
     }
 
     /// Enable persistence for this store (builder pattern).
@@ -947,7 +965,7 @@ impl VectorStore {
     /// store.flush()?;
     /// ```
     pub fn persist(mut self, path: impl AsRef<Path>) -> Result<Self> {
-        if self.storage.is_some() {
+        if self.storage.read().is_some() {
             anyhow::bail!("Store already has persistence enabled");
         }
 
@@ -961,11 +979,12 @@ impl VectorStore {
 
         storage.set_metric(self.distance_metric);
         storage.set_hnsw_params(
-            self.hnsw_m as u16,
-            self.hnsw_ef_construction as u16,
-            self.hnsw_ef_search as u16,
+            self.hnsw_m.load(std::sync::atomic::Ordering::Relaxed) as u16,
+            self.hnsw_ef_construction
+                .load(std::sync::atomic::Ordering::Relaxed) as u16,
+            self.hnsw_ef_search.load(std::sync::atomic::Ordering::Relaxed) as u16,
         );
-        self.storage = Some(storage);
+        *self.storage.write() = Some(storage);
         self.storage_path = Some(path.to_path_buf());
         Ok(self)
     }

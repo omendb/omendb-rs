@@ -51,17 +51,17 @@ fn test_rebuild_index() {
     }
 
     // Verify segments exist
-    assert!(store.segments.is_some());
+    assert!(store.segments.read().is_some());
 
     // Clear the index
-    store.segments = None;
-    assert!(store.segments.is_none());
+    *store.segments.write() = None;
+    assert!(store.segments.read().is_none());
 
     // Rebuild index
     store.rebuild_index().unwrap();
 
     // Verify index is rebuilt
-    assert!(store.segments.is_some());
+    assert!(store.segments.read().is_some());
 
     // Verify search works
     let query = random_vector(128, 50);
@@ -190,7 +190,7 @@ fn test_insert_with_metadata() {
 
     assert_eq!(index, 0);
     assert!(store.contains("doc1"));
-    assert_eq!(store.get_metadata_by_id("doc1"), Some(&metadata));
+    assert_eq!(store.get_metadata_by_id("doc1"), Some(metadata.clone()));
 }
 
 #[test]
