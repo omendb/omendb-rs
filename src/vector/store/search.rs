@@ -71,12 +71,12 @@ pub(crate) fn slots_to_search_results(
     results
         .into_iter()
         .filter_map(|(slot, distance)| {
-            let record = records.get_by_slot(slot as u32)?;
-            let metadata = record
-                .metadata
-                .clone()
-                .unwrap_or_else(helpers::default_metadata);
-            Some(SearchResult::new(record.id.clone(), distance, metadata))
+            let (id, metadata) = records.get_result_fields_by_slot(slot as u32)?;
+            Some(SearchResult::new(
+                id,
+                distance,
+                metadata.unwrap_or_else(helpers::default_metadata),
+            ))
         })
         .collect()
 }

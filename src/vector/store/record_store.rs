@@ -195,6 +195,22 @@ impl RecordStore {
         self.slots.read().get(slot as usize).and_then(std::clone::Clone::clone)
     }
 
+    /// Get just the search result fields for a slot.
+    ///
+    /// This avoids cloning the stored vector when materializing final search
+    /// results, where only the user ID and metadata are needed.
+    pub fn get_result_fields_by_slot(&self, slot: u32) -> Option<(String, Option<JsonValue>)> {
+        if self.deleted.read().contains(slot) {
+            return None;
+        }
+
+        self.slots
+            .read()
+            .get(slot as usize)
+            .and_then(|record| record.as_ref())
+            .map(|record| (record.id.clone(), record.metadata.clone()))
+    }
+
     /// Check if a slot is live (not deleted)
     #[inline]
     pub fn is_live(&self, slot: u32) -> bool {
@@ -569,6 +585,20 @@ mod tests {
 
         let record = store.get("vec1").unwrap();
         assert_eq!(record.metadata, Some(meta));
+    }
+
+    #[test]
+    fn test_get_result_fields_by_slot() {
+        let mut store = RecordStore::new(3);
+
+        let meta = serde_json::json!({"key": "value"});
+        let slot = store
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], Some(meta.clone()))
+            .unwrap();
+
+        let (id, metadata) = store.get_result_fields_by_slot(slot).unwrap();
+        assert_eq!(id, "vec1");
+        assert_eq!(metadata, Some(meta));
     }
 
     #[test]
