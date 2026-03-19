@@ -389,9 +389,10 @@ impl VectorStore {
         };
 
         let segments = self.segments.read();
+        let segment_view = segments.as_ref().map(SegmentManager::read_view);
         let results = search::knn_search_core(
             &self.records,
-            segments.as_ref(),
+            segment_view,
             &query.data,
             search_k,
             ef,
@@ -437,10 +438,11 @@ impl VectorStore {
             helpers::compute_effective_ef(ef, self.hnsw_ef_search.load(Ordering::Relaxed), k);
 
         let segments = self.segments.read();
+        let segment_view = segments.as_ref().map(SegmentManager::read_view);
         search::knn_search_filtered_core(
             &self.records,
             &self.metadata_index.read(),
-            segments.as_ref(),
+            segment_view,
             &query.data,
             k,
             effective_ef,

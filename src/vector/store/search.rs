@@ -8,7 +8,7 @@ use super::record_store::RecordStore;
 use super::{MetadataFilter, SearchResult};
 use crate::distance::{cosine_distance_precomputed, dot_product, l2_distance, norm_squared};
 use crate::omen::Metric;
-use crate::vector::hnsw::SegmentManager;
+use crate::vector::hnsw::SegmentReadView;
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
 
@@ -105,13 +105,13 @@ pub(crate) fn slots_to_results_with_fallback(
 /// Uses segments if available, falls back to brute force.
 pub(crate) fn knn_search_core(
     records: &RecordStore,
-    segments: Option<&SegmentManager>,
+    segments: Option<SegmentReadView<'_>>,
     query: &[f32],
     k: usize,
     ef: usize,
     metric: Metric,
 ) -> Result<Vec<(usize, f32)>> {
-    let has_data = !records.is_empty() || segments.as_ref().is_some_and(|s| !s.is_empty());
+    let has_data = !records.is_empty() || segments.is_some_and(|s| !s.is_empty());
 
     if !has_data {
         return Ok(Vec::new());
@@ -147,7 +147,7 @@ pub(crate) fn knn_search_core(
 pub(crate) fn knn_search_filtered_core(
     records: &RecordStore,
     metadata_index: &MetadataIndex,
-    segments: Option<&SegmentManager>,
+    segments: Option<SegmentReadView<'_>>,
     query: &[f32],
     k: usize,
     ef: usize,

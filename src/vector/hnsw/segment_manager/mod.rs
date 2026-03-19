@@ -117,6 +117,114 @@ pub struct SegmentManager {
     pub(crate) pending_merge_dir: Option<PathBuf>,
 }
 
+/// Immutable view of the currently published segment state.
+///
+/// This is the first seam toward snapshot-style read serving: queries only need
+/// read access to the current mutable segment and frozen segment list, not the
+/// full mutable manager API.
+#[derive(Clone, Copy)]
+pub struct SegmentReadView<'a> {
+    mutable: &'a MutableSegment,
+    frozen: &'a [Arc<FrozenSegment>],
+    generation: u64,
+}
+
+impl SegmentReadView<'_> {
+    /// Number of frozen segments visible to readers.
+    pub fn frozen_count(&self) -> usize {
+        self.frozen.len()
+    }
+
+    /// Number of vectors in the mutable segment visible to readers.
+    pub fn mutable_len(&self) -> usize {
+        self.mutable.len()
+    }
+
+    /// Total number of vectors visible across mutable and frozen segments.
+    pub fn len(&self) -> usize {
+        self.mutable.len() + self.frozen.iter().map(|s| s.len()).sum::<usize>()
+    }
+
+    /// Check whether the visible segment set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Generation of the published segment state.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Search across the visible mutable and frozen segments.
+    pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SegmentSearchResult>> {
+        let mut results = self.mutable.search(query, k, ef)?;
+
+        if !self.frozen.is_empty() {
+            if self.frozen.len() >= 4 {
+                use rayon::prelude::*;
+                let frozen_results: Vec<SegmentSearchResult> = self
+                    .frozen
+                    .par_iter()
+                    .flat_map(|seg| seg.search(query, k, ef))
+                    .collect();
+                results.extend(frozen_results);
+            } else {
+                for seg in self.frozen {
+                    results.extend(seg.search(query, k, ef));
+                }
+            }
+        }
+
+        results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(k);
+
+        Ok(results)
+    }
+
+    /// Search across the visible mutable and frozen segments with a filter predicate.
+    pub fn search_with_filter<F>(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: F,
+    ) -> Result<Vec<SegmentSearchResult>>
+    where
+        F: Fn(u32) -> bool + Sync,
+    {
+        let mut results = self.mutable.search_with_filter(query, k, ef, &filter_fn)?;
+
+        if !self.frozen.is_empty() {
+            if self.frozen.len() >= 4 {
+                use rayon::prelude::*;
+                let frozen_results: Vec<SegmentSearchResult> = self
+                    .frozen
+                    .par_iter()
+                    .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
+                    .collect();
+                results.extend(frozen_results);
+            } else {
+                for seg in self.frozen {
+                    results.extend(seg.search_with_filter(query, k, ef, &filter_fn));
+                }
+            }
+        }
+
+        results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(k);
+
+        Ok(results)
+    }
+}
+
 impl SegmentManager {
     /// Create new segment manager with default merge policy
     pub fn new(config: SegmentConfig) -> Result<Self> {
@@ -232,6 +340,21 @@ impl SegmentManager {
         &self.config
     }
 
+    fn debug_assert_invariants(&self) {
+        debug_assert!(self.pending_merge_count <= self.frozen.len());
+        debug_assert_eq!(self.pending_merge.is_some(), self.pending_merge_count > 0);
+    }
+
+    /// Borrow the currently published mutable and frozen segment state.
+    pub fn read_view(&self) -> SegmentReadView<'_> {
+        self.debug_assert_invariants();
+        SegmentReadView {
+            mutable: &self.mutable,
+            frozen: &self.frozen,
+            generation: self.generation,
+        }
+    }
+
     /// Number of frozen segments
     pub fn frozen_count(&self) -> usize {
         self.frozen.len()
@@ -294,6 +417,8 @@ impl SegmentManager {
     /// After freezing, checks merge policy and triggers automatic merge
     /// if conditions are met.
     pub fn freeze_mutable(&mut self) -> Result<()> {
+        self.debug_assert_invariants();
+
         // Create new mutable segment
         let new_mutable = if self.config.quantization {
             MutableSegment::new_quantized(
@@ -324,6 +449,7 @@ impl SegmentManager {
         // Apply completed background merge if ready, then check if a new one should start
         self.apply_pending_merge_if_ready();
         self.try_start_background_merge();
+        self.debug_assert_invariants();
 
         Ok(())
     }
@@ -333,36 +459,7 @@ impl SegmentManager {
     /// Searches mutable and all frozen segments, merging results.
     /// Frozen segments use sequential iteration for <4 segments, parallel for 4+.
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SegmentSearchResult>> {
-        // Search mutable segment
-        let mut results = self.mutable.search(query, k, ef)?;
-
-        // Search frozen segments (parallel only when enough segments to offset overhead)
-        if !self.frozen.is_empty() {
-            if self.frozen.len() >= 4 {
-                use rayon::prelude::*;
-                let frozen_results: Vec<SegmentSearchResult> = self
-                    .frozen
-                    .par_iter()
-                    .flat_map(|seg| seg.search(query, k, ef))
-                    .collect();
-                results.extend(frozen_results);
-            } else {
-                // Sequential path: extend directly, avoiding intermediate Vec
-                for seg in &self.frozen {
-                    results.extend(seg.search(query, k, ef));
-                }
-            }
-        }
-
-        // Sort by distance and take top k
-        results.sort_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        results.truncate(k);
-
-        Ok(results)
+        self.read_view().search(query, k, ef)
     }
 
     /// Search across all segments with a filter predicate
@@ -379,36 +476,7 @@ impl SegmentManager {
     where
         F: Fn(u32) -> bool + Sync,
     {
-        // Search mutable segment
-        let mut results = self.mutable.search_with_filter(query, k, ef, &filter_fn)?;
-
-        // Search frozen segments (parallel only when enough segments to offset overhead)
-        if !self.frozen.is_empty() {
-            if self.frozen.len() >= 4 {
-                use rayon::prelude::*;
-                let frozen_results: Vec<SegmentSearchResult> = self
-                    .frozen
-                    .par_iter()
-                    .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
-                    .collect();
-                results.extend(frozen_results);
-            } else {
-                // Sequential path: extend directly, avoiding intermediate Vec
-                for seg in &self.frozen {
-                    results.extend(seg.search_with_filter(query, k, ef, &filter_fn));
-                }
-            }
-        }
-
-        // Sort by distance and take top k
-        results.sort_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        results.truncate(k);
-
-        Ok(results)
+        self.read_view().search_with_filter(query, k, ef, filter_fn)
     }
 
     /// Force freeze current mutable segment
@@ -477,12 +545,14 @@ impl SegmentManager {
 
     /// Add a parallel-built index as a new frozen segment with slot mapping
     pub fn add_frozen_from_index(&mut self, index: HNSWIndex, slots: &[u32]) {
+        self.debug_assert_invariants();
         self.apply_pending_merge_if_ready();
         let mut index = index;
         index.remap_slots(slots);
         let frozen = self.create_merged_segment(index);
         self.frozen.push(frozen);
         self.try_start_background_merge();
+        self.debug_assert_invariants();
     }
 
     /// Set the directory for persisting background merge results.
@@ -570,6 +640,46 @@ mod tests {
         // Results should be sorted by distance
         for i in 1..results.len() {
             assert!(results[i - 1].distance <= results[i].distance);
+        }
+    }
+
+    #[test]
+    fn test_read_view_reports_visible_state() {
+        let config = test_config().with_capacity(3);
+        let mut manager = SegmentManager::new(config).unwrap();
+
+        for i in 0..8 {
+            let vector = vec![i as f32, 0.0, 0.0, 0.0];
+            manager.insert(&vector).unwrap();
+        }
+
+        let view = manager.read_view();
+        assert_eq!(view.frozen_count(), manager.frozen_count());
+        assert_eq!(view.mutable_len(), manager.mutable_len());
+        assert_eq!(view.len(), manager.len());
+        assert_eq!(view.is_empty(), manager.is_empty());
+        assert_eq!(view.generation(), manager.generation());
+    }
+
+    #[test]
+    fn test_read_view_matches_manager_search() {
+        let config = test_config().with_capacity(3);
+        let mut manager = SegmentManager::new(config).unwrap();
+
+        for i in 0..9 {
+            let vector = vec![i as f32, 0.0, 0.0, 0.0];
+            manager.insert(&vector).unwrap();
+        }
+
+        let query = [4.0, 0.0, 0.0, 0.0];
+        let manager_results = manager.search(&query, 5, 50).unwrap();
+        let view_results = manager.read_view().search(&query, 5, 50).unwrap();
+
+        assert_eq!(view_results.len(), manager_results.len());
+        for (view, manager) in view_results.iter().zip(manager_results.iter()) {
+            assert_eq!(view.id, manager.id);
+            assert_eq!(view.slot, manager.slot);
+            assert_eq!(view.distance, manager.distance);
         }
     }
 
