@@ -2,9 +2,8 @@
 //!
 //! Supports both owned heap allocations and memory-mapped files.
 
-use super::{NodeStorage, StorageBacking, CACHE_LINE};
+use super::{upper_neighbors::UpperNeighborsStorage, NodeStorage, StorageBacking, CACHE_LINE};
 use crate::compression::scalar::ScalarParams;
-use rustc_hash::FxHashMap;
 use std::alloc::Layout;
 use std::ptr::NonNull;
 
@@ -165,7 +164,7 @@ impl NodeStorage {
             max_neighbors,
             max_neighbors_upper,
             max_level: 8, // Default max level
-            upper_neighbors: FxHashMap::default(),
+            upper_neighbors: UpperNeighborsStorage::default(),
             sq8: false, // Default to full precision for loaded data
             sq8_params: None,
             norms: Vec::new(),
@@ -222,7 +221,7 @@ impl NodeStorage {
             max_neighbors,
             max_neighbors_upper,
             max_level: 8,
-            upper_neighbors: FxHashMap::default(),
+            upper_neighbors: UpperNeighborsStorage::default(),
             sq8: false,
             sq8_params: None,
             norms: Vec::new(),
@@ -232,10 +231,8 @@ impl NodeStorage {
         }
     }
 
-    /// Serialize the auxiliary body: SQ8 params, norms, sums, legacy fields,
-    /// and upper neighbors. Shared by both `serialize_auxiliary`
-    /// and `serialize_full`.
-    fn serialize_aux_body(&self, out: &mut Vec<u8>) {
+    /// Serialize SQ8 params, norms, sums, and legacy compatibility fields.
+    fn serialize_aux_body_without_upper(&self, out: &mut Vec<u8>) {
         // SQ8 params if present
         if let Some(ref params) = self.sq8_params {
             out.push(1);
@@ -269,24 +266,35 @@ impl NodeStorage {
         out.extend_from_slice(&0u64.to_le_bytes()); // rabitq_metadata length = 0
         out.extend_from_slice(&0u64.to_le_bytes()); // rabitq_originals length = 0
 
-        // Upper neighbors
-        out.extend_from_slice(&(self.upper_neighbors.len() as u64).to_le_bytes());
-        for (&node_id, levels) in &self.upper_neighbors {
+    }
+
+    fn serialize_legacy_upper_neighbors(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&(self.upper_neighbors.nodes_with_upper() as u64).to_le_bytes());
+        for node_id in 0..self.len as u32 {
+            let level_count = self.upper_neighbors.upper_level_count(node_id);
+            if level_count == 0 {
+                continue;
+            }
             out.extend_from_slice(&node_id.to_le_bytes());
-            out.push(levels.len() as u8);
-            for level_neighbors in levels {
-                out.extend_from_slice(&(level_neighbors.len() as u16).to_le_bytes());
-                for &neighbor in level_neighbors {
+            out.push(level_count as u8);
+            for level in 1..=level_count as u8 {
+                let neighbors = self
+                    .upper_neighbors
+                    .neighbors_at_level_cow(node_id, level, self.max_neighbors_upper);
+                out.extend_from_slice(&(neighbors.len() as u16).to_le_bytes());
+                for &neighbor in neighbors.iter() {
                     out.extend_from_slice(&neighbor.to_le_bytes());
                 }
             }
         }
     }
 
-    /// Deserialize the auxiliary body: SQ8 params, norms, sums, legacy PQ,
-    /// legacy RaBitQ state, and upper neighbors. Shared by both `deserialize_auxiliary`
-    /// and `deserialize_full`.
-    fn deserialize_aux_body(&mut self, data: &[u8], pos: &mut usize) -> Result<(), String> {
+    /// Deserialize SQ8 params, norms, sums, and legacy compatibility fields.
+    fn deserialize_aux_body_without_upper(
+        &mut self,
+        data: &[u8],
+        pos: &mut usize,
+    ) -> Result<(), String> {
         // SQ8 params
         let has_params = read_u8(data, pos)? != 0;
         let sq8_params = if has_params {
@@ -370,10 +378,24 @@ impl NodeStorage {
             }
         }
 
-        // Upper neighbors
+        // Apply to self
+        self.sq8_params = sq8_params;
+        self.norms = norms;
+        self.sq8_sums = sq8_sums;
+
+        Ok(())
+    }
+
+    fn deserialize_legacy_upper_neighbors(
+        &mut self,
+        data: &[u8],
+        pos: &mut usize,
+    ) -> Result<(), String> {
         let upper_count = read_u64(data, pos)? as usize;
-        let mut upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>> =
-            FxHashMap::with_capacity_and_hasher(upper_count, rustc_hash::FxBuildHasher);
+        let mut upper_neighbors = rustc_hash::FxHashMap::with_capacity_and_hasher(
+            upper_count,
+            rustc_hash::FxBuildHasher,
+        );
         for _ in 0..upper_count {
             let node_id = read_u32(data, pos)?;
             let num_levels = read_u8(data, pos)? as usize;
@@ -389,12 +411,8 @@ impl NodeStorage {
             upper_neighbors.insert(node_id, levels);
         }
 
-        // Apply to self
-        self.sq8_params = sq8_params;
-        self.norms = norms;
-        self.sq8_sums = sq8_sums;
-        self.upper_neighbors = upper_neighbors;
-
+        self.upper_neighbors
+            .replace_owned(upper_neighbors);
         Ok(())
     }
 
@@ -413,7 +431,8 @@ impl NodeStorage {
         out.push(mode_byte);
         out.push(u8::from(self.sq8_trained));
 
-        self.serialize_aux_body(&mut out);
+        self.serialize_aux_body_without_upper(&mut out);
+        self.serialize_legacy_upper_neighbors(&mut out);
 
         out
     }
@@ -438,7 +457,57 @@ impl NodeStorage {
         self.sq8 = sq8;
         self.sq8_trained = sq8_trained;
 
-        self.deserialize_aux_body(data, &mut pos)
+        self.deserialize_aux_body_without_upper(data, &mut pos)?;
+        self.deserialize_legacy_upper_neighbors(data, &mut pos)
+    }
+
+    #[must_use]
+    pub fn serialize_segment_auxiliary(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(128 + self.norms.len() * 4);
+        out.push(u8::from(self.sq8));
+        out.push(u8::from(self.sq8_trained));
+        self.serialize_aux_body_without_upper(&mut out);
+        out
+    }
+
+    #[must_use]
+    pub fn serialize_upper_neighbors_region(&self) -> Vec<u8> {
+        self.upper_neighbors.serialize_region(self.len)
+    }
+
+    pub fn deserialize_segment_auxiliary(&mut self, data: &[u8]) -> Result<(), String> {
+        let mut pos = 0;
+        let mode_byte = read_u8(data, &mut pos)?;
+        let sq8 = match mode_byte {
+            0 | 3 => false,
+            1 => true,
+            2 => return Err("PQ storage mode is no longer supported".to_string()),
+            _ => return Err(format!("Invalid storage mode: {mode_byte}")),
+        };
+        let sq8_trained = read_u8(data, &mut pos)? != 0;
+
+        self.sq8 = sq8;
+        self.sq8_trained = sq8_trained;
+        self.deserialize_aux_body_without_upper(data, &mut pos)
+    }
+
+    pub fn deserialize_upper_neighbors_region(&mut self, data: &[u8]) -> Result<(), String> {
+        self.upper_neighbors = UpperNeighborsStorage::deserialize_region_owned(
+            data,
+            self.len,
+            self.max_neighbors_upper,
+        )?;
+        Ok(())
+    }
+
+    #[cfg(feature = "mmap")]
+    pub fn mmap_upper_neighbors_region(&mut self, mmap: memmap2::Mmap) -> Result<(), String> {
+        self.upper_neighbors = UpperNeighborsStorage::mmap_region(
+            mmap,
+            self.len,
+            self.max_neighbors_upper,
+        )?;
+        Ok(())
     }
 
     /// Serialize complete storage state to bytes
@@ -474,7 +543,8 @@ impl NodeStorage {
         out.extend_from_slice(raw_data);
 
         // Auxiliary body (SQ8 params, norms, upper neighbors)
-        self.serialize_aux_body(&mut out);
+        self.serialize_aux_body_without_upper(&mut out);
+        self.serialize_legacy_upper_neighbors(&mut out);
 
         out
     }
@@ -552,7 +622,8 @@ impl NodeStorage {
         storage.sq8_trained = sq8_trained;
 
         // Deserialize auxiliary body (SQ8 params, norms, upper neighbors)
-        storage.deserialize_aux_body(data, &mut pos)?;
+        storage.deserialize_aux_body_without_upper(data, &mut pos)?;
+        storage.deserialize_legacy_upper_neighbors(data, &mut pos)?;
 
         Ok(storage)
     }

@@ -24,17 +24,9 @@ impl NodeStorage {
         if level == 0 {
             return self.neighbor_count(id);
         }
-        match self.upper_neighbors.get(&id) {
-            Some(levels) => {
-                let level_idx = level as usize - 1;
-                if level_idx < levels.len() {
-                    levels[level_idx].len()
-                } else {
-                    0
-                }
-            }
-            None => 0,
-        }
+        self.upper_neighbors
+            .neighbors_at_level_cow(id, level, self.max_neighbors_upper)
+            .len()
     }
 
     /// Zero-copy access to level 0 neighbors (hot path, colocated storage)
@@ -73,17 +65,9 @@ impl NodeStorage {
         if level == 0 {
             return self.neighbors(id).to_vec();
         }
-        match self.upper_neighbors.get(&id) {
-            Some(levels) => {
-                let level_idx = level as usize - 1;
-                if level_idx < levels.len() {
-                    levels[level_idx].clone()
-                } else {
-                    Vec::new()
-                }
-            }
-            None => Vec::new(),
-        }
+        self.upper_neighbors
+            .neighbors_at_level_cow(id, level, self.max_neighbors_upper)
+            .into_owned()
     }
 
     /// Get neighbors at any level as Cow (zero-copy for all levels)
@@ -96,17 +80,8 @@ impl NodeStorage {
         if level == 0 {
             Cow::Borrowed(self.neighbors(id))
         } else {
-            match self.upper_neighbors.get(&id) {
-                Some(levels) => {
-                    let level_idx = level as usize - 1;
-                    if level_idx < levels.len() {
-                        Cow::Borrowed(&levels[level_idx])
-                    } else {
-                        Cow::Borrowed(&[])
-                    }
-                }
-                None => Cow::Borrowed(&[]),
-            }
+            self.upper_neighbors
+                .neighbors_at_level_cow(id, level, self.max_neighbors_upper)
         }
     }
 
@@ -145,14 +120,7 @@ impl NodeStorage {
         }
 
         // Ensure upper levels are allocated
-        self.allocate_upper_levels(id, level);
-
-        if let Some(levels) = self.upper_neighbors.get_mut(&id) {
-            let level_idx = level as usize - 1;
-            if level_idx < levels.len() {
-                levels[level_idx] = neighbors;
-            }
-        }
+        self.upper_neighbors.set_neighbors_at_level(id, level, neighbors);
     }
 
     /// Add a neighbor at a specific level (for incremental construction)
@@ -178,13 +146,8 @@ impl NodeStorage {
             }
         } else {
             // Upper level: append to sparse storage
-            self.allocate_upper_levels(id, level);
-            if let Some(levels) = self.upper_neighbors.get_mut(&id) {
-                let level_idx = level as usize - 1;
-                if level_idx < levels.len() && levels[level_idx].len() < self.max_neighbors_upper {
-                    levels[level_idx].push(neighbor);
-                }
-            }
+            self.upper_neighbors
+                .add_neighbor(id, level, neighbor, self.max_neighbors_upper);
         }
     }
 

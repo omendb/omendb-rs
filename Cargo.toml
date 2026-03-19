@@ -69,6 +69,7 @@ dashmap = "6.1.0"
 arc-swap = "1.7.1"
 rustc-hash = "2.1.1"
 fs2 = "0.4.3"
+nix = { version = "0.31.2", features = ["mman"] }
 
 [dev-dependencies]
 criterion = "0.5"

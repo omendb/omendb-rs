@@ -133,7 +133,8 @@ impl NodeStorage {
 
         // Reorder upper neighbors (HashMap: old_id -> new_id mapping)
         if !self.upper_neighbors.is_empty() {
-            let old_upper = std::mem::take(&mut self.upper_neighbors);
+            let old_upper = self.upper_neighbors.take_owned();
+            let mut reordered = rustc_hash::FxHashMap::default();
             for (new_idx, &old_id) in bfs_order.iter().enumerate() {
                 if let Some(levels) = old_upper.get(&old_id) {
                     // Remap neighbor IDs in upper levels
@@ -152,9 +153,10 @@ impl NodeStorage {
                                 .collect()
                         })
                         .collect();
-                    self.upper_neighbors.insert(new_idx as u32, new_levels);
+                    reordered.insert(new_idx as u32, new_levels);
                 }
             }
+            self.upper_neighbors.replace_owned(reordered);
         }
 
         // Swap in new backing

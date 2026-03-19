@@ -37,13 +37,14 @@ mod neighbors;
 mod quantization;
 mod reorder;
 mod serialization;
+mod upper_neighbors;
 mod vectors;
 
 use crate::compression::scalar::ScalarParams;
-use rustc_hash::FxHashMap;
 use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
 use std::fmt;
 use std::ptr::NonNull;
+use upper_neighbors::UpperNeighborsStorage;
 
 pub use crate::compression::scalar::QueryPrep;
 
@@ -120,7 +121,7 @@ pub struct NodeStorage {
     /// Only populated for nodes with level > 0 (~5% of nodes).
     /// Using HashMap instead of Vec<Option<...>> saves ~7MB at 1M vectors.
     /// Using Vec<Vec<u32>> instead of Box<[Vec<u32>]> allows in-place mutation.
-    pub(crate) upper_neighbors: FxHashMap<u32, Vec<Vec<u32>>>,
+    pub(crate) upper_neighbors: UpperNeighborsStorage,
 
     // Quantization support
     /// Whether SQ8 quantization is enabled (true = SQ8, false = full precision)
@@ -206,7 +207,7 @@ impl NodeStorage {
             max_neighbors,
             max_neighbors_upper,
             max_level: max_levels,
-            upper_neighbors: FxHashMap::default(),
+            upper_neighbors: UpperNeighborsStorage::default(),
             sq8,
             sq8_params: None,
             norms: Vec::new(),
@@ -309,21 +310,7 @@ impl NodeStorage {
             return;
         }
 
-        let needed_levels = level as usize;
-
-        match self.upper_neighbors.entry(id) {
-            std::collections::hash_map::Entry::Vacant(e) => {
-                // Allocate empty Vec for each upper level (levels 1..=level)
-                let levels: Vec<Vec<u32>> = (0..needed_levels).map(|_| Vec::new()).collect();
-                e.insert(levels);
-            }
-            std::collections::hash_map::Entry::Occupied(mut e) => {
-                if e.get().len() < needed_levels {
-                    // Extend existing allocation in place
-                    e.get_mut().resize(needed_levels, Vec::new());
-                }
-            }
-        }
+        self.upper_neighbors.allocate_upper_levels(id, level);
     }
 
     /// Grow capacity (double or initial 64)
@@ -495,14 +482,7 @@ impl NodeStorage {
         };
 
         // Calculate upper level storage (HashMap values only)
-        let upper_usage: usize = self
-            .upper_neighbors
-            .values()
-            .map(|levels: &Vec<Vec<u32>>| {
-                levels.iter().map(|v| v.len() * 4).sum::<usize>()
-                    + levels.len() * std::mem::size_of::<Vec<u32>>()
-            })
-            .sum();
+        let upper_usage = self.upper_neighbors.memory_usage();
 
         // Auxiliary storage (SQ8)
         let aux_usage = self.norms.len() * 4  // f32 norms
@@ -531,6 +511,11 @@ impl NodeStorage {
     #[must_use]
     pub fn metadata_offset(&self) -> usize {
         self.metadata_offset
+    }
+
+    #[cfg(all(test, feature = "mmap"))]
+    pub(crate) fn upper_neighbors_are_mmap(&self) -> bool {
+        self.upper_neighbors.is_mmap()
     }
 }
 

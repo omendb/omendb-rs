@@ -33,8 +33,9 @@ use tracing::{error, info, instrument};
 /// Current segment file format version
 ///
 /// v1: Raw node data only (no quantization state)
-/// v2: Raw node data + auxiliary data (mode, SQ8, upper neighbors)
-const SEGMENT_FORMAT_VERSION: u32 = 2;
+/// v2: Raw node data + one auxiliary blob (mode, SQ8, upper neighbors)
+/// v3: Raw node data + general auxiliary blob + separate upper-neighbor region
+const SEGMENT_FORMAT_VERSION: u32 = 3;
 
 /// Magic bytes for segment files
 const SEGMENT_MAGIC: &[u8; 8] = b"OMSEG\0\0\0";
@@ -96,11 +97,11 @@ fn parse_header(reader: &mut impl Read) -> Result<SegmentHeader> {
         )));
     }
 
-    // Read version (accept v1 and v2)
+    // Read version (accept v1, v2, and current)
     let mut version_bytes = [0u8; 4];
     reader.read_exact(&mut version_bytes)?;
     let version = u32::from_le_bytes(version_bytes);
-    if version != 1 && version != SEGMENT_FORMAT_VERSION {
+    if version != 1 && version != 2 && version != SEGMENT_FORMAT_VERSION {
         error!(
             version,
             expected = SEGMENT_FORMAT_VERSION,
@@ -226,8 +227,8 @@ fn parse_header(reader: &mut impl Read) -> Result<SegmentHeader> {
     })
 }
 
-/// Read and deserialize auxiliary data (v2+) from current reader position.
-fn read_auxiliary(reader: &mut impl Read, storage: &mut NodeStorage) -> Result<()> {
+/// Read a length-prefixed auxiliary blob from the current reader position.
+fn read_blob(reader: &mut impl Read) -> Result<Vec<u8>> {
     let mut aux_len_bytes = [0u8; 8];
     reader.read_exact(&mut aux_len_bytes)?;
     let aux_len = u64::from_le_bytes(aux_len_bytes) as usize;
@@ -236,12 +237,40 @@ fn read_auxiliary(reader: &mut impl Read, storage: &mut NodeStorage) -> Result<(
             "Auxiliary data too large: {aux_len} bytes (max {MAX_AUX_DATA_SIZE})"
         )));
     }
+    let mut aux_data = vec![0u8; aux_len];
     if aux_len > 0 {
-        let mut aux_data = vec![0u8; aux_len];
         reader.read_exact(&mut aux_data)?;
+    }
+    Ok(aux_data)
+}
+
+fn read_auxiliary_v2(reader: &mut impl Read, storage: &mut NodeStorage) -> Result<()> {
+    let aux_data = read_blob(reader)?;
+    if !aux_data.is_empty() {
         storage.deserialize_auxiliary(&aux_data).map_err(|e| {
             HNSWError::Storage(format!("Failed to deserialize auxiliary data: {e}"))
         })?;
+    }
+    Ok(())
+}
+
+fn read_auxiliary_v3(reader: &mut impl Read, storage: &mut NodeStorage) -> Result<()> {
+    let aux_data = read_blob(reader)?;
+    if !aux_data.is_empty() {
+        storage
+            .deserialize_segment_auxiliary(&aux_data)
+            .map_err(|e| HNSWError::Storage(format!("Failed to deserialize auxiliary data: {e}")))?;
+    }
+
+    let upper_region = read_blob(reader)?;
+    if !upper_region.is_empty() {
+        storage
+            .deserialize_upper_neighbors_region(&upper_region)
+            .map_err(|e| {
+                HNSWError::Storage(format!(
+                    "Failed to deserialize upper-neighbor region: {e}"
+                ))
+            })?;
     }
     Ok(())
 }
@@ -310,7 +339,7 @@ impl FrozenSegment {
             writer.write_all(&(storage.dimensions() as u32).to_le_bytes())?;
             writer.write_all(&(storage.max_neighbors() as u32).to_le_bytes())?;
 
-            // v2: Write alignment padding so raw data starts at a cache-line boundary.
+            // Write alignment padding so raw data starts at a cache-line boundary.
             // This ensures mmap'd pointers are safe for f32/SIMD access.
             {
                 let current_pos = 8
@@ -336,10 +365,14 @@ impl FrozenSegment {
                 writer.write_all(data_bytes)?;
             }
 
-            // v2: Write auxiliary data (mode, SQ8, upper neighbors)
-            let aux_data = storage.serialize_auxiliary();
+            // v3: Write general auxiliary data separately from the upper-neighbor region
+            let aux_data = storage.serialize_segment_auxiliary();
             writer.write_all(&(aux_data.len() as u64).to_le_bytes())?;
             writer.write_all(&aux_data)?;
+
+            let upper_region = storage.serialize_upper_neighbors_region();
+            writer.write_all(&(upper_region.len() as u64).to_le_bytes())?;
+            writer.write_all(&upper_region)?;
 
             writer.flush()?;
             writer
@@ -417,8 +450,10 @@ impl FrozenSegment {
             header.max_neighbors,
         );
 
-        if header.version >= 2 {
-            read_auxiliary(&mut reader, &mut storage)?;
+        match header.version {
+            2 => read_auxiliary_v2(&mut reader, &mut storage)?,
+            3 => read_auxiliary_v3(&mut reader, &mut storage)?,
+            _ => {}
         }
 
         let elapsed = start.elapsed();
@@ -519,13 +554,65 @@ impl FrozenSegment {
             NodeStorage::new(header.dimensions, header.max_neighbors, 8)
         };
 
-        // v2: Read auxiliary data from after the mmap section
-        if header.version >= 2 {
-            use std::io::Seek;
-            let aux_offset = header.data_offset as u64 + data_size as u64;
-            let mut reader = BufReader::new(&file);
-            reader.seek(std::io::SeekFrom::Start(aux_offset))?;
-            read_auxiliary(&mut reader, &mut storage)?;
+        match header.version {
+            2 => {
+                use std::io::Seek;
+                let aux_offset = header.data_offset as u64 + data_size as u64;
+                let mut reader = BufReader::new(&file);
+                reader.seek(std::io::SeekFrom::Start(aux_offset))?;
+                read_auxiliary_v2(&mut reader, &mut storage)?;
+            }
+            3 => {
+                use std::io::Seek;
+                let aux_offset = header.data_offset as u64 + data_size as u64;
+                let mut reader = BufReader::new(&file);
+                reader.seek(std::io::SeekFrom::Start(aux_offset))?;
+
+                let aux_data = read_blob(&mut reader)?;
+                if !aux_data.is_empty() {
+                    storage.deserialize_segment_auxiliary(&aux_data).map_err(|e| {
+                        HNSWError::Storage(format!(
+                            "Failed to deserialize auxiliary data: {e}"
+                        ))
+                    })?;
+                }
+
+                let upper_len_pos = aux_offset + 8 + aux_data.len() as u64;
+                reader.seek(std::io::SeekFrom::Start(upper_len_pos))?;
+                let mut upper_len_bytes = [0u8; 8];
+                reader.read_exact(&mut upper_len_bytes)?;
+                let upper_len = u64::from_le_bytes(upper_len_bytes) as usize;
+                if upper_len > MAX_AUX_DATA_SIZE {
+                    return Err(HNSWError::Storage(format!(
+                        "Upper-neighbor region too large: {upper_len} bytes (max {MAX_AUX_DATA_SIZE})"
+                    )));
+                }
+                if upper_len > 0 {
+                    let upper_offset = upper_len_pos + 8;
+                    let file_len = file.metadata()?.len();
+                    let required_len = upper_offset + upper_len as u64;
+                    if file_len < required_len {
+                        return Err(HNSWError::Storage(format!(
+                            "File too small for upper-neighbor region: {file_len} bytes, need {required_len} bytes"
+                        )));
+                    }
+
+                    let upper_mmap = unsafe {
+                        MmapOptions::new()
+                            .offset(upper_offset)
+                            .len(upper_len)
+                            .map(&file)?
+                    };
+                    storage
+                        .mmap_upper_neighbors_region(upper_mmap)
+                        .map_err(|e| {
+                            HNSWError::Storage(format!(
+                                "Failed to mmap upper-neighbor region: {e}"
+                            ))
+                        })?;
+                }
+            }
+            _ => {}
         }
 
         let elapsed = start.elapsed();
@@ -754,6 +841,41 @@ mod tests {
         for (m, h) in mmap_results.iter().zip(heap_results.iter()) {
             assert_eq!(m.id, h.id);
             assert!((m.distance - h.distance).abs() < 1e-6);
+        }
+    }
+
+    #[cfg(feature = "mmap")]
+    #[test]
+    fn test_segment_mmap_upper_neighbors_region_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("upper_neighbors.bin");
+
+        let mut mutable =
+            MutableSegment::with_capacity(16, default_params(), Metric::L2, 512).unwrap();
+        for i in 0..256 {
+            mutable
+                .insert(&[i as f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0])
+                .unwrap();
+        }
+
+        let frozen = mutable.freeze();
+        frozen.save(&path).unwrap();
+
+        let mmap_loaded = FrozenSegment::load_mmap(&path).unwrap();
+        let heap_loaded = FrozenSegment::load(&path).unwrap();
+
+        assert!(mmap_loaded.storage().upper_neighbors_are_mmap());
+
+        let node_with_upper = (0..mmap_loaded.len() as u32)
+            .find(|&node_id| mmap_loaded.storage().level(node_id) > 0)
+            .expect("expected at least one upper-layer node");
+
+        let max_level = mmap_loaded.storage().level(node_with_upper);
+        for level in 1..=max_level {
+            assert_eq!(
+                mmap_loaded.storage().neighbors_at_level(node_with_upper, level),
+                heap_loaded.storage().neighbors_at_level(node_with_upper, level),
+            );
         }
     }
 
