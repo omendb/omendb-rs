@@ -2,7 +2,7 @@ use serde_json::Value as JsonValue;
 use parking_lot::MappedRwLockReadGuard;
 use std::sync::atomic::Ordering;
 
-use super::VectorStore;
+use super::{MetadataFilter, VectorStore};
 use crate::omen::{Metric, OmenFile};
 
 /// Comprehensive store diagnostics.
@@ -46,6 +46,28 @@ impl VectorStore {
     #[must_use]
     pub fn count(&self) -> usize {
         self.len()
+    }
+
+    /// Count vectors matching a metadata filter.
+    #[must_use]
+    pub fn count_by_filter(&self, filter: &MetadataFilter) -> usize {
+        let metadata_index = self.metadata_index.read();
+        if let Some(bitmap) = filter.evaluate_bitmap(&metadata_index) {
+            return bitmap
+                .iter()
+                .filter(|&slot| self.records.is_live(slot))
+                .count();
+        }
+
+        self.records
+            .iter_live()
+            .filter(|(_, record)| {
+                record
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| filter.matches(metadata))
+            })
+            .count()
     }
 
     /// Check if store is empty

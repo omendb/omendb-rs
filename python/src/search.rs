@@ -237,7 +237,8 @@ impl VectorDatabase {
         for _ in 0..n_iterations {
             py.detach(|| {
                 let inner = inner_arc.read();
-                if let Some(ref segments) = inner.store.segments() {
+                let segments = inner.store.segments();
+                if let Some(segments) = segments {
                     let _ = segments.search(&query_vec.data, k, 100);
                 }
             });
@@ -248,7 +249,8 @@ impl VectorDatabase {
         let t0 = Instant::now();
         py.detach(|| {
             let inner = inner_arc.read();
-            if let Some(ref segments) = inner.store.segments() {
+            let segments = inner.store.segments();
+            if let Some(segments) = segments {
                 for _ in 0..n_iterations {
                     let _ = segments.search(&query_vec.data, k, 100);
                 }
