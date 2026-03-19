@@ -328,6 +328,15 @@ impl FrozenSegment {
         // write them into NodeStorage so FrozenSegment search returns correct slots
         index.remap_slots(&slots);
 
+        // Reorder nodes into BFS traversal order so frozen segments are laid out
+        // for cache-friendly reads. If optimization fails, keep the insertion-order
+        // layout rather than failing freeze/persistence.
+        if !index.is_empty() {
+            if let Err(error) = index.optimize_cache_locality() {
+                tracing::warn!("Failed to reorder frozen segment for cache locality: {error}");
+            }
+        }
+
         Self::from_parts(
             id,
             index.entry_point,
@@ -564,6 +573,47 @@ mod tests {
         let results = frozen.search_with_filter(&[5.0, 0.0, 0.0, 0.0], 3, 100, |_| false);
 
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_freeze_applies_bfs_reorder_and_preserves_slots() {
+        let mut chosen_seed = None;
+
+        for seed in 1..=32 {
+            let mut params = default_params();
+            params.seed = seed;
+
+            let mut mutable = MutableSegment::new(4, params, Metric::L2).unwrap();
+            for i in 0..64 {
+                mutable.insert(&[i as f32, 0.0, 0.0, 0.0]).unwrap();
+            }
+
+            if mutable.entry_point().is_some_and(|entry| entry != 0) {
+                chosen_seed = Some(seed);
+                break;
+            }
+        }
+
+        let seed = chosen_seed.expect("expected a deterministic seed with a nonzero entry point");
+        let mut params = default_params();
+        params.seed = seed;
+
+        let mut mutable = MutableSegment::new(4, params, Metric::L2).unwrap();
+        for i in 0..64 {
+            mutable.insert(&[i as f32, 0.0, 0.0, 0.0]).unwrap();
+        }
+
+        let pre_freeze_entry = mutable.entry_point().unwrap();
+        assert_ne!(pre_freeze_entry, 0, "test setup requires a nonzero entry point");
+
+        let frozen = mutable.freeze();
+
+        // BFS reorder always places the entry point first in storage.
+        assert_eq!(frozen.entry_point(), Some(0));
+
+        let results = frozen.search(&[31.0, 0.0, 0.0, 0.0], 5, 100);
+        assert!(!results.is_empty());
+        assert_eq!(results[0].slot, 31);
     }
 
     #[test]
