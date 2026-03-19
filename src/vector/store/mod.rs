@@ -388,16 +388,16 @@ impl VectorStore {
             (k, false)
         };
 
-        let segments = self.segments.read();
-        let segment_view = segments.as_ref().map(SegmentManager::read_view);
-        let results = search::knn_search_core(
-            &self.records,
-            segment_view,
-            &query.data,
-            search_k,
-            ef,
-            self.distance_metric,
-        )?;
+        let results = self.with_segment_view(|segment_view| {
+            search::knn_search_core(
+                &self.records,
+                segment_view,
+                &query.data,
+                search_k,
+                ef,
+                self.distance_metric,
+            )
+        })?;
 
         if needs_rescore {
             Ok(search::rescore_results(
@@ -437,18 +437,18 @@ impl VectorStore {
         let effective_ef =
             helpers::compute_effective_ef(ef, self.hnsw_ef_search.load(Ordering::Relaxed), k);
 
-        let segments = self.segments.read();
-        let segment_view = segments.as_ref().map(SegmentManager::read_view);
-        search::knn_search_filtered_core(
-            &self.records,
-            &self.metadata_index.read(),
-            segment_view,
-            &query.data,
-            k,
-            effective_ef,
-            filter,
-            self.distance_metric,
-        )
+        self.with_segment_view(|segment_view| {
+            search::knn_search_filtered_core(
+                &self.records,
+                &self.metadata_index.read(),
+                segment_view,
+                &query.data,
+                k,
+                effective_ef,
+                filter,
+                self.distance_metric,
+            )
+        })
     }
 
     /// Search with optional filter (convenience method)

@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use super::{MetadataFilter, VectorStore};
 use crate::omen::{Metric, OmenFile};
+use crate::vector::hnsw::{SegmentManager, SegmentReadView};
 
 /// Comprehensive store diagnostics.
 ///
@@ -183,6 +184,16 @@ impl VectorStore {
     #[must_use]
     pub fn deleted_count(&self) -> usize {
         self.records.deleted_count() as usize
+    }
+
+    /// Run a closure against the current immutable segment read view.
+    ///
+    /// This exposes the published search state without leaking the mutable
+    /// `SegmentManager` lock shape to callers.
+    pub fn with_segment_view<T>(&self, f: impl FnOnce(Option<SegmentReadView<'_>>) -> T) -> T {
+        let segments = self.segments.read();
+        let segment_view = segments.as_ref().map(SegmentManager::read_view);
+        f(segment_view)
     }
 
     /// Get the segment manager (for benchmarking/diagnostics)

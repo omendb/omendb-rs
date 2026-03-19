@@ -85,6 +85,31 @@ fn test_search_with_filter() {
 }
 
 #[test]
+fn test_vector_store_with_segment_view_exposes_published_search_state() {
+    let mut store = VectorStore::new(4);
+    for i in 0..8 {
+        store
+            .insert(Vector::new(vec![i as f32, 0.0, 0.0, 0.0]))
+            .unwrap();
+    }
+
+    let (len, frozen_count, mutable_len, result_len) = store.with_segment_view(|segments| {
+        let segments = segments.expect("segment view should exist after inserts");
+        let results = segments.search(&[4.0, 0.0, 0.0, 0.0], 3, 50).unwrap();
+        (
+            segments.len(),
+            segments.frozen_count(),
+            segments.mutable_len(),
+            results.len(),
+        )
+    });
+
+    assert_eq!(len, store.len());
+    assert_eq!(result_len, 3);
+    assert!(frozen_count > 0 || mutable_len > 0);
+}
+
+#[test]
 fn test_vector_store_cosine_zero_query_rejected_in_brute_force_path() {
     let mut store = VectorStore::new_with_params(3, 16, 100, 100, Metric::Cosine);
     store

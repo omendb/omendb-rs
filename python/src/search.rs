@@ -237,10 +237,11 @@ impl VectorDatabase {
         for _ in 0..n_iterations {
             py.detach(|| {
                 let inner = inner_arc.read();
-                let segments = inner.store.segments();
-                if let Some(segments) = segments {
-                    let _ = segments.search(&query_vec.data, k, 100);
-                }
+                inner.store.with_segment_view(|segments| {
+                    if let Some(segments) = segments {
+                        let _ = segments.search(&query_vec.data, k, 100);
+                    }
+                });
             });
         }
         let t_hnsw_total = t0.elapsed().as_micros() as f64;
@@ -249,12 +250,13 @@ impl VectorDatabase {
         let t0 = Instant::now();
         py.detach(|| {
             let inner = inner_arc.read();
-            let segments = inner.store.segments();
-            if let Some(segments) = segments {
-                for _ in 0..n_iterations {
-                    let _ = segments.search(&query_vec.data, k, 100);
+            inner.store.with_segment_view(|segments| {
+                if let Some(segments) = segments {
+                    for _ in 0..n_iterations {
+                        let _ = segments.search(&query_vec.data, k, 100);
+                    }
                 }
-            }
+            });
         });
         let t_hnsw_tight_total = t0.elapsed().as_micros() as f64;
 
