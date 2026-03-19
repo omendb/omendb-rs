@@ -3,8 +3,8 @@
 use serde_json::json;
 use tempfile::tempdir;
 
-use crate::vector::store::edge_store::{Edge, EdgeDirection, EdgeStore};
 use crate::VectorStore;
+use crate::vector::store::edge_store::{Edge, EdgeDirection, EdgeStore};
 
 // --- EdgeStore unit tests ---
 
@@ -82,12 +82,16 @@ fn test_edge_store_remove_edge() {
     let removed = store.remove_edge("a", "b", "link");
     assert!(removed);
     assert_eq!(store.edge_count(), 0);
-    assert!(store
-        .get_edges("a", EdgeDirection::Outgoing, None)
-        .is_empty());
-    assert!(store
-        .get_edges("b", EdgeDirection::Incoming, None)
-        .is_empty());
+    assert!(
+        store
+            .get_edges("a", EdgeDirection::Outgoing, None)
+            .is_empty()
+    );
+    assert!(
+        store
+            .get_edges("b", EdgeDirection::Incoming, None)
+            .is_empty()
+    );
 
     let not_removed = store.remove_edge("a", "b", "link");
     assert!(!not_removed);
@@ -114,12 +118,16 @@ fn test_edge_store_remove_all_for() {
 
     store.remove_all_for("a");
     assert_eq!(store.edge_count(), 0);
-    assert!(store
-        .get_edges("b", EdgeDirection::Incoming, None)
-        .is_empty());
-    assert!(store
-        .get_edges("c", EdgeDirection::Outgoing, None)
-        .is_empty());
+    assert!(
+        store
+            .get_edges("b", EdgeDirection::Incoming, None)
+            .is_empty()
+    );
+    assert!(
+        store
+            .get_edges("c", EdgeDirection::Outgoing, None)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -585,12 +593,16 @@ fn test_delete_batch_cascade_wal_recovery() {
             0,
             "batch cascade-deleted edges survived WAL recovery"
         );
-        assert!(store
-            .get_edges("c", EdgeDirection::Outgoing, None)
-            .is_empty());
-        assert!(store
-            .get_edges("c", EdgeDirection::Incoming, None)
-            .is_empty());
+        assert!(
+            store
+                .get_edges("c", EdgeDirection::Outgoing, None)
+                .is_empty()
+        );
+        assert!(
+            store
+                .get_edges("c", EdgeDirection::Incoming, None)
+                .is_empty()
+        );
     }
 }
 
@@ -651,9 +663,11 @@ fn test_interleaved_edge_vector_wal_operations() {
 
         assert_eq!(store.edge_count(), 3, "3 edges should survive WAL replay");
         // v1→v2 was cascade-deleted
-        assert!(store
-            .get_edges("v1", EdgeDirection::Outgoing, None)
-            .is_empty());
+        assert!(
+            store
+                .get_edges("v1", EdgeDirection::Outgoing, None)
+                .is_empty()
+        );
         // v2→v3 was explicitly removed
         let v2_out = store.get_edges("v2", EdgeDirection::Outgoing, None);
         assert!(v2_out.is_empty(), "v2→v3 edge was explicitly removed");
@@ -960,9 +974,11 @@ fn test_shortest_path_multi_hop() {
 #[test]
 fn test_shortest_path_no_path() {
     let store = make_chain_store();
-    assert!(store
-        .shortest_path("d", "a", EdgeDirection::Outgoing, 10, None)
-        .is_none());
+    assert!(
+        store
+            .shortest_path("d", "a", EdgeDirection::Outgoing, 10, None)
+            .is_none()
+    );
 }
 
 #[test]

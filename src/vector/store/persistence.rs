@@ -3,13 +3,13 @@
 //! This module contains methods for opening, saving, and managing persistent
 //! vector stores using the `.omen` file format.
 
+use super::VectorStore;
 use super::helpers;
 use super::record_store::{Record, RecordStore};
-use super::VectorStore;
 use super::{DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M};
 use crate::omen::{
-    parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
-    CheckpointOptions, OmenFile, PersistedMuveraConfig, WalEntryType,
+    CheckpointOptions, OmenFile, PersistedMuveraConfig, WalEntryType, parse_wal_delete,
+    parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
 };
 use crate::text::TextIndex;
 use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
@@ -109,17 +109,17 @@ impl VectorStore {
 
         if !slim_snapshot_loaded
             && let Some((manifest_wal_epoch, _)) = manifest_wal_cutoff
-                && current_wal_epoch > manifest_wal_epoch {
-                    let referenced_slots: RoaringBitmap =
-                        snapshot.id_to_slot.values().copied().collect();
-                    for (slot, vector) in snapshot.vectors.iter_mut().enumerate() {
-                        let slot_u32 = slot as u32;
-                        if !referenced_slots.contains(slot_u32) {
-                            *vector = None;
-                            snapshot.metadata.remove(&slot_u32);
-                        }
-                    }
+            && current_wal_epoch > manifest_wal_epoch
+        {
+            let referenced_slots: RoaringBitmap = snapshot.id_to_slot.values().copied().collect();
+            for (slot, vector) in snapshot.vectors.iter_mut().enumerate() {
+                let slot_u32 = slot as u32;
+                if !referenced_slots.contains(slot_u32) {
+                    *vector = None;
+                    snapshot.metadata.remove(&slot_u32);
                 }
+            }
+        }
 
         // Get HNSW parameters from header
         let header = storage.header();
@@ -207,10 +207,11 @@ impl VectorStore {
             let mut entries = storage.pending_wal_entries()?;
             if !slim_snapshot_loaded
                 && let Some((manifest_wal_epoch, manifest_wal_max_ts)) = manifest_wal_cutoff
-                    && current_wal_epoch == manifest_wal_epoch
-                        && let Some(max_ts) = manifest_wal_max_ts {
-                            entries.retain(|entry| entry.header.timestamp > max_ts);
-                        }
+                && current_wal_epoch == manifest_wal_epoch
+                && let Some(max_ts) = manifest_wal_max_ts
+            {
+                entries.retain(|entry| entry.header.timestamp > max_ts);
+            }
             entries
         };
         let mut wal_modified_slots: Vec<u32> = Vec::new();
@@ -360,12 +361,13 @@ impl VectorStore {
                         let mut inserted = 0;
                         for &slot in &modified_slots {
                             if let Some(record) = records.get_by_slot(slot)
-                                && !records.deleted_bitmap().contains(slot) {
-                                    loaded.insert_with_slot(&record.vector, slot).map_err(|e| {
-                                        anyhow::anyhow!("Failed to insert WAL delta vector: {e}")
-                                    })?;
-                                    inserted += 1;
-                                }
+                                && !records.deleted_bitmap().contains(slot)
+                            {
+                                loaded.insert_with_slot(&record.vector, slot).map_err(|e| {
+                                    anyhow::anyhow!("Failed to insert WAL delta vector: {e}")
+                                })?;
+                                inserted += 1;
+                            }
                         }
                         tracing::info!(
                             frozen_segments = loaded.frozen_count(),
@@ -528,11 +530,12 @@ impl VectorStore {
             // Must happen before merging WAL inserts so that a delete→re-add sequence
             // correctly preserves the re-added edge.
             if !wal_edge_deletes.is_empty()
-                && let Some(ref mut store) = base {
-                    for (from_id, to_id, edge_type) in &wal_edge_deletes {
-                        store.remove_edge(from_id, to_id, edge_type);
-                    }
+                && let Some(ref mut store) = base
+            {
+                for (from_id, to_id, edge_type) in &wal_edge_deletes {
+                    store.remove_edge(from_id, to_id, edge_type);
                 }
+            }
 
             if let Some(wal_es) = wal_edge_store {
                 // Merge WAL edges into base (or use WAL store directly if no base)
@@ -757,8 +760,10 @@ impl VectorStore {
     /// compaction runs automatically before persisting.
     pub fn flush(&self) -> Result<()> {
         let _lock = self.write_lock.lock();
-        let auto_compact_threshold =
-            f32::from_bits(self.auto_compact_threshold.load(std::sync::atomic::Ordering::Relaxed));
+        let auto_compact_threshold = f32::from_bits(
+            self.auto_compact_threshold
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
         if self.records.deleted_count() > 0 && self.tombstone_ratio() > auto_compact_threshold {
             self.compact_locked()?;
         }
@@ -813,14 +818,15 @@ impl VectorStore {
                 return Ok(());
             }
             if let Some(ref mut storage) = *self.storage.write()
-                && let Err(e) = storage.checkpoint_vectors_only(&self.records, &dirty) {
-                    // Restore dirty slots so the next checkpoint retries writing them.
-                    // Without this, failed .vecs writes leave slots in id_to_slot but
-                    // missing from dirty_since_flush, making them invisible to ANN search
-                    // after recovery via slim snapshot.
-                    self.records.restore_dirty_slots(dirty);
-                    return Err(e.into());
-                }
+                && let Err(e) = storage.checkpoint_vectors_only(&self.records, &dirty)
+            {
+                // Restore dirty slots so the next checkpoint retries writing them.
+                // Without this, failed .vecs writes leave slots in id_to_slot but
+                // missing from dirty_since_flush, making them invisible to ANN search
+                // after recovery via slim snapshot.
+                self.records.restore_dirty_slots(dirty);
+                return Err(e.into());
+            }
             Ok(())
         } else {
             // First checkpoint: full flush to create .vecs + manifest
@@ -833,24 +839,23 @@ impl VectorStore {
         // Save segments FIRST so their generation is current when the manifest is written.
         // Saving after the checkpoint writes the old generation to the manifest, causing a
         // generation mismatch on every open that forces a full HNSW rebuild.
-        if !skip_segments
-            && let Some(ref mut segments) = *self.segments.write() {
-                // Wait for any background merge to finish before saving
-                segments.drain_pending_merge();
+        if !skip_segments && let Some(ref mut segments) = *self.segments.write() {
+            // Wait for any background merge to finish before saving
+            segments.drain_pending_merge();
 
-                if let Some(ref path) = self.storage_path {
-                    let segments_dir = segments_dir_for(path);
-                    segments.set_pending_merge_dir(segments_dir.clone());
-                    segments
-                        .save(&segments_dir)
-                        .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
-                    // Update config with new generation so the manifest checkpoint below
-                    // writes the correct value.
-                    if let Some(ref mut storage) = *self.storage.write() {
-                        storage.put_config("segments_generation", segments.generation())?;
-                    }
+            if let Some(ref path) = self.storage_path {
+                let segments_dir = segments_dir_for(path);
+                segments.set_pending_merge_dir(segments_dir.clone());
+                segments
+                    .save(&segments_dir)
+                    .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
+                // Update config with new generation so the manifest checkpoint below
+                // writes the correct value.
+                if let Some(ref mut storage) = *self.storage.write() {
+                    storage.put_config("segments_generation", segments.generation())?;
                 }
             }
+        }
 
         if let Some(ref mut storage) = *self.storage.write() {
             // Ensure dimensions are set in storage header
@@ -864,7 +869,8 @@ impl VectorStore {
                 self.hnsw_m.load(std::sync::atomic::Ordering::Relaxed) as u16,
                 self.hnsw_ef_construction
                     .load(std::sync::atomic::Ordering::Relaxed) as u16,
-                self.hnsw_ef_search.load(std::sync::atomic::Ordering::Relaxed) as u16,
+                self.hnsw_ef_search
+                    .load(std::sync::atomic::Ordering::Relaxed) as u16,
             );
             storage.set_metric(self.distance_metric);
 
@@ -981,7 +987,8 @@ impl VectorStore {
             self.hnsw_m.load(std::sync::atomic::Ordering::Relaxed) as u16,
             self.hnsw_ef_construction
                 .load(std::sync::atomic::Ordering::Relaxed) as u16,
-            self.hnsw_ef_search.load(std::sync::atomic::Ordering::Relaxed) as u16,
+            self.hnsw_ef_search
+                .load(std::sync::atomic::Ordering::Relaxed) as u16,
         );
         *self.storage.write() = Some(storage);
         self.storage_path = Some(path.to_path_buf());

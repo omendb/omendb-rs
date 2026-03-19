@@ -5,7 +5,7 @@
 use crate::distance::norm_squared;
 use crate::omen::Metric;
 use crate::vector::types::Vector;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde_json::Value as JsonValue;
 
 /// Compute effective ef_search value.

@@ -534,13 +534,14 @@ impl VectorStore {
 
         // Check post-pooling token count against configured limit
         if let Some(limit) = encoder.config().max_tokens
-            && pooled_tokens.len() > limit {
-                anyhow::bail!(
-                    "Token count {} exceeds max_tokens {}",
-                    pooled_tokens.len(),
-                    limit
-                );
-            }
+            && pooled_tokens.len() > limit
+        {
+            anyhow::bail!(
+                "Token count {} exceeds max_tokens {}",
+                pooled_tokens.len(),
+                limit
+            );
+        }
 
         // Create refs from the pooled/original tokens
         let final_refs: Vec<&[f32]> = pooled_tokens.iter().map(std::vec::Vec::as_slice).collect();

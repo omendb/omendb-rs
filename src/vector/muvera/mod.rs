@@ -45,6 +45,6 @@ mod pooling;
 mod storage;
 
 pub use config::MultiVectorConfig;
-pub use encoder::{maxsim, maxsim_batch, maxsim_batch_par, AggMode, MuveraEncoder};
+pub use encoder::{AggMode, MuveraEncoder, maxsim, maxsim_batch, maxsim_batch_par};
 pub use pooling::pool_tokens;
 pub use storage::MultiVecStorage;

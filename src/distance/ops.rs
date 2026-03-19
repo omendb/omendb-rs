@@ -12,7 +12,7 @@
 //! - 10-40% faster than naive SIMD at high dimensions
 
 use multiversion::multiversion;
-use std::simd::{num::SimdFloat, LaneCount, Simd, StdFloat, SupportedLaneCount};
+use std::simd::{LaneCount, Simd, StdFloat, SupportedLaneCount, num::SimdFloat};
 
 /// L2 (Euclidean) distance with SIMD acceleration.
 #[inline]

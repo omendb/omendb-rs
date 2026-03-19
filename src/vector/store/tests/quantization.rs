@@ -12,11 +12,13 @@ fn test_quantization_insert() {
 
     // Verify vectors stored and quantization is enabled
     assert_eq!(store.len(), 50);
-    assert!(store
-        .segments
-        .read()
-        .as_ref()
-        .is_some_and(|s| s.is_quantized()));
+    assert!(
+        store
+            .segments
+            .read()
+            .as_ref()
+            .is_some_and(|s| s.is_quantized())
+    );
 }
 
 #[test]
@@ -52,9 +54,11 @@ fn test_quantization_batch_insert() {
     // Verify all vectors were created and quantization is enabled
     assert_eq!(ids.len(), 100);
     assert_eq!(store.len(), 100);
-    assert!(store
-        .segments
-        .read()
-        .as_ref()
-        .is_some_and(|s| s.is_quantized()));
+    assert!(
+        store
+            .segments
+            .read()
+            .as_ref()
+            .is_some_and(|s| s.is_quantized())
+    );
 }

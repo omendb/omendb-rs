@@ -159,38 +159,38 @@ pub(crate) fn knn_search_filtered_core(
 
     // Use segments (ACORN-1 filtered search)
     if let Some(seg_mgr) = segments
-        && !seg_mgr.is_empty() {
-            let segment_results = if let Some(ref bitmap) = filter_bitmap {
-                // Fast path: bitmap-based filtering
-                let filter_fn =
-                    |slot: u32| -> bool { records.is_live(slot) && bitmap.contains(slot) };
-                seg_mgr.search_with_filter(query, k, ef, filter_fn)?
-            } else {
-                // Slow path: JSON-based filtering (borrow metadata, no clone)
-                let filter_fn = |slot: u32| -> bool {
-                    if !records.is_live(slot) {
-                        return false;
-                    }
-                    let metadata = records
-                        .get_by_slot(slot)
-                        .and_then(|r| r.metadata)
-                        .unwrap_or_else(|| helpers::DEFAULT_METADATA.clone());
-                    filter.matches(&metadata)
-                };
-                seg_mgr.search_with_filter(query, k, ef, filter_fn)?
+        && !seg_mgr.is_empty()
+    {
+        let segment_results = if let Some(ref bitmap) = filter_bitmap {
+            // Fast path: bitmap-based filtering
+            let filter_fn = |slot: u32| -> bool { records.is_live(slot) && bitmap.contains(slot) };
+            seg_mgr.search_with_filter(query, k, ef, filter_fn)?
+        } else {
+            // Slow path: JSON-based filtering (borrow metadata, no clone)
+            let filter_fn = |slot: u32| -> bool {
+                if !records.is_live(slot) {
+                    return false;
+                }
+                let metadata = records
+                    .get_by_slot(slot)
+                    .and_then(|r| r.metadata)
+                    .unwrap_or_else(|| helpers::DEFAULT_METADATA.clone());
+                filter.matches(&metadata)
             };
+            seg_mgr.search_with_filter(query, k, ef, filter_fn)?
+        };
 
-            // Convert segment results to search results (metadata resolved only for final k)
-            let slot_distances: Vec<(usize, f32)> = segment_results
-                .into_iter()
-                .map(|r| (r.slot as usize, r.distance))
-                .collect();
-            let results = slots_to_search_results(records, slot_distances);
+        // Convert segment results to search results (metadata resolved only for final k)
+        let slot_distances: Vec<(usize, f32)> = segment_results
+            .into_iter()
+            .map(|r| (r.slot as usize, r.distance))
+            .collect();
+        let results = slots_to_search_results(records, slot_distances);
 
-            if !results.is_empty() {
-                return Ok(results);
-            }
+        if !results.is_empty() {
+            return Ok(results);
         }
+    }
 
     // Fallback: brute-force search with filtering
     Ok(brute_force_filtered(

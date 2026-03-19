@@ -834,10 +834,12 @@ mod tests {
     fn test_builder_requires_dimensions() {
         let result = HNSWIndex::builder().build();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("dimensions is required"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("dimensions is required")
+        );
     }
 
     #[test]

@@ -464,9 +464,10 @@ impl HNSWIndex {
                 .ok_or(HNSWError::VectorNotFound(id_a))?;
             // Try SQ8 fast path with dequantized query
             if let Some(prep) = self.storage.prepare_query(&vec_a)
-                && let Some(dist) = self.storage.distance_sq8(&prep, id_b) {
-                    return Ok(dist);
-                }
+                && let Some(dist) = self.storage.distance_sq8(&prep, id_b)
+            {
+                return Ok(dist);
+            }
             // Fallback: dequantize both
             let vec_b = self
                 .storage
@@ -487,9 +488,10 @@ impl HNSWIndex {
     pub(super) fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
         if self.storage.is_sq8() {
             if let Some(prep) = self.storage.prepare_query(query)
-                && let Some(dist) = self.storage.distance_sq8(&prep, id) {
-                    return Ok(dist);
-                }
+                && let Some(dist) = self.storage.distance_sq8(&prep, id)
+            {
+                return Ok(dist);
+            }
             let vec = self
                 .storage
                 .get_dequantized(id)

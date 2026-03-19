@@ -1,5 +1,5 @@
-use serde_json::Value as JsonValue;
 use parking_lot::MappedRwLockReadGuard;
+use serde_json::Value as JsonValue;
 use std::sync::atomic::Ordering;
 
 use super::{MetadataFilter, VectorStore};
@@ -163,7 +163,8 @@ impl VectorStore {
 
     /// Set oversample factor for SQ8 rescoring
     pub fn set_oversample(&self, oversample: f32) {
-        self.oversample.store(oversample.to_bits(), Ordering::Relaxed);
+        self.oversample
+            .store(oversample.to_bits(), Ordering::Relaxed);
     }
 
     /// Check if SQ8 rescoring is enabled
@@ -186,7 +187,9 @@ impl VectorStore {
 
     /// Get the segment manager (for benchmarking/diagnostics)
     #[must_use]
-    pub fn segments(&self) -> Option<MappedRwLockReadGuard<'_, crate::vector::hnsw::SegmentManager>> {
+    pub fn segments(
+        &self,
+    ) -> Option<MappedRwLockReadGuard<'_, crate::vector::hnsw::SegmentManager>> {
         parking_lot::RwLockReadGuard::try_map(self.segments.read(), std::option::Option::as_ref)
             .ok()
     }

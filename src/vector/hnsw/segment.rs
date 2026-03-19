@@ -332,9 +332,10 @@ impl FrozenSegment {
         // for cache-friendly reads. If optimization fails, keep the insertion-order
         // layout rather than failing freeze/persistence.
         if !index.is_empty()
-            && let Err(error) = index.optimize_cache_locality() {
-                tracing::warn!("Failed to reorder frozen segment for cache locality: {error}");
-            }
+            && let Err(error) = index.optimize_cache_locality()
+        {
+            tracing::warn!("Failed to reorder frozen segment for cache locality: {error}");
+        }
 
         Self::from_parts(
             id,
@@ -603,7 +604,10 @@ mod tests {
         }
 
         let pre_freeze_entry = mutable.entry_point().unwrap();
-        assert_ne!(pre_freeze_entry, 0, "test setup requires a nonzero entry point");
+        assert_ne!(
+            pre_freeze_entry, 0,
+            "test setup requires a nonzero entry point"
+        );
 
         let frozen = mutable.freeze();
 

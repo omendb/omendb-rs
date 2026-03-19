@@ -10,8 +10,8 @@
 
 use super::{ThreadSafeVectorStore, VectorStore, VectorStoreOptions};
 use crate::vector::types::Vector;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 

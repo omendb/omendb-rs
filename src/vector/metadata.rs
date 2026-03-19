@@ -487,9 +487,10 @@ impl MetadataIndex {
                     }
                     serde_json::Value::Number(n) => {
                         if let Some(f) = n.as_f64()
-                            && let Some(idx) = self.numeric_index(key) {
-                                idx.insert(doc_id, f);
-                            }
+                            && let Some(idx) = self.numeric_index(key)
+                        {
+                            idx.insert(doc_id, f);
+                        }
                     }
                     _ => {} // Skip arrays and nested objects
                 }

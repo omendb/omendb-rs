@@ -6,7 +6,7 @@
 //! - Cosine distance
 
 use crate::distance;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 /// High-dimensional vector (1536 dimensions for `OpenAI` embeddings)
 #[derive(Debug, Clone, PartialEq)]

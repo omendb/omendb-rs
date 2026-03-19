@@ -3,12 +3,12 @@
 //! Provides BM25-based text search that integrates with `VectorStore`
 //! for hybrid (vector + text) search capabilities.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
+use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, Value};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, doc};
 
 #[cfg(test)]
 mod tests;

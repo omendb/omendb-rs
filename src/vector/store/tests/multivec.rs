@@ -484,10 +484,12 @@ mod unified_api {
         let result = store.store("doc1", tokens, serde_json::json!({}));
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot store token embeddings in regular store"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot store token embeddings in regular store")
+        );
     }
 
     #[test]
@@ -517,10 +519,12 @@ mod unified_api {
         let result = store.query(&query, 1);
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot query regular store with token embeddings"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot query regular store with token embeddings")
+        );
     }
 
     #[test]
@@ -589,10 +593,12 @@ mod unified_api {
         let result = store.store("doc1", vec![1.0, 2.0, 3.0, 4.0], serde_json::json!({}));
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot store single vector in multi-vector store"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot store single vector in multi-vector store")
+        );
     }
 
     #[test]
@@ -633,10 +639,12 @@ mod unified_api {
         let result = store.query(&vec![1.0, 0.0, 0.0, 0.0], 1);
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot query multi-vector store with single vector"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot query multi-vector store with single vector")
+        );
     }
 
     #[test]

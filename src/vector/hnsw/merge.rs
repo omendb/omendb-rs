@@ -278,7 +278,9 @@ impl GraphMerger {
             } else {
                 // No more vertices to add, but not fully covered
                 // This can happen with disconnected components
-                warn!("Join set computation terminated early - graph may have disconnected components");
+                warn!(
+                    "Join set computation terminated early - graph may have disconnected components"
+                );
                 break;
             }
         }

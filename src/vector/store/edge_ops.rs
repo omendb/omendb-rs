@@ -2,8 +2,8 @@
 //!
 //! Public API for the typed directed edge graph embedded in VectorStore.
 
-use super::edge_store::{Edge, EdgeDirection, Subgraph, TraversalHit};
 use super::VectorStore;
+use super::edge_store::{Edge, EdgeDirection, Subgraph, TraversalHit};
 use anyhow::Result;
 use serde_json::Value as JsonValue;
 
@@ -97,11 +97,10 @@ impl VectorStore {
             .expect("checked above")
             .remove_edge(from_id, to_id, edge_type);
 
-        if removed
-            && let Some(ref mut storage) = *self.storage.write() {
-                storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
-                storage.wal_sync()?;
-            }
+        if removed && let Some(ref mut storage) = *self.storage.write() {
+            storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
+            storage.wal_sync()?;
+        }
 
         Ok(removed)
     }
@@ -183,9 +182,12 @@ impl VectorStore {
         max_depth: usize,
         edge_type: Option<&str>,
     ) -> bool {
-        self.edge_store.read().as_ref().map_or(from_id == to_id, |e| {
-            e.has_path(from_id, to_id, direction, max_depth, edge_type)
-        })
+        self.edge_store
+            .read()
+            .as_ref()
+            .map_or(from_id == to_id, |e| {
+                e.has_path(from_id, to_id, direction, max_depth, edge_type)
+            })
     }
 
     /// Find shortest path between two nodes.

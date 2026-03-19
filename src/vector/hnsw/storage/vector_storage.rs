@@ -6,8 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::compression::scalar::QueryPrep;
 use crate::compression::ScalarParams;
+use crate::compression::scalar::QueryPrep;
 use crate::distance::dot_product;
 
 /// Vector storage (quantized or full precision)
@@ -399,9 +399,10 @@ impl VectorStorage {
         if let Self::ScalarQuantized {
             params, trained, ..
         } = self
-            && *trained {
-                return Some(params);
-            }
+            && *trained
+        {
+            return Some(params);
+        }
         None
     }
 

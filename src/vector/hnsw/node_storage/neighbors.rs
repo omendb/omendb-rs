@@ -120,7 +120,8 @@ impl NodeStorage {
         }
 
         // Ensure upper levels are allocated
-        self.upper_neighbors.set_neighbors_at_level(id, level, neighbors);
+        self.upper_neighbors
+            .set_neighbors_at_level(id, level, neighbors);
     }
 
     /// Add a neighbor at a specific level (for incremental construction)

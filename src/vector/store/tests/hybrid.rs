@@ -298,10 +298,12 @@ fn test_hybrid_search_dimension_mismatch() {
     let wrong_query = Vector::new(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
     let result = store.search_hybrid(&wrong_query, "test", 10, None, None, None);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("dimension 8 does not match store dimension 4"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("dimension 8 does not match store dimension 4")
+    );
 }
 
 #[test]
@@ -347,10 +349,12 @@ fn test_hybrid_search_without_text_enabled() {
     let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
     let result = store.search_hybrid(&query, "test", 10, None, None, None);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Text search not enabled"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Text search not enabled")
+    );
 }
 
 #[test]
@@ -531,10 +535,12 @@ fn test_store_with_text_requires_enabled() {
         serde_json::json!({}),
     );
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Text search not enabled"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Text search not enabled")
+    );
 }
 
 #[test]

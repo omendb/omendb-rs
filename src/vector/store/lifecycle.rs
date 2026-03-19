@@ -147,19 +147,21 @@ impl VectorStore {
 
         // Copy sparse vectors for merged IDs
         if let Some(other_sparse) = other.sparse_index.read().as_ref()
-            && !other_sparse.is_empty() {
-                if self.sparse_index.read().is_none() {
-                    *self.sparse_index.write() = Some(crate::vector::sparse::SparseIndex::new());
-                }
-                let mut self_sparse = self.sparse_index.write();
-                let self_sparse = self_sparse.as_mut().unwrap();
-                for (other_slot, id) in &merged_slots {
-                    if let Some(sv) = other_sparse.get(*other_slot)
-                        && let Some(new_slot) = self.records.get_slot(id) {
-                            self_sparse.insert(new_slot, sv);
-                        }
+            && !other_sparse.is_empty()
+        {
+            if self.sparse_index.read().is_none() {
+                *self.sparse_index.write() = Some(crate::vector::sparse::SparseIndex::new());
+            }
+            let mut self_sparse = self.sparse_index.write();
+            let self_sparse = self_sparse.as_mut().unwrap();
+            for (other_slot, id) in &merged_slots {
+                if let Some(sv) = other_sparse.get(*other_slot)
+                    && let Some(new_slot) = self.records.get_slot(id)
+                {
+                    self_sparse.insert(new_slot, sv);
                 }
             }
+        }
 
         // Rebuild index after merge to ensure consistency
         self.rebuild_index()?;
@@ -328,7 +330,9 @@ impl VectorStore {
     /// `flush()` triggers compaction when the tombstone ratio exceeds this value.
     /// Default: 0.25. Set to 1.0 to disable auto-compact.
     pub fn set_auto_compact_threshold(&self, threshold: f32) {
-        self.auto_compact_threshold
-            .store(threshold.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+        self.auto_compact_threshold.store(
+            threshold.clamp(0.0, 1.0).to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }

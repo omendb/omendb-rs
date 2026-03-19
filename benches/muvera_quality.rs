@@ -4,7 +4,7 @@
 //!
 //! Run: cargo bench --bench muvera_quality
 
-use omendb::vector::muvera::{maxsim, MultiVectorConfig, MuveraEncoder};
+use omendb::vector::muvera::{MultiVectorConfig, MuveraEncoder, maxsim};
 use rand::prelude::*;
 use std::time::Instant;
 
@@ -12,7 +12,7 @@ use std::time::Instant;
 fn random_tokens(rng: &mut StdRng, num_tokens: usize, dim: usize) -> Vec<Vec<f32>> {
     (0..num_tokens)
         .map(|_| {
-            let v: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect();
+            let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
             normalize(&v)
         })
         .collect()
@@ -169,7 +169,7 @@ fn main() {
                 // Add small noise to the token
                 let noisy: Vec<f32> = doc[token_idx]
                     .iter()
-                    .map(|&v| v + (rng.gen::<f32>() - 0.5) * 0.2)
+                    .map(|&v| v + (rng.r#gen::<f32>() - 0.5) * 0.2)
                     .collect();
                 query_vecs.push(normalize(&noisy));
             }

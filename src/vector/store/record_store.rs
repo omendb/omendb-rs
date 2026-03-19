@@ -184,7 +184,10 @@ impl RecordStore {
         if self.deleted.read().contains(slot) {
             return None;
         }
-        self.slots.read().get(slot as usize).and_then(std::clone::Clone::clone)
+        self.slots
+            .read()
+            .get(slot as usize)
+            .and_then(std::clone::Clone::clone)
     }
 
     /// Get a record by slot index
@@ -192,7 +195,10 @@ impl RecordStore {
         if self.deleted.read().contains(slot) {
             return None;
         }
-        self.slots.read().get(slot as usize).and_then(std::clone::Clone::clone)
+        self.slots
+            .read()
+            .get(slot as usize)
+            .and_then(std::clone::Clone::clone)
     }
 
     /// Get just the search result fields for a slot.
@@ -257,12 +263,9 @@ impl RecordStore {
 
     /// Set dimensions (only if currently 0)
     pub fn set_dimensions(&self, dimensions: u32) {
-        let _ = self.dimensions.compare_exchange(
-            0,
-            dimensions,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
+        let _ = self
+            .dimensions
+            .compare_exchange(0, dimensions, Ordering::SeqCst, Ordering::SeqCst);
     }
 
     /// Get deleted count
@@ -276,13 +279,16 @@ impl RecordStore {
         let slots = self.slots.read().clone();
         let deleted = self.deleted.read().clone();
 
-        slots.into_iter().enumerate().filter_map(move |(slot, record_opt)| {
-            let slot = slot as u32;
-            if deleted.contains(slot) {
-                return None;
-            }
-            record_opt.map(|r| (slot, r))
-        })
+        slots
+            .into_iter()
+            .enumerate()
+            .filter_map(move |(slot, record_opt)| {
+                let slot = slot as u32;
+                if deleted.contains(slot) {
+                    return None;
+                }
+                record_opt.map(|r| (slot, r))
+            })
     }
 
     /// Get a clone of the deleted bitmap
@@ -328,11 +334,16 @@ impl RecordStore {
 
     /// Iterate (slot, metadata) pairs
     pub fn iter_metadata(&self) -> Vec<(u32, JsonValue)> {
-        self.slots.read().iter().enumerate().filter_map(|(slot, opt)| {
-            opt.as_ref()
-                .and_then(|r| r.metadata.clone())
-                .map(|m| (slot as u32, m))
-        }).collect()
+        self.slots
+            .read()
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, opt)| {
+                opt.as_ref()
+                    .and_then(|r| r.metadata.clone())
+                    .map(|m| (slot as u32, m))
+            })
+            .collect()
     }
 
     /// Take dirty slots bitmap, resetting it to empty

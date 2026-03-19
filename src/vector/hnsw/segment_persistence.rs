@@ -259,7 +259,9 @@ fn read_auxiliary_v3(reader: &mut impl Read, storage: &mut NodeStorage) -> Resul
     if !aux_data.is_empty() {
         storage
             .deserialize_segment_auxiliary(&aux_data)
-            .map_err(|e| HNSWError::Storage(format!("Failed to deserialize auxiliary data: {e}")))?;
+            .map_err(|e| {
+                HNSWError::Storage(format!("Failed to deserialize auxiliary data: {e}"))
+            })?;
     }
 
     let upper_region = read_blob(reader)?;
@@ -267,9 +269,7 @@ fn read_auxiliary_v3(reader: &mut impl Read, storage: &mut NodeStorage) -> Resul
         storage
             .deserialize_upper_neighbors_region(&upper_region)
             .map_err(|e| {
-                HNSWError::Storage(format!(
-                    "Failed to deserialize upper-neighbor region: {e}"
-                ))
+                HNSWError::Storage(format!("Failed to deserialize upper-neighbor region: {e}"))
             })?;
     }
     Ok(())
@@ -391,9 +391,10 @@ impl FrozenSegment {
 
         // Fsync parent directory to ensure rename is durable (required on Linux ext4/btrfs)
         if let Some(parent) = path.parent()
-            && let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
 
         let elapsed = start.elapsed();
         info!(
@@ -569,11 +570,11 @@ impl FrozenSegment {
 
                 let aux_data = read_blob(&mut reader)?;
                 if !aux_data.is_empty() {
-                    storage.deserialize_segment_auxiliary(&aux_data).map_err(|e| {
-                        HNSWError::Storage(format!(
-                            "Failed to deserialize auxiliary data: {e}"
-                        ))
-                    })?;
+                    storage
+                        .deserialize_segment_auxiliary(&aux_data)
+                        .map_err(|e| {
+                            HNSWError::Storage(format!("Failed to deserialize auxiliary data: {e}"))
+                        })?;
                 }
 
                 let upper_len_pos = aux_offset + 8 + aux_data.len() as u64;
@@ -605,9 +606,7 @@ impl FrozenSegment {
                     storage
                         .mmap_upper_neighbors_region(upper_mmap)
                         .map_err(|e| {
-                            HNSWError::Storage(format!(
-                                "Failed to mmap upper-neighbor region: {e}"
-                            ))
+                            HNSWError::Storage(format!("Failed to mmap upper-neighbor region: {e}"))
                         })?;
                 }
             }
@@ -853,7 +852,10 @@ mod tests {
             MutableSegment::with_capacity(16, default_params(), Metric::L2, 512).unwrap();
         for i in 0..256 {
             mutable
-                .insert(&[i as f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0])
+                .insert(&[
+                    i as f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0,
+                    14.0, 15.0,
+                ])
                 .unwrap();
         }
 
@@ -872,8 +874,12 @@ mod tests {
         let max_level = mmap_loaded.storage().level(node_with_upper);
         for level in 1..=max_level {
             assert_eq!(
-                mmap_loaded.storage().neighbors_at_level(node_with_upper, level),
-                heap_loaded.storage().neighbors_at_level(node_with_upper, level),
+                mmap_loaded
+                    .storage()
+                    .neighbors_at_level(node_with_upper, level),
+                heap_loaded
+                    .storage()
+                    .neighbors_at_level(node_with_upper, level),
             );
         }
     }

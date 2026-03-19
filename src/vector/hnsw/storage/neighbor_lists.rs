@@ -165,8 +165,8 @@ impl NeighborLists {
         #[cfg(target_arch = "x86_64")]
         // SAFETY: Pointer within bounds-checked array/slice, prefetch is a non-faulting read hint
         unsafe {
-            use std::arch::x86_64::_mm_prefetch;
             use std::arch::x86_64::_MM_HINT_T0;
+            use std::arch::x86_64::_mm_prefetch;
             _mm_prefetch(ptr.cast(), _MM_HINT_T0);
         }
         #[cfg(target_arch = "aarch64")]

@@ -44,11 +44,7 @@ impl QuantizationCode {
     /// Create from runtime bool (true = SQ8, false = F32).
     #[must_use]
     pub fn from_enabled(sq8: bool) -> Self {
-        if sq8 {
-            Self::Sq8
-        } else {
-            Self::F32
-        }
+        if sq8 { Self::Sq8 } else { Self::F32 }
     }
 
     /// Convert to runtime bool (true = SQ8 enabled).

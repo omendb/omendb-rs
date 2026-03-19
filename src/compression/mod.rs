@@ -5,4 +5,4 @@
 
 pub mod scalar;
 
-pub use scalar::{symmetric_l2_squared_u8, QueryPrep, ScalarParams};
+pub use scalar::{QueryPrep, ScalarParams, symmetric_l2_squared_u8};

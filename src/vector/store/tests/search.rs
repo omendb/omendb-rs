@@ -126,11 +126,13 @@ fn test_vector_store_search_batch_reports_invalid_query() {
     let results = store.search_batch(&queries, 1, None);
 
     assert_eq!(results.len(), 1);
-    assert!(results[0]
-        .as_ref()
-        .unwrap_err()
-        .to_string()
-        .contains("zero vector"));
+    assert!(
+        results[0]
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("zero vector")
+    );
 }
 
 #[test]

@@ -41,7 +41,7 @@ mod upper_neighbors;
 mod vectors;
 
 use crate::compression::scalar::ScalarParams;
-use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
+use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
 use std::fmt;
 use std::ptr::NonNull;
 use upper_neighbors::UpperNeighborsStorage;
@@ -462,7 +462,7 @@ impl NodeStorage {
         #[cfg(target_arch = "x86_64")]
         // SAFETY: Read-only hint, pointer from node_ptr() (bounds checked)
         unsafe {
-            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+            use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
             _mm_prefetch(ptr as *const i8, _MM_HINT_T0);
         }
 

@@ -2,14 +2,14 @@
 //!
 //! Run: cargo bench --bench distance_bench
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use omendb::distance::{dot_product, l2_distance_squared};
 use rand::Rng;
 
 fn generate_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
     let mut rng = rand::thread_rng();
     (0..n)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
         .collect()
 }
 

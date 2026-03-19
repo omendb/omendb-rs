@@ -27,7 +27,7 @@ mod types;
 pub use types::{Candidate, HNSWNode, HNSWParams, Metric};
 
 // Export trait-based distance types for monomorphization
-pub use types::{Cosine, Distance, NegDot, L2};
+pub use types::{Cosine, Distance, L2, NegDot};
 
 // Re-export SIMD-enabled distance functions (single source of truth)
 pub use crate::distance::{cosine_distance, dot_product, l2_distance};

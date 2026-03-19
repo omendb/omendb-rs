@@ -23,12 +23,12 @@ mod vectors;
 mod wal;
 
 pub use file::{
-    parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
     CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, SlimRecordsSnapshot,
-    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData,
+    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData, parse_wal_delete,
+    parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
 };
 pub use graph::GraphSection;
-pub use header::{Metric, OmenHeader, HEADER_SIZE, MAGIC, VERSION_MAJOR, VERSION_MINOR};
+pub use header::{HEADER_SIZE, MAGIC, Metric, OmenHeader, VERSION_MAJOR, VERSION_MINOR};
 pub use manifest::{ManifestHeader, NodeLocation, OmenFooter, OmenManifest, SegmentType};
 pub use vectors::VectorSection;
 pub use wal::{Wal, WalEntry, WalEntryType};

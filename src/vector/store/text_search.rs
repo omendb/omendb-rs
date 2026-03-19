@@ -7,8 +7,8 @@ use super::helpers;
 use super::record_store::RecordStore;
 use super::{MetadataFilter, VectorStore};
 use crate::text::{
-    weighted_reciprocal_rank_fusion, weighted_reciprocal_rank_fusion_with_subscores, HybridResult,
-    TextIndex, TextSearchConfig, DEFAULT_RRF_K,
+    DEFAULT_RRF_K, HybridResult, TextIndex, TextSearchConfig, weighted_reciprocal_rank_fusion,
+    weighted_reciprocal_rank_fusion_with_subscores,
 };
 use crate::vector::types::Vector;
 use anyhow::Result;

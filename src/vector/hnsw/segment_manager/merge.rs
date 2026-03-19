@@ -508,9 +508,10 @@ impl SegmentManager {
                 if let Some(ref dir) = self.pending_merge_dir {
                     let meta_path = dir.join("pending_merge.meta");
                     if meta_path.exists()
-                        && let Err(e) = std::fs::remove_file(&meta_path) {
-                            tracing::warn!("Failed to remove pending_merge.meta: {e}");
-                        }
+                        && let Err(e) = std::fs::remove_file(&meta_path)
+                    {
+                        tracing::warn!("Failed to remove pending_merge.meta: {e}");
+                    }
                 }
                 true
             }
@@ -548,9 +549,10 @@ impl SegmentManager {
                 if let Some(ref dir) = self.pending_merge_dir {
                     let meta_path = dir.join("pending_merge.meta");
                     if meta_path.exists()
-                        && let Err(e) = std::fs::remove_file(&meta_path) {
-                            tracing::warn!("Failed to remove pending_merge.meta: {e}");
-                        }
+                        && let Err(e) = std::fs::remove_file(&meta_path)
+                    {
+                        tracing::warn!("Failed to remove pending_merge.meta: {e}");
+                    }
                 }
             }
             Ok(Err(e)) => {

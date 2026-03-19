@@ -3,8 +3,8 @@
 //! Reorders nodes so that graph traversal follows memory layout,
 //! improving cache locality during search.
 
-use super::{NodeStorage, StorageBacking, CACHE_LINE};
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use super::{CACHE_LINE, NodeStorage, StorageBacking};
+use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::collections::{HashSet, VecDeque};
 use std::ptr::NonNull;
 

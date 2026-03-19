@@ -234,9 +234,9 @@ impl EdgeStore {
                 && let Some(pos) = list
                     .iter()
                     .position(|r| r.peer_id == from_id && r.edge_type == edge_type)
-                {
-                    list.swap_remove(pos);
-                }
+            {
+                list.swap_remove(pos);
+            }
             self.edge_count = self.edge_count.saturating_sub(1);
         }
 
@@ -595,24 +595,23 @@ impl EdgeStore {
             }
             // For Both direction, also collect incoming edges where peer is in set
             if (direction == EdgeDirection::Both || direction == EdgeDirection::Incoming)
-                && let Some(records) = self.incoming.get(node.as_str()) {
-                    for r in records {
-                        if node_set.contains(&r.peer_id)
-                            && edge_type.is_none_or(|t| r.edge_type == t)
-                        {
-                            let key = (r.peer_id.clone(), node.clone(), r.edge_type.clone());
-                            if seen_edges.insert(key) {
-                                edges.push(Edge {
-                                    from_id: r.peer_id.clone(),
-                                    to_id: node.clone(),
-                                    edge_type: r.edge_type.clone(),
-                                    weight: r.weight,
-                                    metadata: r.metadata.clone(),
-                                });
-                            }
+                && let Some(records) = self.incoming.get(node.as_str())
+            {
+                for r in records {
+                    if node_set.contains(&r.peer_id) && edge_type.is_none_or(|t| r.edge_type == t) {
+                        let key = (r.peer_id.clone(), node.clone(), r.edge_type.clone());
+                        if seen_edges.insert(key) {
+                            edges.push(Edge {
+                                from_id: r.peer_id.clone(),
+                                to_id: node.clone(),
+                                edge_type: r.edge_type.clone(),
+                                weight: r.weight,
+                                metadata: r.metadata.clone(),
+                            });
                         }
                     }
                 }
+            }
         }
 
         Subgraph {

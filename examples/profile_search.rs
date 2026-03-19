@@ -19,10 +19,10 @@ fn main() {
     println!("Generating {} vectors of {}D...", n_vectors, dim);
     let mut rng = rand::thread_rng();
     let vectors: Vec<Vec<f32>> = (0..n_vectors)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>() * 2.0 - 1.0).collect())
         .collect();
     let queries: Vec<Vec<f32>> = (0..n_queries)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>() * 2.0 - 1.0).collect())
         .collect();
 
     println!("Building index...");

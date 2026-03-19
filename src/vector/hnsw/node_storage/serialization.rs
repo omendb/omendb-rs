@@ -2,7 +2,7 @@
 //!
 //! Supports both owned heap allocations and memory-mapped files.
 
-use super::{upper_neighbors::UpperNeighborsStorage, NodeStorage, StorageBacking, CACHE_LINE};
+use super::{CACHE_LINE, NodeStorage, StorageBacking, upper_neighbors::UpperNeighborsStorage};
 use crate::compression::scalar::ScalarParams;
 use std::alloc::Layout;
 use std::ptr::NonNull;
@@ -265,7 +265,6 @@ impl NodeStorage {
         out.extend_from_slice(&0u64.to_le_bytes()); // rabitq_codes length = 0
         out.extend_from_slice(&0u64.to_le_bytes()); // rabitq_metadata length = 0
         out.extend_from_slice(&0u64.to_le_bytes()); // rabitq_originals length = 0
-
     }
 
     fn serialize_legacy_upper_neighbors(&self, out: &mut Vec<u8>) {
@@ -278,9 +277,11 @@ impl NodeStorage {
             out.extend_from_slice(&node_id.to_le_bytes());
             out.push(level_count as u8);
             for level in 1..=level_count as u8 {
-                let neighbors = self
-                    .upper_neighbors
-                    .neighbors_at_level_cow(node_id, level, self.max_neighbors_upper);
+                let neighbors = self.upper_neighbors.neighbors_at_level_cow(
+                    node_id,
+                    level,
+                    self.max_neighbors_upper,
+                );
                 out.extend_from_slice(&(neighbors.len() as u16).to_le_bytes());
                 for &neighbor in neighbors.iter() {
                     out.extend_from_slice(&neighbor.to_le_bytes());
@@ -392,10 +393,8 @@ impl NodeStorage {
         pos: &mut usize,
     ) -> Result<(), String> {
         let upper_count = read_u64(data, pos)? as usize;
-        let mut upper_neighbors = rustc_hash::FxHashMap::with_capacity_and_hasher(
-            upper_count,
-            rustc_hash::FxBuildHasher,
-        );
+        let mut upper_neighbors =
+            rustc_hash::FxHashMap::with_capacity_and_hasher(upper_count, rustc_hash::FxBuildHasher);
         for _ in 0..upper_count {
             let node_id = read_u32(data, pos)?;
             let num_levels = read_u8(data, pos)? as usize;
@@ -411,8 +410,7 @@ impl NodeStorage {
             upper_neighbors.insert(node_id, levels);
         }
 
-        self.upper_neighbors
-            .replace_owned(upper_neighbors);
+        self.upper_neighbors.replace_owned(upper_neighbors);
         Ok(())
     }
 
@@ -502,11 +500,8 @@ impl NodeStorage {
 
     #[cfg(feature = "mmap")]
     pub fn mmap_upper_neighbors_region(&mut self, mmap: memmap2::Mmap) -> Result<(), String> {
-        self.upper_neighbors = UpperNeighborsStorage::mmap_region(
-            mmap,
-            self.len,
-            self.max_neighbors_upper,
-        )?;
+        self.upper_neighbors =
+            UpperNeighborsStorage::mmap_region(mmap, self.len, self.max_neighbors_upper)?;
         Ok(())
     }
 

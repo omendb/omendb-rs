@@ -132,11 +132,7 @@ impl HNSWParams {
     #[inline]
     #[must_use]
     pub fn m_for_level(&self, level: u8) -> usize {
-        if level == 0 {
-            self.m * 2
-        } else {
-            self.m
-        }
+        if level == 0 { self.m * 2 } else { self.m }
     }
 }
 

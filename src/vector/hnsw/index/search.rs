@@ -52,9 +52,10 @@ impl<'a> DistanceContext<'a> {
     fn compute<D: Distance>(&self, node_id: u32) -> Result<f32> {
         // SQ8 fast path
         if let Some(ref prep) = self.sq8_prep
-            && let Some(dist) = self.storage.distance_sq8(prep, node_id) {
-                return Ok(dist);
-            }
+            && let Some(dist) = self.storage.distance_sq8(prep, node_id)
+        {
+            return Ok(dist);
+        }
 
         // Full precision path (also fallback for untrained SQ8)
         if self.storage.is_sq8() {
@@ -282,9 +283,10 @@ impl HNSWIndex {
             // Greedy search
             while let Some(Reverse(current)) = candidates.pop() {
                 if let Some(&farthest) = working.peek()
-                    && current.distance > farthest.distance {
-                        break;
-                    }
+                    && current.distance > farthest.distance
+                {
+                    break;
+                }
 
                 // Collect neighbors using specialized collector
                 collector.collect(current.node_id, level, visited, unvisited);

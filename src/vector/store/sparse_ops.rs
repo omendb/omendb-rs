@@ -57,11 +57,12 @@ impl VectorStore {
 
             // WAL write for metadata update
             if let Some(ref mut storage) = *self.storage.write()
-                && let Some(record) = self.records.get_by_slot(slot) {
-                    let metadata_bytes = serde_json::to_vec(&metadata)?;
-                    storage.wal_append_insert(id, &record.vector, Some(&metadata_bytes))?;
-                    storage.wal_sync()?;
-                }
+                && let Some(record) = self.records.get_by_slot(slot)
+            {
+                let metadata_bytes = serde_json::to_vec(&metadata)?;
+                storage.wal_append_insert(id, &record.vector, Some(&metadata_bytes))?;
+                storage.wal_sync()?;
+            }
             slot
         } else {
             // New ID: create record slot with zero-filled placeholder vector
@@ -80,7 +81,11 @@ impl VectorStore {
             slot
         };
 
-        self.sparse_index.write().as_mut().unwrap().insert(slot, &sparse);
+        self.sparse_index
+            .write()
+            .as_mut()
+            .unwrap()
+            .insert(slot, &sparse);
         Ok(())
     }
 
@@ -101,7 +106,11 @@ impl VectorStore {
             .map_err(|_| anyhow::anyhow!("slot index exceeds u32::MAX"))?;
 
         // Index sparse vector
-        self.sparse_index.write().as_mut().unwrap().insert(slot, &sparse);
+        self.sparse_index
+            .write()
+            .as_mut()
+            .unwrap()
+            .insert(slot, &sparse);
 
         Ok(())
     }

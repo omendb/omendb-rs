@@ -5,7 +5,7 @@
 //!
 //! Run: cargo bench --bench segment_bench
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use omendb::vector::{Vector, VectorStore};
 use rand::Rng;
 use serde_json::json;
@@ -13,7 +13,7 @@ use serde_json::json;
 fn generate_vectors(n: usize, dim: usize) -> Vec<Vector> {
     let mut rng = rand::thread_rng();
     (0..n)
-        .map(|_| Vector::new((0..dim).map(|_| rng.gen::<f32>()).collect()))
+        .map(|_| Vector::new((0..dim).map(|_| rng.r#gen::<f32>()).collect()))
         .collect()
 }
 

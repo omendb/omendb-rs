@@ -3,16 +3,15 @@
 //! Storage backend for `VectorStore`. Uses postcard for efficient binary serialization.
 
 use crate::omen::{
-    align_to_page,
-    header::{Metric, OmenHeader, HEADER_SIZE},
+    ManifestHeader, NodeLocation, OmenFooter, OmenManifest, SegmentType, align_to_page,
+    header::{HEADER_SIZE, Metric, OmenHeader},
     wal::{Wal, WalEntry},
-    ManifestHeader, NodeLocation, OmenFooter, OmenManifest, SegmentType,
 };
 
 // Re-export WAL parsing functions for external use
 pub use crate::omen::wal::{
-    parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
-    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData,
+    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData, parse_wal_delete,
+    parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
 };
 use crate::vector::store::record_store::RecordStore;
 use anyhow::Result;
@@ -1005,9 +1004,10 @@ impl OmenFile {
 
         // Fsync parent directory to durabilize the rename
         if let Some(parent) = self.records_path.parent()
-            && let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
 
         Ok(())
     }
@@ -1477,9 +1477,10 @@ impl OmenFile {
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
         for (idx, json) in records.iter_metadata() {
             if !deleted_bitmap.contains(idx)
-                && let Ok(bytes) = serde_json::to_vec(&json) {
-                    metadata_bytes.insert(idx, bytes);
-                }
+                && let Ok(bytes) = serde_json::to_vec(&json)
+            {
+                metadata_bytes.insert(idx, bytes);
+            }
         }
         manifest.metadata = metadata_bytes;
         manifest.deleted.clone_from(&deleted_bitmap);
@@ -1568,9 +1569,10 @@ impl OmenFile {
 
         // Fsync parent directory
         if let Some(parent) = self.path.parent()
-            && let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
 
         // Re-open with lock + mmap
         let mut opts = OpenOptions::new();
@@ -1728,9 +1730,10 @@ impl OmenFile {
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
         for (&idx, json) in metadata {
             if !deleted_bitmap.contains(idx)
-                && let Ok(bytes) = serde_json::to_vec(json) {
-                    metadata_bytes.insert(idx, bytes);
-                }
+                && let Ok(bytes) = serde_json::to_vec(json)
+            {
+                metadata_bytes.insert(idx, bytes);
+            }
         }
         manifest.metadata = metadata_bytes;
         manifest.deleted = deleted_bitmap; // move — reuses the bitmap built above
@@ -1823,9 +1826,10 @@ impl OmenFile {
 
         // Fsync parent directory to ensure rename is durable (required on Linux ext4)
         if let Some(parent) = self.path.parent()
-            && let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
 
         // Re-open with lock + mmap
         let mut opts = OpenOptions::new();

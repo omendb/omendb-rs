@@ -169,20 +169,21 @@ impl SegmentManager {
                     .strip_prefix("segment_")
                     .and_then(|s| s.strip_suffix(".bin"))
                     && let Ok(id) = id_str.parse::<u64>()
-                        && !active_ids.contains(&id) {
-                            if let Err(e) = fs::remove_file(entry.path()) {
-                                tracing::warn!(
-                                    file = %name_str,
-                                    error = %e,
-                                    "Failed to remove orphan segment file"
-                                );
-                            } else {
-                                tracing::debug!(
-                                    file = %name_str,
-                                    "Removed orphan segment file"
-                                );
-                            }
-                        }
+                    && !active_ids.contains(&id)
+                {
+                    if let Err(e) = fs::remove_file(entry.path()) {
+                        tracing::warn!(
+                            file = %name_str,
+                            error = %e,
+                            "Failed to remove orphan segment file"
+                        );
+                    } else {
+                        tracing::debug!(
+                            file = %name_str,
+                            "Removed orphan segment file"
+                        );
+                    }
+                }
             }
         }
 

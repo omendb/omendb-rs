@@ -341,12 +341,13 @@ impl VectorStore {
     /// heap usage while allowing large datasets.
     fn check_memory_pressure(&self) {
         if let Some(limit) = self.max_memory_bytes
-            && let Some(ref mut segments) = *self.segments.write() {
-                let estimated = segments.total_memory();
-                if estimated > limit && segments.mutable_len() > 0 {
-                    let _ = segments.freeze_mutable();
-                }
+            && let Some(ref mut segments) = *self.segments.write()
+        {
+            let estimated = segments.total_memory();
+            if estimated > limit && segments.mutable_len() > 0 {
+                let _ = segments.freeze_mutable();
             }
+        }
     }
 
     /// K-nearest neighbors search using HNSW
@@ -380,9 +381,8 @@ impl VectorStore {
         let (search_k, needs_rescore) = if self.rescore.load(Ordering::Relaxed)
             && self.pending_quantization.load(Ordering::Relaxed)
         {
-            let oversampled =
-                (k as f32 * f32::from_bits(self.oversample.load(Ordering::Relaxed))).ceil()
-                    as usize;
+            let oversampled = (k as f32 * f32::from_bits(self.oversample.load(Ordering::Relaxed)))
+                .ceil() as usize;
             (oversampled.max(k), true)
         } else {
             (k, false)
