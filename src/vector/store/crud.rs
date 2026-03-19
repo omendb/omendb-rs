@@ -3,8 +3,8 @@ use serde_json::Value as JsonValue;
 
 use crate::vector::hnsw::HNSWIndex;
 
-use super::helpers;
 use super::VectorStore;
+use super::helpers;
 use super::{MetadataFilter, SegmentManager, Vector};
 
 impl VectorStore {
@@ -83,7 +83,9 @@ impl VectorStore {
                 sparse_index.remap_slot(old, slot as u32);
             }
         }
-        self.metadata_index.write().index_json(slot as u32, &metadata);
+        self.metadata_index
+            .write()
+            .index_json(slot as u32, &metadata);
 
         // WAL for crash durability
         let needs_checkpoint = if let Some(ref mut storage) = *self.storage.write() {
@@ -135,25 +137,31 @@ impl VectorStore {
 
         let mut result_indices = Vec::with_capacity(updates.len() + inserts.len());
 
-        // Process updates individually
-        for (old_slot, id, vector, metadata) in updates {
-            let new_slot =
-                self.records
-                    .set(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
+        // Process updates individually, but keep batch-wide locks stable.
+        if !updates.is_empty() {
+            let mut segments = self.segments.write();
+            let mut metadata_index = self.metadata_index.write();
+            let mut sparse_index = self.sparse_index.write();
 
-            if let Some(ref mut segments) = *self.segments.write() {
-                segments
-                    .insert_with_slot(&vector.data, new_slot)
-                    .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+            for (old_slot, id, vector, metadata) in updates {
+                let new_slot =
+                    self.records
+                        .set(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
+
+                if let Some(segments) = segments.as_mut() {
+                    segments
+                        .insert_with_slot(&vector.data, new_slot)
+                        .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+                }
+
+                metadata_index.remove(old_slot);
+                if let Some(sparse_index) = sparse_index.as_mut() {
+                    sparse_index.remap_slot(old_slot, new_slot);
+                }
+                metadata_index.index_json(new_slot, &metadata);
+
+                result_indices.push(new_slot as usize);
             }
-
-            self.metadata_index.write().remove(old_slot);
-            if let Some(ref mut sparse_index) = *self.sparse_index.write() {
-                sparse_index.remap_slot(old_slot, new_slot);
-            }
-            self.metadata_index.write().index_json(new_slot, &metadata);
-
-            result_indices.push(new_slot as usize);
         }
 
         // Process inserts with batch optimization
@@ -165,6 +173,7 @@ impl VectorStore {
                 let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
                 self.records.set_dimensions(dimensions as u32);
 
+                let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in &inserts {
                     let slot = self.records.set(
@@ -173,7 +182,7 @@ impl VectorStore {
                         Some(metadata.clone()),
                     )?;
                     slots.push(slot);
-                    self.metadata_index.write().index_json(slot, metadata);
+                    metadata_index.index_json(slot, metadata);
                 }
 
                 let config = self.segment_config(dimensions);
@@ -186,9 +195,10 @@ impl VectorStore {
                 *self.segments.write() = Some(segs);
 
                 if self.is_quantized()
-                    && let Some(ref mut storage) = *self.storage.write() {
-                        storage.put_quantization_mode(helpers::quantization_to_id(true))?;
-                    }
+                    && let Some(ref mut storage) = *self.storage.write()
+                {
+                    storage.put_quantization_mode(helpers::quantization_to_id(true))?;
+                }
 
                 result_indices.extend(slots.iter().map(|&s| s as usize));
             } else {
@@ -199,6 +209,7 @@ impl VectorStore {
                     }
                 }
 
+                let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in &inserts {
                     let slot = self.records.set(
@@ -207,7 +218,7 @@ impl VectorStore {
                         Some(metadata.clone()),
                     )?;
                     slots.push(slot);
-                    self.metadata_index.write().index_json(slot, metadata);
+                    metadata_index.index_json(slot, metadata);
                 }
 
                 let config = self.segment_config(expected_dims);

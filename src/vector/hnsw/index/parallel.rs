@@ -18,7 +18,7 @@ use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::NodeStorage;
 use crate::vector::hnsw::query_buffers::VisitedList;
 use crate::vector::hnsw::storage::NeighborStorage;
-use crate::vector::hnsw::types::{dot_product, Candidate, HNSWParams, Metric};
+use crate::vector::hnsw::types::{Candidate, HNSWParams, Metric, dot_product};
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::cell::RefCell;
@@ -150,7 +150,7 @@ impl ParallelBuilder {
         );
 
         // Phase 1: Allocate all nodes, assign levels, store vectors
-        self.allocate_all_nodes(&vectors);
+        self.allocate_all_nodes(vectors);
         debug!(nodes = batch_size, "Allocated all nodes");
 
         // Phase 2: Initialize concurrency structures
@@ -190,9 +190,9 @@ impl ParallelBuilder {
     }
 
     /// Allocate all nodes and assign levels
-    fn allocate_all_nodes(&mut self, vectors: &[Vec<f32>]) {
+    fn allocate_all_nodes(&mut self, vectors: Vec<Vec<f32>>) {
         let n = vectors.len();
-        self.vectors = vectors.to_vec();
+        self.vectors = vectors;
         self.levels = Vec::with_capacity(n);
 
         // Allocate neighbor storage for all nodes
@@ -364,9 +364,10 @@ impl ParallelBuilder {
             // Greedy search
             while let Some(Reverse(current)) = buffers.candidates.pop() {
                 if let Some(&farthest) = buffers.working.peek()
-                    && current.distance > farthest.distance {
-                        break;
-                    }
+                    && current.distance > farthest.distance
+                {
+                    break;
+                }
 
                 // Get neighbors using lock-free atomic reads
                 // NeighborStorage uses atomic operations for both level 0 and upper levels
