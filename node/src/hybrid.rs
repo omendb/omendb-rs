@@ -49,7 +49,6 @@ impl VectorDatabase {
                 let metadata = inner
                     .store
                     .get_metadata_by_id(&id)
-                    .cloned()
                     .unwrap_or(serde_json::json!({}));
                 TextSearchResult {
                     id,
