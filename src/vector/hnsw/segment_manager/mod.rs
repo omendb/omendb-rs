@@ -284,6 +284,10 @@ impl PublishedSegments {
             .eq(source_segment_ids.iter().copied())
     }
 
+    fn matches_pending_merge_sources(&self, pending: &PendingMergeState) -> bool {
+        self.frozen_prefix_matches_ids(pending.source_segment_ids())
+    }
+
     fn mutable_is_empty(&self) -> bool {
         self.mutable.is_empty()
     }
@@ -558,17 +562,13 @@ impl SegmentManager {
     }
 
     fn debug_assert_invariants(&self) {
+        // Readers only observe the published mutable + frozen topology.
+        // Writers may also own one pending background merge whose captured
+        // source IDs must still match the current frozen prefix until publish/drain.
         if let Some(ref pending) = self.pending_merge {
             debug_assert!(pending.source_count() >= 2);
-            debug_assert!(pending.source_count() <= self.published.frozen.len());
-            debug_assert!(
-                self.published
-                    .frozen
-                    .iter()
-                    .take(pending.source_count())
-                    .map(|segment| segment.id())
-                    .eq(pending.source_segment_ids().iter().copied())
-            );
+            debug_assert!(pending.source_count() <= self.published.frozen_count());
+            debug_assert!(self.published.matches_pending_merge_sources(pending));
         }
     }
 
