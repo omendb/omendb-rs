@@ -504,21 +504,6 @@ impl SegmentManager {
         Ok(())
     }
 
-    /// Get access to frozen segments
-    pub fn frozen_segments(&self) -> &[Arc<FrozenSegment>] {
-        &self.frozen
-    }
-
-    /// Get access to mutable segment
-    pub fn mutable_segment(&self) -> &MutableSegment {
-        &self.mutable
-    }
-
-    /// Get mutable access to mutable segment
-    pub fn mutable_segment_mut(&mut self) -> &mut MutableSegment {
-        &mut self.mutable
-    }
-
     /// Get dimensions
     #[inline]
     pub fn dimensions(&self) -> usize {
