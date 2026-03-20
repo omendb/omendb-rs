@@ -4,13 +4,18 @@
 //! Merges use parallel HNSW construction (`build_parallel`) for
 //! the merged index.
 
-use super::{SegmentConfig, SegmentManager};
+use super::{PendingMergeState, SegmentConfig, SegmentManager};
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::{MergeConfig, MergeStats};
 use crate::vector::hnsw::segment::FrozenSegment;
 use std::sync::Arc;
 use tracing::{debug, info};
+
+enum PendingMergeCompletion {
+    NotReady,
+    Finished(Option<usize>),
+}
 
 /// Policy for automatic segment merging
 ///
@@ -113,6 +118,29 @@ impl MergePolicy {
 }
 
 impl SegmentManager {
+    fn complete_pending_merge(&mut self, wait: bool) -> Option<PendingMergeCompletion> {
+        let pending = self.pending_merge.take()?;
+        if !wait && !pending.is_finished() {
+            self.pending_merge = Some(pending);
+            return Some(PendingMergeCompletion::NotReady);
+        }
+
+        let (handle, source_segment_ids) = pending.into_parts();
+        match handle.join() {
+            Ok(Ok(merged)) => Some(PendingMergeCompletion::Finished(
+                self.publish_completed_pending_merge(merged, source_segment_ids.as_ref()),
+            )),
+            Ok(Err(e)) => {
+                tracing::warn!("Background merge failed: {e}");
+                Some(PendingMergeCompletion::Finished(None))
+            }
+            Err(_) => {
+                tracing::warn!("Background merge thread panicked");
+                Some(PendingMergeCompletion::Finished(None))
+            }
+        }
+    }
+
     /// Check if merge should be triggered based on current policy
     ///
     /// Returns true if:
@@ -159,7 +187,9 @@ impl SegmentManager {
     }
 
     /// Collect vectors and slots from frozen segments into separate vecs
-    fn collect_from_segments(segments: &[Arc<FrozenSegment>]) -> (Vec<Vec<f32>>, Vec<u32>) {
+    pub(super) fn collect_from_segments(
+        segments: &[Arc<FrozenSegment>],
+    ) -> (Vec<Vec<f32>>, Vec<u32>) {
         let total_len: usize = segments.iter().map(|s| s.len()).sum();
         let mut vectors = Vec::with_capacity(total_len);
         let mut slots = Vec::with_capacity(total_len);
@@ -181,7 +211,7 @@ impl SegmentManager {
     }
 
     /// Build a merged HNSWIndex via parallel construction, then remap slots
-    fn build_merged_index(
+    pub(super) fn build_merged_index(
         config: &SegmentConfig,
         vectors: Vec<Vec<f32>>,
         slots: &[u32],
@@ -317,8 +347,8 @@ impl SegmentManager {
             return Ok(None);
         }
 
-        // A background merge in flight has snapshotted self.frozen[0..pending_merge_count].
-        // Mutating self.frozen before that merge is applied would misalign the drain indices.
+        // A background merge in flight has snapshotted the current frozen prefix by segment ID.
+        // Mutating self.frozen before that merge is applied would invalidate that publication path.
         // Complete any pending merge first to get a stable baseline.
         self.drain_pending_merge();
 
@@ -386,8 +416,8 @@ impl SegmentManager {
             return;
         }
 
-        let count = self.frozen.len();
-        if count < 2 {
+        let source_segment_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
+        if source_segment_ids.len() < 2 {
             return;
         }
 
@@ -399,11 +429,11 @@ impl SegmentManager {
         self.next_segment_id += 1;
 
         let segments_dir = self.pending_merge_dir.clone();
-        let source_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
+        let source_ids = source_segment_ids.clone();
         let total_vectors: usize = self.frozen.iter().map(|s| s.len()).sum();
 
         tracing::info!(
-            frozen_count = count,
+            frozen_count = source_segment_ids.len(),
             frozen_vectors = total_vectors,
             "Starting background segment merge"
         );
@@ -471,33 +501,18 @@ impl SegmentManager {
             Ok(Arc::new(frozen))
         });
 
-        self.pending_merge = Some(handle);
-        self.pending_merge_count = count;
+        self.pending_merge = Some(PendingMergeState::new(handle, source_segment_ids));
     }
 
     /// Apply a completed background merge if the thread is done.
     ///
     /// Non-blocking: returns immediately if the merge is still running.
     /// When the merge completes, atomically removes the merged segments and
-    /// inserts the merged result. Segments added during the merge (at positions
-    /// >= pending_merge_count) are preserved.
+    /// inserts the merged result. Segments added during the merge after the
+    /// original frozen prefix are preserved.
     pub fn apply_pending_merge_if_ready(&mut self) -> bool {
-        let handle = match self.pending_merge.take() {
-            Some(h) => h,
-            None => return false,
-        };
-
-        if !handle.is_finished() {
-            self.pending_merge = Some(handle);
-            return false;
-        }
-
-        let count = std::mem::replace(&mut self.pending_merge_count, 0);
-        match handle.join() {
-            Ok(Ok(merged)) => {
-                // Remove the first `count` segments (those that were merged).
-                // Segments added during the merge are at positions count..len and stay.
-                let drain_count = self.apply_completed_merge(merged, count);
+        match self.complete_pending_merge(false) {
+            Some(PendingMergeCompletion::Finished(Some(drain_count))) => {
                 tracing::info!(
                     merged_segments = drain_count,
                     remaining_segments = self.frozen.len(),
@@ -505,12 +520,8 @@ impl SegmentManager {
                 );
                 true
             }
-            Ok(Err(e)) => {
-                tracing::warn!("Background merge failed: {e}");
-                false
-            }
-            Err(_) => {
-                tracing::warn!("Background merge thread panicked");
+            None
+            | Some(PendingMergeCompletion::NotReady | PendingMergeCompletion::Finished(None)) => {
                 false
             }
         }
@@ -521,26 +532,13 @@ impl SegmentManager {
     /// Blocks until the merge thread finishes. Called during flush/close to ensure
     /// merge results are not discarded on clean shutdown.
     pub fn drain_pending_merge(&mut self) {
-        let handle = match self.pending_merge.take() {
-            Some(h) => h,
-            None => return,
-        };
-
-        let count = std::mem::replace(&mut self.pending_merge_count, 0);
-        match handle.join() {
-            Ok(Ok(merged)) => {
-                let drain_count = self.apply_completed_merge(merged, count);
-                tracing::info!(
-                    merged_segments = drain_count,
-                    "Applied pending background merge during drain"
-                );
-            }
-            Ok(Err(e)) => {
-                tracing::warn!("Background merge failed during drain: {e}");
-            }
-            Err(_) => {
-                tracing::warn!("Background merge thread panicked during drain");
-            }
+        if let Some(PendingMergeCompletion::Finished(Some(drain_count))) =
+            self.complete_pending_merge(true)
+        {
+            tracing::info!(
+                merged_segments = drain_count,
+                "Applied pending background merge during drain"
+            );
         }
     }
 }

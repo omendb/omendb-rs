@@ -257,7 +257,6 @@ impl SegmentManager {
             last_merge_stats: None,
             generation,
             pending_merge: None,
-            pending_merge_count: 0,
             pending_merge_dir: None,
         };
 

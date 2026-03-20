@@ -27,6 +27,8 @@ use crate::vector::hnsw::types::{HNSWParams, Metric};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+type PendingMergeHandle = std::thread::JoinHandle<Result<Arc<FrozenSegment>>>;
+
 /// Configuration for segment manager
 #[derive(Clone, Debug)]
 pub struct SegmentConfig {
@@ -106,15 +108,41 @@ pub struct SegmentManager {
     pub(crate) last_merge_stats: Option<MergeStats>,
     /// Generation counter, incremented on each save for staleness detection
     pub(crate) generation: u64,
-    /// Background merge thread: None when idle, Some while merge is in progress
-    pub(crate) pending_merge:
-        Option<std::thread::JoinHandle<crate::vector::hnsw::error::Result<Arc<FrozenSegment>>>>,
-    /// Number of frozen segments that are being merged in the background
-    /// (always the first N entries in self.frozen at the time merge started)
-    pub(crate) pending_merge_count: usize,
+    /// Background merge state: None when idle, Some while merge is in progress.
+    pub(crate) pending_merge: Option<PendingMergeState>,
     /// Directory where segment files are stored, used to persist background merge results.
     /// Set by VectorStore after loading or creating segments.
     pub(crate) pending_merge_dir: Option<PathBuf>,
+}
+
+pub(crate) struct PendingMergeState {
+    handle: PendingMergeHandle,
+    source_segment_ids: Box<[u64]>,
+}
+
+impl PendingMergeState {
+    fn new(handle: PendingMergeHandle, source_segment_ids: Vec<u64>) -> Self {
+        Self {
+            handle,
+            source_segment_ids: source_segment_ids.into_boxed_slice(),
+        }
+    }
+
+    fn source_segment_ids(&self) -> &[u64] {
+        &self.source_segment_ids
+    }
+
+    fn source_count(&self) -> usize {
+        self.source_segment_ids.len()
+    }
+
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+
+    fn into_parts(self) -> (PendingMergeHandle, Box<[u64]>) {
+        (self.handle, self.source_segment_ids)
+    }
 }
 
 /// Immutable view of the currently published segment state.
@@ -266,7 +294,6 @@ impl SegmentManager {
             last_merge_stats: None,
             generation: 0,
             pending_merge: None,
-            pending_merge_count: 0,
             pending_merge_dir: None,
         })
     }
@@ -284,7 +311,6 @@ impl SegmentManager {
             last_merge_stats: None,
             generation: 0,
             pending_merge: None,
-            pending_merge_count: 0,
             pending_merge_dir: None,
         }
     }
@@ -312,7 +338,6 @@ impl SegmentManager {
             last_merge_stats: None,
             generation: 0,
             pending_merge: None,
-            pending_merge_count: 0,
             pending_merge_dir: None,
         })
     }
@@ -343,7 +368,6 @@ impl SegmentManager {
             last_merge_stats: None,
             generation: 0,
             pending_merge: None,
-            pending_merge_count: 0,
             pending_merge_dir: None,
         })
     }
@@ -354,8 +378,17 @@ impl SegmentManager {
     }
 
     fn debug_assert_invariants(&self) {
-        debug_assert!(self.pending_merge_count <= self.frozen.len());
-        debug_assert_eq!(self.pending_merge.is_some(), self.pending_merge_count > 0);
+        if let Some(ref pending) = self.pending_merge {
+            debug_assert!(pending.source_count() >= 2);
+            debug_assert!(pending.source_count() <= self.frozen.len());
+            debug_assert!(
+                self.frozen
+                    .iter()
+                    .take(pending.source_count())
+                    .map(|segment| segment.id())
+                    .eq(pending.source_segment_ids().iter().copied())
+            );
+        }
     }
 
     fn new_mutable_segment(&self) -> Result<MutableSegment> {
@@ -396,12 +429,47 @@ impl SegmentManager {
         }
     }
 
-    fn apply_completed_merge(&mut self, merged: Arc<FrozenSegment>, count: usize) -> usize {
-        let drain_count = count.min(self.frozen.len());
+    fn discard_pending_merge_artifacts(&self, merged_segment_id: u64) {
+        self.clear_pending_merge_meta();
+        if let Some(ref dir) = self.pending_merge_dir {
+            let segment_path = dir.join(format!("segment_{merged_segment_id}.bin"));
+            if segment_path.exists()
+                && let Err(e) = std::fs::remove_file(&segment_path)
+            {
+                tracing::warn!(
+                    segment_id = merged_segment_id,
+                    "Failed to remove discarded pending merge segment: {e}"
+                );
+            }
+        }
+    }
+
+    fn publish_completed_pending_merge(
+        &mut self,
+        merged: Arc<FrozenSegment>,
+        source_segment_ids: &[u64],
+    ) -> Option<usize> {
+        let prefix_matches = self
+            .frozen
+            .iter()
+            .take(source_segment_ids.len())
+            .map(|segment| segment.id())
+            .eq(source_segment_ids.iter().copied());
+        if !prefix_matches {
+            tracing::warn!(
+                merged_segment_id = merged.id(),
+                expected_sources = ?source_segment_ids,
+                "Discarding completed background merge because the published frozen prefix changed"
+            );
+            self.discard_pending_merge_artifacts(merged.id());
+            return None;
+        }
+
+        let drain_count = source_segment_ids.len();
         self.frozen.drain(0..drain_count);
         self.frozen.insert(0, merged);
         self.clear_pending_merge_meta();
-        drain_count
+        Some(drain_count)
     }
 
     /// Borrow the currently published mutable and frozen segment state.
@@ -588,6 +656,15 @@ impl SegmentManager {
     /// recovered if the process crashes before `drain_pending_merge()` runs.
     pub fn set_pending_merge_dir(&mut self, dir: impl Into<PathBuf>) {
         self.pending_merge_dir = Some(dir.into());
+    }
+
+    #[cfg(test)]
+    fn build_test_merged_segment_from_frozen_prefix(&mut self, count: usize) -> Arc<FrozenSegment> {
+        let segments_to_merge = self.frozen[0..count].to_vec();
+        let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
+        let (index, _) =
+            Self::build_merged_index(&self.config, vectors, &slots).expect("build merged index");
+        self.create_merged_segment(index)
     }
 }
 
@@ -881,6 +958,56 @@ mod tests {
             2,
             "Should have 2 frozen after partial merge"
         );
+    }
+
+    #[test]
+    fn test_publish_completed_pending_merge_preserves_appended_segments() {
+        let config = test_config().with_capacity(3);
+        let policy = MergePolicy::disabled();
+        let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
+
+        for i in 0..9 {
+            manager.insert(&vec![i as f32, 0.0, 0.0, 0.0]).unwrap();
+        }
+        manager.flush().unwrap();
+
+        assert_eq!(manager.frozen_count(), 3);
+        let total_before = manager.len();
+        let appended_segment_id = manager.frozen[2].id();
+        let source_ids = vec![manager.frozen[0].id(), manager.frozen[1].id()];
+        let merged = manager.build_test_merged_segment_from_frozen_prefix(2);
+        let merged_id = merged.id();
+
+        let drained = manager.publish_completed_pending_merge(merged, &source_ids);
+        assert_eq!(drained, Some(2));
+        assert_eq!(manager.frozen_count(), 2);
+        assert_eq!(manager.frozen[0].id(), merged_id);
+        assert_eq!(manager.frozen[1].id(), appended_segment_id);
+        assert_eq!(manager.len(), total_before);
+    }
+
+    #[test]
+    fn test_publish_completed_pending_merge_rejects_prefix_mismatch() {
+        let config = test_config().with_capacity(3);
+        let policy = MergePolicy::disabled();
+        let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
+
+        for i in 0..9 {
+            manager.insert(&vec![i as f32, 0.0, 0.0, 0.0]).unwrap();
+        }
+        manager.flush().unwrap();
+
+        assert_eq!(manager.frozen_count(), 3);
+        let frozen_ids_before: Vec<u64> =
+            manager.frozen.iter().map(|segment| segment.id()).collect();
+        let source_ids = vec![manager.frozen[1].id(), manager.frozen[0].id()];
+        let merged = manager.build_test_merged_segment_from_frozen_prefix(2);
+
+        let drained = manager.publish_completed_pending_merge(merged, &source_ids);
+        assert_eq!(drained, None);
+        let frozen_ids_after: Vec<u64> =
+            manager.frozen.iter().map(|segment| segment.id()).collect();
+        assert_eq!(frozen_ids_after, frozen_ids_before);
     }
 
     #[test]
