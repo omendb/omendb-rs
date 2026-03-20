@@ -217,6 +217,18 @@ impl PublishedSegments {
         self.frozen.len()
     }
 
+    fn mutable_is_empty(&self) -> bool {
+        self.mutable.is_empty()
+    }
+
+    fn mutable_is_full(&self) -> bool {
+        self.mutable.is_full()
+    }
+
+    fn insert_mutable_with_slot(&mut self, vector: &[f32], slot: u32) -> Result<u32> {
+        self.mutable.insert_with_slot(vector, slot)
+    }
+
     fn frozen_total_len(&self) -> usize {
         self.frozen.iter().map(|segment| segment.len()).sum()
     }
@@ -242,6 +254,15 @@ impl PublishedSegments {
             .map(|segment| segment.index().memory_usage())
             .sum();
         mutable + frozen
+    }
+
+    fn read_view<'a>(&'a self, config: &'a SegmentConfig, generation: u64) -> SegmentReadView<'a> {
+        SegmentReadView {
+            mutable: &self.mutable,
+            frozen: &self.frozen,
+            config,
+            generation,
+        }
     }
 }
 
@@ -572,12 +593,7 @@ impl SegmentManager {
     /// Borrow the currently published mutable and frozen segment state.
     pub fn read_view(&self) -> SegmentReadView<'_> {
         self.debug_assert_invariants();
-        SegmentReadView {
-            mutable: &self.published.mutable,
-            frozen: &self.published.frozen,
-            config: &self.config,
-            generation: self.generation,
-        }
+        self.published.read_view(&self.config, self.generation)
     }
 
     /// Number of frozen segments
@@ -605,18 +621,25 @@ impl SegmentManager {
         self.published.total_memory()
     }
 
+    fn ensure_mutable_insert_capacity(&mut self) -> Result<()> {
+        if self.published.mutable_is_full() {
+            self.freeze_mutable()?;
+        }
+        Ok(())
+    }
+
+    fn insert_into_published_mutable(&mut self, vector: &[f32], slot: u32) -> Result<u32> {
+        self.ensure_mutable_insert_capacity()?;
+        self.published.insert_mutable_with_slot(vector, slot)
+    }
+
     /// Insert a vector with a specific slot
     ///
     /// Inserts into the mutable segment. If the segment reaches capacity,
     /// it's automatically frozen and a new mutable segment is created.
     /// The slot is the global RecordStore slot that will be returned in search results.
     pub fn insert_with_slot(&mut self, vector: &[f32], slot: u32) -> Result<u32> {
-        // Freeze mutable if at capacity
-        if self.published.mutable.is_full() {
-            self.freeze_mutable()?;
-        }
-
-        self.published.mutable.insert_with_slot(vector, slot)
+        self.insert_into_published_mutable(vector, slot)
     }
 
     /// Insert a vector (slot == global vector count for consistency)
@@ -625,14 +648,9 @@ impl SegmentManager {
     /// it's automatically frozen and a new mutable segment is created.
     /// The slot is assigned as the total vector count (global ID).
     pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
-        // Freeze mutable if at capacity
-        if self.published.mutable.is_full() {
-            self.freeze_mutable()?;
-        }
-
         // Use global vector count as slot to maintain unique IDs across segments
         let slot = self.len() as u32;
-        self.published.mutable.insert_with_slot(vector, slot)
+        self.insert_into_published_mutable(vector, slot)
     }
 
     /// Freeze current mutable segment
@@ -686,7 +704,7 @@ impl SegmentManager {
     /// Useful before persistence or when you want to ensure all data
     /// is in frozen segments.
     pub fn flush(&mut self) -> Result<()> {
-        if !self.published.mutable.is_empty() {
+        if !self.published.mutable_is_empty() {
             self.freeze_mutable()?;
         }
         Ok(())
