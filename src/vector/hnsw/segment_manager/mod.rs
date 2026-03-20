@@ -183,8 +183,42 @@ impl PublishedSegments {
         self.frozen.insert(0, merged);
     }
 
+    fn replace_frozen_by_id(&mut self, source_ids: &[u64], merged: Arc<FrozenSegment>) {
+        self.frozen
+            .retain(|segment| !source_ids.contains(&segment.id()));
+        self.frozen.insert(0, merged);
+    }
+
+    fn take_all_frozen(&mut self) -> Vec<Arc<FrozenSegment>> {
+        std::mem::take(&mut self.frozen)
+    }
+
+    fn restore_all_frozen(&mut self, frozen: Vec<Arc<FrozenSegment>>) {
+        self.frozen = frozen;
+    }
+
+    fn take_frozen_indices(&mut self, indices: &[usize]) -> Vec<Arc<FrozenSegment>> {
+        let mut segments = Vec::with_capacity(indices.len());
+        for &idx in indices.iter().rev() {
+            segments.push(self.frozen.remove(idx));
+        }
+        segments.reverse();
+        segments
+    }
+
+    fn restore_frozen_indices(&mut self, indices: &[usize], segments: Vec<Arc<FrozenSegment>>) {
+        for (i, segment) in segments.into_iter().enumerate() {
+            let insert_idx = indices[i].min(self.frozen.len());
+            self.frozen.insert(insert_idx, segment);
+        }
+    }
+
     fn frozen_count(&self) -> usize {
         self.frozen.len()
+    }
+
+    fn frozen_total_len(&self) -> usize {
+        self.frozen.iter().map(|segment| segment.len()).sum()
     }
 
     fn mutable_len(&self) -> usize {

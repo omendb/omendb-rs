@@ -301,7 +301,7 @@ impl SegmentManager {
             // Verify source segments are still present with matching total vector count
             let current_ids: std::collections::HashSet<u64> =
                 self.published.frozen.iter().map(|s| s.id()).collect();
-            let current_total: usize = self.published.frozen.iter().map(|s| s.len()).sum();
+            let current_total = self.published.frozen_total_len();
 
             let source_ids_match = source_ids.iter().all(|id| current_ids.contains(id));
             let vectors_match = current_total == total_vectors;
@@ -320,9 +320,7 @@ impl SegmentManager {
 
             // Apply: remove source segments, insert merged
             self.published
-                .frozen
-                .retain(|s| !source_ids.contains(&s.id()));
-            self.published.frozen.insert(0, Arc::new(merged));
+                .replace_frozen_by_id(&source_ids, Arc::new(merged));
 
             // Advance next_segment_id past the merged segment's ID. The manifest stores
             // next_segment_id as of the last flush before the merge started, so it may

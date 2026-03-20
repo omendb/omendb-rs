@@ -166,7 +166,7 @@ impl SegmentManager {
         }
 
         // Check total vectors threshold
-        let total_frozen_vectors: usize = self.published.frozen.iter().map(|s| s.len()).sum();
+        let total_frozen_vectors = self.published.frozen_total_len();
         if total_frozen_vectors >= self.merge_policy.min_vectors {
             return true;
         }
@@ -290,14 +290,14 @@ impl SegmentManager {
 
         info!(
             frozen_count = self.published.frozen.len(),
-            frozen_vectors = self.published.frozen.iter().map(|s| s.len()).sum::<usize>(),
+            frozen_vectors = self.published.frozen_total_len(),
             "Starting segment merge"
         );
 
-        let segments_to_merge = std::mem::take(&mut self.published.frozen);
+        let segments_to_merge = self.published.take_all_frozen();
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         if vectors.is_empty() {
-            self.published.frozen = segments_to_merge;
+            self.published.restore_all_frozen(segments_to_merge);
             return Ok(None);
         }
 
@@ -306,7 +306,7 @@ impl SegmentManager {
         {
             Ok(result) => result,
             Err(e) => {
-                self.published.frozen = segments_to_merge;
+                self.published.restore_all_frozen(segments_to_merge);
                 return Err(e);
             }
         };
@@ -373,12 +373,7 @@ impl SegmentManager {
             }
         }
 
-        // Extract segments to merge (in reverse order to preserve indices)
-        let mut segments_to_merge: Vec<Arc<FrozenSegment>> = Vec::with_capacity(indices.len());
-        for &idx in indices.iter().rev() {
-            segments_to_merge.push(self.published.frozen.remove(idx));
-        }
-        segments_to_merge.reverse();
+        let segments_to_merge = self.published.take_frozen_indices(indices);
 
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         if vectors.is_empty() {
@@ -391,10 +386,8 @@ impl SegmentManager {
             Ok(result) => result,
             Err(e) => {
                 // Restore segments on failure (best-effort)
-                for (i, seg) in segments_to_merge.into_iter().enumerate() {
-                    let insert_idx = indices[i].min(self.published.frozen.len());
-                    self.published.frozen.insert(insert_idx, seg);
-                }
+                self.published
+                    .restore_frozen_indices(indices, segments_to_merge);
                 return Err(e);
             }
         };
@@ -431,7 +424,7 @@ impl SegmentManager {
 
         let segments_dir = self.pending_merge_dir.clone();
         let source_ids = source_segment_ids.clone();
-        let total_vectors: usize = self.published.frozen.iter().map(|s| s.len()).sum();
+        let total_vectors = self.published.frozen_total_len();
 
         tracing::info!(
             frozen_count = source_segment_ids.len(),
