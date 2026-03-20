@@ -233,24 +233,25 @@ impl VectorStore {
             .sum::<usize>();
 
         let (frozen_count, mutable_vecs, graph_bytes, segment_capacity) =
-            if let Some(segments) = self.segments.read().as_ref() {
-                let config = segments.config();
-                let graph = segments.total_memory() - vector_bytes;
-                (
-                    segments.frozen_count(),
-                    segments.mutable_len(),
-                    graph,
-                    config.segment_capacity,
-                )
-            } else {
-                (
-                    0,
-                    0,
-                    0,
-                    self.segment_capacity
-                        .unwrap_or(crate::vector::hnsw::SegmentConfig::DEFAULT_CAPACITY),
-                )
-            };
+            self.with_segment_view(|segments| {
+                if let Some(segments) = segments {
+                    let graph = segments.total_memory() - vector_bytes;
+                    (
+                        segments.frozen_count(),
+                        segments.mutable_len(),
+                        graph,
+                        segments.segment_capacity(),
+                    )
+                } else {
+                    (
+                        0,
+                        0,
+                        0,
+                        self.segment_capacity
+                            .unwrap_or(crate::vector::hnsw::SegmentConfig::DEFAULT_CAPACITY),
+                    )
+                }
+            });
 
         let wal_entries = self.storage.read().as_ref().map_or(0, OmenFile::wal_len);
 

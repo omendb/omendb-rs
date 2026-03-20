@@ -126,6 +126,7 @@ pub struct SegmentManager {
 pub struct SegmentReadView<'a> {
     mutable: &'a MutableSegment,
     frozen: &'a [Arc<FrozenSegment>],
+    config: &'a SegmentConfig,
     generation: u64,
 }
 
@@ -153,6 +154,18 @@ impl SegmentReadView<'_> {
     /// Generation of the published segment state.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Segment capacity for the currently published topology.
+    pub fn segment_capacity(&self) -> usize {
+        self.config.segment_capacity
+    }
+
+    /// Total graph memory visible across mutable and frozen segments.
+    pub fn total_memory(&self) -> usize {
+        let mutable = self.mutable.index().memory_usage();
+        let frozen: usize = self.frozen.iter().map(|s| s.index().memory_usage()).sum();
+        mutable + frozen
     }
 
     /// Search across the visible mutable and frozen segments.
@@ -351,6 +364,7 @@ impl SegmentManager {
         SegmentReadView {
             mutable: &self.mutable,
             frozen: &self.frozen,
+            config: &self.config,
             generation: self.generation,
         }
     }
@@ -659,6 +673,8 @@ mod tests {
         assert_eq!(view.len(), manager.len());
         assert_eq!(view.is_empty(), manager.is_empty());
         assert_eq!(view.generation(), manager.generation());
+        assert_eq!(view.segment_capacity(), manager.config().segment_capacity);
+        assert_eq!(view.total_memory(), manager.total_memory());
     }
 
     #[test]
