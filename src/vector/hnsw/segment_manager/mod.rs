@@ -217,6 +217,38 @@ impl PublishedSegments {
         self.frozen.len()
     }
 
+    fn frozen_segments(&self) -> &[Arc<FrozenSegment>] {
+        &self.frozen
+    }
+
+    fn cloned_frozen_segments(&self) -> Vec<Arc<FrozenSegment>> {
+        self.frozen.clone()
+    }
+
+    fn frozen_segment_ids(&self) -> Vec<u64> {
+        self.frozen.iter().map(|segment| segment.id()).collect()
+    }
+
+    fn frozen_prefix_matches_ids(&self, source_segment_ids: &[u64]) -> bool {
+        self.frozen
+            .iter()
+            .take(source_segment_ids.len())
+            .map(|segment| segment.id())
+            .eq(source_segment_ids.iter().copied())
+    }
+
+    fn frozen_size_bounds(&self) -> Option<(usize, usize)> {
+        let mut sizes = self.frozen.iter().map(|segment| segment.len());
+        let first = sizes.next()?;
+        let mut min_size = first;
+        let mut max_size = first;
+        for size in sizes {
+            min_size = min_size.min(size);
+            max_size = max_size.max(size);
+        }
+        Some((min_size, max_size))
+    }
+
     fn mutable_is_empty(&self) -> bool {
         self.mutable.is_empty()
     }
@@ -567,14 +599,7 @@ impl SegmentManager {
         merged: Arc<FrozenSegment>,
         source_segment_ids: &[u64],
     ) -> Option<usize> {
-        let prefix_matches = self
-            .published
-            .frozen
-            .iter()
-            .take(source_segment_ids.len())
-            .map(|segment| segment.id())
-            .eq(source_segment_ids.iter().copied());
-        if !prefix_matches {
+        if !self.published.frozen_prefix_matches_ids(source_segment_ids) {
             tracing::warn!(
                 merged_segment_id = merged.id(),
                 expected_sources = ?source_segment_ids,
@@ -769,7 +794,7 @@ impl SegmentManager {
 
     #[cfg(test)]
     fn build_test_merged_segment_from_frozen_prefix(&mut self, count: usize) -> Arc<FrozenSegment> {
-        let segments_to_merge = self.published.frozen[0..count].to_vec();
+        let segments_to_merge = self.published.frozen_segments()[0..count].to_vec();
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         let (index, _) =
             Self::build_merged_index(&self.config, vectors, &slots).expect("build merged index");

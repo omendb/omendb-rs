@@ -112,7 +112,7 @@ impl SegmentManager {
         self.generation += 1;
 
         // Build manifest
-        let segment_ids: Vec<u64> = self.published.frozen.iter().map(|s| s.id()).collect();
+        let segment_ids = self.published.frozen_segment_ids();
         let manifest = self.build_manifest(&segment_ids);
 
         // Write manifest atomically (tmp + fsync + rename)
@@ -142,7 +142,7 @@ impl SegmentManager {
         }
 
         // Save each frozen segment (skip if file already exists — frozen segments are immutable)
-        for segment in &self.published.frozen {
+        for segment in self.published.frozen_segments() {
             let segment_path = dir.join(format!("segment_{}.bin", segment.id()));
             if !segment_path.exists() {
                 segment.save(&segment_path)?;
@@ -188,7 +188,7 @@ impl SegmentManager {
         }
 
         info!(
-            segments = self.published.frozen.len(),
+            segments = self.published.frozen_count(),
             total_vectors = self.len(),
             "Segment manager saved"
         );
@@ -300,7 +300,7 @@ impl SegmentManager {
 
             // Verify source segments are still present with matching total vector count
             let current_ids: std::collections::HashSet<u64> =
-                self.published.frozen.iter().map(|s| s.id()).collect();
+                self.published.frozen_segment_ids().into_iter().collect();
             let current_total = self.published.frozen_total_len();
 
             let source_ids_match = source_ids.iter().all(|id| current_ids.contains(id));

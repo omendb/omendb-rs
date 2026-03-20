@@ -153,7 +153,7 @@ impl SegmentManager {
             return false;
         }
 
-        let num_frozen = self.published.frozen.len();
+        let num_frozen = self.published.frozen_count();
 
         // Always merge if we hit max segments
         if num_frozen >= self.merge_policy.max_segments {
@@ -173,9 +173,10 @@ impl SegmentManager {
 
         // Check size ratio (merge unbalanced segments)
         if num_frozen >= 2 {
-            let sizes: Vec<usize> = self.published.frozen.iter().map(|s| s.len()).collect();
-            let max_size = *sizes.iter().max().unwrap_or(&0);
-            let min_size = *sizes.iter().min().unwrap_or(&1).max(&1);
+            let Some((min_size, max_size)) = self.published.frozen_size_bounds() else {
+                return false;
+            };
+            let min_size = min_size.max(1);
             let ratio = max_size as f32 / min_size as f32;
 
             if ratio > self.merge_policy.size_ratio_threshold {
@@ -284,12 +285,12 @@ impl SegmentManager {
         // Wait for any in-progress background merge to finish before starting
         // an explicit merge — prevents redundant concurrent builds of the same segments.
         self.drain_pending_merge();
-        if self.published.frozen.len() < 2 {
+        if self.published.frozen_count() < 2 {
             return Ok(None);
         }
 
         info!(
-            frozen_count = self.published.frozen.len(),
+            frozen_count = self.published.frozen_count(),
             frozen_vectors = self.published.frozen_total_len(),
             "Starting segment merge"
         );
@@ -364,11 +365,11 @@ impl SegmentManager {
 
         // Validate indices in range
         for &idx in indices {
-            if idx >= self.published.frozen.len() {
+            if idx >= self.published.frozen_count() {
                 return Err(crate::vector::hnsw::error::HNSWError::internal(format!(
                     "Segment index {} out of range (have {})",
                     idx,
-                    self.published.frozen.len()
+                    self.published.frozen_count()
                 )));
             }
         }
@@ -410,13 +411,13 @@ impl SegmentManager {
             return;
         }
 
-        let source_segment_ids: Vec<u64> = self.published.frozen.iter().map(|s| s.id()).collect();
+        let source_segment_ids = self.published.frozen_segment_ids();
         if source_segment_ids.len() < 2 {
             return;
         }
 
         // Clone Arcs (cheap) — original segments stay published and remain searchable.
-        let segments = self.published.frozen.clone();
+        let segments = self.published.cloned_frozen_segments();
         let config = self.config.clone();
         // Pre-assign segment ID so the background thread can build the FrozenSegment directly
         let segment_id = self.next_segment_id;
@@ -509,7 +510,7 @@ impl SegmentManager {
             Some(PendingMergeCompletion::Finished(Some(drain_count))) => {
                 tracing::info!(
                     merged_segments = drain_count,
-                    remaining_segments = self.published.frozen.len(),
+                    remaining_segments = self.published.frozen_count(),
                     "Applied background merge"
                 );
                 true
