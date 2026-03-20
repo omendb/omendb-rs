@@ -497,22 +497,12 @@ impl SegmentManager {
             Ok(Ok(merged)) => {
                 // Remove the first `count` segments (those that were merged).
                 // Segments added during the merge are at positions count..len and stay.
-                let drain_count = count.min(self.frozen.len());
-                self.frozen.drain(0..drain_count);
-                self.frozen.insert(0, merged);
+                let drain_count = self.apply_completed_merge(merged, count);
                 tracing::info!(
                     merged_segments = drain_count,
                     remaining_segments = self.frozen.len(),
                     "Applied background merge"
                 );
-                if let Some(ref dir) = self.pending_merge_dir {
-                    let meta_path = dir.join("pending_merge.meta");
-                    if meta_path.exists()
-                        && let Err(e) = std::fs::remove_file(&meta_path)
-                    {
-                        tracing::warn!("Failed to remove pending_merge.meta: {e}");
-                    }
-                }
                 true
             }
             Ok(Err(e)) => {
@@ -539,21 +529,11 @@ impl SegmentManager {
         let count = std::mem::replace(&mut self.pending_merge_count, 0);
         match handle.join() {
             Ok(Ok(merged)) => {
-                let drain_count = count.min(self.frozen.len());
-                self.frozen.drain(0..drain_count);
-                self.frozen.insert(0, merged);
+                let drain_count = self.apply_completed_merge(merged, count);
                 tracing::info!(
                     merged_segments = drain_count,
                     "Applied pending background merge during drain"
                 );
-                if let Some(ref dir) = self.pending_merge_dir {
-                    let meta_path = dir.join("pending_merge.meta");
-                    if meta_path.exists()
-                        && let Err(e) = std::fs::remove_file(&meta_path)
-                    {
-                        tracing::warn!("Failed to remove pending_merge.meta: {e}");
-                    }
-                }
             }
             Ok(Err(e)) => {
                 tracing::warn!("Background merge failed during drain: {e}");

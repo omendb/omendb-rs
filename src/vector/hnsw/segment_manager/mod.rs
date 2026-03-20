@@ -358,6 +358,52 @@ impl SegmentManager {
         debug_assert_eq!(self.pending_merge.is_some(), self.pending_merge_count > 0);
     }
 
+    fn new_mutable_segment(&self) -> Result<MutableSegment> {
+        if self.config.quantization {
+            MutableSegment::new_quantized(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+            )
+        } else {
+            MutableSegment::with_capacity(
+                self.config.dimensions,
+                self.config.params,
+                self.config.distance_fn,
+                self.config.segment_capacity,
+            )
+        }
+    }
+
+    fn publish_frozen_segment(&mut self, frozen: Arc<FrozenSegment>) {
+        self.frozen.push(frozen);
+    }
+
+    fn finalize_published_frozen_change(&mut self) {
+        self.apply_pending_merge_if_ready();
+        self.try_start_background_merge();
+        self.debug_assert_invariants();
+    }
+
+    fn clear_pending_merge_meta(&self) {
+        if let Some(ref dir) = self.pending_merge_dir {
+            let meta_path = dir.join("pending_merge.meta");
+            if meta_path.exists()
+                && let Err(e) = std::fs::remove_file(&meta_path)
+            {
+                tracing::warn!("Failed to remove pending_merge.meta: {e}");
+            }
+        }
+    }
+
+    fn apply_completed_merge(&mut self, merged: Arc<FrozenSegment>, count: usize) -> usize {
+        let drain_count = count.min(self.frozen.len());
+        self.frozen.drain(0..drain_count);
+        self.frozen.insert(0, merged);
+        self.clear_pending_merge_meta();
+        drain_count
+    }
+
     /// Borrow the currently published mutable and frozen segment state.
     pub fn read_view(&self) -> SegmentReadView<'_> {
         self.debug_assert_invariants();
@@ -433,21 +479,7 @@ impl SegmentManager {
     pub fn freeze_mutable(&mut self) -> Result<()> {
         self.debug_assert_invariants();
 
-        // Create new mutable segment
-        let new_mutable = if self.config.quantization {
-            MutableSegment::new_quantized(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-            )?
-        } else {
-            MutableSegment::with_capacity(
-                self.config.dimensions,
-                self.config.params,
-                self.config.distance_fn,
-                self.config.segment_capacity,
-            )?
-        };
+        let new_mutable = self.new_mutable_segment()?;
 
         // Swap in new mutable, freeze old one
         let mut old_mutable = std::mem::replace(&mut self.mutable, new_mutable);
@@ -457,13 +489,10 @@ impl SegmentManager {
             old_mutable.set_id(self.next_segment_id);
             self.next_segment_id += 1;
             let frozen = old_mutable.freeze();
-            self.frozen.push(Arc::new(frozen));
+            self.publish_frozen_segment(Arc::new(frozen));
         }
 
-        // Apply completed background merge if ready, then check if a new one should start
-        self.apply_pending_merge_if_ready();
-        self.try_start_background_merge();
-        self.debug_assert_invariants();
+        self.finalize_published_frozen_change();
 
         Ok(())
     }
@@ -545,13 +574,11 @@ impl SegmentManager {
     /// Add a parallel-built index as a new frozen segment with slot mapping
     pub fn add_frozen_from_index(&mut self, index: HNSWIndex, slots: &[u32]) {
         self.debug_assert_invariants();
-        self.apply_pending_merge_if_ready();
         let mut index = index;
         index.remap_slots(slots);
         let frozen = self.create_merged_segment(index);
-        self.frozen.push(frozen);
-        self.try_start_background_merge();
-        self.debug_assert_invariants();
+        self.publish_frozen_segment(frozen);
+        self.finalize_published_frozen_change();
     }
 
     /// Set the directory for persisting background merge results.
