@@ -839,22 +839,27 @@ impl VectorStore {
         // Save segments FIRST so their generation is current when the manifest is written.
         // Saving after the checkpoint writes the old generation to the manifest, causing a
         // generation mismatch on every open that forces a full HNSW rebuild.
-        if !skip_segments && let Some(ref mut segments) = *self.segments.write() {
-            // Wait for any background merge to finish before saving
-            segments.drain_pending_merge();
+        if !skip_segments {
+            self.with_segments_mut(|segments| {
+                if let Some(segments) = segments.as_mut() {
+                    // Wait for any background merge to finish before saving
+                    segments.drain_pending_merge();
 
-            if let Some(ref path) = self.storage_path {
-                let segments_dir = segments_dir_for(path);
-                segments.set_pending_merge_dir(segments_dir.clone());
-                segments
-                    .save(&segments_dir)
-                    .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
-                // Update config with new generation so the manifest checkpoint below
-                // writes the correct value.
-                if let Some(ref mut storage) = *self.storage.write() {
-                    storage.put_config("segments_generation", segments.generation())?;
+                    if let Some(ref path) = self.storage_path {
+                        let segments_dir = segments_dir_for(path);
+                        segments.set_pending_merge_dir(segments_dir.clone());
+                        segments
+                            .save(&segments_dir)
+                            .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
+                        // Update config with new generation so the manifest checkpoint below
+                        // writes the correct value.
+                        if let Some(ref mut storage) = *self.storage.write() {
+                            storage.put_config("segments_generation", segments.generation())?;
+                        }
+                    }
                 }
-            }
+                Ok(())
+            })?;
         }
 
         if let Some(ref mut storage) = *self.storage.write() {

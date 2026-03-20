@@ -1,3 +1,4 @@
+use anyhow::Result;
 use parking_lot::MappedRwLockReadGuard;
 use serde_json::Value as JsonValue;
 use std::sync::atomic::Ordering;
@@ -194,6 +195,23 @@ impl VectorStore {
         let segments = self.segments.read();
         let segment_view = segments.as_ref().map(SegmentManager::read_view);
         f(segment_view)
+    }
+
+    /// Check whether a segment manager is initialized.
+    pub(crate) fn has_segments(&self) -> bool {
+        self.segments.read().is_some()
+    }
+
+    /// Run a closure against the mutable segment manager slot.
+    ///
+    /// This centralizes serialized write-side access so topology mutations can
+    /// gradually move behind one explicit coordination seam.
+    pub(crate) fn with_segments_mut<T>(
+        &self,
+        f: impl FnOnce(&mut Option<SegmentManager>) -> Result<T>,
+    ) -> Result<T> {
+        let mut segments = self.segments.write();
+        f(&mut segments)
     }
 
     /// Get the segment manager (for benchmarking/diagnostics)

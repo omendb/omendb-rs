@@ -40,7 +40,18 @@ impl VectorStore {
         let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
         let slots: Vec<u32> = all_slots.iter().map(|&s| s as u32).collect();
 
-        if self.segments.read().is_none() {
+        if self.has_segments() {
+            self.with_segments_mut(|segments| {
+                if let Some(segments) = segments.as_mut() {
+                    for (vector, &slot) in vector_data.iter().zip(slots.iter()) {
+                        segments
+                            .insert_with_slot(vector, slot)
+                            .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+                    }
+                }
+                Ok(())
+            })?;
+        } else {
             // Build new segment with parallel construction
             let config = self.segment_config(dimensions);
 
@@ -49,14 +60,10 @@ impl VectorStore {
             if let Some(ref path) = self.storage_path {
                 segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
             }
-            *self.segments.write() = Some(segs);
-        } else if let Some(ref mut segments) = *self.segments.write() {
-            // Insert into existing segments
-            for (vector, &slot) in vector_data.iter().zip(slots.iter()) {
-                segments
-                    .insert_with_slot(vector, slot)
-                    .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
-            }
+            self.with_segments_mut(|segments| {
+                *segments = Some(segs);
+                Ok(())
+            })?;
         }
 
         Ok(all_slots)
@@ -91,7 +98,10 @@ impl VectorStore {
         if let Some(ref path) = self.storage_path {
             segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
         }
-        *self.segments.write() = Some(segs);
+        self.with_segments_mut(|segments| {
+            *segments = Some(segs);
+            Ok(())
+        })?;
 
         Ok(())
     }
@@ -173,7 +183,7 @@ impl VectorStore {
     #[inline]
     #[must_use]
     pub fn needs_index_rebuild(&self) -> bool {
-        self.segments.read().is_none() && self.records.len() > 100
+        !self.has_segments() && self.records.len() > 100
     }
 
     /// Ensure HNSW index is ready for search
@@ -211,18 +221,20 @@ impl VectorStore {
             self.compact_locked()?;
         }
 
-        if let Some(ref mut segments) = *self.segments.write() {
-            // Flush mutable segment first
-            segments.flush().map_err(|e| anyhow::anyhow!("{e}"))?;
-            // Merge all frozen segments
-            if let Some(stats) = segments
-                .merge_all_frozen()
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-            {
-                return Ok(stats.vectors_merged);
+        self.with_segments_mut(|segments| {
+            if let Some(segments) = segments.as_mut() {
+                // Flush mutable segment first
+                segments.flush().map_err(|e| anyhow::anyhow!("{e}"))?;
+                // Merge all frozen segments
+                if let Some(stats) = segments
+                    .merge_all_frozen()
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                {
+                    return Ok(stats.vectors_merged);
+                }
             }
-        }
-        Ok(0)
+            Ok(0)
+        })
     }
 
     /// Compact the database by removing deleted records and reclaiming space.
@@ -296,7 +308,10 @@ impl VectorStore {
 
         // Rebuild segments with new contiguous slots
         if self.records.is_empty() {
-            *self.segments.write() = None;
+            self.with_segments_mut(|segments| {
+                *segments = None;
+                Ok(())
+            })?;
         } else {
             self.rebuild_index_locked()?;
         }

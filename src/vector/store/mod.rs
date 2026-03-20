@@ -340,13 +340,16 @@ impl VectorStore {
     /// Frozen segments use mmap, so the OS handles paging. This bounds
     /// heap usage while allowing large datasets.
     fn check_memory_pressure(&self) {
-        if let Some(limit) = self.max_memory_bytes
-            && let Some(ref mut segments) = *self.segments.write()
-        {
-            let estimated = segments.total_memory();
-            if estimated > limit && segments.mutable_len() > 0 {
-                let _ = segments.freeze_mutable();
-            }
+        if let Some(limit) = self.max_memory_bytes {
+            let _ = self.with_segments_mut(|segments| {
+                if let Some(segments) = segments.as_mut() {
+                    let estimated = segments.total_memory();
+                    if estimated > limit && segments.mutable_len() > 0 {
+                        let _ = segments.freeze_mutable();
+                    }
+                }
+                Ok(())
+            });
         }
     }
 

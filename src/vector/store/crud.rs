@@ -37,28 +37,27 @@ impl VectorStore {
     pub fn set(&self, id: &str, vector: Vector, metadata: JsonValue) -> Result<usize> {
         let _lock = self.write_lock.lock();
 
-        // Initialize segments if needed
-        let mut segments_guard = self.segments.write();
-        if segments_guard.is_none() {
-            let dimensions = self.resolve_dimensions(vector.dim())?;
-            self.records.set_dimensions(dimensions as u32);
+        self.with_segments_mut(|segments_guard| {
+            if segments_guard.is_none() {
+                let dimensions = self.resolve_dimensions(vector.dim())?;
+                self.records.set_dimensions(dimensions as u32);
 
-            // Create segment manager with initial config
-            let config = self.segment_config(dimensions);
-
-            let mut segs = SegmentManager::new(config)
-                .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?;
-            if let Some(ref path) = self.storage_path {
-                segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+                let config = self.segment_config(dimensions);
+                let mut segs = SegmentManager::new(config)
+                    .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?;
+                if let Some(ref path) = self.storage_path {
+                    segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+                }
+                *segments_guard = Some(segs);
+            } else if vector.dim() != self.dimensions() {
+                anyhow::bail!(
+                    "Vector dimension mismatch: store expects {}, got {}",
+                    self.dimensions(),
+                    vector.dim()
+                );
             }
-            *segments_guard = Some(segs);
-        } else if vector.dim() != self.dimensions() {
-            anyhow::bail!(
-                "Vector dimension mismatch: store expects {}, got {}",
-                self.dimensions(),
-                vector.dim()
-            );
-        }
+            Ok(())
+        })?;
 
         // Check if this is an update
         let old_slot = self.records.get_slot(id);
@@ -69,12 +68,14 @@ impl VectorStore {
             .set(id.to_string(), vector.data.clone(), Some(metadata.clone()))?
             as usize;
 
-        // Insert into segments
-        if let Some(segments) = segments_guard.as_mut() {
-            segments
-                .insert_with_slot(&vector.data, slot as u32)
-                .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
-        }
+        self.with_segments_mut(|segments| {
+            if let Some(segments) = segments.as_mut() {
+                segments
+                    .insert_with_slot(&vector.data, slot as u32)
+                    .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+            }
+            Ok(())
+        })?;
 
         // Update metadata index and migrate sparse entry to new slot
         if let Some(old) = old_slot {
@@ -139,29 +140,32 @@ impl VectorStore {
 
         // Process updates individually, but keep batch-wide locks stable.
         if !updates.is_empty() {
-            let mut segments = self.segments.write();
             let mut metadata_index = self.metadata_index.write();
             let mut sparse_index = self.sparse_index.write();
+            self.with_segments_mut(|segments| {
+                for (old_slot, id, vector, metadata) in updates {
+                    let new_slot = self.records.set(
+                        id.clone(),
+                        vector.data.clone(),
+                        Some(metadata.clone()),
+                    )?;
 
-            for (old_slot, id, vector, metadata) in updates {
-                let new_slot =
-                    self.records
-                        .set(id.clone(), vector.data.clone(), Some(metadata.clone()))?;
+                    if let Some(segments) = segments.as_mut() {
+                        segments
+                            .insert_with_slot(&vector.data, new_slot)
+                            .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+                    }
 
-                if let Some(segments) = segments.as_mut() {
-                    segments
-                        .insert_with_slot(&vector.data, new_slot)
-                        .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+                    metadata_index.remove(old_slot);
+                    if let Some(sparse_index) = sparse_index.as_mut() {
+                        sparse_index.remap_slot(old_slot, new_slot);
+                    }
+                    metadata_index.index_json(new_slot, &metadata);
+
+                    result_indices.push(new_slot as usize);
                 }
-
-                metadata_index.remove(old_slot);
-                if let Some(sparse_index) = sparse_index.as_mut() {
-                    sparse_index.remap_slot(old_slot, new_slot);
-                }
-                metadata_index.index_json(new_slot, &metadata);
-
-                result_indices.push(new_slot as usize);
-            }
+                Ok(())
+            })?;
         }
 
         // Process inserts with batch optimization
@@ -169,39 +173,7 @@ impl VectorStore {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
-            if self.segments.read().is_none() {
-                let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
-                self.records.set_dimensions(dimensions as u32);
-
-                let mut metadata_index = self.metadata_index.write();
-                let mut slots = Vec::with_capacity(inserts.len());
-                for (id, vector, metadata) in &inserts {
-                    let slot = self.records.set(
-                        id.clone(),
-                        vector.data.clone(),
-                        Some(metadata.clone()),
-                    )?;
-                    slots.push(slot);
-                    metadata_index.index_json(slot, metadata);
-                }
-
-                let config = self.segment_config(dimensions);
-                let mut segs =
-                    SegmentManager::build_parallel_with_slots(config, vectors_data, &slots)
-                        .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?;
-                if let Some(ref path) = self.storage_path {
-                    segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
-                }
-                *self.segments.write() = Some(segs);
-
-                if self.is_quantized()
-                    && let Some(ref mut storage) = *self.storage.write()
-                {
-                    storage.put_quantization_mode(helpers::quantization_to_id(true))?;
-                }
-
-                result_indices.extend(slots.iter().map(|&s| s as usize));
-            } else {
+            if self.has_segments() {
                 let expected_dims = self.dimensions();
                 for (_, vector, _) in &inserts {
                     if vector.dim() != expected_dims {
@@ -230,8 +202,46 @@ impl VectorStore {
                     vectors_data,
                 )?;
 
-                if let Some(ref mut segments) = *self.segments.write() {
-                    segments.add_frozen_from_index(batch_index, &slots);
+                self.with_segments_mut(|segments| {
+                    if let Some(segments) = segments.as_mut() {
+                        segments.add_frozen_from_index(batch_index, &slots);
+                    }
+                    Ok(())
+                })?;
+
+                result_indices.extend(slots.iter().map(|&s| s as usize));
+            } else {
+                let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
+                self.records.set_dimensions(dimensions as u32);
+
+                let mut metadata_index = self.metadata_index.write();
+                let mut slots = Vec::with_capacity(inserts.len());
+                for (id, vector, metadata) in &inserts {
+                    let slot = self.records.set(
+                        id.clone(),
+                        vector.data.clone(),
+                        Some(metadata.clone()),
+                    )?;
+                    slots.push(slot);
+                    metadata_index.index_json(slot, metadata);
+                }
+
+                let config = self.segment_config(dimensions);
+                let mut segs =
+                    SegmentManager::build_parallel_with_slots(config, vectors_data, &slots)
+                        .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?;
+                if let Some(ref path) = self.storage_path {
+                    segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+                }
+                self.with_segments_mut(|segments| {
+                    *segments = Some(segs);
+                    Ok(())
+                })?;
+
+                if self.is_quantized()
+                    && let Some(ref mut storage) = *self.storage.write()
+                {
+                    storage.put_quantization_mode(helpers::quantization_to_id(true))?;
                 }
 
                 result_indices.extend(slots.iter().map(|&s| s as usize));
