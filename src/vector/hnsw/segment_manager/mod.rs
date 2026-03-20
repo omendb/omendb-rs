@@ -225,6 +225,21 @@ impl PublishedSegments {
         self.frozen.clone()
     }
 
+    fn cloned_frozen_indices(&self, indices: &[usize]) -> Result<Vec<Arc<FrozenSegment>>> {
+        let mut segments = Vec::with_capacity(indices.len());
+        for &idx in indices {
+            let Some(segment) = self.frozen.get(idx) else {
+                return Err(crate::vector::hnsw::error::HNSWError::internal(format!(
+                    "Segment index {} out of range (have {})",
+                    idx,
+                    self.frozen.len()
+                )));
+            };
+            segments.push(Arc::clone(segment));
+        }
+        Ok(segments)
+    }
+
     fn frozen_segment_ids(&self) -> Vec<u64> {
         self.frozen.iter().map(|segment| segment.id()).collect()
     }
@@ -235,18 +250,6 @@ impl PublishedSegments {
             .take(source_segment_ids.len())
             .map(|segment| segment.id())
             .eq(source_segment_ids.iter().copied())
-    }
-
-    fn frozen_size_bounds(&self) -> Option<(usize, usize)> {
-        let mut sizes = self.frozen.iter().map(|segment| segment.len());
-        let first = sizes.next()?;
-        let mut min_size = first;
-        let mut max_size = first;
-        for size in sizes {
-            min_size = min_size.min(size);
-            max_size = max_size.max(size);
-        }
-        Some((min_size, max_size))
     }
 
     fn mutable_is_empty(&self) -> bool {

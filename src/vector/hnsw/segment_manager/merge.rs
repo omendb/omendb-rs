@@ -17,6 +17,53 @@ enum PendingMergeCompletion {
     Finished(Option<usize>),
 }
 
+struct FrozenMergeInput {
+    source_segment_ids: Box<[u64]>,
+    segments: Vec<Arc<FrozenSegment>>,
+    total_vectors: usize,
+}
+
+impl FrozenMergeInput {
+    fn from_segments(segments: Vec<Arc<FrozenSegment>>) -> Option<Self> {
+        if segments.len() < 2 {
+            return None;
+        }
+
+        let total_vectors = segments.iter().map(|segment| segment.len()).sum();
+        let source_segment_ids = segments
+            .iter()
+            .map(|segment| segment.id())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        Some(Self {
+            source_segment_ids,
+            segments,
+            total_vectors,
+        })
+    }
+
+    fn source_count(&self) -> usize {
+        self.source_segment_ids.len()
+    }
+
+    fn total_vectors(&self) -> usize {
+        self.total_vectors
+    }
+
+    fn size_bounds(&self) -> Option<(usize, usize)> {
+        let mut sizes = self.segments.iter().map(|segment| segment.len());
+        let first = sizes.next()?;
+        let mut min_size = first;
+        let mut max_size = first;
+        for size in sizes {
+            min_size = min_size.min(size);
+            max_size = max_size.max(size);
+        }
+        Some((min_size, max_size))
+    }
+}
+
 /// Policy for automatic segment merging
 ///
 /// Controls when and how frozen segments are merged together.
@@ -118,6 +165,49 @@ impl MergePolicy {
 }
 
 impl SegmentManager {
+    fn current_frozen_merge_input(&self) -> Option<FrozenMergeInput> {
+        FrozenMergeInput::from_segments(self.published.cloned_frozen_segments())
+    }
+
+    fn selected_frozen_merge_input(&self, indices: &[usize]) -> Result<Option<FrozenMergeInput>> {
+        if indices.is_empty() || indices.len() == 1 {
+            return Ok(None);
+        }
+
+        for i in 1..indices.len() {
+            if indices[i] <= indices[i - 1] {
+                return Err(crate::vector::hnsw::error::HNSWError::internal(
+                    "Segment indices must be sorted ascending with no duplicates".to_string(),
+                ));
+            }
+        }
+
+        FrozenMergeInput::from_segments(self.published.cloned_frozen_indices(indices)?)
+            .map_or(Ok(None), |input| Ok(Some(input)))
+    }
+
+    fn should_merge_input(&self, input: &FrozenMergeInput) -> bool {
+        let num_frozen = input.source_count();
+
+        if num_frozen >= self.merge_policy.max_segments {
+            return true;
+        }
+
+        if num_frozen < self.merge_policy.min_segments {
+            return false;
+        }
+
+        if input.total_vectors() >= self.merge_policy.min_vectors {
+            return true;
+        }
+
+        let Some((min_size, max_size)) = input.size_bounds() else {
+            return false;
+        };
+        let ratio = max_size as f32 / min_size.max(1) as f32;
+        ratio > self.merge_policy.size_ratio_threshold
+    }
+
     fn complete_pending_merge(&mut self, wait: bool) -> Option<PendingMergeCompletion> {
         let pending = self.pending_merge.take()?;
         if !wait && !pending.is_finished() {
@@ -153,38 +243,8 @@ impl SegmentManager {
             return false;
         }
 
-        let num_frozen = self.published.frozen_count();
-
-        // Always merge if we hit max segments
-        if num_frozen >= self.merge_policy.max_segments {
-            return true;
-        }
-
-        // Need at least min_segments to consider merging
-        if num_frozen < self.merge_policy.min_segments {
-            return false;
-        }
-
-        // Check total vectors threshold
-        let total_frozen_vectors = self.published.frozen_total_len();
-        if total_frozen_vectors >= self.merge_policy.min_vectors {
-            return true;
-        }
-
-        // Check size ratio (merge unbalanced segments)
-        if num_frozen >= 2 {
-            let Some((min_size, max_size)) = self.published.frozen_size_bounds() else {
-                return false;
-            };
-            let min_size = min_size.max(1);
-            let ratio = max_size as f32 / min_size as f32;
-
-            if ratio > self.merge_policy.size_ratio_threshold {
-                return true;
-            }
-        }
-
-        false
+        self.current_frozen_merge_input()
+            .is_some_and(|input| self.should_merge_input(&input))
     }
 
     /// Collect vectors and slots from frozen segments into separate vecs
@@ -285,13 +345,13 @@ impl SegmentManager {
         // Wait for any in-progress background merge to finish before starting
         // an explicit merge — prevents redundant concurrent builds of the same segments.
         self.drain_pending_merge();
-        if self.published.frozen_count() < 2 {
+        let Some(merge_input) = self.current_frozen_merge_input() else {
             return Ok(None);
-        }
+        };
 
         info!(
-            frozen_count = self.published.frozen_count(),
-            frozen_vectors = self.published.frozen_total_len(),
+            frozen_count = merge_input.source_count(),
+            frozen_vectors = merge_input.total_vectors(),
             "Starting segment merge"
         );
 
@@ -344,35 +404,15 @@ impl SegmentManager {
     /// # Arguments
     /// * `indices` - Indices of frozen segments to merge (must be sorted ascending, unique)
     pub fn merge_segments(&mut self, indices: &[usize]) -> Result<Option<MergeStats>> {
-        if indices.is_empty() || indices.len() == 1 {
-            return Ok(None);
-        }
-
         // A background merge in flight has snapshotted the current frozen prefix by segment ID.
         // Mutating the published frozen topology before that merge is applied would invalidate
         // that publication path.
         // Complete any pending merge first to get a stable baseline.
         self.drain_pending_merge();
 
-        // Validate indices are sorted ascending and unique
-        for i in 1..indices.len() {
-            if indices[i] <= indices[i - 1] {
-                return Err(crate::vector::hnsw::error::HNSWError::internal(
-                    "Segment indices must be sorted ascending with no duplicates".to_string(),
-                ));
-            }
-        }
-
-        // Validate indices in range
-        for &idx in indices {
-            if idx >= self.published.frozen_count() {
-                return Err(crate::vector::hnsw::error::HNSWError::internal(format!(
-                    "Segment index {} out of range (have {})",
-                    idx,
-                    self.published.frozen_count()
-                )));
-            }
-        }
+        let Some(_merge_input) = self.selected_frozen_merge_input(indices)? else {
+            return Ok(None);
+        };
 
         let segments_to_merge = self.published.take_frozen_indices(indices);
 
@@ -407,28 +447,30 @@ impl SegmentManager {
         if self.pending_merge.is_some() {
             return; // Already merging
         }
-        if !self.should_merge() {
+        let Some(merge_input) = self.current_frozen_merge_input() else {
             return;
-        }
-
-        let source_segment_ids = self.published.frozen_segment_ids();
-        if source_segment_ids.len() < 2 {
+        };
+        if !self.should_merge_input(&merge_input) {
             return;
         }
 
         // Clone Arcs (cheap) — original segments stay published and remain searchable.
-        let segments = self.published.cloned_frozen_segments();
+        let FrozenMergeInput {
+            source_segment_ids,
+            segments,
+            total_vectors,
+        } = merge_input;
         let config = self.config.clone();
         // Pre-assign segment ID so the background thread can build the FrozenSegment directly
         let segment_id = self.next_segment_id;
         self.next_segment_id += 1;
 
         let segments_dir = self.pending_merge_dir.clone();
-        let source_ids = source_segment_ids.clone();
-        let total_vectors = self.published.frozen_total_len();
+        let source_ids = source_segment_ids.to_vec();
+        let source_ids_for_meta = source_ids.clone();
 
         tracing::info!(
-            frozen_count = source_segment_ids.len(),
+            frozen_count = source_ids.len(),
             frozen_vectors = total_vectors,
             "Starting background segment merge"
         );
@@ -465,7 +507,7 @@ impl SegmentManager {
                     tracing::warn!("Failed to persist background merge segment: {e}");
                 } else {
                     let meta = serde_json::json!({
-                        "source_ids": source_ids,
+                        "source_ids": source_ids_for_meta,
                         "total_vectors": total_vectors,
                         "merged_segment_id": segment_id,
                     });
@@ -496,7 +538,7 @@ impl SegmentManager {
             Ok(Arc::new(frozen))
         });
 
-        self.pending_merge = Some(PendingMergeState::new(handle, source_segment_ids));
+        self.pending_merge = Some(PendingMergeState::new(handle, source_ids));
     }
 
     /// Apply a completed background merge if the thread is done.
