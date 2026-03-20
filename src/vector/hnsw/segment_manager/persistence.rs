@@ -2,7 +2,7 @@
 //!
 //! Save and load segment manager state to/from disk.
 
-use super::{MergePolicy, SegmentConfig, SegmentManager};
+use super::{MergePolicy, PublishedSegments, SegmentConfig, SegmentManager};
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment};
 use crate::vector::hnsw::types::{HNSWParams, Metric};
@@ -112,7 +112,7 @@ impl SegmentManager {
         self.generation += 1;
 
         // Build manifest
-        let segment_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
+        let segment_ids: Vec<u64> = self.published.frozen.iter().map(|s| s.id()).collect();
         let manifest = self.build_manifest(&segment_ids);
 
         // Write manifest atomically (tmp + fsync + rename)
@@ -142,7 +142,7 @@ impl SegmentManager {
         }
 
         // Save each frozen segment (skip if file already exists — frozen segments are immutable)
-        for segment in &self.frozen {
+        for segment in &self.published.frozen {
             let segment_path = dir.join(format!("segment_{}.bin", segment.id()));
             if !segment_path.exists() {
                 segment.save(&segment_path)?;
@@ -188,7 +188,7 @@ impl SegmentManager {
         }
 
         info!(
-            segments = self.frozen.len(),
+            segments = self.published.frozen.len(),
             total_vectors = self.len(),
             "Segment manager saved"
         );
@@ -250,8 +250,7 @@ impl SegmentManager {
 
         let mut manager = Self {
             config,
-            mutable,
-            frozen,
+            published: PublishedSegments::from_parts(mutable, frozen),
             next_segment_id,
             merge_policy,
             last_merge_stats: None,
@@ -301,8 +300,8 @@ impl SegmentManager {
 
             // Verify source segments are still present with matching total vector count
             let current_ids: std::collections::HashSet<u64> =
-                self.frozen.iter().map(|s| s.id()).collect();
-            let current_total: usize = self.frozen.iter().map(|s| s.len()).sum();
+                self.published.frozen.iter().map(|s| s.id()).collect();
+            let current_total: usize = self.published.frozen.iter().map(|s| s.len()).sum();
 
             let source_ids_match = source_ids.iter().all(|id| current_ids.contains(id));
             let vectors_match = current_total == total_vectors;
@@ -320,8 +319,10 @@ impl SegmentManager {
             let merged = FrozenSegment::load(&segment_path)?;
 
             // Apply: remove source segments, insert merged
-            self.frozen.retain(|s| !source_ids.contains(&s.id()));
-            self.frozen.insert(0, Arc::new(merged));
+            self.published
+                .frozen
+                .retain(|s| !source_ids.contains(&s.id()));
+            self.published.frozen.insert(0, Arc::new(merged));
 
             // Advance next_segment_id past the merged segment's ID. The manifest stores
             // next_segment_id as of the last flush before the merge started, so it may

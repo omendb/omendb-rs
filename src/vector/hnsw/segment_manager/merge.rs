@@ -153,7 +153,7 @@ impl SegmentManager {
             return false;
         }
 
-        let num_frozen = self.frozen.len();
+        let num_frozen = self.published.frozen.len();
 
         // Always merge if we hit max segments
         if num_frozen >= self.merge_policy.max_segments {
@@ -166,14 +166,14 @@ impl SegmentManager {
         }
 
         // Check total vectors threshold
-        let total_frozen_vectors: usize = self.frozen.iter().map(|s| s.len()).sum();
+        let total_frozen_vectors: usize = self.published.frozen.iter().map(|s| s.len()).sum();
         if total_frozen_vectors >= self.merge_policy.min_vectors {
             return true;
         }
 
         // Check size ratio (merge unbalanced segments)
         if num_frozen >= 2 {
-            let sizes: Vec<usize> = self.frozen.iter().map(|s| s.len()).collect();
+            let sizes: Vec<usize> = self.published.frozen.iter().map(|s| s.len()).collect();
             let max_size = *sizes.iter().max().unwrap_or(&0);
             let min_size = *sizes.iter().min().unwrap_or(&1).max(&1);
             let ratio = max_size as f32 / min_size as f32;
@@ -252,7 +252,7 @@ impl SegmentManager {
     ) -> MergeStats {
         if !index.is_empty() {
             let frozen = self.create_merged_segment(index);
-            self.frozen.push(frozen);
+            self.published.publish_frozen_segment(frozen);
         }
 
         let stats = MergeStats {
@@ -284,20 +284,20 @@ impl SegmentManager {
         // Wait for any in-progress background merge to finish before starting
         // an explicit merge — prevents redundant concurrent builds of the same segments.
         self.drain_pending_merge();
-        if self.frozen.len() < 2 {
+        if self.published.frozen.len() < 2 {
             return Ok(None);
         }
 
         info!(
-            frozen_count = self.frozen.len(),
-            frozen_vectors = self.frozen.iter().map(|s| s.len()).sum::<usize>(),
+            frozen_count = self.published.frozen.len(),
+            frozen_vectors = self.published.frozen.iter().map(|s| s.len()).sum::<usize>(),
             "Starting segment merge"
         );
 
-        let segments_to_merge = std::mem::take(&mut self.frozen);
+        let segments_to_merge = std::mem::take(&mut self.published.frozen);
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         if vectors.is_empty() {
-            self.frozen = segments_to_merge;
+            self.published.frozen = segments_to_merge;
             return Ok(None);
         }
 
@@ -306,7 +306,7 @@ impl SegmentManager {
         {
             Ok(result) => result,
             Err(e) => {
-                self.frozen = segments_to_merge;
+                self.published.frozen = segments_to_merge;
                 return Err(e);
             }
         };
@@ -348,7 +348,8 @@ impl SegmentManager {
         }
 
         // A background merge in flight has snapshotted the current frozen prefix by segment ID.
-        // Mutating self.frozen before that merge is applied would invalidate that publication path.
+        // Mutating the published frozen topology before that merge is applied would invalidate
+        // that publication path.
         // Complete any pending merge first to get a stable baseline.
         self.drain_pending_merge();
 
@@ -363,11 +364,11 @@ impl SegmentManager {
 
         // Validate indices in range
         for &idx in indices {
-            if idx >= self.frozen.len() {
+            if idx >= self.published.frozen.len() {
                 return Err(crate::vector::hnsw::error::HNSWError::internal(format!(
                     "Segment index {} out of range (have {})",
                     idx,
-                    self.frozen.len()
+                    self.published.frozen.len()
                 )));
             }
         }
@@ -375,7 +376,7 @@ impl SegmentManager {
         // Extract segments to merge (in reverse order to preserve indices)
         let mut segments_to_merge: Vec<Arc<FrozenSegment>> = Vec::with_capacity(indices.len());
         for &idx in indices.iter().rev() {
-            segments_to_merge.push(self.frozen.remove(idx));
+            segments_to_merge.push(self.published.frozen.remove(idx));
         }
         segments_to_merge.reverse();
 
@@ -391,8 +392,8 @@ impl SegmentManager {
             Err(e) => {
                 // Restore segments on failure (best-effort)
                 for (i, seg) in segments_to_merge.into_iter().enumerate() {
-                    let insert_idx = indices[i].min(self.frozen.len());
-                    self.frozen.insert(insert_idx, seg);
+                    let insert_idx = indices[i].min(self.published.frozen.len());
+                    self.published.frozen.insert(insert_idx, seg);
                 }
                 return Err(e);
             }
@@ -405,7 +406,7 @@ impl SegmentManager {
     /// Start a background merge if conditions are met and no merge is already running.
     ///
     /// Clones the Arc refs to frozen segments (cheap) and spawns a thread to build
-    /// the merged index. The original segments stay in `self.frozen` and remain
+    /// the merged index. The original frozen segments stay published and remain
     /// searchable while the merge runs. When the merge completes, call
     /// `apply_pending_merge_if_ready()` to atomically swap in the merged segment.
     pub fn try_start_background_merge(&mut self) {
@@ -416,13 +417,13 @@ impl SegmentManager {
             return;
         }
 
-        let source_segment_ids: Vec<u64> = self.frozen.iter().map(|s| s.id()).collect();
+        let source_segment_ids: Vec<u64> = self.published.frozen.iter().map(|s| s.id()).collect();
         if source_segment_ids.len() < 2 {
             return;
         }
 
-        // Clone Arcs (cheap) — original segments stay in self.frozen and remain searchable
-        let segments = self.frozen.clone();
+        // Clone Arcs (cheap) — original segments stay published and remain searchable.
+        let segments = self.published.frozen.clone();
         let config = self.config.clone();
         // Pre-assign segment ID so the background thread can build the FrozenSegment directly
         let segment_id = self.next_segment_id;
@@ -430,7 +431,7 @@ impl SegmentManager {
 
         let segments_dir = self.pending_merge_dir.clone();
         let source_ids = source_segment_ids.clone();
-        let total_vectors: usize = self.frozen.iter().map(|s| s.len()).sum();
+        let total_vectors: usize = self.published.frozen.iter().map(|s| s.len()).sum();
 
         tracing::info!(
             frozen_count = source_segment_ids.len(),
@@ -515,7 +516,7 @@ impl SegmentManager {
             Some(PendingMergeCompletion::Finished(Some(drain_count))) => {
                 tracing::info!(
                     merged_segments = drain_count,
-                    remaining_segments = self.frozen.len(),
+                    remaining_segments = self.published.frozen.len(),
                     "Applied background merge"
                 );
                 true

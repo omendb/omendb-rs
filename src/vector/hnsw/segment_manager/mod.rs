@@ -96,10 +96,8 @@ impl SegmentConfig {
 pub struct SegmentManager {
     /// Configuration
     pub(crate) config: SegmentConfig,
-    /// Active mutable segment for writes
-    pub(crate) mutable: MutableSegment,
-    /// Frozen segments for reads (immutable, thread-safe)
-    pub(crate) frozen: Vec<Arc<FrozenSegment>>,
+    /// Currently published mutable + frozen topology.
+    pub(crate) published: PublishedSegments,
     /// Next segment ID
     pub(crate) next_segment_id: u64,
     /// Merge policy for automatic merging
@@ -142,6 +140,74 @@ impl PendingMergeState {
 
     fn into_parts(self) -> (PendingMergeHandle, Box<[u64]>) {
         (self.handle, self.source_segment_ids)
+    }
+}
+
+pub(crate) struct PublishedSegments {
+    pub(crate) mutable: MutableSegment,
+    pub(crate) frozen: Vec<Arc<FrozenSegment>>,
+}
+
+impl PublishedSegments {
+    fn new(mutable: MutableSegment) -> Self {
+        Self {
+            mutable,
+            frozen: Vec::new(),
+        }
+    }
+
+    fn from_parts(mutable: MutableSegment, frozen: Vec<Arc<FrozenSegment>>) -> Self {
+        Self { mutable, frozen }
+    }
+
+    fn publish_frozen_segment(&mut self, frozen: Arc<FrozenSegment>) {
+        self.frozen.push(frozen);
+    }
+
+    fn rollover_mutable(
+        &mut self,
+        next_mutable: MutableSegment,
+        next_segment_id: u64,
+    ) -> Option<FrozenSegment> {
+        let mut old_mutable = std::mem::replace(&mut self.mutable, next_mutable);
+        if old_mutable.is_empty() {
+            return None;
+        }
+
+        old_mutable.set_id(next_segment_id);
+        Some(old_mutable.freeze())
+    }
+
+    fn publish_completed_merge(&mut self, merged: Arc<FrozenSegment>, drain_count: usize) {
+        self.frozen.drain(0..drain_count);
+        self.frozen.insert(0, merged);
+    }
+
+    fn frozen_count(&self) -> usize {
+        self.frozen.len()
+    }
+
+    fn mutable_len(&self) -> usize {
+        self.mutable.len()
+    }
+
+    fn len(&self) -> usize {
+        self.mutable.len()
+            + self
+                .frozen
+                .iter()
+                .map(|segment| segment.len())
+                .sum::<usize>()
+    }
+
+    fn total_memory(&self) -> usize {
+        let mutable = self.mutable.index().memory_usage();
+        let frozen: usize = self
+            .frozen
+            .iter()
+            .map(|segment| segment.index().memory_usage())
+            .sum();
+        mutable + frozen
     }
 }
 
@@ -287,8 +353,7 @@ impl SegmentManager {
 
         Ok(Self {
             config,
-            mutable,
-            frozen: Vec::new(),
+            published: PublishedSegments::new(mutable),
             next_segment_id: 0,
             merge_policy,
             last_merge_stats: None,
@@ -304,8 +369,7 @@ impl SegmentManager {
     pub fn from_index(config: SegmentConfig, index: HNSWIndex, slots: &[u32]) -> Self {
         Self {
             config,
-            mutable: MutableSegment::from_index(index, slots),
-            frozen: Vec::new(),
+            published: PublishedSegments::new(MutableSegment::from_index(index, slots)),
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
@@ -331,8 +395,7 @@ impl SegmentManager {
 
         Ok(Self {
             config,
-            mutable,
-            frozen: Vec::new(),
+            published: PublishedSegments::new(mutable),
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
@@ -361,8 +424,7 @@ impl SegmentManager {
 
         Ok(Self {
             config,
-            mutable,
-            frozen: Vec::new(),
+            published: PublishedSegments::new(mutable),
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
@@ -380,9 +442,10 @@ impl SegmentManager {
     fn debug_assert_invariants(&self) {
         if let Some(ref pending) = self.pending_merge {
             debug_assert!(pending.source_count() >= 2);
-            debug_assert!(pending.source_count() <= self.frozen.len());
+            debug_assert!(pending.source_count() <= self.published.frozen.len());
             debug_assert!(
-                self.frozen
+                self.published
+                    .frozen
                     .iter()
                     .take(pending.source_count())
                     .map(|segment| segment.id())
@@ -409,7 +472,7 @@ impl SegmentManager {
     }
 
     fn publish_frozen_segment(&mut self, frozen: Arc<FrozenSegment>) {
-        self.frozen.push(frozen);
+        self.published.publish_frozen_segment(frozen);
     }
 
     fn finalize_published_frozen_change(&mut self) {
@@ -450,6 +513,7 @@ impl SegmentManager {
         source_segment_ids: &[u64],
     ) -> Option<usize> {
         let prefix_matches = self
+            .published
             .frozen
             .iter()
             .take(source_segment_ids.len())
@@ -466,8 +530,7 @@ impl SegmentManager {
         }
 
         let drain_count = source_segment_ids.len();
-        self.frozen.drain(0..drain_count);
-        self.frozen.insert(0, merged);
+        self.published.publish_completed_merge(merged, drain_count);
         self.clear_pending_merge_meta();
         Some(drain_count)
     }
@@ -476,8 +539,8 @@ impl SegmentManager {
     pub fn read_view(&self) -> SegmentReadView<'_> {
         self.debug_assert_invariants();
         SegmentReadView {
-            mutable: &self.mutable,
-            frozen: &self.frozen,
+            mutable: &self.published.mutable,
+            frozen: &self.published.frozen,
             config: &self.config,
             generation: self.generation,
         }
@@ -485,17 +548,17 @@ impl SegmentManager {
 
     /// Number of frozen segments
     pub fn frozen_count(&self) -> usize {
-        self.frozen.len()
+        self.published.frozen_count()
     }
 
     /// Number of vectors in mutable segment
     pub fn mutable_len(&self) -> usize {
-        self.mutable.len()
+        self.published.mutable_len()
     }
 
     /// Total number of vectors across all segments
     pub fn len(&self) -> usize {
-        self.mutable.len() + self.frozen.iter().map(|s| s.len()).sum::<usize>()
+        self.published.len()
     }
 
     /// Check if empty
@@ -505,9 +568,7 @@ impl SegmentManager {
 
     /// Total memory usage across all segments (bytes)
     pub fn total_memory(&self) -> usize {
-        let mutable = self.mutable.index().memory_usage();
-        let frozen: usize = self.frozen.iter().map(|s| s.index().memory_usage()).sum();
-        mutable + frozen
+        self.published.total_memory()
     }
 
     /// Insert a vector with a specific slot
@@ -517,11 +578,11 @@ impl SegmentManager {
     /// The slot is the global RecordStore slot that will be returned in search results.
     pub fn insert_with_slot(&mut self, vector: &[f32], slot: u32) -> Result<u32> {
         // Freeze mutable if at capacity
-        if self.mutable.is_full() {
+        if self.published.mutable.is_full() {
             self.freeze_mutable()?;
         }
 
-        self.mutable.insert_with_slot(vector, slot)
+        self.published.mutable.insert_with_slot(vector, slot)
     }
 
     /// Insert a vector (slot == global vector count for consistency)
@@ -531,13 +592,13 @@ impl SegmentManager {
     /// The slot is assigned as the total vector count (global ID).
     pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
         // Freeze mutable if at capacity
-        if self.mutable.is_full() {
+        if self.published.mutable.is_full() {
             self.freeze_mutable()?;
         }
 
         // Use global vector count as slot to maintain unique IDs across segments
         let slot = self.len() as u32;
-        self.mutable.insert_with_slot(vector, slot)
+        self.published.mutable.insert_with_slot(vector, slot)
     }
 
     /// Freeze current mutable segment
@@ -548,15 +609,11 @@ impl SegmentManager {
         self.debug_assert_invariants();
 
         let new_mutable = self.new_mutable_segment()?;
-
-        // Swap in new mutable, freeze old one
-        let mut old_mutable = std::mem::replace(&mut self.mutable, new_mutable);
-
-        if !old_mutable.is_empty() {
-            // Assign unique segment ID before freezing
-            old_mutable.set_id(self.next_segment_id);
+        if let Some(frozen) = self
+            .published
+            .rollover_mutable(new_mutable, self.next_segment_id)
+        {
             self.next_segment_id += 1;
-            let frozen = old_mutable.freeze();
             self.publish_frozen_segment(Arc::new(frozen));
         }
 
@@ -595,7 +652,7 @@ impl SegmentManager {
     /// Useful before persistence or when you want to ensure all data
     /// is in frozen segments.
     pub fn flush(&mut self) -> Result<()> {
-        if !self.mutable.is_empty() {
+        if !self.published.mutable.is_empty() {
             self.freeze_mutable()?;
         }
         Ok(())
@@ -660,7 +717,7 @@ impl SegmentManager {
 
     #[cfg(test)]
     fn build_test_merged_segment_from_frozen_prefix(&mut self, count: usize) -> Arc<FrozenSegment> {
-        let segments_to_merge = self.frozen[0..count].to_vec();
+        let segments_to_merge = self.published.frozen[0..count].to_vec();
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         let (index, _) =
             Self::build_merged_index(&self.config, vectors, &slots).expect("build merged index");
@@ -973,16 +1030,19 @@ mod tests {
 
         assert_eq!(manager.frozen_count(), 3);
         let total_before = manager.len();
-        let appended_segment_id = manager.frozen[2].id();
-        let source_ids = vec![manager.frozen[0].id(), manager.frozen[1].id()];
+        let appended_segment_id = manager.published.frozen[2].id();
+        let source_ids = vec![
+            manager.published.frozen[0].id(),
+            manager.published.frozen[1].id(),
+        ];
         let merged = manager.build_test_merged_segment_from_frozen_prefix(2);
         let merged_id = merged.id();
 
         let drained = manager.publish_completed_pending_merge(merged, &source_ids);
         assert_eq!(drained, Some(2));
         assert_eq!(manager.frozen_count(), 2);
-        assert_eq!(manager.frozen[0].id(), merged_id);
-        assert_eq!(manager.frozen[1].id(), appended_segment_id);
+        assert_eq!(manager.published.frozen[0].id(), merged_id);
+        assert_eq!(manager.published.frozen[1].id(), appended_segment_id);
         assert_eq!(manager.len(), total_before);
     }
 
@@ -998,15 +1058,26 @@ mod tests {
         manager.flush().unwrap();
 
         assert_eq!(manager.frozen_count(), 3);
-        let frozen_ids_before: Vec<u64> =
-            manager.frozen.iter().map(|segment| segment.id()).collect();
-        let source_ids = vec![manager.frozen[1].id(), manager.frozen[0].id()];
+        let frozen_ids_before: Vec<u64> = manager
+            .published
+            .frozen
+            .iter()
+            .map(|segment| segment.id())
+            .collect();
+        let source_ids = vec![
+            manager.published.frozen[1].id(),
+            manager.published.frozen[0].id(),
+        ];
         let merged = manager.build_test_merged_segment_from_frozen_prefix(2);
 
         let drained = manager.publish_completed_pending_merge(merged, &source_ids);
         assert_eq!(drained, None);
-        let frozen_ids_after: Vec<u64> =
-            manager.frozen.iter().map(|segment| segment.id()).collect();
+        let frozen_ids_after: Vec<u64> = manager
+            .published
+            .frozen
+            .iter()
+            .map(|segment| segment.id())
+            .collect();
         assert_eq!(frozen_ids_after, frozen_ids_before);
     }
 
