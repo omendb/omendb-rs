@@ -148,6 +148,30 @@ pub(crate) struct PublishedSegments {
     pub(crate) frozen: Vec<Arc<FrozenSegment>>,
 }
 
+pub(crate) struct PublishedFrozenSnapshot {
+    segments: Vec<Arc<FrozenSegment>>,
+    segment_ids: Box<[u64]>,
+    total_vectors: usize,
+}
+
+impl PublishedFrozenSnapshot {
+    fn segments(&self) -> &[Arc<FrozenSegment>] {
+        &self.segments
+    }
+
+    fn segment_ids(&self) -> &[u64] {
+        &self.segment_ids
+    }
+
+    fn count(&self) -> usize {
+        self.segments.len()
+    }
+
+    fn total_vectors(&self) -> usize {
+        self.total_vectors
+    }
+}
+
 impl PublishedSegments {
     fn new(mutable: MutableSegment) -> Self {
         Self {
@@ -217,10 +241,6 @@ impl PublishedSegments {
         self.frozen.len()
     }
 
-    fn frozen_segments(&self) -> &[Arc<FrozenSegment>] {
-        &self.frozen
-    }
-
     fn cloned_frozen_segments(&self) -> Vec<Arc<FrozenSegment>> {
         self.frozen.clone()
     }
@@ -240,8 +260,20 @@ impl PublishedSegments {
         Ok(segments)
     }
 
-    fn frozen_segment_ids(&self) -> Vec<u64> {
-        self.frozen.iter().map(|segment| segment.id()).collect()
+    fn frozen_snapshot(&self) -> PublishedFrozenSnapshot {
+        let segments = self.frozen.clone();
+        let segment_ids = segments
+            .iter()
+            .map(|segment| segment.id())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let total_vectors = segments.iter().map(|segment| segment.len()).sum();
+
+        PublishedFrozenSnapshot {
+            segments,
+            segment_ids,
+            total_vectors,
+        }
     }
 
     fn frozen_prefix_matches_ids(&self, source_segment_ids: &[u64]) -> bool {
@@ -262,10 +294,6 @@ impl PublishedSegments {
 
     fn insert_mutable_with_slot(&mut self, vector: &[f32], slot: u32) -> Result<u32> {
         self.mutable.insert_with_slot(vector, slot)
-    }
-
-    fn frozen_total_len(&self) -> usize {
-        self.frozen.iter().map(|segment| segment.len()).sum()
     }
 
     fn mutable_len(&self) -> usize {
@@ -797,7 +825,7 @@ impl SegmentManager {
 
     #[cfg(test)]
     fn build_test_merged_segment_from_frozen_prefix(&mut self, count: usize) -> Arc<FrozenSegment> {
-        let segments_to_merge = self.published.frozen_segments()[0..count].to_vec();
+        let segments_to_merge = self.published.cloned_frozen_segments()[0..count].to_vec();
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         let (index, _) =
             Self::build_merged_index(&self.config, vectors, &slots).expect("build merged index");

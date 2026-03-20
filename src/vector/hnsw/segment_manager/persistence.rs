@@ -2,7 +2,9 @@
 //!
 //! Save and load segment manager state to/from disk.
 
-use super::{MergePolicy, PublishedSegments, SegmentConfig, SegmentManager};
+use super::{
+    MergePolicy, PublishedFrozenSnapshot, PublishedSegments, SegmentConfig, SegmentManager,
+};
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment};
 use crate::vector::hnsw::types::{HNSWParams, Metric};
@@ -10,6 +12,10 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 impl SegmentManager {
+    fn published_frozen_snapshot(&self) -> PublishedFrozenSnapshot {
+        self.published.frozen_snapshot()
+    }
+
     /// Build manifest JSON for saving
     pub(super) fn build_manifest(&self, segment_ids: &[u64]) -> serde_json::Value {
         serde_json::json!({
@@ -111,9 +117,10 @@ impl SegmentManager {
         // Increment generation for staleness detection
         self.generation += 1;
 
-        // Build manifest
-        let segment_ids = self.published.frozen_segment_ids();
-        let manifest = self.build_manifest(&segment_ids);
+        // Capture one published frozen snapshot so manifest IDs, saved files,
+        // and orphan cleanup all use the same topology view.
+        let frozen_snapshot = self.published_frozen_snapshot();
+        let manifest = self.build_manifest(frozen_snapshot.segment_ids());
 
         // Write manifest atomically (tmp + fsync + rename)
         let manifest_path = dir.join("manifest.json");
@@ -142,7 +149,7 @@ impl SegmentManager {
         }
 
         // Save each frozen segment (skip if file already exists — frozen segments are immutable)
-        for segment in self.published.frozen_segments() {
+        for segment in frozen_snapshot.segments() {
             let segment_path = dir.join(format!("segment_{}.bin", segment.id()));
             if !segment_path.exists() {
                 segment.save(&segment_path)?;
@@ -152,7 +159,8 @@ impl SegmentManager {
 
         // Clean orphan segment files and stale temp files
         if let Ok(entries) = fs::read_dir(dir) {
-            let active_ids: std::collections::HashSet<u64> = segment_ids.iter().copied().collect();
+            let active_ids: std::collections::HashSet<u64> =
+                frozen_snapshot.segment_ids().iter().copied().collect();
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();
@@ -188,7 +196,7 @@ impl SegmentManager {
         }
 
         info!(
-            segments = self.published.frozen_count(),
+            segments = frozen_snapshot.count(),
             total_vectors = self.len(),
             "Segment manager saved"
         );
@@ -299,9 +307,10 @@ impl SegmentManager {
             let merged_segment_id = meta["merged_segment_id"].as_u64().unwrap_or(u64::MAX);
 
             // Verify source segments are still present with matching total vector count
+            let current_snapshot = self.published_frozen_snapshot();
             let current_ids: std::collections::HashSet<u64> =
-                self.published.frozen_segment_ids().into_iter().collect();
-            let current_total = self.published.frozen_total_len();
+                current_snapshot.segment_ids().iter().copied().collect();
+            let current_total = current_snapshot.total_vectors();
 
             let source_ids_match = source_ids.iter().all(|id| current_ids.contains(id));
             let vectors_match = current_total == total_vectors;
