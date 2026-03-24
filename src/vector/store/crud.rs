@@ -5,7 +5,7 @@ use crate::vector::hnsw::HNSWIndex;
 
 use super::VectorStore;
 use super::helpers;
-use super::{MetadataFilter, SegmentManager, Vector};
+use super::{MetadataFilter, Vector};
 
 impl VectorStore {
     /// Insert vector and return its slot ID (used in tests)
@@ -37,27 +37,7 @@ impl VectorStore {
     pub fn set(&self, id: &str, vector: Vector, metadata: JsonValue) -> Result<usize> {
         let _lock = self.write_lock.lock();
 
-        self.with_segments_mut(|segments_guard| {
-            if segments_guard.is_none() {
-                let dimensions = self.resolve_dimensions(vector.dim())?;
-                self.records.set_dimensions(dimensions as u32);
-
-                let config = self.segment_config(dimensions);
-                let mut segs = SegmentManager::new(config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?;
-                if let Some(ref path) = self.storage_path {
-                    segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
-                }
-                *segments_guard = Some(segs);
-            } else if vector.dim() != self.dimensions() {
-                anyhow::bail!(
-                    "Vector dimension mismatch: store expects {}, got {}",
-                    self.dimensions(),
-                    vector.dim()
-                );
-            }
-            Ok(())
-        })?;
+        self.ensure_segments_initialized(vector.dim())?;
 
         // Check if this is an update
         let old_slot = self.records.get_slot(id);
@@ -67,6 +47,19 @@ impl VectorStore {
             .records
             .set(id.to_string(), vector.data.clone(), Some(metadata.clone()))?
             as usize;
+
+        debug_assert_eq!(
+            self.records.get_slot(id),
+            Some(slot as u32),
+            "Slot consistency violation: id '{}' does not map to returned slot {}",
+            id,
+            slot
+        );
+        debug_assert!(
+            (slot as u32) < self.records.slot_count(),
+            "RecordStore does not contain the returned slot {}",
+            slot
+        );
 
         self.with_segments_mut(|segments| {
             if let Some(segments) = segments.as_mut() {
@@ -226,17 +219,7 @@ impl VectorStore {
                     metadata_index.index_json(slot, metadata);
                 }
 
-                let config = self.segment_config(dimensions);
-                let mut segs =
-                    SegmentManager::build_parallel_with_slots(config, vectors_data, &slots)
-                        .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?;
-                if let Some(ref path) = self.storage_path {
-                    segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
-                }
-                self.with_segments_mut(|segments| {
-                    *segments = Some(segs);
-                    Ok(())
-                })?;
+                self.build_and_publish_segments(dimensions, vectors_data, &slots)?;
 
                 if self.is_quantized()
                     && let Some(ref mut storage) = *self.storage.write()

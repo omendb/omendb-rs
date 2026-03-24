@@ -36,7 +36,7 @@ pub use storage::{NeighborLists, VectorStorage};
 
 pub use graph_storage::GraphStorage;
 
-pub use index::{HNSWIndex, IndexStats, ParallelBuilder};
+pub use index::{HNSWIndex, HNSWIndexBuilder, HNSWQuantization, IndexStats, ParallelBuilder};
 
 // Re-export error types
 pub use error::{HNSWError, Result};

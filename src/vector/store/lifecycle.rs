@@ -53,17 +53,7 @@ impl VectorStore {
             })?;
         } else {
             // Build new segment with parallel construction
-            let config = self.segment_config(dimensions);
-
-            let mut segs = SegmentManager::build_parallel_with_slots(config, vector_data, &slots)
-                .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?;
-            if let Some(ref path) = self.storage_path {
-                segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
-            }
-            self.with_segments_mut(|segments| {
-                *segments = Some(segs);
-                Ok(())
-            })?;
+            self.build_and_publish_segments(dimensions, vector_data, &slots)?;
         }
 
         Ok(all_slots)
@@ -90,25 +80,60 @@ impl VectorStore {
 
         // Build segment config
         let dims = self.dimensions();
-        let config = self.segment_config(dims);
 
         // Rebuild with parallel construction
-        let mut segs = SegmentManager::build_parallel_with_slots(config, vectors, &slots)
-            .map_err(|e| anyhow::anyhow!("Segment rebuild failed: {e}"))?;
-        if let Some(ref path) = self.storage_path {
-            segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
-        }
-        self.with_segments_mut(|segments| {
-            *segments = Some(segs);
-            Ok(())
-        })?;
-
-        Ok(())
+        self.build_and_publish_segments(dims, vectors, &slots)
     }
 
     /// Merge another `VectorStore` into this one using IGTM algorithm
     pub fn merge_from(&mut self, other: &VectorStore) -> Result<usize> {
         self.merge_from_with_prefix(other, None)
+    }
+
+    /// Build segments in parallel from provided vectors and publish them.
+    pub(crate) fn build_and_publish_segments(
+        &self,
+        dimensions: usize,
+        vectors: Vec<Vec<f32>>,
+        slots: &[u32],
+    ) -> Result<()> {
+        let config = self.segment_config(dimensions);
+        let mut segs = SegmentManager::build_parallel_with_slots(config, vectors, slots)
+            .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?;
+
+        if let Some(ref path) = self.storage_path {
+            segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+        }
+
+        self.with_segments_mut(|segments| {
+            *segments = Some(segs);
+            Ok(())
+        })
+    }
+
+    /// Ensure segments are initialized, creating an empty SegmentManager if needed.
+    pub(super) fn ensure_segments_initialized(&self, dimensions: usize) -> Result<()> {
+        let resolved_dims = self.resolve_dimensions(dimensions)?;
+        self.records.set_dimensions(resolved_dims as u32);
+
+        self.with_segments_mut(|guard| {
+            if guard.is_none() {
+                let config = self.segment_config(resolved_dims);
+                let mut segs = SegmentManager::new(config)
+                    .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?;
+                if let Some(ref path) = self.storage_path {
+                    segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+                }
+                *guard = Some(segs);
+            } else if resolved_dims != self.dimensions() {
+                anyhow::bail!(
+                    "Vector dimension mismatch: store expects {}, got {}",
+                    self.dimensions(),
+                    resolved_dims
+                );
+            }
+            Ok(())
+        })
     }
 
     /// Merge vectors from another store with optional key prefix.
@@ -285,6 +310,15 @@ impl VectorStore {
 
         // Compact RecordStore - reassigns slots, clears tombstones
         let old_to_new = self.records.compact();
+
+        debug_assert!(
+            old_to_new.len() == old_to_new.values().collect::<std::collections::HashSet<_>>().len(),
+            "Slot remapping is not bijective (contains duplicate target slots)"
+        );
+        debug_assert!(
+            !old_to_new.is_empty() || removed_count == 0,
+            "Compacted mapping is empty but removed_count was > 0"
+        );
 
         // Compact multi-vector storage if present
         if let Some(ref mut multivec_storage) = *self.multivec_storage.write() {

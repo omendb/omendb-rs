@@ -203,6 +203,17 @@ impl PublishedSegments {
     }
 
     fn publish_completed_merge(&mut self, merged: Arc<FrozenSegment>, drain_count: usize) {
+        debug_assert!(
+            drain_count <= self.frozen.len(),
+            "drain_count {} exceeds frozen count {}",
+            drain_count,
+            self.frozen.len()
+        );
+        debug_assert!(drain_count > 0, "drain_count must be > 0 for a published merge");
+        debug_assert!(
+            !self.frozen.is_empty(),
+            "Cannot publish merge into empty frozen set"
+        );
         self.frozen.drain(0..drain_count);
         self.frozen.insert(0, merged);
     }
@@ -715,17 +726,28 @@ impl SegmentManager {
     /// if conditions are met.
     pub fn freeze_mutable(&mut self) -> Result<()> {
         self.debug_assert_invariants();
+        let expected_len = self.published.mutable.len();
+        let old_next_id = self.next_segment_id;
 
         let new_mutable = self.new_mutable_segment()?;
         if let Some(frozen) = self
             .published
             .rollover_mutable(new_mutable, self.next_segment_id)
         {
+            debug_assert_eq!(
+                frozen.len(),
+                expected_len,
+                "Frozen segment vector count mismatch: expected {}, got {}",
+                expected_len,
+                frozen.len()
+            );
+            debug_assert_eq!(frozen.id(), self.next_segment_id, "Frozen segment ID mismatch");
             self.next_segment_id += 1;
             self.publish_frozen_segment(Arc::new(frozen));
         }
 
         self.finalize_published_frozen_change();
+        debug_assert!(self.next_segment_id >= old_next_id, "next_segment_id regressed");
 
         Ok(())
     }

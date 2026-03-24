@@ -88,6 +88,117 @@ pub struct IndexStats {
     pub quantization_enabled: bool,
 }
 
+/// Quantization mode for HNSW index
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HNSWQuantization {
+    /// No quantization (full f32 precision)
+    None,
+    /// SQ8 scalar quantization (4x compression, ~99% recall)
+    SQ8,
+}
+
+impl Default for HNSWQuantization {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// Builder for creating HNSWIndex
+#[derive(Debug, Clone)]
+pub struct HNSWIndexBuilder {
+    dimensions: Option<usize>,
+    m: usize,
+    ef_construction: usize,
+    metric: Metric,
+    quantization: HNSWQuantization,
+    use_quantized_construction: bool,
+}
+
+impl Default for HNSWIndexBuilder {
+    fn default() -> Self {
+        let params = HNSWParams::default();
+        Self {
+            dimensions: None,
+            m: params.m,
+            ef_construction: params.ef_construction,
+            metric: Metric::L2,
+            quantization: HNSWQuantization::None,
+            use_quantized_construction: params.use_quantized_construction,
+        }
+    }
+}
+
+impl HNSWIndexBuilder {
+    /// Create a new builder with default values
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the vector dimensions (required)
+    #[must_use]
+    pub fn dimensions(mut self, dimensions: usize) -> Self {
+        self.dimensions = Some(dimensions);
+        self
+    }
+
+    /// Set the M parameter (neighbors per node)
+    #[must_use]
+    pub fn m(mut self, m: usize) -> Self {
+        self.m = m;
+        self
+    }
+
+    /// Set the ef_construction parameter (build quality)
+    #[must_use]
+    pub fn ef_construction(mut self, ef: usize) -> Self {
+        self.ef_construction = ef;
+        self
+    }
+
+    /// Set the distance metric
+    #[must_use]
+    pub fn metric(mut self, metric: Metric) -> Self {
+        self.metric = metric;
+        self
+    }
+
+    /// Set the quantization mode
+    #[must_use]
+    pub fn quantization(mut self, q: HNSWQuantization) -> Self {
+        self.quantization = q;
+        self
+    }
+
+    /// Use SQ8 distances during graph construction when quantization is enabled.
+    #[must_use]
+    pub fn use_quantized_construction(mut self, enabled: bool) -> Self {
+        self.use_quantized_construction = enabled;
+        self
+    }
+
+    /// Build the HNSWIndex
+    pub fn build(self) -> Result<HNSWIndex> {
+        let dimensions = self
+            .dimensions
+            .ok_or_else(|| HNSWError::InvalidParams("dimensions is required".to_string()))?;
+
+        let params = HNSWParams {
+            m: self.m,
+            ef_construction: self.ef_construction,
+            ml: 1.0 / (self.m as f32).ln(),
+            seed: 42,
+            max_level: 8,
+            use_quantized_construction: self.use_quantized_construction,
+        };
+
+        match self.quantization {
+            HNSWQuantization::None => HNSWIndex::new(dimensions, params, self.metric, false),
+            HNSWQuantization::SQ8 => HNSWIndex::new_with_sq8(dimensions, params, self.metric),
+        }
+    }
+}
+
 /// HNSW Index
 ///
 /// Hierarchical graph index for approximate nearest neighbor search.
@@ -114,6 +225,14 @@ pub struct HNSWIndex {
 
     /// Random number generator seed state
     pub(super) rng_state: u64,
+}
+
+impl HNSWIndex {
+    /// Create a new builder for constructing an HNSWIndex
+    #[must_use]
+    pub fn builder() -> HNSWIndexBuilder {
+        HNSWIndexBuilder::new()
+    }
 }
 
 impl HNSWIndex {
