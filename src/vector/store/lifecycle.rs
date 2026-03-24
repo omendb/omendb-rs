@@ -61,7 +61,7 @@ impl VectorStore {
 
     /// Rebuild HNSW index from existing vectors.
     pub fn rebuild_index(&self) -> Result<()> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.write();
         self.rebuild_index_locked()
     }
 
@@ -217,7 +217,7 @@ impl VectorStore {
             return Ok(());
         }
 
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.write();
         if self.needs_index_rebuild() {
             self.rebuild_index_locked()?;
         }
@@ -239,7 +239,7 @@ impl VectorStore {
     /// For segment-based storage, this merges all frozen segments into one
     /// for better search locality. Returns the number of vectors in the merged segment.
     pub fn optimize(&self) -> Result<usize> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.write();
 
         // Compact first if there are pending deletes to ensure consistent slot state
         if self.records.deleted_count() > 0 {
@@ -296,7 +296,7 @@ impl VectorStore {
     /// number of live records. Call periodically after bulk deletes, not after
     /// every delete.
     pub fn compact(&self) -> Result<usize> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.write();
         self.compact_locked()
     }
 
@@ -316,8 +316,8 @@ impl VectorStore {
             "Slot remapping is not bijective (contains duplicate target slots)"
         );
         debug_assert!(
-            !old_to_new.is_empty() || removed_count == 0,
-            "Compacted mapping is empty but removed_count was > 0"
+            !old_to_new.is_empty() || self.records.is_empty(),
+            "Compacted mapping is empty but live records exist"
         );
 
         // Compact multi-vector storage if present

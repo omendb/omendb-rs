@@ -127,7 +127,7 @@ impl VectorStore {
             oversample: (3.0f32.to_bits()).into(),
             max_memory_bytes: None,
             auto_compact_threshold: (0.25f32.to_bits()).into(),
-            write_lock: parking_lot::Mutex::new(()),
+            write_lock: RwLock::new(()),
         })
     }
 
@@ -243,7 +243,7 @@ impl VectorStore {
             oversample: oversample.to_bits().into(),
             max_memory_bytes: options.max_memory_bytes,
             auto_compact_threshold: (0.25f32.to_bits()).into(),
-            write_lock: parking_lot::Mutex::new(()),
+            write_lock: RwLock::new(()),
         })
     }
 
@@ -294,7 +294,7 @@ impl VectorStore {
             oversample: oversample.to_bits().into(),
             max_memory_bytes: options.max_memory_bytes,
             auto_compact_threshold: (0.25f32.to_bits()).into(),
-            write_lock: parking_lot::Mutex::new(()),
+            write_lock: RwLock::new(()),
         })
     }
 
@@ -306,7 +306,7 @@ impl VectorStore {
     /// If the tombstone ratio exceeds `auto_compact_threshold` (default 25%),
     /// compaction runs automatically before persisting.
     pub fn flush(&self) -> Result<()> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.write();
         let auto_compact_threshold = f32::from_bits(
             self.auto_compact_threshold
                 .load(std::sync::atomic::Ordering::Relaxed),
@@ -324,7 +324,7 @@ impl VectorStore {
     /// Falls back to full flush on the first checkpoint (creates .vecs + manifest).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn checkpoint_wal(&self) -> Result<()> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.write();
         self.checkpoint_wal_locked()
     }
 

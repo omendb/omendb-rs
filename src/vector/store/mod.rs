@@ -44,7 +44,7 @@ use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
 use edge_store::EdgeStore;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::path::PathBuf;
@@ -148,8 +148,9 @@ pub struct VectorStore {
     /// Range: 0.0–1.0. Default: 0.25 (compact when >25% of slots are tombstones).
     auto_compact_threshold: AtomicU32,
 
-    /// Serializes all mutating operations (set, delete, flush, etc.)
-    pub(crate) write_lock: Mutex<()>,
+    /// Serializes slow maintenance operations (flush, compact, optimize)
+    /// while allowing concurrent CRUD mutations (set, delete).
+    pub(crate) write_lock: RwLock<()>,
 }
 
 /// WAL auto-checkpoint threshold (entries). Triggers flush when exceeded to prevent
@@ -184,7 +185,7 @@ impl VectorStore {
             oversample: AtomicU32::new(3.0f32.to_bits()),
             max_memory_bytes: None,
             auto_compact_threshold: AtomicU32::new(0.25f32.to_bits()),
-            write_lock: Mutex::new(()),
+            write_lock: RwLock::new(()),
         }
     }
 

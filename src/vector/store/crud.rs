@@ -35,7 +35,7 @@ impl VectorStore {
 
     /// Upsert vector (insert or update) with string ID and metadata
     pub fn set(&self, id: &str, vector: Vector, metadata: JsonValue) -> Result<usize> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.read();
 
         self.ensure_segments_initialized(vector.dim())?;
 
@@ -109,7 +109,7 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.read();
 
         // Convert IDs to String up front
         let batch: Vec<(String, Vector, JsonValue)> = batch
@@ -250,7 +250,7 @@ impl VectorStore {
         vector: Option<Vector>,
         metadata: Option<JsonValue>,
     ) -> Result<()> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.read();
 
         let slot = self
             .records
@@ -302,7 +302,7 @@ impl VectorStore {
 
     /// Delete vector by string ID
     pub fn delete(&self, id: &str) -> Result<()> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.read();
 
         let slot = self
             .records
@@ -350,7 +350,7 @@ impl VectorStore {
 
     /// Delete multiple vectors
     pub fn delete_batch(&self, ids: &[impl AsRef<str>]) -> Result<usize> {
-        let _lock = self.write_lock.lock();
+        let _lock = self.write_lock.read();
 
         let mut valid_ids: Vec<String> = Vec::with_capacity(ids.len());
         let mut edge_deletes: Vec<(String, String, String)> = Vec::new();
