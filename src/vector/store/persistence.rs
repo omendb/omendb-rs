@@ -19,11 +19,13 @@ use crate::vector::sparse::SparseIndex;
 use crate::vector::store::edge_store::{Edge, EdgeStore};
 use crate::vector::store::options::VectorStoreOptions;
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use parking_lot::RwLock;
 use roaring::RoaringBitmap;
 use rustc_hash::FxHashMap;
 use serde_json::Value as JsonValue;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::omen::Metric;
 use std::path::PathBuf;
@@ -79,6 +81,7 @@ impl VectorStore {
             &wal_modified_slots
         };
         let segments = Self::initialize_segments(path, &storage, &records, modified_slots, &ctx)?;
+        let published_view = segments.as_ref().map(|s| s.published_view());
 
         // 5. Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
         let ancillary = Self::initialize_ancillary_indexes(
@@ -93,6 +96,7 @@ impl VectorStore {
         Ok(Self {
             records,
             segments: RwLock::new(segments),
+            published_view: ArcSwap::new(Arc::new(published_view)),
             metadata_index: RwLock::new(ancillary.metadata_index),
             storage: RwLock::new(Some(storage)),
             storage_path: Some(path.to_path_buf()),
@@ -224,6 +228,7 @@ impl VectorStore {
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
             segments: RwLock::new(None),
+            published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
             storage: RwLock::new(Some(storage)),
             storage_path: Some(path.to_path_buf()),
@@ -275,6 +280,7 @@ impl VectorStore {
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
             segments: RwLock::new(None),
+            published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
             storage: RwLock::new(None),
             storage_path: None,

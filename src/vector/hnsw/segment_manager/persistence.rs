@@ -257,8 +257,8 @@ impl SegmentManager {
         );
 
         let mut manager = Self {
-            config,
-            published: PublishedSegments::from_parts(mutable, frozen),
+            config: config.clone(),
+            published: PublishedSegments::from_parts(mutable, frozen, config, generation),
             next_segment_id,
             merge_policy,
             last_merge_stats: None,
@@ -328,8 +328,9 @@ impl SegmentManager {
             let merged = FrozenSegment::load(&segment_path)?;
 
             // Apply: remove source segments, insert merged
+            self.generation += 1;
             self.published
-                .replace_frozen_by_id(&source_ids, Arc::new(merged));
+                .replace_frozen_by_id(&source_ids, Arc::new(merged), self.generation);
 
             // Advance next_segment_id past the merged segment's ID. The manifest stores
             // next_segment_id as of the last flush before the merge started, so it may

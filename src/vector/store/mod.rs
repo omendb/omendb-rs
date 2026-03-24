@@ -35,10 +35,11 @@ pub use options::VectorStoreOptions;
 pub(crate) use record_store::RecordStore;
 pub use thread_safe::ThreadSafeVectorStore;
 
-use super::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
+use super::hnsw::{HNSWParams, PublishedSegmentView, SegmentConfig, SegmentManager};
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::sparse::SparseIndex;
 use super::types::Vector;
+use arc_swap::ArcSwap;
 use crate::omen::OmenFile;
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
@@ -48,6 +49,7 @@ use parking_lot::RwLock;
 use rayon::prelude::*;
 use serde_json::Value as JsonValue;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 /// Default HNSW M parameter (neighbors per node)
@@ -92,6 +94,9 @@ pub struct VectorStore {
 
     /// Segment manager for HNSW index (mutable + frozen segments)
     pub(crate) segments: RwLock<Option<SegmentManager>>,
+
+    /// Fast lock-free read access to segments
+    pub(crate) published_view: ArcSwap<Option<Arc<PublishedSegmentView>>>,
 
     /// Roaring bitmap index for fast filtered search
     pub(crate) metadata_index: RwLock<MetadataIndex>,
@@ -164,8 +169,9 @@ impl VectorStore {
     /// Used by public constructors to avoid field duplication.
     fn with_defaults(dimensions: usize, distance_metric: Metric) -> Self {
         Self {
-            records: RecordStore::new(dimensions as u32),
+            records: RecordStore::new(dimensions.try_into().unwrap()),
             segments: RwLock::new(None),
+            published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
             storage: RwLock::new(None),
             storage_path: None,

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde_json::Value as JsonValue;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use super::{MetadataFilter, VectorStore};
@@ -190,9 +191,11 @@ impl VectorStore {
     ///
     /// This exposes the published search state without leaking the mutable
     /// `SegmentManager` lock shape to callers.
-    pub fn with_segment_view<T>(&self, f: impl FnOnce(Option<SegmentReadView<'_>>) -> T) -> T {
-        let segments = self.segments.read();
-        let segment_view = segments.as_ref().map(SegmentManager::read_view);
+    pub fn with_segment_view<T>(&self, f: impl FnOnce(Option<SegmentReadView>) -> T) -> T {
+        let view = self.published_view.load();
+        let segment_view = (**view).as_ref().map(|v| SegmentReadView {
+            view: Arc::clone(v),
+        });
         f(segment_view)
     }
 
@@ -210,7 +213,13 @@ impl VectorStore {
         f: impl FnOnce(&mut Option<SegmentManager>) -> Result<T>,
     ) -> Result<T> {
         let mut segments = self.segments.write();
-        f(&mut segments)
+        let result = f(&mut segments);
+        
+        // Sync published view ArcSwap after mutation
+        let new_view = segments.as_ref().map(|s| s.published_view());
+        self.published_view.store(Arc::new(new_view));
+        
+        result
     }
 
     /// Get comprehensive store diagnostics.

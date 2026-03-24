@@ -313,7 +313,7 @@ impl SegmentManager {
     ) -> MergeStats {
         if !index.is_empty() {
             let frozen = self.create_merged_segment(index);
-            self.published.publish_frozen_segment(frozen);
+            self.publish_frozen_segment(frozen);
         }
 
         let stats = MergeStats {
@@ -355,10 +355,12 @@ impl SegmentManager {
             "Starting segment merge"
         );
 
-        let segments_to_merge = self.published.take_all_frozen();
+        self.generation += 1;
+        let segments_to_merge = self.published.take_all_frozen(self.generation);
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         if vectors.is_empty() {
-            self.published.restore_all_frozen(segments_to_merge);
+            self.generation += 1;
+            self.published.restore_all_frozen(segments_to_merge, self.generation);
             return Ok(None);
         }
 
@@ -367,7 +369,8 @@ impl SegmentManager {
         {
             Ok(result) => result,
             Err(e) => {
-                self.published.restore_all_frozen(segments_to_merge);
+                self.generation += 1;
+                self.published.restore_all_frozen(segments_to_merge, self.generation);
                 return Err(e);
             }
         };
@@ -414,10 +417,13 @@ impl SegmentManager {
             return Ok(None);
         };
 
-        let segments_to_merge = self.published.take_frozen_indices(indices);
+        self.generation += 1;
+        let segments_to_merge = self.published.take_frozen_indices(indices, self.generation);
 
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         if vectors.is_empty() {
+            self.generation += 1;
+            self.published.restore_frozen_indices(indices, segments_to_merge, self.generation);
             return Ok(None);
         }
 
@@ -427,8 +433,9 @@ impl SegmentManager {
             Ok(result) => result,
             Err(e) => {
                 // Restore segments on failure (best-effort)
+                self.generation += 1;
                 self.published
-                    .restore_frozen_indices(indices, segments_to_merge);
+                    .restore_frozen_indices(indices, segments_to_merge, self.generation);
                 return Err(e);
             }
         };

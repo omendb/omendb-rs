@@ -24,6 +24,7 @@ use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::MergeStats;
 use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment, SegmentSearchResult};
 use crate::vector::hnsw::types::{HNSWParams, Metric};
+use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -143,9 +144,48 @@ impl PendingMergeState {
     }
 }
 
+/// Immutable snapshot of the currently published segment topology.
+///
+/// This allows lock-free read access to the frozen segments while the MutableSegment
+/// provides its own internal synchronization for concurrent searches.
+pub struct PublishedSegmentView {
+    pub(crate) mutable: Arc<RwLock<MutableSegment>>,
+    pub(crate) frozen: Arc<[Arc<FrozenSegment>]>,
+    pub(crate) config: SegmentConfig,
+    pub(crate) generation: u64,
+}
+
+impl PublishedSegmentView {
+    fn new(mutable: MutableSegment, frozen: Vec<Arc<FrozenSegment>>, config: SegmentConfig, generation: u64) -> Self {
+        Self {
+            mutable: Arc::new(RwLock::new(mutable)),
+            frozen: Arc::from(frozen),
+            config,
+            generation,
+        }
+    }
+
+    fn clone_with_frozen(&self, frozen: Vec<Arc<FrozenSegment>>, generation: u64) -> Self {
+        Self {
+            mutable: Arc::clone(&self.mutable),
+            frozen: Arc::from(frozen),
+            config: self.config.clone(),
+            generation,
+        }
+    }
+
+    fn clone_with_mutable(&self, mutable: MutableSegment, generation: u64) -> Self {
+        Self {
+            mutable: Arc::new(RwLock::new(mutable)),
+            frozen: Arc::clone(&self.frozen),
+            config: self.config.clone(),
+            generation,
+        }
+    }
+}
+
 pub(crate) struct PublishedSegments {
-    pub(crate) mutable: MutableSegment,
-    pub(crate) frozen: Vec<Arc<FrozenSegment>>,
+    pub(crate) current: Arc<PublishedSegmentView>,
 }
 
 pub(crate) struct PublishedFrozenSnapshot {
@@ -173,97 +213,142 @@ impl PublishedFrozenSnapshot {
 }
 
 impl PublishedSegments {
-    fn new(mutable: MutableSegment) -> Self {
+    fn new(mutable: MutableSegment, config: SegmentConfig) -> Self {
         Self {
-            mutable,
-            frozen: Vec::new(),
+            current: Arc::new(PublishedSegmentView::new(mutable, Vec::new(), config, 0)),
         }
     }
 
-    fn from_parts(mutable: MutableSegment, frozen: Vec<Arc<FrozenSegment>>) -> Self {
-        Self { mutable, frozen }
+    fn from_parts(
+        mutable: MutableSegment,
+        frozen: Vec<Arc<FrozenSegment>>,
+        config: SegmentConfig,
+        generation: u64,
+    ) -> Self {
+        Self {
+            current: Arc::new(PublishedSegmentView::new(mutable, frozen, config, generation)),
+        }
     }
 
-    fn publish_frozen_segment(&mut self, frozen: Arc<FrozenSegment>) {
-        self.frozen.push(frozen);
+    fn publish_frozen_segment(&mut self, frozen: Arc<FrozenSegment>, generation: u64) {
+        let mut frozen_list = self.current.frozen.to_vec();
+        frozen_list.push(frozen);
+        self.current = Arc::new(self.current.clone_with_frozen(frozen_list, generation));
     }
 
     fn rollover_mutable(
         &mut self,
         next_mutable: MutableSegment,
         next_segment_id: u64,
-    ) -> Option<FrozenSegment> {
-        let mut old_mutable = std::mem::replace(&mut self.mutable, next_mutable);
+        generation: u64,
+    ) -> Result<Option<Arc<FrozenSegment>>> {
+        // 1. Get the old mutable segment by taking a write lock on the CURRENT view's mutable segment.
+        let old_mutable_arc: Arc<RwLock<MutableSegment>> = Arc::clone(&self.current.mutable);
+        let mut old_mutable = old_mutable_arc.write();
+        
         if old_mutable.is_empty() {
-            return None;
+            // Just swap to next_mutable in a new view
+            self.current = Arc::new(self.current.clone_with_mutable(next_mutable, generation));
+            return Ok(None);
         }
 
-        old_mutable.set_id(next_segment_id);
-        Some(old_mutable.freeze())
+        // 2. Freeze the old one
+        // Create a placeholder to swap out the real segment
+        let placeholder = if self.current.config.quantization {
+            MutableSegment::new_quantized(self.current.config.dimensions, self.current.config.params, self.current.config.distance_fn)?
+        } else {
+            MutableSegment::with_capacity(self.current.config.dimensions, self.current.config.params, self.current.config.distance_fn, self.current.config.segment_capacity)?
+        };
+
+        let mut old_mutable_owned = std::mem::replace(&mut *old_mutable, placeholder);
+        old_mutable_owned.set_id(next_segment_id);
+        let frozen = Arc::new(old_mutable_owned.freeze());
+        
+        // 3. Keep current frozen list
+        let frozen_list = self.current.frozen.to_vec();
+        
+        // 4. Publish new view
+        self.current = Arc::new(PublishedSegmentView::new(
+            next_mutable,
+            frozen_list,
+            self.current.config.clone(),
+            generation,
+        ));
+        
+        Ok(Some(frozen))
     }
 
-    fn publish_completed_merge(&mut self, merged: Arc<FrozenSegment>, drain_count: usize) {
+    fn publish_completed_merge(&mut self, merged: Arc<FrozenSegment>, drain_count: usize, generation: u64) {
+        let mut frozen_list = self.current.frozen.to_vec();
         debug_assert!(
-            drain_count <= self.frozen.len(),
+            drain_count <= frozen_list.len(),
             "drain_count {} exceeds frozen count {}",
             drain_count,
-            self.frozen.len()
+            frozen_list.len()
         );
         debug_assert!(drain_count > 0, "drain_count must be > 0 for a published merge");
         debug_assert!(
-            !self.frozen.is_empty(),
+            !frozen_list.is_empty(),
             "Cannot publish merge into empty frozen set"
         );
-        self.frozen.drain(0..drain_count);
-        self.frozen.insert(0, merged);
+        frozen_list.drain(0..drain_count);
+        frozen_list.insert(0, merged);
+        self.current = Arc::new(self.current.clone_with_frozen(frozen_list, generation));
     }
 
-    fn replace_frozen_by_id(&mut self, source_ids: &[u64], merged: Arc<FrozenSegment>) {
-        self.frozen
-            .retain(|segment| !source_ids.contains(&segment.id()));
-        self.frozen.insert(0, merged);
+    fn replace_frozen_by_id(&mut self, source_ids: &[u64], merged: Arc<FrozenSegment>, generation: u64) {
+        let mut frozen_list = self.current.frozen.to_vec();
+        frozen_list.retain(|segment| !source_ids.contains(&segment.id()));
+        frozen_list.insert(0, merged);
+        self.current = Arc::new(self.current.clone_with_frozen(frozen_list, generation));
     }
 
-    fn take_all_frozen(&mut self) -> Vec<Arc<FrozenSegment>> {
-        std::mem::take(&mut self.frozen)
+    fn take_all_frozen(&mut self, generation: u64) -> Vec<Arc<FrozenSegment>> {
+        let frozen_list = self.current.frozen.to_vec();
+        self.current = Arc::new(self.current.clone_with_frozen(Vec::new(), generation));
+        frozen_list
     }
 
-    fn restore_all_frozen(&mut self, frozen: Vec<Arc<FrozenSegment>>) {
-        self.frozen = frozen;
+    fn restore_all_frozen(&mut self, frozen: Vec<Arc<FrozenSegment>>, generation: u64) {
+        self.current = Arc::new(self.current.clone_with_frozen(frozen, generation));
     }
 
-    fn take_frozen_indices(&mut self, indices: &[usize]) -> Vec<Arc<FrozenSegment>> {
-        let mut segments = Vec::with_capacity(indices.len());
+    fn take_frozen_indices(&mut self, indices: &[usize], generation: u64) -> Vec<Arc<FrozenSegment>> {
+        let mut frozen_list = self.current.frozen.to_vec();
+        let mut removed = Vec::with_capacity(indices.len());
         for &idx in indices.iter().rev() {
-            segments.push(self.frozen.remove(idx));
+            removed.push(frozen_list.remove(idx));
         }
-        segments.reverse();
-        segments
+        removed.reverse();
+        self.current = Arc::new(self.current.clone_with_frozen(frozen_list, generation));
+        removed
     }
 
-    fn restore_frozen_indices(&mut self, indices: &[usize], segments: Vec<Arc<FrozenSegment>>) {
+    fn restore_frozen_indices(&mut self, indices: &[usize], segments: Vec<Arc<FrozenSegment>>, generation: u64) {
+        let mut frozen_list = self.current.frozen.to_vec();
         for (i, segment) in segments.into_iter().enumerate() {
-            let insert_idx = indices[i].min(self.frozen.len());
-            self.frozen.insert(insert_idx, segment);
+            let insert_idx = indices[i].min(frozen_list.len());
+            frozen_list.insert(insert_idx, segment);
         }
+        self.current = Arc::new(self.current.clone_with_frozen(frozen_list, generation));
     }
 
     fn frozen_count(&self) -> usize {
-        self.frozen.len()
+        self.current.frozen.len()
     }
 
     fn cloned_frozen_segments(&self) -> Vec<Arc<FrozenSegment>> {
-        self.frozen.clone()
+        self.current.frozen.to_vec()
     }
 
     fn cloned_frozen_indices(&self, indices: &[usize]) -> Result<Vec<Arc<FrozenSegment>>> {
         let mut segments = Vec::with_capacity(indices.len());
         for &idx in indices {
-            let Some(segment) = self.frozen.get(idx) else {
+            let Some(segment) = self.current.frozen.get(idx) else {
                 return Err(crate::vector::hnsw::error::HNSWError::internal(format!(
                     "Segment index {} out of range (have {})",
                     idx,
-                    self.frozen.len()
+                    self.current.frozen.len()
                 )));
             };
             segments.push(Arc::clone(segment));
@@ -272,7 +357,7 @@ impl PublishedSegments {
     }
 
     fn frozen_snapshot(&self) -> PublishedFrozenSnapshot {
-        let segments = self.frozen.clone();
+        let segments = self.current.frozen.to_vec();
         let segment_ids = segments
             .iter()
             .map(|segment| segment.id())
@@ -288,7 +373,7 @@ impl PublishedSegments {
     }
 
     fn frozen_prefix_matches_ids(&self, source_segment_ids: &[u64]) -> bool {
-        self.frozen
+        self.current.frozen
             .iter()
             .take(source_segment_ids.len())
             .map(|segment| segment.id())
@@ -300,33 +385,32 @@ impl PublishedSegments {
     }
 
     fn mutable_is_empty(&self) -> bool {
-        self.mutable.is_empty()
+        self.current.mutable.read().is_empty()
     }
 
     fn mutable_is_full(&self) -> bool {
-        self.mutable.is_full()
+        self.current.mutable.read().is_full()
     }
 
     fn insert_mutable_with_slot(&mut self, vector: &[f32], slot: u32) -> Result<u32> {
-        self.mutable.insert_with_slot(vector, slot)
+        self.current.mutable.write().insert_with_slot(vector, slot)
     }
 
     fn mutable_len(&self) -> usize {
-        self.mutable.len()
+        self.current.mutable.read().len()
     }
 
     fn len(&self) -> usize {
-        self.mutable.len()
-            + self
-                .frozen
+        self.mutable_len()
+            + self.current.frozen
                 .iter()
                 .map(|segment| segment.len())
                 .sum::<usize>()
     }
 
     fn total_memory(&self) -> usize {
-        let mutable = self.mutable.index().memory_usage();
-        let frozen: usize = self
+        let mutable = self.current.mutable.read().index().memory_usage();
+        let frozen: usize = self.current
             .frozen
             .iter()
             .map(|segment| segment.index().memory_usage())
@@ -334,43 +418,41 @@ impl PublishedSegments {
         mutable + frozen
     }
 
-    fn read_view<'a>(&'a self, config: &'a SegmentConfig, generation: u64) -> SegmentReadView<'a> {
+    fn read_view(&self) -> SegmentReadView {
         SegmentReadView {
-            mutable: &self.mutable,
-            frozen: &self.frozen,
-            config,
-            generation,
+            view: Arc::clone(&self.current),
         }
+    }
+
+    #[cfg(test)]
+    fn frozen(&self) -> &[Arc<FrozenSegment>] {
+        &self.current.frozen
     }
 }
 
 /// Immutable view of the currently published segment state.
 ///
-/// This is the first seam toward snapshot-style read serving: queries only need
-/// read access to the current mutable segment and frozen segment list, not the
-/// full mutable manager API.
-#[derive(Clone, Copy)]
-pub struct SegmentReadView<'a> {
-    mutable: &'a MutableSegment,
-    frozen: &'a [Arc<FrozenSegment>],
-    config: &'a SegmentConfig,
-    generation: u64,
+/// This provides snapshot-style read serving: queries only need
+/// read access to the captured view Arc, not the full mutable manager.
+#[derive(Clone)]
+pub struct SegmentReadView {
+    pub(crate) view: Arc<PublishedSegmentView>,
 }
 
-impl SegmentReadView<'_> {
+impl SegmentReadView {
     /// Number of frozen segments visible to readers.
     pub fn frozen_count(&self) -> usize {
-        self.frozen.len()
+        self.view.frozen.len()
     }
 
     /// Number of vectors in the mutable segment visible to readers.
     pub fn mutable_len(&self) -> usize {
-        self.mutable.len()
+        self.view.mutable.read().len()
     }
 
     /// Total number of vectors visible across mutable and frozen segments.
     pub fn len(&self) -> usize {
-        self.mutable.len() + self.frozen.iter().map(|s| s.len()).sum::<usize>()
+        self.mutable_len() + self.view.frozen.iter().map(|s| s.len()).sum::<usize>()
     }
 
     /// Check whether the visible segment set is empty.
@@ -380,36 +462,36 @@ impl SegmentReadView<'_> {
 
     /// Generation of the published segment state.
     pub fn generation(&self) -> u64 {
-        self.generation
+        self.view.generation
     }
 
     /// Segment capacity for the currently published topology.
     pub fn segment_capacity(&self) -> usize {
-        self.config.segment_capacity
+        self.view.config.segment_capacity
     }
 
     /// Total graph memory visible across mutable and frozen segments.
     pub fn total_memory(&self) -> usize {
-        let mutable = self.mutable.index().memory_usage();
-        let frozen: usize = self.frozen.iter().map(|s| s.index().memory_usage()).sum();
+        let mutable = self.view.mutable.read().index().memory_usage();
+        let frozen: usize = self.view.frozen.iter().map(|s| s.index().memory_usage()).sum();
         mutable + frozen
     }
 
     /// Search across the visible mutable and frozen segments.
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SegmentSearchResult>> {
-        let mut results = self.mutable.search(query, k, ef)?;
+        let mut results = self.view.mutable.read().search(query, k, ef)?;
 
-        if !self.frozen.is_empty() {
-            if self.frozen.len() >= 4 {
+        if !self.view.frozen.is_empty() {
+            if self.view.frozen.len() >= 4 {
                 use rayon::prelude::*;
                 let frozen_results: Vec<SegmentSearchResult> = self
-                    .frozen
+                    .view.frozen
                     .par_iter()
                     .flat_map(|seg| seg.search(query, k, ef))
                     .collect();
                 results.extend(frozen_results);
             } else {
-                for seg in self.frozen {
+                for seg in self.view.frozen.iter() {
                     results.extend(seg.search(query, k, ef));
                 }
             }
@@ -436,19 +518,19 @@ impl SegmentReadView<'_> {
     where
         F: Fn(u32) -> bool + Sync,
     {
-        let mut results = self.mutable.search_with_filter(query, k, ef, &filter_fn)?;
+        let mut results = self.view.mutable.read().search_with_filter(query, k, ef, &filter_fn)?;
 
-        if !self.frozen.is_empty() {
-            if self.frozen.len() >= 4 {
+        if !self.view.frozen.is_empty() {
+            if self.view.frozen.len() >= 4 {
                 use rayon::prelude::*;
                 let frozen_results: Vec<SegmentSearchResult> = self
-                    .frozen
+                    .view.frozen
                     .par_iter()
                     .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
                     .collect();
                 results.extend(frozen_results);
             } else {
-                for seg in self.frozen {
+                for seg in self.view.frozen.iter() {
                     results.extend(seg.search_with_filter(query, k, ef, &filter_fn));
                 }
             }
@@ -485,8 +567,8 @@ impl SegmentManager {
         };
 
         Ok(Self {
-            config,
-            published: PublishedSegments::new(mutable),
+            config: config.clone(),
+            published: PublishedSegments::new(mutable, config),
             next_segment_id: 0,
             merge_policy,
             last_merge_stats: None,
@@ -501,8 +583,8 @@ impl SegmentManager {
     /// Used for integrating parallel-built indexes into segment system.
     pub fn from_index(config: SegmentConfig, index: HNSWIndex, slots: &[u32]) -> Self {
         Self {
-            config,
-            published: PublishedSegments::new(MutableSegment::from_index(index, slots)),
+            config: config.clone(),
+            published: PublishedSegments::new(MutableSegment::from_index(index, slots), config),
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
@@ -527,8 +609,8 @@ impl SegmentManager {
         let mutable = MutableSegment::from_index_sequential(index);
 
         Ok(Self {
-            config,
-            published: PublishedSegments::new(mutable),
+            config: config.clone(),
+            published: PublishedSegments::new(mutable, config),
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
@@ -556,8 +638,8 @@ impl SegmentManager {
         let mutable = MutableSegment::from_index(index, slots);
 
         Ok(Self {
-            config,
-            published: PublishedSegments::new(mutable),
+            config: config.clone(),
+            published: PublishedSegments::new(mutable, config),
             next_segment_id: 0,
             merge_policy: MergePolicy::default(),
             last_merge_stats: None,
@@ -601,7 +683,8 @@ impl SegmentManager {
     }
 
     fn publish_frozen_segment(&mut self, frozen: Arc<FrozenSegment>) {
-        self.published.publish_frozen_segment(frozen);
+        self.generation += 1;
+        self.published.publish_frozen_segment(frozen, self.generation);
     }
 
     fn finalize_published_frozen_change(&mut self) {
@@ -652,15 +735,16 @@ impl SegmentManager {
         }
 
         let drain_count = source_segment_ids.len();
-        self.published.publish_completed_merge(merged, drain_count);
+        self.generation += 1;
+        self.published.publish_completed_merge(merged, drain_count, self.generation);
         self.clear_pending_merge_meta();
         Some(drain_count)
     }
 
     /// Borrow the currently published mutable and frozen segment state.
-    pub fn read_view(&self) -> SegmentReadView<'_> {
+    pub fn read_view(&self) -> SegmentReadView {
         self.debug_assert_invariants();
-        self.published.read_view(&self.config, self.generation)
+        self.published.read_view()
     }
 
     /// Number of frozen segments
@@ -726,13 +810,14 @@ impl SegmentManager {
     /// if conditions are met.
     pub fn freeze_mutable(&mut self) -> Result<()> {
         self.debug_assert_invariants();
-        let expected_len = self.published.mutable.len();
+        let expected_len = self.published.mutable_len();
         let old_next_id = self.next_segment_id;
 
         let new_mutable = self.new_mutable_segment()?;
+        self.generation += 1;
         if let Some(frozen) = self
             .published
-            .rollover_mutable(new_mutable, self.next_segment_id)
+            .rollover_mutable(new_mutable, self.next_segment_id, self.generation)?
         {
             debug_assert_eq!(
                 frozen.len(),
@@ -743,7 +828,7 @@ impl SegmentManager {
             );
             debug_assert_eq!(frozen.id(), self.next_segment_id, "Frozen segment ID mismatch");
             self.next_segment_id += 1;
-            self.publish_frozen_segment(Arc::new(frozen));
+            self.publish_frozen_segment(frozen);
         }
 
         self.finalize_published_frozen_change();
@@ -809,6 +894,11 @@ impl SegmentManager {
     /// Get the generation counter (incremented on each save)
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Get the current published segment view Arc
+    pub fn published_view(&self) -> Arc<PublishedSegmentView> {
+        Arc::clone(&self.published.current)
     }
 
     /// Get current merge policy
@@ -1160,10 +1250,10 @@ mod tests {
 
         assert_eq!(manager.frozen_count(), 3);
         let total_before = manager.len();
-        let appended_segment_id = manager.published.frozen[2].id();
+        let appended_segment_id = manager.published.frozen()[2].id();
         let source_ids = vec![
-            manager.published.frozen[0].id(),
-            manager.published.frozen[1].id(),
+            manager.published.frozen()[0].id(),
+            manager.published.frozen()[1].id(),
         ];
         let merged = manager.build_test_merged_segment_from_frozen_prefix(2);
         let merged_id = merged.id();
@@ -1171,8 +1261,8 @@ mod tests {
         let drained = manager.publish_completed_pending_merge(merged, &source_ids);
         assert_eq!(drained, Some(2));
         assert_eq!(manager.frozen_count(), 2);
-        assert_eq!(manager.published.frozen[0].id(), merged_id);
-        assert_eq!(manager.published.frozen[1].id(), appended_segment_id);
+        assert_eq!(manager.published.frozen()[0].id(), merged_id);
+        assert_eq!(manager.published.frozen()[1].id(), appended_segment_id);
         assert_eq!(manager.len(), total_before);
     }
 
@@ -1190,13 +1280,13 @@ mod tests {
         assert_eq!(manager.frozen_count(), 3);
         let frozen_ids_before: Vec<u64> = manager
             .published
-            .frozen
+            .frozen()
             .iter()
-            .map(|segment| segment.id())
+            .map(|segment: &Arc<FrozenSegment>| segment.id())
             .collect();
         let source_ids = vec![
-            manager.published.frozen[1].id(),
-            manager.published.frozen[0].id(),
+            manager.published.frozen()[1].id(),
+            manager.published.frozen()[0].id(),
         ];
         let merged = manager.build_test_merged_segment_from_frozen_prefix(2);
 
@@ -1204,9 +1294,9 @@ mod tests {
         assert_eq!(drained, None);
         let frozen_ids_after: Vec<u64> = manager
             .published
-            .frozen
+            .frozen()
             .iter()
-            .map(|segment| segment.id())
+            .map(|segment: &Arc<FrozenSegment>| segment.id())
             .collect();
         assert_eq!(frozen_ids_after, frozen_ids_before);
     }
