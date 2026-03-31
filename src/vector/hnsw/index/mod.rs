@@ -89,18 +89,13 @@ pub struct IndexStats {
 }
 
 /// Quantization mode for HNSW index
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum HNSWQuantization {
     /// No quantization (full f32 precision)
+    #[default]
     None,
     /// SQ8 scalar quantization (4x compression, ~99% recall)
     SQ8,
-}
-
-impl Default for HNSWQuantization {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Builder for creating HNSWIndex

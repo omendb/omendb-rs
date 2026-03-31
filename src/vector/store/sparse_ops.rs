@@ -56,12 +56,12 @@ impl VectorStore {
             self.records.update_metadata(slot, metadata.clone())?;
 
             // WAL write for metadata update
-            if let Some(ref mut storage) = *self.storage.write()
+            if let Some(ref storage) = self.storage
                 && let Some(record) = self.records.get_by_slot(slot)
             {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
-                storage.wal_append_insert(id, &record.vector, Some(&metadata_bytes))?;
-                storage.wal_sync()?;
+                let mut storage = storage.write();
+                storage.log_insert(id, &record.vector, &metadata)?;
+                storage.sync()?;
             }
             slot
         } else {
@@ -73,10 +73,10 @@ impl VectorStore {
                     .set(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
             self.metadata_index.write().index_json(slot, &metadata);
 
-            if let Some(ref mut storage) = *self.storage.write() {
-                let metadata_bytes = serde_json::to_vec(&metadata)?;
-                storage.wal_append_insert(id, &zero_vec, Some(&metadata_bytes))?;
-                storage.wal_sync()?;
+            if let Some(ref storage) = self.storage {
+                let mut storage = storage.write();
+                storage.log_insert(id, &zero_vec, &metadata)?;
+                storage.sync()?;
             }
             slot
         };

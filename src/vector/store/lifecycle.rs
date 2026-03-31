@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rustc_hash::FxHashSet;
+use std::sync::Arc;
 
 use super::VectorStore;
 use super::{MetadataIndex, SegmentManager, Vector};
@@ -105,6 +106,10 @@ impl VectorStore {
             segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
         }
 
+        if let Some(ref storage) = self.storage {
+            segs.set_storage(Arc::clone(storage));
+        }
+
         self.with_segments_mut(|segments| {
             *segments = Some(segs);
             Ok(())
@@ -123,6 +128,9 @@ impl VectorStore {
                     .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?;
                 if let Some(ref path) = self.storage_path {
                     segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
+                }
+                if let Some(ref storage) = self.storage {
+                    segs.set_storage(Arc::clone(storage));
                 }
                 *guard = Some(segs);
             } else if resolved_dims != self.dimensions() {

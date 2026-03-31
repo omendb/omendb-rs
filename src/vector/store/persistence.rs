@@ -40,6 +40,8 @@ pub(super) fn segments_dir_for(path: &Path) -> PathBuf {
     PathBuf::from(seg_path)
 }
 
+type ReplayedWalData = (Vec<u32>, Option<EdgeStore>, Vec<(String, String, String)>);
+
 impl VectorStore {
     /// Open a persistent vector store at the given path
     ///
@@ -58,47 +60,57 @@ impl VectorStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
-        let mut storage = if omen_path.exists() {
+        let mut storage_local = if omen_path.exists() {
             OmenFile::open(path)?
         } else {
             OmenFile::create(path, 0)?
         };
 
         // 1. Load recovery context (snapshots, WAL epochs, HNSW params)
-        let ctx = Self::load_recovery_context(&mut storage)?;
+        let ctx = {
+            let ctx = Self::load_recovery_context(&mut storage_local)?;
+            
+            // 2. Build initial RecordStore from snapshot
+            let mut records = Self::build_initial_records(&ctx.snapshot, ctx.dimensions);
 
-        // 2. Build initial RecordStore from snapshot
-        let mut records = Self::build_initial_records(&ctx.snapshot, ctx.dimensions)?;
+            // 3. Replay WAL entries into RecordStore and collect auxiliary deltas
+            let (wal_modified_slots, wal_edge_store, wal_edge_deletes) =
+                Self::replay_wal_into_records(&mut records, &mut storage_local, &ctx)?;
 
-        // 3. Replay WAL entries into RecordStore and collect auxiliary deltas
-        let (wal_modified_slots, wal_edge_store, wal_edge_deletes) =
-            Self::replay_wal_into_records(&mut records, &mut storage, &ctx)?;
+            // 4. Initialize or rebuild segments (HNSW indexes)
+            let modified_slots = if ctx.slim_snapshot_loaded && !ctx.slim_dirty_slots.is_empty() {
+                &ctx.slim_dirty_slots
+            } else {
+                &wal_modified_slots
+            };
+            let mut segments = Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
+            
+            // 5. Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
+            let ancillary = Self::initialize_ancillary_indexes(
+                path,
+                &records,
+                &ctx.snapshot,
+                wal_edge_store,
+                &wal_edge_deletes,
+                ctx.distance_metric,
+            )?;
 
-        // 4. Initialize or rebuild segments (HNSW indexes)
-        let modified_slots = if ctx.slim_snapshot_loaded && !ctx.slim_dirty_slots.is_empty() {
-            &ctx.slim_dirty_slots
-        } else {
-            &wal_modified_slots
+            (ctx, records, segments, ancillary)
         };
-        let segments = Self::initialize_segments(path, &storage, &records, modified_slots, &ctx)?;
-        let published_view = segments.as_ref().map(|s| s.published_view());
-
-        // 5. Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
-        let ancillary = Self::initialize_ancillary_indexes(
-            path,
-            &records,
-            &ctx.snapshot,
-            wal_edge_store,
-            &wal_edge_deletes,
-            ctx.distance_metric,
-        )?;
+        let (ctx, records, mut segments, ancillary) = ctx;
+        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage_local));
+        
+        if let Some(ref mut segments) = segments {
+            segments.set_storage(Arc::clone(&storage));
+        }
+        let published_view = segments.as_ref().map(SegmentManager::published_view);
 
         Ok(Self {
             records,
             segments: RwLock::new(segments),
             published_view: ArcSwap::new(Arc::new(published_view)),
             metadata_index: RwLock::new(ancillary.metadata_index),
-            storage: RwLock::new(Some(storage)),
+            storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
             text_index: RwLock::new(ancillary.text_index),
             text_search_config: RwLock::new(None),
@@ -142,8 +154,8 @@ impl VectorStore {
         let store = Self::open(path)?;
         if store.dimensions() == 0 {
             store.records.set_dimensions(dimensions as u32);
-            if let Some(ref mut storage) = *store.storage.write() {
-                storage.put_config("dimensions", dimensions as u64)?;
+            if let Some(ref storage) = store.storage {
+                storage.write().put_config("dimensions", dimensions as u64)?;
             }
         }
         Ok(store)
@@ -161,12 +173,13 @@ impl VectorStore {
             let mut store = Self::open(path)?;
 
             // Apply dimension if specified and store has none
-            if store.dimensions() == 0 && options.dimensions > 0 {
+            if store.dimensions() == 0 {
                 store.records.set_dimensions(options.dimensions as u32);
-                if let Some(ref mut storage) = *store.storage.write() {
-                    storage.put_config("dimensions", options.dimensions as u64)?;
+                if let Some(ref storage) = store.storage {
+                    storage.write().put_config("dimensions", options.dimensions as u64)?;
                 }
             }
+
 
             // Apply ef_search if specified
             if let Some(ef) = options.ef_search {
@@ -225,12 +238,15 @@ impl VectorStore {
         };
         let oversample = options.oversample.unwrap_or(3.0);
 
+        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage));
+        let records = RecordStore::new(dimensions as u32);
+        
         Ok(Self {
-            records: RecordStore::new(dimensions as u32),
+            records,
             segments: RwLock::new(None),
             published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
-            storage: RwLock::new(Some(storage)),
+            storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
             text_index: RwLock::new(text_index),
             text_search_config: RwLock::new(options.text_search_config.clone()),
@@ -282,7 +298,7 @@ impl VectorStore {
             segments: RwLock::new(None),
             published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
-            storage: RwLock::new(None),
+            storage: None,
             storage_path: None,
             text_index: RwLock::new(text_index),
             text_search_config: RwLock::new(options.text_search_config.clone()),
@@ -337,9 +353,8 @@ impl VectorStore {
     pub(super) fn checkpoint_wal_locked(&self) -> Result<()> {
         let has_vec = self
             .storage
-            .read()
             .as_ref()
-            .is_some_and(OmenFile::has_vec_file);
+            .is_some_and(|s| s.read().has_vec_file());
         let requires_full_checkpoint = self
             .sparse_index
             .read()
@@ -370,15 +385,16 @@ impl VectorStore {
             if dirty.is_empty() {
                 return Ok(());
             }
-            if let Some(ref mut storage) = *self.storage.write()
-                && let Err(e) = storage.checkpoint_vectors_only(&self.records, &dirty)
-            {
-                // Restore dirty slots so the next checkpoint retries writing them.
-                // Without this, failed .vecs writes leave slots in id_to_slot but
-                // missing from dirty_since_flush, making them invisible to ANN search
-                // after recovery via slim snapshot.
-                self.records.restore_dirty_slots(dirty);
-                return Err(e.into());
+            if let Some(ref storage) = self.storage {
+                let mut storage = storage.write();
+                if let Err(e) = storage.checkpoint_vectors_only(&self.records, &dirty) {
+                    // Restore dirty slots so the next checkpoint retries writing them.
+                    // Without this, failed .vecs writes leave slots in id_to_slot but
+                    // missing from dirty_since_flush, making them invisible to ANN search
+                    // after recovery via slim snapshot.
+                    self.records.restore_dirty_slots(dirty);
+                    return Err(e.into());
+                }
             }
             Ok(())
         } else {
@@ -396,8 +412,9 @@ impl VectorStore {
             self.flush_segments()?;
         }
 
-        if let Some(ref mut storage) = *self.storage.write() {
-            self.update_storage_header(storage)?;
+        if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
+            self.update_storage_header_impl(&mut *storage);
 
             // Get dirty slots for incremental checkpoint
             let dirty = self.records.take_dirty_slots();
@@ -428,7 +445,7 @@ impl VectorStore {
     /// Check if this store has persistent storage enabled
     #[must_use]
     pub fn is_persistent(&self) -> bool {
-        self.storage.read().is_some()
+        self.storage.is_some()
     }
 
     /// Enable persistence for this store (builder pattern).
@@ -444,27 +461,34 @@ impl VectorStore {
     /// store.flush()?;
     /// ```
     pub fn persist(mut self, path: impl AsRef<Path>) -> Result<Self> {
-        if self.storage.read().is_some() {
+        if self.storage.is_some() {
             anyhow::bail!("Store already has persistence enabled");
         }
 
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
-        let mut storage = if omen_path.exists() {
+        let mut storage_local = if omen_path.exists() {
             OmenFile::open(path)?
         } else {
             OmenFile::create(path, self.dimensions() as u32)?
         };
 
-        storage.set_metric(self.distance_metric);
-        storage.set_hnsw_params(
+        storage_local.set_metric(self.distance_metric);
+        storage_local.set_hnsw_params(
             self.hnsw_m.load(std::sync::atomic::Ordering::Relaxed) as u16,
             self.hnsw_ef_construction
                 .load(std::sync::atomic::Ordering::Relaxed) as u16,
             self.hnsw_ef_search
                 .load(std::sync::atomic::Ordering::Relaxed) as u16,
         );
-        *self.storage.write() = Some(storage);
+        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage_local));
+        
+        // Wire storage to existing segments if any
+        if let Some(ref mut segments) = *self.segments.write() {
+            segments.set_storage(Arc::clone(&storage));
+        }
+
+        self.storage = Some(storage);
         self.storage_path = Some(path.to_path_buf());
         Ok(self)
     }
@@ -550,7 +574,7 @@ impl VectorStore {
     }
 
     /// Build initial RecordStore from snapshot.
-    fn build_initial_records(snapshot: &OmenSnapshot, dimensions: usize) -> Result<RecordStore> {
+    fn build_initial_records(snapshot: &OmenSnapshot, dimensions: usize) -> RecordStore {
         let deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
 
         // Determine required slot count from vectors and id_to_slot
@@ -595,11 +619,11 @@ impl VectorStore {
             }
         }
 
-        Ok(RecordStore::from_snapshot(
+        RecordStore::from_snapshot(
             slots,
             deleted_bitmap,
             dimensions as u32,
-        ))
+        )
     }
 
     /// Replay WAL entries directly into RecordStore.
@@ -607,7 +631,7 @@ impl VectorStore {
         records: &mut RecordStore,
         storage: &mut OmenFile,
         ctx: &RecoveryContext,
-    ) -> Result<(Vec<u32>, Option<EdgeStore>, Vec<(String, String, String)>)> {
+    ) -> Result<ReplayedWalData> {
         let current_wal_epoch = storage.wal_truncation_epoch();
         let manifest_wal_cutoff = storage.manifest_wal_replay_cutoff();
 
@@ -973,8 +997,8 @@ impl VectorStore {
                         .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
                     // Update config with new generation so the manifest checkpoint below
                     // writes the correct value.
-                    if let Some(ref mut storage) = *self.storage.write() {
-                        storage.put_config("segments_generation", segments.generation())?;
+                    if let Some(ref storage) = self.storage {
+                        storage.write().put_config("segments_generation", segments.generation())?;
                     }
                 }
             }
@@ -982,23 +1006,22 @@ impl VectorStore {
         })
     }
 
-    /// Update OmenFile header with current store parameters (dimensions, HNSW, metric).
-    fn update_storage_header(&self, storage: &mut OmenFile) -> Result<()> {
+    /// Update storage header with current store parameters (dimensions, HNSW, metric).
+    fn update_storage_header_impl(&self, storage: &mut dyn crate::omen::StorageBackend) {
         let dims = self.records.dimensions();
         if dims > 0 {
-            storage.set_dimensions(dims);
+            let _ = storage.set_dimensions(dims);
         }
 
         // Persist HNSW parameters and metric to header
-        storage.set_hnsw_params(
+        let _ = storage.set_hnsw_params(
             self.hnsw_m.load(std::sync::atomic::Ordering::Relaxed) as u16,
             self.hnsw_ef_construction
                 .load(std::sync::atomic::Ordering::Relaxed) as u16,
             self.hnsw_ef_search
                 .load(std::sync::atomic::Ordering::Relaxed) as u16,
         );
-        storage.set_metric(self.distance_metric);
-        Ok(())
+        let _ = storage.set_metric(self.distance_metric);
     }
 
     /// Prepare serialized data from all subsystems for the manifest checkpoint.

@@ -51,16 +51,17 @@ impl VectorStore {
     ) -> Result<()> {
         self.enable_edges();
 
-        if let Some(ref mut storage) = *self.storage.write() {
+        if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
             let meta_bytes = metadata.as_ref().map(serde_json::to_vec).transpose()?;
-            storage.wal_append_insert_edge(
+            storage.log_insert_edge(
                 from_id,
                 to_id,
                 edge_type,
                 weight,
                 meta_bytes.as_deref(),
             )?;
-            storage.wal_sync()?;
+            storage.sync()?;
         }
 
         self.edge_store
@@ -97,9 +98,10 @@ impl VectorStore {
             .expect("checked above")
             .remove_edge(from_id, to_id, edge_type);
 
-        if removed && let Some(ref mut storage) = *self.storage.write() {
-            storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
-            storage.wal_sync()?;
+        if removed && let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
+            storage.log_delete_edge(from_id, to_id, edge_type)?;
+            storage.sync()?;
         }
 
         Ok(removed)
@@ -248,10 +250,11 @@ impl VectorStore {
         }
         self.enable_edges();
 
-        if let Some(ref mut storage) = *self.storage.write() {
+        if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
             for edge in &edges {
                 let meta_bytes = edge.metadata.as_ref().map(serde_json::to_vec).transpose()?;
-                storage.wal_append_insert_edge(
+                storage.log_insert_edge(
                     &edge.from_id,
                     &edge.to_id,
                     &edge.edge_type,
@@ -259,7 +262,7 @@ impl VectorStore {
                     meta_bytes.as_deref(),
                 )?;
             }
-            storage.wal_sync()?;
+            storage.sync()?;
         }
 
         let added = self

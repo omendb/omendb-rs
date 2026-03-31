@@ -51,14 +51,11 @@ impl VectorStore {
         debug_assert_eq!(
             self.records.get_slot(id),
             Some(slot as u32),
-            "Slot consistency violation: id '{}' does not map to returned slot {}",
-            id,
-            slot
+            "Slot consistency violation: id '{id}' does not map to returned slot {slot}",
         );
         debug_assert!(
             (slot as u32) < self.records.slot_count(),
-            "RecordStore does not contain the returned slot {}",
-            slot
+            "RecordStore does not contain the returned slot {slot}",
         );
 
         self.with_segments_mut(|segments| {
@@ -82,11 +79,11 @@ impl VectorStore {
             .index_json(slot as u32, &metadata);
 
         // WAL for crash durability
-        let needs_checkpoint = if let Some(ref mut storage) = *self.storage.write() {
-            let metadata_bytes = serde_json::to_vec(&metadata)?;
-            storage.wal_append_insert(&id, &vector.data, Some(&metadata_bytes))?;
-            storage.wal_sync()?;
-            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
+        let needs_checkpoint = if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
+            storage.log_insert(id, &vector.data, &metadata)?;
+            storage.sync()?;
+            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
         } else {
             false
         };
@@ -222,9 +219,9 @@ impl VectorStore {
                 self.build_and_publish_segments(dimensions, vectors_data, &slots)?;
 
                 if self.is_quantized()
-                    && let Some(ref mut storage) = *self.storage.write()
+                    && let Some(ref storage) = self.storage
                 {
-                    storage.put_quantization_mode(helpers::quantization_to_id(true))?;
+                    storage.write().put_config("quantization", helpers::quantization_to_id(true) as u64)?;
                 }
 
                 result_indices.extend(slots.iter().map(|&s| s as usize));
@@ -233,9 +230,8 @@ impl VectorStore {
 
         let needs_checkpoint = self
             .storage
-            .read()
             .as_ref()
-            .is_some_and(|s| s.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES);
+            .is_some_and(|s| s.read().wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize);
         if needs_checkpoint {
             self.checkpoint_wal_locked()?;
         }
@@ -275,12 +271,12 @@ impl VectorStore {
         } else if let Some(ref new_metadata) = metadata {
             let existing_vector = self.records.get_vector(slot);
 
-            let needs_checkpoint = if let Some(ref mut storage) = *self.storage.write() {
+            let needs_checkpoint = if let Some(ref storage) = self.storage {
+                let mut storage = storage.write();
                 if let Some(vec_data) = &existing_vector {
-                    let metadata_bytes = serde_json::to_vec(new_metadata)?;
-                    storage.wal_append_insert(id, vec_data, Some(&metadata_bytes))?;
-                    storage.wal_sync()?;
-                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
+                    storage.log_insert(id, vec_data, new_metadata)?;
+                    storage.sync()?;
+                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
                 } else {
                     false
                 }
@@ -325,17 +321,19 @@ impl VectorStore {
         if let Some(ref mut edge_store) = *self.edge_store.write() {
             edge_store.remove_all_for(id);
         }
-
-        let needs_checkpoint = if let Some(ref mut storage) = *self.storage.write() {
+        // WAL for crash durability
+        let needs_checkpoint = if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
             for (from_id, to_id, edge_type) in &edge_deletes {
-                storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
+                storage.log_delete_edge(from_id, to_id, edge_type)?;
             }
-            storage.wal_append_delete(id)?;
-            storage.wal_sync()?;
-            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES
+            storage.log_delete(id)?;
+            storage.sync()?;
+            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
         } else {
             false
         };
+
 
         if let Some(ref mut text_index) = *self.text_index.write() {
             text_index.delete_document(id)?;
@@ -372,15 +370,16 @@ impl VectorStore {
             }
         }
 
-        if let Some(ref mut storage) = *self.storage.write() {
+        if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
             for (from_id, to_id, edge_type) in &edge_deletes {
-                storage.wal_append_delete_edge(from_id, to_id, edge_type)?;
+                storage.log_delete_edge(from_id, to_id, edge_type)?;
             }
             for id in &valid_ids {
-                storage.wal_append_delete(id)?;
+                storage.log_delete(id)?;
             }
             if !valid_ids.is_empty() {
-                storage.wal_sync()?;
+                storage.sync()?;
             }
         }
         for id in &valid_ids {

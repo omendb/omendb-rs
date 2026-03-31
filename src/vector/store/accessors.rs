@@ -216,7 +216,7 @@ impl VectorStore {
         let result = f(&mut segments);
         
         // Sync published view ArcSwap after mutation
-        let new_view = segments.as_ref().map(|s| s.published_view());
+        let new_view = segments.as_ref().map(SegmentManager::published_view);
         self.published_view.store(Arc::new(new_view));
         
         result
@@ -252,7 +252,7 @@ impl VectorStore {
                 }
             });
 
-        let wal_entries = self.storage.read().as_ref().map_or(0, OmenFile::wal_len);
+        let wal_entries = self.storage.as_ref().map_or(0, |s| s.read().wal_len());
 
         StoreInfo {
             vector_count: self.records.len() as usize,
@@ -264,8 +264,8 @@ impl VectorStore {
             vector_bytes,
             graph_bytes,
             total_memory_bytes: vector_bytes + graph_bytes,
-            wal_entries,
-            is_persistent: self.storage.read().is_some(),
+            wal_entries: wal_entries as u64,
+            is_persistent: self.storage.is_some(),
             hnsw_m: self.hnsw_m.load(Ordering::Relaxed),
             hnsw_ef_construction: self.hnsw_ef_construction.load(Ordering::Relaxed),
             hnsw_ef_search: self.hnsw_ef_search.load(Ordering::Relaxed),

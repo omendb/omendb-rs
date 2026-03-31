@@ -18,6 +18,7 @@ mod lifecycle;
 mod multivec_ops;
 mod options;
 mod persistence;
+pub mod planner;
 pub(crate) mod record_store;
 mod search;
 mod sparse_ops;
@@ -101,8 +102,8 @@ pub struct VectorStore {
     /// Roaring bitmap index for fast filtered search
     pub(crate) metadata_index: RwLock<MetadataIndex>,
 
-    /// Persistent storage backend (.omen format)
-    pub(crate) storage: RwLock<Option<OmenFile>>,
+    /// Persistent storage backend
+    pub(crate) storage: Option<Arc<RwLock<dyn crate::omen::StorageBackend>>>,
 
     /// Storage path (for `TextIndex` subdirectory)
     pub(crate) storage_path: Option<PathBuf>,
@@ -173,7 +174,7 @@ impl VectorStore {
             segments: RwLock::new(None),
             published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
-            storage: RwLock::new(None),
+            storage: None,
             storage_path: None,
             text_index: RwLock::new(None),
             text_search_config: RwLock::new(None),
