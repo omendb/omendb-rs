@@ -13,6 +13,44 @@ use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, do
 #[cfg(test)]
 mod tests;
 
+/// Result from a text search engine.
+#[derive(Debug, Clone)]
+pub struct TextSearchResult {
+    /// Document ID
+    pub id: String,
+    /// BM25 matching score
+    pub score: f32,
+}
+
+impl TextSearchResult {
+    pub fn new(id: String, score: f32) -> Self {
+        Self { id, score }
+    }
+}
+
+/// Core trait for full-text search engines.
+pub trait TextEngine: Send + Sync {
+    /// Index a document with the given ID and text content.
+    fn index_document(&mut self, id: &str, text: &str) -> Result<()>;
+
+    /// Delete a document by ID.
+    fn delete_document(&mut self, id: &str) -> Result<()>;
+
+    /// Search for documents matching the query.
+    fn search(&self, query_str: &str, limit: usize) -> Result<Vec<TextSearchResult>>;
+
+    /// Commit pending changes to the index.
+    fn commit(&mut self) -> Result<()>;
+
+    /// Get the number of documents in the index.
+    fn num_docs(&self) -> u64;
+
+    /// Flush pending changes (same as commit for now).
+    fn flush(&mut self) -> Result<()> {
+        self.commit()
+    }
+}
+
 /// Configuration for text search functionality.
 ///
 /// # Example
@@ -55,6 +93,32 @@ pub struct TextIndex {
     reader: IndexReader,
     id_field: Field,
     text_field: Field,
+}
+
+impl TextEngine for TextIndex {
+    fn index_document(&mut self, id: &str, text: &str) -> Result<()> {
+        self.index_document(id, text)
+    }
+
+    fn delete_document(&mut self, id: &str) -> Result<()> {
+        self.delete_document(id)
+    }
+
+    fn search(&self, query_str: &str, limit: usize) -> Result<Vec<TextSearchResult>> {
+        let results = self.search(query_str, limit)?;
+        Ok(results
+            .into_iter()
+            .map(|(id, score)| TextSearchResult::new(id, score))
+            .collect())
+    }
+
+    fn commit(&mut self) -> Result<()> {
+        self.commit()
+    }
+
+    fn num_docs(&self) -> u64 {
+        self.num_docs()
+    }
 }
 
 impl TextIndex {
