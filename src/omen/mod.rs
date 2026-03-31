@@ -19,8 +19,94 @@ mod file;
 mod graph;
 mod header;
 mod manifest;
+pub mod mmap_backend;
+pub mod mock_backend;
 mod vectors;
 mod wal;
+
+use anyhow::Result;
+
+/// Core trait for storage backends.
+///
+/// Abstracting OmenFile allows us to swap between:
+/// - OmenFile (Single file, custom layout, WAL)
+/// - MmapBackend (Simple file-per-segment, no WAL)
+/// - MemoryBackend (Testing only)
+pub trait StorageBackend: Send + Sync {
+    /// Dimension of vectors in this storage.
+    fn dimensions(&self) -> usize;
+
+    /// Distance metric used by this storage.
+    fn metric(&self) -> Metric;
+
+    /// Set dimensions.
+    fn set_dimensions(&mut self, dimensions: u32) -> Result<()>;
+
+    /// Set distance metric.
+    fn set_metric(&mut self, metric: Metric) -> Result<()>;
+
+    /// Set HNSW parameters.
+    fn set_hnsw_params(&mut self, m: u16, ef_construction: u16, ef_search: u16) -> Result<()>;
+
+    /// Load a vector by slot ID.
+    fn get_vector(&self, slot: u32) -> Result<Option<Vec<f32>>>;
+
+    /// Append a vector insert to the WAL.
+    fn log_insert(&mut self, id: &str, vector: &[f32], metadata: &serde_json::Value) -> Result<()>;
+
+    /// Append a vector delete to the WAL.
+    fn log_delete(&mut self, id: &str) -> Result<()>;
+
+    /// Append an edge insert to the WAL.
+    fn log_insert_edge(
+        &mut self,
+        from_id: &str,
+        to_id: &str,
+        edge_type: &str,
+        weight: f32,
+        metadata: Option<&[u8]>,
+    ) -> Result<()>;
+
+    /// Append an edge delete to the WAL.
+    fn log_delete_edge(&mut self, from_id: &str, to_id: &str, edge_type: &str) -> Result<()>;
+
+    /// Checkpoint the storage (flush WAL to segments).
+    fn checkpoint(&mut self) -> Result<()>;
+
+    /// Sync to disk.
+    fn sync(&mut self) -> Result<()>;
+
+    /// Store configuration value.
+    fn put_config(&mut self, key: &str, value: u64) -> Result<()>;
+
+    /// Get current WAL length (number of entries).
+    fn wal_len(&self) -> usize;
+
+    /// Check if storage has a vectors file (.vecs).
+    fn has_vec_file(&self) -> bool;
+
+    /// Fast path: write dirty .vecs slots, sync WAL, skip manifest.
+    fn checkpoint_vectors_only(
+        &mut self,
+        records: &crate::vector::store::record_store::RecordStore,
+        dirty_slots: &roaring::RoaringBitmap,
+    ) -> Result<()>;
+
+    /// Incremental checkpoint: write dirty slots and update manifest.
+    fn checkpoint_incremental(
+        &mut self,
+        records: &crate::vector::store::record_store::RecordStore,
+        dirty_slots: &roaring::RoaringBitmap,
+        options: CheckpointOptions,
+    ) -> Result<()>;
+
+    /// Full checkpoint: write all live records and update manifest.
+    fn checkpoint_full(
+        &mut self,
+        records: &crate::vector::store::record_store::RecordStore,
+        options: CheckpointOptions,
+    ) -> Result<()>;
+}
 
 pub use file::{
     CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, SlimRecordsSnapshot,

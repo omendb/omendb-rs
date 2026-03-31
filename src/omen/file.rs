@@ -447,6 +447,111 @@ impl OmenFile {
     // VectorStore uses checkpoint_from_snapshot() which takes data from RecordStore.
 }
 
+impl crate::omen::StorageBackend for OmenFile {
+    fn dimensions(&self) -> usize {
+        self.header.dimensions as usize
+    }
+
+    fn metric(&self) -> crate::omen::Metric {
+        self.header.metric
+    }
+
+    fn set_dimensions(&mut self, dimensions: u32) -> anyhow::Result<()> {
+        self.set_dimensions(dimensions);
+        Ok(())
+    }
+
+    fn set_metric(&mut self, metric: crate::omen::Metric) -> anyhow::Result<()> {
+        self.set_metric(metric);
+        Ok(())
+    }
+
+    fn set_hnsw_params(&mut self, m: u16, ef_construction: u16, ef_search: u16) -> anyhow::Result<()> {
+        self.set_hnsw_params(m, ef_construction, ef_search);
+        Ok(())
+    }
+
+    fn get_vector(&self, _slot: u32) -> anyhow::Result<Option<Vec<f32>>> {
+        // OmenFile is pure I/O now; VectorStore manages the record mmap directly.
+        // We'll need to decide if StorageBackend should handle this or if
+        // RecordStore keeps managing its own mmap.
+        anyhow::bail!("OmenFile::get_vector not yet implemented (Phase 2)")
+    }
+
+    fn log_insert(&mut self, id: &str, vector: &[f32], metadata: &serde_json::Value) -> anyhow::Result<()> {
+        let metadata_bytes = serde_json::to_vec(metadata)?;
+        self.wal_append_insert(id, vector, Some(&metadata_bytes)).map_err(|e| e.into())
+    }
+
+    fn log_delete(&mut self, id: &str) -> anyhow::Result<()> {
+        self.wal_append_delete(id).map_err(|e| e.into())
+    }
+
+    fn log_insert_edge(
+        &mut self,
+        from_id: &str,
+        to_id: &str,
+        edge_type: &str,
+        weight: f32,
+        metadata: Option<&[u8]>,
+    ) -> anyhow::Result<()> {
+        self.wal_append_insert_edge(from_id, to_id, edge_type, weight, metadata)
+            .map_err(|e| e.into())
+    }
+
+    fn log_delete_edge(&mut self, from_id: &str, to_id: &str, edge_type: &str) -> anyhow::Result<()> {
+        self.wal_append_delete_edge(from_id, to_id, edge_type)
+            .map_err(|e| e.into())
+    }
+
+    fn checkpoint(&mut self) -> anyhow::Result<()> {
+        // checkpoint_from_snapshot is the new way (Phase 5).
+        // For now, this is a no-op or error until we wire it up.
+        anyhow::bail!("OmenFile::checkpoint requires a snapshot (use checkpoint_from_snapshot)")
+    }
+
+    fn sync(&mut self) -> anyhow::Result<()> {
+        self.wal_sync().map_err(|e| e.into())
+    }
+
+    fn put_config(&mut self, key: &str, value: u64) -> anyhow::Result<()> {
+        self.put_config(key, value).map_err(|e| e.into())
+    }
+
+    fn wal_len(&self) -> usize {
+        self.wal_len() as usize
+    }
+
+    fn has_vec_file(&self) -> bool {
+        self.has_vec_file()
+    }
+
+    fn checkpoint_vectors_only(
+        &mut self,
+        records: &crate::vector::store::record_store::RecordStore,
+        dirty_slots: &roaring::RoaringBitmap,
+    ) -> anyhow::Result<()> {
+        self.checkpoint_vectors_only(records, dirty_slots).map_err(|e| e.into())
+    }
+
+    fn checkpoint_incremental(
+        &mut self,
+        records: &crate::vector::store::record_store::RecordStore,
+        dirty_slots: &roaring::RoaringBitmap,
+        options: crate::omen::CheckpointOptions,
+    ) -> anyhow::Result<()> {
+        self.checkpoint_incremental(records, dirty_slots, options).map_err(|e| e.into())
+    }
+
+    fn checkpoint_full(
+        &mut self,
+        records: &crate::vector::store::record_store::RecordStore,
+        options: crate::omen::CheckpointOptions,
+    ) -> anyhow::Result<()> {
+        self.checkpoint_full(records, options).map_err(|e| e.into())
+    }
+}
+
 // Note: Many methods removed in Phase 5. VectorStore uses RecordStore for state.
 // OmenFile is now pure I/O: WAL + checkpoint_from_snapshot.
 
