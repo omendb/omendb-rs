@@ -112,7 +112,7 @@ fn main() {
         seed: 42,
         ..Default::default()
     };
-    let encoder = MuveraEncoder::new(dim, config);
+    let encoder = MuveraEncoder::new(dim, config).expect("Failed to create MuveraEncoder");
 
     println!("Configuration:");
     println!("  Documents: {num_docs}");

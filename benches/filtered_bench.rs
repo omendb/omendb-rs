@@ -31,7 +31,7 @@ fn bench_filtered_search(c: &mut Criterion) {
     for (i, v) in vectors.iter().enumerate() {
         store
             .set(
-                format!("d{i}"),
+                &format!("d{i}"),
                 v.clone(),
                 json!({
                     "category": i % 10,
@@ -107,7 +107,7 @@ fn bench_filtered_recall(c: &mut Criterion) {
     for (i, v) in vectors.iter().enumerate() {
         store
             .set(
-                format!("d{i}"),
+                &format!("d{i}"),
                 v.clone(),
                 json!({
                     "category": i % 10,

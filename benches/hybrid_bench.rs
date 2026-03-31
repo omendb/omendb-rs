@@ -111,7 +111,7 @@ fn bench_hybrid_search(c: &mut Criterion) {
 
     for (i, (vec, text)) in vectors.iter().zip(texts.iter()).enumerate() {
         store
-            .set_with_text(format!("doc{i}"), vec.clone(), text, json!({}))
+            .set_with_text(&format!("doc{i}"), vec.clone(), text, json!({}))
             .unwrap();
     }
     store.flush().unwrap();
@@ -159,7 +159,7 @@ fn bench_hybrid_overhead(c: &mut Criterion) {
     let mut vector_store = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         vector_store
-            .set(format!("doc{i}"), v.clone(), json!({}))
+            .set(&format!("doc{i}"), v.clone(), json!({}))
             .unwrap();
     }
 
@@ -170,7 +170,7 @@ fn bench_hybrid_overhead(c: &mut Criterion) {
     let mut hybrid_store = options.build().unwrap();
     for (i, (v, t)) in vectors.iter().zip(texts.iter()).enumerate() {
         hybrid_store
-            .set_with_text(format!("doc{i}"), v.clone(), t, json!({}))
+            .set_with_text(&format!("doc{i}"), v.clone(), t, json!({}))
             .unwrap();
     }
     hybrid_store.flush().unwrap();

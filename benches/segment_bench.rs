@@ -31,7 +31,7 @@ fn bench_multi_segment_search(c: &mut Criterion) {
         let mut store = VectorStore::new(dim).with_segment_capacity(25_000);
         for (i, v) in vectors.iter().enumerate() {
             store
-                .set(format!("v{i}"), v.clone(), json!({"cat": i % 10}))
+                .set(&format!("v{i}"), v.clone(), json!({"cat": i % 10}))
                 .expect("set");
         }
         store.ensure_index_ready().expect("index ready");
@@ -68,7 +68,7 @@ fn bench_single_vs_multi_segment(c: &mut Criterion) {
         let mut single = VectorStore::new(dim).with_segment_capacity(200_000);
         for (i, v) in vectors.iter().enumerate() {
             single
-                .set(format!("v{i}"), v.clone(), json!({}))
+                .set(&format!("v{i}"), v.clone(), json!({}))
                 .expect("set");
         }
         single.ensure_index_ready().expect("index ready");
@@ -77,7 +77,7 @@ fn bench_single_vs_multi_segment(c: &mut Criterion) {
         let mut multi = VectorStore::new(dim).with_segment_capacity(25_000);
         for (i, v) in vectors.iter().enumerate() {
             multi
-                .set(format!("v{i}"), v.clone(), json!({}))
+                .set(&format!("v{i}"), v.clone(), json!({}))
                 .expect("set");
         }
         multi.ensure_index_ready().expect("index ready");

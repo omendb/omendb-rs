@@ -27,7 +27,7 @@ fn bench_search(c: &mut Criterion) {
         let mut store = VectorStore::new(dim);
         for (i, v) in vectors.iter().enumerate() {
             store
-                .set(format!("v{i}"), v.clone(), json!({}))
+                .set(&format!("v{i}"), v.clone(), json!({}))
                 .expect("set");
         }
 
@@ -61,11 +61,11 @@ fn bench_search_ef_comparison(c: &mut Criterion) {
     let queries = generate_vectors(100, dim);
 
     let mut store = VectorStore::new(dim);
-    for (i, v) in vectors.iter().enumerate() {
-        store
-            .set(format!("v{i}"), v.clone(), json!({}))
-            .expect("set");
-    }
+        for (i, v) in vectors.iter().enumerate() {
+            store
+                .set(&format!("v{i}"), v.clone(), json!({}))
+                .expect("set");
+        }
 
     for ef in [64, 100, 200] {
         group.bench_with_input(
@@ -101,9 +101,8 @@ fn bench_search_with_metadata(c: &mut Criterion) {
     let mut store = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         store
-            .set(format!("d{i}"), v.clone(), json!({"cat": i % 10}))
-            .expect("set");
-    }
+            .set(&format!("d{i}"), v.clone(), json!({"cat": i % 10}))
+            .expect("set");    }
 
     // Test with metadata path
     group.bench_function("768D_ef64_with_metadata", |b| {
@@ -144,7 +143,7 @@ fn bench_metadata_overhead(c: &mut Criterion) {
     let mut store_empty = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         store_empty
-            .set(format!("v{i}"), v.clone(), json!({}))
+            .set(&format!("v{i}"), v.clone(), json!({}))
             .expect("set");
     }
     store_empty.ensure_index_ready().expect("index ready");
@@ -167,7 +166,7 @@ fn bench_metadata_overhead(c: &mut Criterion) {
             "timestamp": 1700000000 + i,
         });
         store_heavy
-            .set(format!("v{i}"), v.clone(), metadata)
+            .set(&format!("v{i}"), v.clone(), metadata)
             .expect("set");
     }
     store_heavy.ensure_index_ready().expect("index ready");
@@ -250,7 +249,7 @@ fn bench_recall(c: &mut Criterion) {
         let mut store = VectorStore::new_with_params(dim, 16, 100, ef, metric);
         for (i, v) in vectors.iter().enumerate() {
             store
-                .set(format!("v{i}"), v.clone(), json!({}))
+                .set(&format!("v{i}"), v.clone(), json!({}))
                 .expect("set");
         }
         store.ensure_index_ready().expect("index ready");
@@ -294,11 +293,11 @@ fn bench_cosine_search(c: &mut Criterion) {
     let queries = generate_vectors(100, dim);
 
     let mut store = VectorStore::new_with_params(dim, 16, 100, 100, Metric::Cosine);
-    for (i, v) in vectors.iter().enumerate() {
-        store
-            .set(format!("v{i}"), v.clone(), json!({}))
-            .expect("set");
-    }
+        for (i, v) in vectors.iter().enumerate() {
+            store
+                .set(&format!("v{i}"), v.clone(), json!({}))
+                .expect("set");
+        }
     store.ensure_index_ready().expect("index ready");
 
     for ef in [64, 100, 200] {
