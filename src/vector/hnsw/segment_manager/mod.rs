@@ -18,7 +18,7 @@ mod merge;
 mod persistence;
 
 pub use merge::MergePolicy;
-
+use crate::vector::{EngineSearchResult, OptimizationStats, VectorEngine};
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::MergeStats;
@@ -27,6 +27,60 @@ use crate::vector::hnsw::types::{HNSWParams, Metric};
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+impl VectorEngine for SegmentManager {
+    fn dimensions(&self) -> usize {
+        self.config.dimensions
+    }
+
+    fn metric(&self) -> Metric {
+        self.config.distance_fn
+    }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn insert(&mut self, vector: &[f32], slot: u32) -> anyhow::Result<u32> {
+        self.insert_with_slot(vector, slot).map_err(|e| e.into())
+    }
+
+    fn search(&self, query: &[f32], k: usize, ef: usize) -> anyhow::Result<Vec<EngineSearchResult>> {
+        let results = self.search(query, k, ef)?;
+        Ok(results
+            .into_iter()
+            .map(|r| EngineSearchResult::new(r.slot, r.distance))
+            .collect())
+    }
+
+    fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: Arc<dyn Fn(u32) -> bool + Sync + Send>,
+    ) -> anyhow::Result<Vec<EngineSearchResult>> {
+        let results = self.search_with_filter(query, k, ef, move |slot| filter_fn(slot))?;
+        Ok(results
+            .into_iter()
+            .map(|r| EngineSearchResult::new(r.slot, r.distance))
+            .collect())
+    }
+
+    fn flush(&mut self) -> anyhow::Result<()> {
+        self.flush().map_err(|e| e.into())
+    }
+
+    fn optimize(&mut self) -> anyhow::Result<OptimizationStats> {
+        let vectors_reordered = self.optimize().map_err(|e| anyhow::anyhow!("{e}"))?;
+        // For now, optimizationStats only tracks merged vectors from optimize().
+        // We could expand this to be more detailed.
+        Ok(OptimizationStats {
+            vectors_reordered,
+            segments_merged: 0, // TODO: track segments merged in SegmentManager::optimize
+        })
+    }
+}
 
 type PendingMergeHandle = std::thread::JoinHandle<Result<Arc<FrozenSegment>>>;
 
@@ -112,6 +166,8 @@ pub struct SegmentManager {
     /// Directory where segment files are stored, used to persist background merge results.
     /// Set by VectorStore after loading or creating segments.
     pub(crate) pending_merge_dir: Option<PathBuf>,
+    /// Optional storage backend for vector loading and persistence.
+    pub(crate) storage: Option<Arc<RwLock<dyn crate::omen::StorageBackend>>>,
 }
 
 pub(crate) struct PendingMergeState {
@@ -575,6 +631,7 @@ impl SegmentManager {
             generation: 0,
             pending_merge: None,
             pending_merge_dir: None,
+            storage: None,
         })
     }
 
@@ -591,6 +648,7 @@ impl SegmentManager {
             generation: 0,
             pending_merge: None,
             pending_merge_dir: None,
+            storage: None,
         }
     }
 
@@ -617,6 +675,7 @@ impl SegmentManager {
             generation: 0,
             pending_merge: None,
             pending_merge_dir: None,
+            storage: None,
         })
     }
 
@@ -646,7 +705,20 @@ impl SegmentManager {
             generation: 0,
             pending_merge: None,
             pending_merge_dir: None,
+            storage: None,
         })
+    }
+
+    /// Set storage backend
+    pub fn set_storage(&mut self, storage: Arc<RwLock<dyn crate::omen::StorageBackend>>) {
+        self.storage = Some(storage);
+    }
+
+    /// Builder: set storage backend
+    #[must_use]
+    pub fn with_storage(mut self, storage: Arc<RwLock<dyn crate::omen::StorageBackend>>) -> Self {
+        self.storage = Some(storage);
+        self
     }
 
     /// Get configuration
@@ -901,12 +973,29 @@ impl SegmentManager {
         Arc::clone(&self.published.current)
     }
 
+    /// Optimize the index by merging segments and reordering for cache locality.
+    pub fn optimize(&mut self) -> Result<usize> {
+        self.flush()?;
+        let stats = self.merge_all_frozen()?;
+        Ok(stats.map(|s| s.vectors_merged).unwrap_or(0))
+    }
+
     /// Get current merge policy
     pub fn merge_policy(&self) -> &MergePolicy {
         &self.merge_policy
     }
 
-    /// Set merge policy
+    /// Fetch a vector from the storage backend.
+    pub fn fetch_vector(&self, slot: u32) -> anyhow::Result<Option<Vec<f32>>> {
+        if let Some(ref storage) = self.storage {
+            storage.read().get_vector(slot)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Set HNSW parameters
+
     pub fn set_merge_policy(&mut self, policy: MergePolicy) {
         self.merge_policy = policy;
     }

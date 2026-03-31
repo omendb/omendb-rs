@@ -288,6 +288,11 @@ impl SegmentManager {
         )?;
         index.remap_slots(slots);
 
+        // Optimize merged index for cache locality
+        if !index.is_empty() {
+            let _ = index.optimize_cache_locality();
+        }
+
         Ok((index, start.elapsed()))
     }
 

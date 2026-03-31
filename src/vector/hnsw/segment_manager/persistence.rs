@@ -265,6 +265,7 @@ impl SegmentManager {
             generation,
             pending_merge: None,
             pending_merge_dir: None,
+            storage: None,
         };
 
         // Apply any background merge that completed before the last crash
