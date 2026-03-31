@@ -13,7 +13,7 @@ pub struct MmapBackend {
     dimensions: usize,
     metric: Metric,
     _path: PathBuf,
-    mmap: Option<Mmap>,
+    _mmap: Option<Mmap>,
 }
 
 impl MmapBackend {
@@ -34,7 +34,7 @@ impl MmapBackend {
             dimensions,
             metric,
             _path: path,
-            mmap,
+            _mmap: mmap,
         })
     }
 }
@@ -58,35 +58,6 @@ impl StorageBackend for MmapBackend {
 
     fn set_hnsw_params(&mut self, _m: u16, _ef_construction: u16, _ef_search: u16) -> Result<()> {
         Ok(())
-    }
-
-    fn get_vector(&self, slot: u32) -> Result<Option<Vec<f32>>> {
-        let mmap = match &self.mmap {
-            Some(m) => m,
-            None => return Ok(None),
-        };
-
-        let vec_size = self.dimensions * std::mem::size_of::<f32>();
-        let offset = slot as usize * vec_size;
-
-        if offset + vec_size > mmap.len() {
-            return Ok(None);
-        }
-
-        let slice = &mmap[offset..offset + vec_size];
-        let mut vector = vec![0.0f32; self.dimensions];
-        
-        // Unsafe block to copy f32s from bytes. 
-        // In OmenDB, we usually use zerocopy or manual casting.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                slice.as_ptr(),
-                vector.as_mut_ptr() as *mut u8,
-                vec_size,
-            );
-        }
-
-        Ok(Some(vector))
     }
 
     fn log_insert(&mut self, _id: &str, _vector: &[f32], _metadata: &serde_json::Value) -> Result<()> {

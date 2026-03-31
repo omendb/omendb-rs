@@ -314,6 +314,7 @@ impl SegmentManager {
         &mut self,
         index: HNSWIndex,
         vectors_merged: usize,
+        segments_merged: usize,
         build_duration: std::time::Duration,
     ) -> MergeStats {
         if !index.is_empty() {
@@ -323,6 +324,7 @@ impl SegmentManager {
 
         let stats = MergeStats {
             vectors_merged,
+            segments_merged,
             join_set_size: 0,
             join_set_duration: std::time::Duration::ZERO,
             join_set_insert_duration: build_duration,
@@ -354,8 +356,9 @@ impl SegmentManager {
             return Ok(None);
         };
 
+        let segments_merged = merge_input.source_count();
         info!(
-            frozen_count = merge_input.source_count(),
+            frozen_count = segments_merged,
             frozen_vectors = merge_input.total_vectors(),
             "Starting segment merge"
         );
@@ -386,7 +389,7 @@ impl SegmentManager {
             "Merged frozen segments"
         );
 
-        let stats = self.finish_merge(index, vectors_merged, build_duration);
+        let stats = self.finish_merge(index, vectors_merged, segments_merged, build_duration);
         Ok(Some(stats))
     }
 
@@ -422,6 +425,7 @@ impl SegmentManager {
             return Ok(None);
         };
 
+        let segments_merged = indices.len();
         self.generation += 1;
         let segments_to_merge = self.published.take_frozen_indices(indices, self.generation);
 
@@ -445,7 +449,7 @@ impl SegmentManager {
             }
         };
 
-        let stats = self.finish_merge(index, vectors_merged, build_duration);
+        let stats = self.finish_merge(index, vectors_merged, segments_merged, build_duration);
         Ok(Some(stats))
     }
 

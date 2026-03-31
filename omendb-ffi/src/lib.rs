@@ -706,11 +706,11 @@ pub unsafe extern "C" fn omendb_compact(db: *mut OmenDB) -> i64 {
 pub unsafe extern "C" fn omendb_optimize(db: *mut OmenDB) -> i64 {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
-        let count = db
+        let stats = db
             .store
             .optimize()
             .map_err(|e| format!("Optimize failed: {e}"))?;
-        Ok(i64::try_from(count).unwrap_or(i64::MAX))
+        Ok(i64::try_from(stats.vectors_reordered).unwrap_or(i64::MAX))
     })
 }
 

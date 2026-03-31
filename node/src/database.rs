@@ -543,8 +543,8 @@ impl VectorDatabase {
     #[napi]
     pub fn optimize(&self) -> Result<u32> {
         let mut inner = self.inner.write();
-        let result = inner.store.optimize().map_err(convert_error)?;
-        Ok(result as u32)
+        let stats = inner.store.optimize().map_err(convert_error)?;
+        Ok(stats.vectors_reordered as u32)
     }
 
     /// Merge another database into this one.

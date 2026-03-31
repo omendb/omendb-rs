@@ -72,13 +72,7 @@ impl VectorEngine for SegmentManager {
     }
 
     fn optimize(&mut self) -> anyhow::Result<OptimizationStats> {
-        let vectors_reordered = self.optimize().map_err(|e| anyhow::anyhow!("{e}"))?;
-        // For now, optimizationStats only tracks merged vectors from optimize().
-        // We could expand this to be more detailed.
-        Ok(OptimizationStats {
-            vectors_reordered,
-            segments_merged: 0, // TODO: track segments merged in SegmentManager::optimize
-        })
+        self.optimize().map_err(|e| anyhow::anyhow!("{e}"))
     }
 }
 
@@ -974,24 +968,18 @@ impl SegmentManager {
     }
 
     /// Optimize the index by merging segments and reordering for cache locality.
-    pub fn optimize(&mut self) -> Result<usize> {
+    pub fn optimize(&mut self) -> Result<OptimizationStats> {
         self.flush()?;
         let stats = self.merge_all_frozen()?;
-        Ok(stats.map(|s| s.vectors_merged).unwrap_or(0))
+        Ok(OptimizationStats {
+            vectors_reordered: stats.as_ref().map(|s| s.vectors_merged).unwrap_or(0),
+            segments_merged: stats.as_ref().map(|s| s.segments_merged).unwrap_or(0),
+        })
     }
 
     /// Get current merge policy
     pub fn merge_policy(&self) -> &MergePolicy {
         &self.merge_policy
-    }
-
-    /// Fetch a vector from the storage backend.
-    pub fn fetch_vector(&self, slot: u32) -> anyhow::Result<Option<Vec<f32>>> {
-        if let Some(ref storage) = self.storage {
-            storage.read().get_vector(slot)
-        } else {
-            Ok(None)
-        }
     }
 
     /// Set HNSW parameters
@@ -1687,5 +1675,25 @@ mod tests {
         }
         // Closest to 2.0 in [0-4] is 2
         assert_eq!(results[0].slot, 2);
+    }
+
+    #[test]
+    fn test_segment_manager_optimize_tracks_segments_merged() {
+        let config = test_config().with_capacity(5);
+        let mut manager = SegmentManager::new(config).unwrap();
+
+        // Create 3 frozen segments
+        for i in 0..15 {
+            let vector = vec![i as f32, 0.0, 0.0, 0.0];
+            manager.insert(&vector).unwrap();
+        }
+        manager.flush().unwrap();
+        assert_eq!(manager.frozen_count(), 3);
+
+        // Optimize (merge all frozen)
+        let stats = manager.optimize().unwrap();
+        assert_eq!(stats.segments_merged, 3);
+        assert_eq!(stats.vectors_reordered, 15);
+        assert_eq!(manager.frozen_count(), 1);
     }
 }

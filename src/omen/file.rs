@@ -471,13 +471,6 @@ impl crate::omen::StorageBackend for OmenFile {
         Ok(())
     }
 
-    fn get_vector(&self, _slot: u32) -> anyhow::Result<Option<Vec<f32>>> {
-        // OmenFile is pure I/O now; VectorStore manages the record mmap directly.
-        // We'll need to decide if StorageBackend should handle this or if
-        // RecordStore keeps managing its own mmap.
-        anyhow::bail!("OmenFile::get_vector not yet implemented (Phase 2)")
-    }
-
     fn log_insert(&mut self, id: &str, vector: &[f32], metadata: &serde_json::Value) -> anyhow::Result<()> {
         let metadata_bytes = serde_json::to_vec(metadata)?;
         self.wal_append_insert(id, vector, Some(&metadata_bytes)).map_err(|e| e.into())

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use super::{MetadataFilter, VectorStore};
-use crate::omen::{Metric, OmenFile};
+use crate::omen::Metric;
 use crate::vector::hnsw::{SegmentManager, SegmentReadView};
 
 /// Comprehensive store diagnostics.

@@ -1,6 +1,6 @@
 [package]
 name = "omendb-python"
-version = "0.0.33-rc1"
+version = "0.0.33"
 edition = "2021"
 readme = "../README.md"
 

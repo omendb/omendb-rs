@@ -40,8 +40,11 @@ impl Default for MergeConfig {
 /// Statistics from a merge operation
 #[derive(Clone, Debug)]
 pub struct MergeStats {
-    /// Total vectors merged from small graph
+    /// Total vectors merged from source graphs
     pub vectors_merged: usize,
+
+    /// Total segments merged into one
+    pub segments_merged: usize,
 
     /// Size of the join set (strategic vertices inserted first)
     pub join_set_size: usize,
@@ -127,6 +130,7 @@ impl GraphMerger {
         if small_size == 0 {
             return Ok(MergeStats {
                 vectors_merged: 0,
+                segments_merged: 0,
                 join_set_size: 0,
                 join_set_duration: Duration::ZERO,
                 join_set_insert_duration: Duration::ZERO,
@@ -217,6 +221,7 @@ impl GraphMerger {
 
         let stats = MergeStats {
             vectors_merged: small_size,
+            segments_merged: 2,
             join_set_size: join_set.len(),
             join_set_duration,
             join_set_insert_duration,

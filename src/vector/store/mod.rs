@@ -41,7 +41,6 @@ use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::sparse::SparseIndex;
 use super::types::Vector;
 use arc_swap::ArcSwap;
-use crate::omen::OmenFile;
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;

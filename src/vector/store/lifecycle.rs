@@ -242,11 +242,9 @@ impl VectorStore {
     /// Call this after loading/building the index and before querying for best results.
     /// Based on NeurIPS 2021 "Graph Reordering for Cache-Efficient Near Neighbor Search".
     ///
-    /// Returns the number of nodes reordered, or 0 if index is empty/not initialized.
-    ///
     /// For segment-based storage, this merges all frozen segments into one
-    /// for better search locality. Returns the number of vectors in the merged segment.
-    pub fn optimize(&self) -> Result<usize> {
+    /// for better search locality.
+    pub fn optimize(&self) -> Result<crate::vector::OptimizationStats> {
         let _lock = self.write_lock.write();
 
         // Compact first if there are pending deletes to ensure consistent slot state
@@ -259,14 +257,15 @@ impl VectorStore {
                 // Flush mutable segment first
                 segments.flush().map_err(|e| anyhow::anyhow!("{e}"))?;
                 // Merge all frozen segments
-                if let Some(stats) = segments
-                    .merge_all_frozen()
-                    .map_err(|e| anyhow::anyhow!("{e}"))?
-                {
-                    return Ok(stats.vectors_merged);
-                }
+                let stats = segments
+                    .optimize()
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                return Ok(stats);
             }
-            Ok(0)
+            Ok(crate::vector::OptimizationStats {
+                vectors_reordered: 0,
+                segments_merged: 0,
+            })
         })
     }
 

@@ -83,7 +83,7 @@ impl VectorStore {
             } else {
                 &wal_modified_slots
             };
-            let mut segments = Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
+            let segments = Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
             
             // 5. Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
             let ancillary = Self::initialize_ancillary_indexes(

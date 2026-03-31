@@ -5,8 +5,6 @@
 use crate::omen::{Metric, StorageBackend, CheckpointOptions};
 use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::Arc;
-use parking_lot::RwLock;
 
 pub struct MockStorageBackend {
     dimensions: usize,
@@ -51,11 +49,7 @@ impl StorageBackend for MockStorageBackend {
         Ok(())
     }
 
-    fn get_vector(&self, slot: u32) -> Result<Option<Vec<f32>>> {
-        Ok(self.vectors.get(&slot).cloned())
-    }
-
-    fn log_insert(&mut self, id: &str, vector: &[f32], _metadata: &serde_json::Value) -> Result<()> {
+    fn log_insert(&mut self, id: &str, _vector: &[f32], _metadata: &serde_json::Value) -> Result<()> {
         self.wal.push(format!("insert:{}", id));
         // In a real mock, we might want to store the vector here too if we want to 
         // simulate recovery.
@@ -173,7 +167,7 @@ mod tests {
 
         backend.checkpoint_vectors_only(&records, &dirty).unwrap();
         
-        let v = backend.get_vector(0).unwrap().expect("should have vector");
-        assert_eq!(v, vec![1.0, 2.0, 3.0, 4.0]);
+        let v = backend.vectors.get(&0).expect("should have vector");
+        assert_eq!(*v, vec![1.0, 2.0, 3.0, 4.0]);
     }
 }

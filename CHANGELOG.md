@@ -1,13 +1,32 @@
 # Changelog
 
-## v0.0.33-rc1
+## v0.0.33
 
-### Release Candidate Checkpoint
+### Engine Abstractions and Traits
 
-- Capture the current `main` line before the larger `SegmentManager` refactor begins
-- Include the recent concurrency, freeze-path, mmap-backed upper-layer, and search/build-path cleanup work
-- Validate the release candidate on Fedora/Linux as the authoritative publish benchmark host
-- Note that macOS publish numbers improved materially after clean reruns on Python `3.13.11`, but still trail the older local highs and will continue to be profiled after this checkpoint
+- Define `VectorEngine` and `TextEngine` traits to decouple `VectorStore` from specific implementations
+- Refactor `SegmentManager` to implement `VectorEngine`, enabling easier future storage extensions
+- Introduce `StorageBackend` trait with initial implementations for `OmenFile`, `MmapBackend`, and `MockStorageBackend`
+- Consolidate search orchestration into `QueryPlanner` for better maintenance and extensibility
+
+### Hybrid and Search Improvements
+
+- Wire `QueryPlanner` into hybrid search paths, centralizing RRF fusion and metadata filtering
+- Add `HNSWIndexBuilder` for more robust HNSW index construction
+- Update `optimize()` to return `OptimizationStats`, tracking both reordered vectors and merged segments
+- Improve hybrid search performance and correctness with better candidate fetching and fusion logic
+
+### Python and Platform Support
+
+- Add Python 3.14 support with free-threaded GIL (`gil_used = false`)
+- Improve macOS benchmark performance on newer Python versions
+- Clean up unused imports and stabilize core library types
+
+### CI and Release
+
+- Stabilize release workflow and benchmark history tracking
+- Update lockfiles and dependency versions across Rust, Python, and Node.js
+- Ensure full test suite passing across all supported language bindings
 
 ## v0.0.32
 

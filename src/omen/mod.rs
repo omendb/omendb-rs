@@ -48,9 +48,6 @@ pub trait StorageBackend: Send + Sync {
     /// Set HNSW parameters.
     fn set_hnsw_params(&mut self, m: u16, ef_construction: u16, ef_search: u16) -> Result<()>;
 
-    /// Load a vector by slot ID.
-    fn get_vector(&self, slot: u32) -> Result<Option<Vec<f32>>>;
-
     /// Append a vector insert to the WAL.
     fn log_insert(&mut self, id: &str, vector: &[f32], metadata: &serde_json::Value) -> Result<()>;
 

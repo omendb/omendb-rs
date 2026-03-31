@@ -9,7 +9,6 @@ pub mod types;
 
 use anyhow::Result;
 use crate::omen::Metric;
-use std::sync::Arc;
 
 // Re-export main types
 pub use hnsw::{HNSWIndex, HNSWIndexBuilder, HNSWQuantization};

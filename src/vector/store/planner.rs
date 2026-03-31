@@ -14,7 +14,6 @@ use crate::vector::metadata::MetadataIndex;
 use crate::vector::store::helpers;
 use crate::vector::store::input::HybridParams;
 use anyhow::Result;
-use std::sync::Arc;
 
 pub struct QueryPlanner<'a> {
     records: &'a RecordStore,

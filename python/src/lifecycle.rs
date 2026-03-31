@@ -155,6 +155,7 @@ impl VectorDatabase {
     ///     >>> db.search(...)  # Faster queries
     fn optimize(&mut self) -> PyResult<usize> {
         let mut inner = self.inner.write();
-        inner.store.optimize().map_err(convert_error)
+        let stats = inner.store.optimize().map_err(convert_error)?;
+        Ok(stats.vectors_reordered)
     }
 }
