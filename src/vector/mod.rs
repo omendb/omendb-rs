@@ -68,7 +68,7 @@ pub trait VectorEngine: Send + Sync {
         query: &[f32],
         k: usize,
         ef: usize,
-        filter_fn: Arc<dyn Fn(u32) -> bool + Sync + Send>,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
     ) -> Result<Vec<EngineSearchResult>>;
 
     /// Flush pending changes (e.g., freeze mutable segment).

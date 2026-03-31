@@ -5,11 +5,13 @@
 
 use super::helpers;
 use super::record_store::RecordStore;
+use super::planner::QueryPlanner;
 use super::{MetadataFilter, VectorStore};
 use crate::text::{
-    DEFAULT_RRF_K, HybridResult, TextIndex, TextSearchConfig, weighted_reciprocal_rank_fusion,
+    DEFAULT_RRF_K, HybridResult, TextEngine, TextIndex, TextSearchConfig, weighted_reciprocal_rank_fusion,
     weighted_reciprocal_rank_fusion_with_subscores,
 };
+use crate::vector::store::input::HybridParams;
 use crate::vector::types::Vector;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
@@ -170,6 +172,31 @@ impl VectorStore {
     ) -> Result<Vec<(String, f32, JsonValue)>> {
         self.validate_hybrid_search_preconditions(query_vector)?;
 
+        let segments_guard = self.segments.read();
+        if let Some(ref segments) = *segments_guard {
+            let text_index_guard = self.text_index.read();
+            let metadata_index_guard = self.metadata_index.read();
+            let planner = QueryPlanner::new(
+                &self.records,
+                segments,
+                text_index_guard.as_ref().map(|ti| ti as &dyn TextEngine),
+                Some(&metadata_index_guard),
+            );
+
+            let mut params = HybridParams::new()
+                .alpha(alpha.unwrap_or(0.5))
+                .rrf_k(rrf_k.unwrap_or(DEFAULT_RRF_K));
+            if let Some(f) = filter {
+                params = params.filter(f.clone());
+            }
+
+            let results = planner.search_hybrid(&query_vector.data, query_text, k, &params)?;
+            return Ok(results
+                .into_iter()
+                .map(|r| (r.id, r.distance, r.metadata))
+                .collect());
+        }
+
         let (vector_results, text_results) =
             self.fetch_hybrid_candidates(query_vector, query_text, k, filter)?;
 
@@ -206,6 +233,27 @@ impl VectorStore {
         rrf_k: Option<usize>,
     ) -> Result<Vec<(HybridResult, JsonValue)>> {
         self.validate_hybrid_search_preconditions(query_vector)?;
+
+        let segments_guard = self.segments.read();
+        if let Some(ref segments) = *segments_guard {
+            let text_index_guard = self.text_index.read();
+            let metadata_index_guard = self.metadata_index.read();
+            let planner = QueryPlanner::new(
+                &self.records,
+                segments,
+                text_index_guard.as_ref().map(|ti| ti as &dyn TextEngine),
+                Some(&metadata_index_guard),
+            );
+
+            let mut params = HybridParams::new()
+                .alpha(alpha.unwrap_or(0.5))
+                .rrf_k(rrf_k.unwrap_or(DEFAULT_RRF_K));
+            if let Some(f) = filter {
+                params = params.filter(f.clone());
+            }
+
+            return planner.search_hybrid_with_subscores(&query_vector.data, query_text, k, &params);
+        }
 
         let (vector_results, text_results) =
             self.fetch_hybrid_candidates(query_vector, query_text, k, filter)?;

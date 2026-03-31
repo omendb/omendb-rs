@@ -58,9 +58,9 @@ impl VectorEngine for SegmentManager {
         query: &[f32],
         k: usize,
         ef: usize,
-        filter_fn: Arc<dyn Fn(u32) -> bool + Sync + Send>,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
     ) -> anyhow::Result<Vec<EngineSearchResult>> {
-        let results = self.search_with_filter(query, k, ef, move |slot| filter_fn(slot))?;
+        let results = self.search_with_filter(query, k, ef, filter_fn)?;
         Ok(results
             .into_iter()
             .map(|r| EngineSearchResult::new(r.slot, r.distance))
