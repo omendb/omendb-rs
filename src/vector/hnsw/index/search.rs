@@ -20,7 +20,9 @@ use tracing::{debug, error, instrument};
 /// to `new()`, which prevents `sq8_prep` from being populated.
 struct DistanceContext<'a> {
     query: &'a [f32],
+    query_norm_sq: f32,
     query_norm: f32,
+    allow_l2_decomposition: bool,
     sq8_prep: Option<QueryPrep>,
     storage: &'a NodeStorage,
 }
@@ -32,7 +34,8 @@ impl<'a> DistanceContext<'a> {
     /// of storage mode. This is used during graph construction where quantization
     /// noise would hurt graph quality.
     fn new(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
-        let query_norm = dot_product(query, query).sqrt();
+        let query_norm_sq = dot_product(query, query);
+        let query_norm = query_norm_sq.sqrt();
         let sq8_prep = if force_full_precision {
             None
         } else {
@@ -41,7 +44,9 @@ impl<'a> DistanceContext<'a> {
 
         Self {
             query,
+            query_norm_sq,
             query_norm,
+            allow_l2_decomposition: !force_full_precision,
             sq8_prep,
             storage: &index.storage,
         }
@@ -50,6 +55,17 @@ impl<'a> DistanceContext<'a> {
     /// Compute distance to a node using the best available method
     #[inline(always)]
     fn compute<D: Distance>(&self, node_id: u32) -> Result<f32> {
+        // Full-precision L2 can use cached norms to avoid one SIMD pass over the candidate.
+        if D::as_enum() == crate::types::Metric::L2
+            && self.allow_l2_decomposition
+            && !self.storage.sq8
+            && let Some(vec_norm) = self.storage.get_norm(node_id)
+        {
+            let vec = self.storage.vector(node_id);
+            let dot = dot_product(self.query, vec);
+            return Ok(self.query_norm_sq + vec_norm - 2.0 * dot);
+        }
+
         // SQ8 fast path
         if let Some(ref prep) = self.sq8_prep
             && let Some(dist) = self.storage.distance_sq8(prep, node_id)

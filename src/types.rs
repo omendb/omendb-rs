@@ -77,7 +77,9 @@ impl Metric {
     #[must_use]
     pub fn comparison_to_actual(&self, d: f32) -> f32 {
         match self {
-            Self::L2 => d.sqrt(),
+            // Decomposed L2 can drift a hair below zero from floating-point error.
+            // Clamp so user-facing distances stay finite and monotonic.
+            Self::L2 => d.max(0.0).sqrt(),
             _ => d,
         }
     }
@@ -146,3 +148,15 @@ pub enum OmenDBError {
 
 /// Result type for `OmenDB` operations
 pub type Result<T> = std::result::Result<T, OmenDBError>;
+
+#[cfg(test)]
+mod tests {
+    use super::Metric;
+
+    #[test]
+    fn l2_comparison_to_actual_clamps_negative_roundoff() {
+        let metric = Metric::L2;
+        assert_eq!(metric.comparison_to_actual(-1.0e-6), 0.0);
+        assert_eq!(metric.comparison_to_actual(4.0), 2.0);
+    }
+}
