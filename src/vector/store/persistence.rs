@@ -13,6 +13,7 @@ use crate::omen::{
 };
 use crate::text::TextIndex;
 use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
+use crate::vector::VectorEngineView;
 use crate::vector::metadata::MetadataIndex;
 use crate::vector::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use crate::vector::sparse::SparseIndex;
@@ -83,7 +84,7 @@ impl VectorStore {
             } else {
                 &wal_modified_slots
             };
-            let segments = Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
+            let engine = Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
             
             // 5. Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
             let ancillary = Self::initialize_ancillary_indexes(
@@ -95,19 +96,19 @@ impl VectorStore {
                 ctx.distance_metric,
             )?;
 
-            (ctx, records, segments, ancillary)
+            (ctx, records, engine, ancillary)
         };
-        let (ctx, records, mut segments, ancillary) = ctx;
+        let (ctx, records, mut engine, ancillary) = ctx;
         let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage_local));
         
-        if let Some(ref mut segments) = segments {
-            segments.set_storage(Arc::clone(&storage));
+        if let Some(ref mut engine) = engine {
+            engine.set_storage(Arc::clone(&storage));
         }
-        let published_view = segments.as_ref().map(SegmentManager::published_view);
+        let published_view = engine.as_ref().map(SegmentManager::read_view);
 
         Ok(Self {
             records,
-            segments: RwLock::new(segments),
+            engine: RwLock::new(engine),
             published_view: ArcSwap::new(Arc::new(published_view)),
             metadata_index: RwLock::new(ancillary.metadata_index),
             storage: Some(storage),
@@ -243,7 +244,7 @@ impl VectorStore {
         
         Ok(Self {
             records,
-            segments: RwLock::new(None),
+            engine: RwLock::new(None),
             published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
             storage: Some(storage),
@@ -295,7 +296,7 @@ impl VectorStore {
 
         Ok(Self {
             records: RecordStore::new(dimensions as u32),
-            segments: RwLock::new(None),
+            engine: RwLock::new(None),
             published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
             storage: None,
@@ -405,11 +406,11 @@ impl VectorStore {
 
     // Caller must hold write_lock when mutations can race with search/CRUD.
     fn flush_internal(&self, skip_segments: bool) -> Result<()> {
-        // Save segments FIRST so their generation is current when the manifest is written.
+        // Save engine FIRST so their generation is current when the manifest is written.
         // Saving after the checkpoint writes the old generation to the manifest, causing a
         // generation mismatch on every open that forces a full HNSW rebuild.
         if !skip_segments {
-            self.flush_segments()?;
+            self.flush_engine()?;
         }
 
         if let Some(ref storage) = self.storage {
@@ -483,9 +484,9 @@ impl VectorStore {
         );
         let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage_local));
         
-        // Wire storage to existing segments if any
-        if let Some(ref mut segments) = *self.segments.write() {
-            segments.set_storage(Arc::clone(&storage));
+        // Wire storage to existing engine if any
+        if let Some(ref mut engine) = *self.engine.write() {
+            engine.set_storage(Arc::clone(&storage));
         }
 
         self.storage = Some(storage);
@@ -741,7 +742,7 @@ impl VectorStore {
         Ok((wal_modified_slots, wal_edge_store, wal_edge_deletes))
     }
 
-    /// Initialize or rebuild segments from RecordStore.
+    /// Initialize or rebuild search engine from RecordStore.
     fn initialize_segments(
         path: &Path,
         storage: &OmenFile,
@@ -770,8 +771,9 @@ impl VectorStore {
                         && loaded.generation() == stored_generation
                         && modified_slots.is_empty() =>
                 {
+                    let loaded_view = loaded.read_view();
                     tracing::info!(
-                        segments = loaded.frozen_count(),
+                        segments = loaded_view.frozen_count(),
                         total_vectors = active_count,
                         generation = stored_generation,
                         "Loaded persisted segments (skipped rebuild)"
@@ -795,8 +797,9 @@ impl VectorStore {
                             inserted += 1;
                         }
                     }
+                    let loaded_view = loaded.read_view();
                     tracing::info!(
-                        frozen_segments = loaded.frozen_count(),
+                        frozen_segments = loaded_view.frozen_count(),
                         frozen_vectors = loaded.len() - inserted,
                         wal_delta = delta,
                         inserted,
@@ -823,9 +826,9 @@ impl VectorStore {
             None
         };
 
-        if let Some(mut segments) = loaded {
-            segments.set_pending_merge_dir(segments_dir);
-            Ok(Some(segments))
+        if let Some(mut engine) = loaded {
+            engine.set_pending_merge_dir(segments_dir);
+            Ok(Some(engine))
         } else {
             // Slow path: rebuild from vectors
             let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(active_count);
@@ -982,23 +985,21 @@ impl VectorStore {
         })
     }
 
-    /// Flush HNSW segments to disk and update generation in storage.
-    fn flush_segments(&self) -> Result<()> {
-        self.with_segments_mut(|segments| {
-            if let Some(segments) = segments.as_mut() {
-                // Wait for any background merge to finish before saving
-                segments.drain_pending_merge();
+    /// Flush HNSW engine to disk and update generation in storage.
+    fn flush_engine(&self) -> Result<()> {
+        self.with_engine_mut(|engine| {
+            if let Some(engine) = engine.as_mut() {
+                // Flush pending changes
+                engine.flush()?;
 
                 if let Some(ref path) = self.storage_path {
                     let segments_dir = segments_dir_for(path);
-                    segments.set_pending_merge_dir(segments_dir.clone());
-                    segments
-                        .save(&segments_dir)
-                        .map_err(|e| anyhow::anyhow!("Failed to save segments: {e}"))?;
+                    engine.set_pending_merge_dir(segments_dir.clone());
+                    engine.save(&segments_dir)?;
                     // Update config with new generation so the manifest checkpoint below
                     // writes the correct value.
                     if let Some(ref storage) = self.storage {
-                        storage.write().put_config("segments_generation", segments.generation())?;
+                        storage.write().put_config("segments_generation", engine.generation())?;
                     }
                 }
             }

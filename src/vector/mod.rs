@@ -8,7 +8,6 @@ pub mod store;
 pub mod types;
 
 use anyhow::Result;
-use crate::omen::Metric;
 
 // Re-export main types
 pub use hnsw::{HNSWIndex, HNSWIndexBuilder, HNSWQuantization};
@@ -33,6 +32,47 @@ impl EngineSearchResult {
     }
 }
 
+/// Core trait for a read-only view of a vector engine.
+///
+/// Allows lock-free read access to search results while the main engine
+/// may be undergoing mutations.
+pub trait VectorEngineView: Send + Sync {
+    /// Total number of vectors visible in this view.
+    fn len(&self) -> usize;
+
+    /// Check if the view is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Search for k-nearest neighbors in this view.
+    fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<EngineSearchResult>>;
+
+    /// Search with a filter predicate in this view.
+    fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> Result<Vec<EngineSearchResult>>;
+
+    /// Number of frozen segments visible in this view.
+    fn frozen_count(&self) -> usize;
+
+    /// Number of vectors visible in the mutable segment.
+    fn mutable_len(&self) -> usize;
+
+    /// Generation of the currently published engine state.
+    fn generation(&self) -> u64;
+
+    /// Segment capacity for the currently published topology.
+    fn segment_capacity(&self) -> usize;
+
+    /// Total graph memory visible across mutable and frozen segments.
+    fn total_memory(&self) -> usize;
+}
+
 /// Statistics from an optimization operation
 pub struct OptimizationStats {
     pub vectors_reordered: usize,
@@ -45,7 +85,7 @@ pub trait VectorEngine: Send + Sync {
     fn dimensions(&self) -> usize;
 
     /// Distance metric used by this engine.
-    fn metric(&self) -> Metric;
+    fn metric(&self) -> crate::Metric;
 
     /// Number of vectors currently indexed.
     fn len(&self) -> usize;
@@ -75,4 +115,31 @@ pub trait VectorEngine: Send + Sync {
 
     /// Optimize the index (e.g., merge segments, reorder for cache locality).
     fn optimize(&mut self) -> Result<OptimizationStats>;
+
+    /// Persist the engine state to a directory.
+    fn checkpoint(&mut self, path: &std::path::Path) -> Result<()>;
+
+    /// Set a storage backend for persistence.
+    fn set_storage(&mut self, storage: std::sync::Arc<parking_lot::RwLock<dyn crate::omen::StorageBackend>>);
+
+    /// Set the directory for background merge artifacts.
+    fn set_pending_merge_dir(&mut self, dir: std::path::PathBuf);
+
+    /// Estimated memory usage in bytes.
+    fn memory_usage(&self) -> usize;
+
+    /// Number of vectors in the mutable portion of the engine.
+    fn mutable_len(&self) -> usize;
+
+    /// Force freeze the mutable portion into a read-only state.
+    fn freeze_mutable(&mut self) -> Result<()>;
+
+    /// Add multiple vectors in parallel.
+    fn insert_batch_parallel(&mut self, vectors: Vec<Vec<f32>>, slots: &[u32]) -> Result<()>;
+
+    /// Generation counter for the current engine state.
+    fn generation(&self) -> u64;
+
+    /// Get a thread-safe read-only view of the current engine state.
+    fn read_view(&self) -> std::sync::Arc<dyn VectorEngineView>;
 }

@@ -1,5 +1,6 @@
 use super::super::*;
 use super::random_vector;
+use crate::vector::VectorEngineView;
 
 #[test]
 fn test_vector_store_knn_with_hnsw() {

@@ -1,8 +1,6 @@
 use anyhow::Result;
 use serde_json::Value as JsonValue;
 
-use crate::vector::hnsw::HNSWIndex;
-
 use super::VectorStore;
 use super::helpers;
 use super::{MetadataFilter, Vector};
@@ -58,11 +56,11 @@ impl VectorStore {
             "RecordStore does not contain the returned slot {slot}",
         );
 
-        self.with_segments_mut(|segments| {
-            if let Some(segments) = segments.as_mut() {
-                segments
+        self.with_engine_mut(|engine| {
+            if let Some(engine) = engine.as_mut() {
+                engine
                     .insert_with_slot(&vector.data, slot as u32)
-                    .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+                    .map_err(|e| anyhow::anyhow!("Engine insert failed: {e}"))?;
             }
             Ok(())
         })?;
@@ -132,7 +130,7 @@ impl VectorStore {
         if !updates.is_empty() {
             let mut metadata_index = self.metadata_index.write();
             let mut sparse_index = self.sparse_index.write();
-            self.with_segments_mut(|segments| {
+            self.with_engine_mut(|engine| {
                 for (old_slot, id, vector, metadata) in updates {
                     let new_slot = self.records.set(
                         id.clone(),
@@ -140,10 +138,10 @@ impl VectorStore {
                         Some(metadata.clone()),
                     )?;
 
-                    if let Some(segments) = segments.as_mut() {
-                        segments
+                    if let Some(engine) = engine.as_mut() {
+                        engine
                             .insert_with_slot(&vector.data, new_slot)
-                            .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
+                            .map_err(|e| anyhow::anyhow!("Engine insert failed: {e}"))?;
                     }
 
                     metadata_index.remove(old_slot);
@@ -163,7 +161,7 @@ impl VectorStore {
             let vectors_data: Vec<Vec<f32>> =
                 inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
 
-            if self.has_segments() {
+            if self.has_engine() {
                 let expected_dims = self.dimensions();
                 for (_, vector, _) in &inserts {
                     if vector.dim() != expected_dims {
@@ -183,18 +181,9 @@ impl VectorStore {
                     metadata_index.index_json(slot, metadata);
                 }
 
-                let config = self.segment_config(expected_dims);
-                let batch_index = HNSWIndex::build_parallel(
-                    config.dimensions,
-                    config.params,
-                    config.distance_fn,
-                    config.quantization,
-                    vectors_data,
-                )?;
-
-                self.with_segments_mut(|segments| {
-                    if let Some(segments) = segments.as_mut() {
-                        segments.add_frozen_from_index(batch_index, &slots);
+                self.with_engine_mut(|engine| {
+                    if let Some(engine) = engine.as_mut() {
+                        engine.insert_batch_parallel(vectors_data, &slots)?;
                     }
                     Ok(())
                 })?;
@@ -216,7 +205,7 @@ impl VectorStore {
                     metadata_index.index_json(slot, metadata);
                 }
 
-                self.build_and_publish_segments(dimensions, vectors_data, &slots)?;
+                self.build_and_publish_engine(dimensions, vectors_data, &slots)?;
 
                 if self.is_quantized()
                     && let Some(ref storage) = self.storage

@@ -3,7 +3,8 @@ use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 use super::VectorStore;
-use super::{MetadataIndex, SegmentManager, Vector};
+use super::{MetadataIndex, Vector};
+use crate::vector::hnsw::SegmentManager;
 
 impl VectorStore {
     /// Insert batch of vectors in parallel
@@ -37,24 +38,20 @@ impl VectorStore {
             all_slots.push(slot as usize);
         }
 
-        // Build or extend segments
+        // Build or extend engine
         let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
         let slots: Vec<u32> = all_slots.iter().map(|&s| s as u32).collect();
 
-        if self.has_segments() {
-            self.with_segments_mut(|segments| {
-                if let Some(segments) = segments.as_mut() {
-                    for (vector, &slot) in vector_data.iter().zip(slots.iter()) {
-                        segments
-                            .insert_with_slot(vector, slot)
-                            .map_err(|e| anyhow::anyhow!("Segment insert failed: {e}"))?;
-                    }
+        if self.has_engine() {
+            self.with_engine_mut(|engine| {
+                if let Some(engine) = engine.as_mut() {
+                    engine.insert_batch_parallel(vector_data, &slots)?;
                 }
                 Ok(())
             })?;
         } else {
-            // Build new segment with parallel construction
-            self.build_and_publish_segments(dimensions, vector_data, &slots)?;
+            // Build new engine with parallel construction
+            self.build_and_publish_engine(dimensions, vector_data, &slots)?;
         }
 
         Ok(all_slots)
@@ -79,11 +76,11 @@ impl VectorStore {
             slots.push(slot);
         }
 
-        // Build segment config
+        // Build config
         let dims = self.dimensions();
 
         // Rebuild with parallel construction
-        self.build_and_publish_segments(dims, vectors, &slots)
+        self.build_and_publish_engine(dims, vectors, &slots)
     }
 
     /// Merge another `VectorStore` into this one using IGTM algorithm
@@ -91,8 +88,8 @@ impl VectorStore {
         self.merge_from_with_prefix(other, None)
     }
 
-    /// Build segments in parallel from provided vectors and publish them.
-    pub(crate) fn build_and_publish_segments(
+    /// Build engine in parallel from provided vectors and publish it.
+    pub(crate) fn build_and_publish_engine(
         &self,
         dimensions: usize,
         vectors: Vec<Vec<f32>>,
@@ -100,7 +97,7 @@ impl VectorStore {
     ) -> Result<()> {
         let config = self.segment_config(dimensions);
         let mut segs = SegmentManager::build_parallel_with_slots(config, vectors, slots)
-            .map_err(|e| anyhow::anyhow!("Segment parallel build failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Engine parallel build failed: {e}"))?;
 
         if let Some(ref path) = self.storage_path {
             segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
@@ -110,18 +107,18 @@ impl VectorStore {
             segs.set_storage(Arc::clone(storage));
         }
 
-        self.with_segments_mut(|segments| {
-            *segments = Some(segs);
+        self.with_engine_mut(|engine| {
+            *engine = Some(segs);
             Ok(())
         })
     }
 
-    /// Ensure segments are initialized, creating an empty SegmentManager if needed.
+    /// Ensure search engine is initialized, creating an empty one if needed.
     pub(super) fn ensure_segments_initialized(&self, dimensions: usize) -> Result<()> {
         let resolved_dims = self.resolve_dimensions(dimensions)?;
         self.records.set_dimensions(resolved_dims as u32);
 
-        self.with_segments_mut(|guard| {
+        self.with_engine_mut(|guard| {
             if guard.is_none() {
                 let config = self.segment_config(resolved_dims);
                 let mut segs = SegmentManager::new(config)
@@ -216,7 +213,7 @@ impl VectorStore {
     #[inline]
     #[must_use]
     pub fn needs_index_rebuild(&self) -> bool {
-        !self.has_segments() && self.records.len() > 100
+        !self.has_engine() && self.records.len() > 100
     }
 
     /// Ensure HNSW index is ready for search
@@ -252,14 +249,12 @@ impl VectorStore {
             self.compact_locked()?;
         }
 
-        self.with_segments_mut(|segments| {
-            if let Some(segments) = segments.as_mut() {
-                // Flush mutable segment first
-                segments.flush().map_err(|e| anyhow::anyhow!("{e}"))?;
-                // Merge all frozen segments
-                let stats = segments
-                    .optimize()
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.with_engine_mut(|engine| {
+            if let Some(engine) = engine.as_mut() {
+                // Flush engine first
+                engine.flush()?;
+                // Optimize engine
+                let stats = engine.optimize()?;
                 return Ok(stats);
             }
             Ok(crate::vector::OptimizationStats {
@@ -347,10 +342,10 @@ impl VectorStore {
             edge_store.gc_orphaned(&live_ids);
         }
 
-        // Rebuild segments with new contiguous slots
+        // Rebuild engine with new contiguous slots
         if self.records.is_empty() {
-            self.with_segments_mut(|segments| {
-                *segments = None;
+            self.with_engine_mut(|engine| {
+                *engine = None;
                 Ok(())
             })?;
         } else {

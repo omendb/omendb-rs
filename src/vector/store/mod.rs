@@ -92,10 +92,10 @@ pub struct VectorStore {
     /// Single source of truth for records (vectors, IDs, deleted, metadata)
     pub(crate) records: RecordStore,
 
-    /// Segment manager for HNSW index (mutable + frozen segments)
-    pub(crate) segments: RwLock<Option<SegmentManager>>,
+    /// Vector search engine (mutable + frozen segments)
+    pub(crate) engine: RwLock<Option<SegmentManager>>,
 
-    /// Fast lock-free read access to segments
+    /// Fast lock-free read access to engine view
     pub(crate) published_view: ArcSwap<Option<Arc<PublishedSegmentView>>>,
 
     /// Roaring bitmap index for fast filtered search
@@ -170,7 +170,7 @@ impl VectorStore {
     fn with_defaults(dimensions: usize, distance_metric: Metric) -> Self {
         Self {
             records: RecordStore::new(dimensions.try_into().unwrap()),
-            segments: RwLock::new(None),
+            engine: RwLock::new(None),
             published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),
             storage: None,
@@ -348,11 +348,11 @@ impl VectorStore {
     /// heap usage while allowing large datasets.
     fn check_memory_pressure(&self) {
         if let Some(limit) = self.max_memory_bytes {
-            let _ = self.with_segments_mut(|segments| {
-                if let Some(segments) = segments.as_mut() {
-                    let estimated = segments.total_memory();
-                    if estimated > limit && segments.mutable_len() > 0 {
-                        let _ = segments.freeze_mutable();
+            let _ = self.with_engine_mut(|engine| {
+                if let Some(engine) = engine.as_mut() {
+                    let estimated = engine.total_memory();
+                    if estimated > limit && engine.mutable_len() > 0 {
+                        let _ = engine.freeze_mutable();
                     }
                 }
                 Ok(())
@@ -398,10 +398,10 @@ impl VectorStore {
             (k, false)
         };
 
-        let results = self.with_segment_view(|segment_view| {
+        let results = self.with_segment_view(|engine_view| {
             search::knn_search_core(
                 &self.records,
-                segment_view,
+                engine_view,
                 &query.data,
                 search_k,
                 ef,
@@ -447,11 +447,11 @@ impl VectorStore {
         let effective_ef =
             helpers::compute_effective_ef(ef, self.hnsw_ef_search.load(Ordering::Relaxed), k);
 
-        self.with_segment_view(|segment_view| {
+        self.with_segment_view(|engine_view| {
             search::knn_search_filtered_core(
                 &self.records,
                 &self.metadata_index.read(),
-                segment_view,
+                engine_view,
                 &query.data,
                 k,
                 effective_ef,

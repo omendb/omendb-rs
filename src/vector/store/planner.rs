@@ -7,7 +7,7 @@
 //! - Applying metadata filters across retrieval paths.
 
 use crate::text::{TextEngine, weighted_reciprocal_rank_fusion, HybridResult, weighted_reciprocal_rank_fusion_with_subscores};
-use crate::vector::{VectorEngine, EngineSearchResult};
+use crate::vector::{VectorEngineView, EngineSearchResult};
 use crate::vector::store::SearchResult;
 use crate::vector::store::record_store::RecordStore;
 use crate::vector::metadata::MetadataIndex;
@@ -17,7 +17,7 @@ use anyhow::Result;
 
 pub struct QueryPlanner<'a> {
     records: &'a RecordStore,
-    vector_engine: &'a dyn VectorEngine,
+    vector_engine: &'a dyn VectorEngineView,
     text_engine: Option<&'a dyn TextEngine>,
     metadata_index: Option<&'a MetadataIndex>,
 }
@@ -25,7 +25,7 @@ pub struct QueryPlanner<'a> {
 impl<'a> QueryPlanner<'a> {
     pub fn new(
         records: &'a RecordStore,
-        vector_engine: &'a dyn VectorEngine,
+        vector_engine: &'a dyn VectorEngineView,
         text_engine: Option<&'a dyn TextEngine>,
         metadata_index: Option<&'a MetadataIndex>,
     ) -> Self {

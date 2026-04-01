@@ -5,7 +5,8 @@ use std::sync::atomic::Ordering;
 
 use super::{MetadataFilter, VectorStore};
 use crate::omen::Metric;
-use crate::vector::hnsw::{SegmentManager, SegmentReadView};
+use crate::vector::VectorEngineView;
+use crate::vector::hnsw::{PublishedSegmentView, SegmentManager};
 
 /// Comprehensive store diagnostics.
 ///
@@ -190,33 +191,33 @@ impl VectorStore {
     /// Run a closure against the current immutable segment read view.
     ///
     /// This exposes the published search state without leaking the mutable
-    /// `SegmentManager` lock shape to callers.
-    pub fn with_segment_view<T>(&self, f: impl FnOnce(Option<SegmentReadView>) -> T) -> T {
+    /// `VectorEngine` lock shape to callers.
+    pub fn with_segment_view<T>(
+        &self,
+        f: impl FnOnce(Option<Arc<PublishedSegmentView>>) -> T,
+    ) -> T {
         let view = self.published_view.load();
-        let segment_view = (**view).as_ref().map(|v| SegmentReadView {
-            view: Arc::clone(v),
-        });
-        f(segment_view)
+        f((**view).clone())
     }
 
-    /// Check whether a segment manager is initialized.
-    pub(crate) fn has_segments(&self) -> bool {
-        self.segments.read().is_some()
+    /// Check whether a search engine is initialized.
+    pub(crate) fn has_engine(&self) -> bool {
+        self.engine.read().is_some()
     }
 
-    /// Run a closure against the mutable segment manager slot.
+    /// Run a closure against the mutable search engine slot.
     ///
     /// This centralizes serialized write-side access so topology mutations can
     /// gradually move behind one explicit coordination seam.
-    pub(crate) fn with_segments_mut<T>(
+    pub(crate) fn with_engine_mut<T>(
         &self,
         f: impl FnOnce(&mut Option<SegmentManager>) -> Result<T>,
     ) -> Result<T> {
-        let mut segments = self.segments.write();
-        let result = f(&mut segments);
+        let mut engine = self.engine.write();
+        let result = f(&mut engine);
         
         // Sync published view ArcSwap after mutation
-        let new_view = segments.as_ref().map(SegmentManager::published_view);
+        let new_view = engine.as_ref().map(SegmentManager::read_view);
         self.published_view.store(Arc::new(new_view));
         
         result
@@ -232,23 +233,18 @@ impl VectorStore {
             .sum::<usize>();
 
         let (frozen_count, mutable_vecs, graph_bytes, segment_capacity) =
-            self.with_segment_view(|segments| {
-                if let Some(segments) = segments {
-                    let graph = segments.total_memory() - vector_bytes;
+            self.with_segment_view(|engine_view| {
+                if let Some(engine_view) = engine_view {
+                    let total_mem = engine_view.total_memory();
+                    let graph = total_mem.saturating_sub(vector_bytes);
                     (
-                        segments.frozen_count(),
-                        segments.mutable_len(),
+                        engine_view.frozen_count(),
+                        engine_view.mutable_len(),
                         graph,
-                        segments.segment_capacity(),
+                        engine_view.segment_capacity(),
                     )
                 } else {
-                    (
-                        0,
-                        0,
-                        0,
-                        self.segment_capacity
-                            .unwrap_or(crate::vector::hnsw::SegmentConfig::DEFAULT_CAPACITY),
-                    )
+                    (0, 0, 0, 0)
                 }
             });
 

@@ -8,9 +8,11 @@ use super::record_store::RecordStore;
 use super::{MetadataFilter, SearchResult};
 use crate::distance::{cosine_distance_precomputed, dot_product, l2_distance, norm_squared};
 use crate::omen::Metric;
-use crate::vector::hnsw::SegmentReadView;
 use crate::vector::metadata::MetadataIndex;
+use crate::vector::hnsw::PublishedSegmentView;
+use crate::vector::VectorEngineView;
 use anyhow::Result;
+use std::sync::Arc;
 
 /// Compute distance with precomputed query norm.
 ///
@@ -100,42 +102,42 @@ pub(crate) fn slots_to_results_with_fallback(
     }
 }
 
-/// Core K-NN search using segments.
+/// Core K-NN search using search engine view.
 ///
-/// Uses segments if available, falls back to brute force.
+/// Uses engine view if available, falls back to brute force.
 pub(crate) fn knn_search_core(
     records: &RecordStore,
-    segments: Option<SegmentReadView>,
+    engine: Option<Arc<PublishedSegmentView>>,
     query: &[f32],
     k: usize,
     ef: usize,
     metric: Metric,
 ) -> Result<Vec<(usize, f32)>> {
-    let has_data = !records.is_empty() || segments.as_ref().is_some_and(|s| !s.is_empty());
+    let has_data = !records.is_empty() || engine.as_ref().is_some_and(|e| !e.is_empty());
 
     if !has_data {
         return Ok(Vec::new());
     }
 
-    // Use segments if available
-    if let Some(segments) = segments {
-        let segment_results = segments
+    // Use engine if available
+    if let Some(engine) = engine {
+        let engine_results = engine
             .search(query, k, ef)
-            .map_err(|e| anyhow::anyhow!("Segment search failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Engine search failed: {e}"))?;
 
-        let results: Vec<(usize, f32)> = segment_results
+        let results: Vec<(usize, f32)> = engine_results
             .into_iter()
             .map(|r| (r.slot as usize, r.distance))
             .collect();
 
-        // Fall back to brute force if segments return nothing but we have data
+        // Fall back to brute force if engine returns nothing but we have data
         if results.is_empty() && !records.is_empty() {
             return Ok(brute_force_search(records, query, k, metric));
         }
         return Ok(results);
     }
 
-    // No segments - use brute force
+    // No engine - use brute force
     Ok(brute_force_search(records, query, k, metric))
 }
 
@@ -147,7 +149,7 @@ pub(crate) fn knn_search_core(
 pub(crate) fn knn_search_filtered_core(
     records: &RecordStore,
     metadata_index: &MetadataIndex,
-    segments: Option<SegmentReadView>,
+    engine: Option<Arc<PublishedSegmentView>>,
     query: &[f32],
     k: usize,
     ef: usize,
@@ -157,14 +159,14 @@ pub(crate) fn knn_search_filtered_core(
     // Try bitmap-based filtering (O(1) per candidate)
     let filter_bitmap = filter.evaluate_bitmap(metadata_index);
 
-    // Use segments (ACORN-1 filtered search)
-    if let Some(seg_mgr) = segments
-        && !seg_mgr.is_empty()
+    // Use engine (ACORN-1 filtered search)
+    if let Some(engine) = engine
+        && !engine.is_empty()
     {
-        let segment_results = if let Some(ref bitmap) = filter_bitmap {
+        let engine_results = if let Some(ref bitmap) = filter_bitmap {
             // Fast path: bitmap-based filtering
             let filter_fn = |slot: u32| -> bool { records.is_live(slot) && bitmap.contains(slot) };
-            seg_mgr.search_with_filter(query, k, ef, filter_fn)?
+            PublishedSegmentView::search_with_filter(engine.as_ref(), query, k, ef, &filter_fn)?
         } else {
             // Slow path: JSON-based filtering (borrow metadata, no clone)
             let filter_fn = |slot: u32| -> bool {
@@ -177,11 +179,11 @@ pub(crate) fn knn_search_filtered_core(
                     .unwrap_or_else(|| helpers::DEFAULT_METADATA.clone());
                 filter.matches(&metadata)
             };
-            seg_mgr.search_with_filter(query, k, ef, filter_fn)?
+            PublishedSegmentView::search_with_filter(engine.as_ref(), query, k, ef, &filter_fn)?
         };
 
-        // Convert segment results to search results (metadata resolved only for final k)
-        let slot_distances: Vec<(usize, f32)> = segment_results
+        // Convert engine results to search results (metadata resolved only for final k)
+        let slot_distances: Vec<(usize, f32)> = engine_results
             .into_iter()
             .map(|r| (r.slot as usize, r.distance))
             .collect();

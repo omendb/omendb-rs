@@ -51,22 +51,22 @@ fn test_rebuild_index() {
     }
 
     // Verify segments exist
-    assert!(store.has_segments());
+    assert!(store.has_engine());
 
     // Clear the index
     store
-        .with_segments_mut(|segments| {
-            *segments = None;
+        .with_engine_mut(|engine| {
+            *engine = None;
             Ok(())
         })
         .unwrap();
-    assert!(!store.has_segments());
+    assert!(!store.has_engine());
 
     // Rebuild index
     store.rebuild_index().unwrap();
 
     // Verify index is rebuilt
-    assert!(store.has_segments());
+    assert!(store.has_engine());
 
     // Verify search works
     let query = random_vector(128, 50);

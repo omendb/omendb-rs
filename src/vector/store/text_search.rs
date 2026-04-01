@@ -172,13 +172,12 @@ impl VectorStore {
     ) -> Result<Vec<(String, f32, JsonValue)>> {
         self.validate_hybrid_search_preconditions(query_vector)?;
 
-        let segments_guard = self.segments.read();
-        if let Some(ref segments) = *segments_guard {
+        if let Some(engine) = self.published_view.load().as_ref() {
             let text_index_guard = self.text_index.read();
             let metadata_index_guard = self.metadata_index.read();
             let planner = QueryPlanner::new(
                 &self.records,
-                segments,
+                engine.as_ref(),
                 text_index_guard.as_ref().map(|ti| ti as &dyn TextEngine),
                 Some(&metadata_index_guard),
             );
@@ -234,13 +233,12 @@ impl VectorStore {
     ) -> Result<Vec<(HybridResult, JsonValue)>> {
         self.validate_hybrid_search_preconditions(query_vector)?;
 
-        let segments_guard = self.segments.read();
-        if let Some(ref segments) = *segments_guard {
+        if let Some(engine) = self.published_view.load().as_ref() {
             let text_index_guard = self.text_index.read();
             let metadata_index_guard = self.metadata_index.read();
             let planner = QueryPlanner::new(
                 &self.records,
-                segments,
+                engine.as_ref(),
                 text_index_guard.as_ref().map(|ti| ti as &dyn TextEngine),
                 Some(&metadata_index_guard),
             );

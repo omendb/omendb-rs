@@ -18,7 +18,6 @@ mod merge;
 mod persistence;
 
 pub use merge::MergePolicy;
-use crate::vector::{EngineSearchResult, OptimizationStats, VectorEngine};
 use crate::vector::hnsw::error::Result;
 use crate::vector::hnsw::index::HNSWIndex;
 use crate::vector::hnsw::merge::MergeStats;
@@ -27,6 +26,8 @@ use crate::vector::hnsw::types::{HNSWParams, Metric};
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use crate::vector::{EngineSearchResult, OptimizationStats, VectorEngine, VectorEngineView};
 
 impl VectorEngine for SegmentManager {
     fn dimensions(&self) -> usize {
@@ -73,6 +74,51 @@ impl VectorEngine for SegmentManager {
 
     fn optimize(&mut self) -> anyhow::Result<OptimizationStats> {
         self.optimize().map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn checkpoint(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        self.save(path).map_err(|e| e.into())
+    }
+
+    fn set_storage(&mut self, storage: Arc<RwLock<dyn crate::omen::StorageBackend>>) {
+        self.set_storage(storage);
+    }
+
+    fn set_pending_merge_dir(&mut self, dir: PathBuf) {
+        self.set_pending_merge_dir(dir);
+    }
+
+    fn memory_usage(&self) -> usize {
+        self.total_memory()
+    }
+
+    fn mutable_len(&self) -> usize {
+        self.mutable_len()
+    }
+
+    fn freeze_mutable(&mut self) -> anyhow::Result<()> {
+        self.freeze_mutable().map_err(|e| e.into())
+    }
+
+    fn insert_batch_parallel(&mut self, vectors: Vec<Vec<f32>>, slots: &[u32]) -> anyhow::Result<()> {
+        let config = self.config.clone();
+        let index = HNSWIndex::build_parallel(
+            config.dimensions,
+            config.params,
+            config.distance_fn,
+            config.quantization,
+            vectors,
+        )?;
+        self.add_frozen_from_index(index, slots);
+        Ok(())
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation()
+    }
+
+    fn read_view(&self) -> Arc<dyn VectorEngineView> {
+        Arc::clone(&self.published.current) as Arc<dyn VectorEngineView>
     }
 }
 
@@ -231,6 +277,105 @@ impl PublishedSegmentView {
             config: self.config.clone(),
             generation,
         }
+    }
+
+    fn frozen_count(&self) -> usize {
+        self.frozen.len()
+    }
+
+    fn mutable_len(&self) -> usize {
+        self.mutable.read().len()
+    }
+
+    fn len(&self) -> usize {
+        self.mutable_len() + self.frozen.iter().map(|s| s.len()).sum::<usize>()
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn segment_capacity(&self) -> usize {
+        self.config.segment_capacity
+    }
+
+    fn total_memory(&self) -> usize {
+        let mutable = self.mutable.read().index().memory_usage();
+        let frozen: usize = self.frozen.iter().map(|segment| segment.index().memory_usage()).sum();
+        mutable + frozen
+    }
+
+    fn search(&self, query: &[f32], k: usize, ef: usize) -> anyhow::Result<Vec<EngineSearchResult>> {
+        let mut results = self.mutable.read().search(query, k, ef)?;
+
+        if !self.frozen.is_empty() {
+            if self.frozen.len() >= 4 {
+                use rayon::prelude::*;
+                let frozen_results: Vec<SegmentSearchResult> = self
+                    .frozen
+                    .par_iter()
+                    .flat_map(|seg| seg.search(query, k, ef))
+                    .collect();
+                results.extend(frozen_results);
+            } else {
+                for seg in self.frozen.iter() {
+                    results.extend(seg.search(query, k, ef));
+                }
+            }
+        }
+
+        results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(k);
+
+        Ok(results
+            .into_iter()
+            .map(|r| EngineSearchResult::new(r.slot, r.distance))
+            .collect())
+    }
+
+    fn search_with_filter<F>(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: F,
+    ) -> anyhow::Result<Vec<EngineSearchResult>>
+    where
+        F: Fn(u32) -> bool + Sync,
+    {
+        let mut results = self.mutable.read().search_with_filter(query, k, ef, &filter_fn)?;
+
+        if !self.frozen.is_empty() {
+            if self.frozen.len() >= 4 {
+                use rayon::prelude::*;
+                let frozen_results: Vec<SegmentSearchResult> = self
+                    .frozen
+                    .par_iter()
+                    .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
+                    .collect();
+                results.extend(frozen_results);
+            } else {
+                for seg in self.frozen.iter() {
+                    results.extend(seg.search_with_filter(query, k, ef, &filter_fn));
+                }
+            }
+        }
+
+        results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(k);
+
+        Ok(results
+            .into_iter()
+            .map(|r| EngineSearchResult::new(r.slot, r.distance))
+            .collect())
     }
 }
 
@@ -468,80 +613,25 @@ impl PublishedSegments {
         mutable + frozen
     }
 
-    fn read_view(&self) -> SegmentReadView {
-        SegmentReadView {
-            view: Arc::clone(&self.current),
-        }
+    fn read_view(&self) -> Arc<PublishedSegmentView> {
+        Arc::clone(&self.current)
     }
 
-    #[cfg(test)]
-    fn frozen(&self) -> &[Arc<FrozenSegment>] {
-        &self.current.frozen
-    }
-}
+    fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SegmentSearchResult>> {
+        let mut results = self.current.mutable.read().search(query, k, ef)?;
 
-/// Immutable view of the currently published segment state.
-///
-/// This provides snapshot-style read serving: queries only need
-/// read access to the captured view Arc, not the full mutable manager.
-#[derive(Clone)]
-pub struct SegmentReadView {
-    pub(crate) view: Arc<PublishedSegmentView>,
-}
-
-impl SegmentReadView {
-    /// Number of frozen segments visible to readers.
-    pub fn frozen_count(&self) -> usize {
-        self.view.frozen.len()
-    }
-
-    /// Number of vectors in the mutable segment visible to readers.
-    pub fn mutable_len(&self) -> usize {
-        self.view.mutable.read().len()
-    }
-
-    /// Total number of vectors visible across mutable and frozen segments.
-    pub fn len(&self) -> usize {
-        self.mutable_len() + self.view.frozen.iter().map(|s| s.len()).sum::<usize>()
-    }
-
-    /// Check whether the visible segment set is empty.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Generation of the published segment state.
-    pub fn generation(&self) -> u64 {
-        self.view.generation
-    }
-
-    /// Segment capacity for the currently published topology.
-    pub fn segment_capacity(&self) -> usize {
-        self.view.config.segment_capacity
-    }
-
-    /// Total graph memory visible across mutable and frozen segments.
-    pub fn total_memory(&self) -> usize {
-        let mutable = self.view.mutable.read().index().memory_usage();
-        let frozen: usize = self.view.frozen.iter().map(|s| s.index().memory_usage()).sum();
-        mutable + frozen
-    }
-
-    /// Search across the visible mutable and frozen segments.
-    pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SegmentSearchResult>> {
-        let mut results = self.view.mutable.read().search(query, k, ef)?;
-
-        if !self.view.frozen.is_empty() {
-            if self.view.frozen.len() >= 4 {
+        if !self.current.frozen.is_empty() {
+            if self.current.frozen.len() >= 4 {
                 use rayon::prelude::*;
                 let frozen_results: Vec<SegmentSearchResult> = self
-                    .view.frozen
+                    .current
+                    .frozen
                     .par_iter()
                     .flat_map(|seg| seg.search(query, k, ef))
                     .collect();
                 results.extend(frozen_results);
             } else {
-                for seg in self.view.frozen.iter() {
+                for seg in self.current.frozen.iter() {
                     results.extend(seg.search(query, k, ef));
                 }
             }
@@ -553,35 +643,31 @@ impl SegmentReadView {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         results.truncate(k);
-
         Ok(results)
     }
 
-    /// Search across the visible mutable and frozen segments with a filter predicate.
-    pub fn search_with_filter<F>(
+    fn search_with_filter(
         &self,
         query: &[f32],
         k: usize,
         ef: usize,
-        filter_fn: F,
-    ) -> Result<Vec<SegmentSearchResult>>
-    where
-        F: Fn(u32) -> bool + Sync,
-    {
-        let mut results = self.view.mutable.read().search_with_filter(query, k, ef, &filter_fn)?;
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> Result<Vec<SegmentSearchResult>> {
+        let mut results = self.current.mutable.read().search_with_filter(query, k, ef, filter_fn)?;
 
-        if !self.view.frozen.is_empty() {
-            if self.view.frozen.len() >= 4 {
+        if !self.current.frozen.is_empty() {
+            if self.current.frozen.len() >= 4 {
                 use rayon::prelude::*;
                 let frozen_results: Vec<SegmentSearchResult> = self
-                    .view.frozen
+                    .current
+                    .frozen
                     .par_iter()
-                    .flat_map(|seg| seg.search_with_filter(query, k, ef, &filter_fn))
+                    .flat_map(|seg| seg.search_with_filter(query, k, ef, filter_fn))
                     .collect();
                 results.extend(frozen_results);
             } else {
-                for seg in self.view.frozen.iter() {
-                    results.extend(seg.search_with_filter(query, k, ef, &filter_fn));
+                for seg in self.current.frozen.iter() {
+                    results.extend(seg.search_with_filter(query, k, ef, filter_fn));
                 }
             }
         }
@@ -592,8 +678,55 @@ impl SegmentReadView {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         results.truncate(k);
-
         Ok(results)
+    }
+
+    #[cfg(test)]
+    fn frozen(&self) -> &[Arc<FrozenSegment>] {
+        &self.current.frozen
+    }
+}
+
+impl VectorEngineView for PublishedSegmentView {
+    /// Total number of vectors visible across mutable and frozen segments.
+    fn len(&self) -> usize {
+        PublishedSegmentView::len(self)
+    }
+
+    fn frozen_count(&self) -> usize {
+        PublishedSegmentView::frozen_count(self)
+    }
+
+    fn mutable_len(&self) -> usize {
+        PublishedSegmentView::mutable_len(self)
+    }
+
+    fn generation(&self) -> u64 {
+        PublishedSegmentView::generation(self)
+    }
+
+    fn segment_capacity(&self) -> usize {
+        PublishedSegmentView::segment_capacity(self)
+    }
+
+    fn total_memory(&self) -> usize {
+        PublishedSegmentView::total_memory(self)
+    }
+
+    /// Search across the visible mutable and frozen segments.
+    fn search(&self, query: &[f32], k: usize, ef: usize) -> anyhow::Result<Vec<EngineSearchResult>> {
+        PublishedSegmentView::search(self, query, k, ef)
+    }
+
+    /// Search across the visible mutable and frozen segments with a filter predicate.
+    fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> anyhow::Result<Vec<EngineSearchResult>> {
+        PublishedSegmentView::search_with_filter(self, query, k, ef, filter_fn)
     }
 }
 
@@ -808,7 +941,7 @@ impl SegmentManager {
     }
 
     /// Borrow the currently published mutable and frozen segment state.
-    pub fn read_view(&self) -> SegmentReadView {
+    pub fn read_view(&self) -> Arc<PublishedSegmentView> {
         self.debug_assert_invariants();
         self.published.read_view()
     }
@@ -870,6 +1003,20 @@ impl SegmentManager {
         self.insert_into_published_mutable(vector, slot)
     }
 
+    /// Add multiple vectors in parallel.
+    pub fn insert_batch_parallel(&mut self, vectors: Vec<Vec<f32>>, slots: &[u32]) -> anyhow::Result<()> {
+        let config = self.config.clone();
+        let index = HNSWIndex::build_parallel(
+            config.dimensions,
+            config.params,
+            config.distance_fn,
+            config.quantization,
+            vectors,
+        )?;
+        self.add_frozen_from_index(index, slots);
+        Ok(())
+    }
+
     /// Freeze current mutable segment
     ///
     /// After freezing, checks merge policy and triggers automatic merge
@@ -908,7 +1055,7 @@ impl SegmentManager {
     /// Searches mutable and all frozen segments, merging results.
     /// Frozen segments use sequential iteration for <4 segments, parallel for 4+.
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SegmentSearchResult>> {
-        self.read_view().search(query, k, ef)
+        self.published.search(query, k, ef)
     }
 
     /// Search across all segments with a filter predicate
@@ -923,9 +1070,9 @@ impl SegmentManager {
         filter_fn: F,
     ) -> Result<Vec<SegmentSearchResult>>
     where
-        F: Fn(u32) -> bool + Sync,
+        F: Fn(u32) -> bool + Sync + Send,
     {
-        self.read_view().search_with_filter(query, k, ef, filter_fn)
+        self.published.search_with_filter(query, k, ef, &filter_fn)
     }
 
     /// Force freeze current mutable segment
@@ -972,8 +1119,8 @@ impl SegmentManager {
         self.flush()?;
         let stats = self.merge_all_frozen()?;
         Ok(OptimizationStats {
-            vectors_reordered: stats.as_ref().map(|s| s.vectors_merged).unwrap_or(0),
-            segments_merged: stats.as_ref().map(|s| s.segments_merged).unwrap_or(0),
+            vectors_reordered: stats.as_ref().map_or(0, |s| s.vectors_merged),
+            segments_merged: stats.as_ref().map_or(0, |s| s.segments_merged),
         })
     }
 
@@ -983,7 +1130,6 @@ impl SegmentManager {
     }
 
     /// Set HNSW parameters
-
     pub fn set_merge_policy(&mut self, policy: MergePolicy) {
         self.merge_policy = policy;
     }
@@ -1136,7 +1282,6 @@ mod tests {
 
         assert_eq!(view_results.len(), manager_results.len());
         for (view, manager) in view_results.iter().zip(manager_results.iter()) {
-            assert_eq!(view.id, manager.id);
             assert_eq!(view.slot, manager.slot);
             assert_eq!(view.distance, manager.distance);
         }
