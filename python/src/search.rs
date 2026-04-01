@@ -4,7 +4,7 @@ use crate::conversions::{
 };
 use crate::database::VectorDatabase;
 use crate::filters::parse_filter;
-use omendb_lib::vector::{SearchResult, Vector};
+use omendb_lib::vector::{SearchResult, Vector, VectorEngineView};
 use omendb_lib::{Rerank, SearchOptions};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
