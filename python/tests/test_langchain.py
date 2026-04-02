@@ -5,6 +5,8 @@ import tempfile
 
 import pytest
 
+pytest.importorskip("langchain_core")
+
 
 class FakeEmbeddings:
     """Fake embeddings model for testing (no API calls)."""

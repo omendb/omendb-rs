@@ -2114,20 +2114,26 @@ llamaindex = [
 ]
 
 [package.dev-dependencies]
-dev = [
-    { name = "fastembed" },
+bench = [
     { name = "h5py", version = "3.14.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "h5py", version = "3.15.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "hnswlib" },
-    { name = "langchain-core", marker = "python_full_version >= '3.10'" },
-    { name = "llama-index-core" },
+]
+dev = [
     { name = "maturin" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest-timeout" },
     { name = "ruff" },
-    { name = "sentence-transformers" },
     { name = "ty" },
+]
+integration = [
+    { name = "langchain-core", marker = "python_full_version >= '3.10'" },
+    { name = "llama-index-core" },
+]
+models = [
+    { name = "fastembed" },
+    { name = "sentence-transformers" },
 ]
 
 [package.metadata]
@@ -2139,18 +2145,24 @@ requires-dist = [
 provides-extras = ["langchain", "llamaindex"]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "fastembed", specifier = ">=0.7.4" },
+bench = [
     { name = "h5py", specifier = ">=3.10.0" },
     { name = "hnswlib", specifier = ">=0.8.0" },
-    { name = "langchain-core", marker = "python_full_version >= '3.10'", specifier = ">=0.2.0" },
-    { name = "llama-index-core", specifier = ">=0.10.0" },
+]
+dev = [
     { name = "maturin", specifier = ">=1.0" },
     { name = "pytest", specifier = ">=8.3.5" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
     { name = "ruff", specifier = ">=0.8.0" },
-    { name = "sentence-transformers", specifier = ">=5.1.2" },
     { name = "ty", specifier = ">=0.0.2" },
+]
+integration = [
+    { name = "langchain-core", marker = "python_full_version >= '3.10'", specifier = ">=0.2.0" },
+    { name = "llama-index-core", specifier = ">=0.10.0" },
+]
+models = [
+    { name = "fastembed", specifier = ">=0.7.4" },
+    { name = "sentence-transformers", specifier = ">=5.1.2" },
 ]
 
 [[package]]
