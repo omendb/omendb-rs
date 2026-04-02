@@ -276,6 +276,35 @@ enum SearchValidation {
     Empty,
 }
 
+const SEARCH_RESULT_PARTIAL_SORT_THRESHOLD: usize = 4;
+
+fn finalize_search_results(
+    results_buf: &mut Vec<Candidate>,
+    result_limit: usize,
+) -> Vec<(u32, f32)> {
+    if result_limit == 0 || results_buf.is_empty() {
+        return Vec::new();
+    }
+
+    let result_limit = result_limit.min(results_buf.len());
+
+    if results_buf.len() > result_limit.saturating_mul(SEARCH_RESULT_PARTIAL_SORT_THRESHOLD) {
+        // `select_nth_unstable_by(result_limit, ...)` keeps the first `result_limit`
+        // items in the left partition, which is exactly the top-k prefix we want.
+        results_buf.select_nth_unstable_by(result_limit, |a, b| a.distance.cmp(&b.distance));
+        results_buf.truncate(result_limit);
+        results_buf.sort_unstable_by(|a, b| a.distance.cmp(&b.distance));
+    } else {
+        results_buf.sort_unstable_by(|a, b| a.distance.cmp(&b.distance));
+        results_buf.truncate(result_limit);
+    }
+
+    results_buf
+        .iter()
+        .map(|c| (c.node_id, c.distance.into_inner()))
+        .collect()
+}
+
 impl HNSWIndex {
     /// Unified search layer loop for both standard and filtered search.
     #[inline(always)]
@@ -286,6 +315,7 @@ impl HNSWIndex {
         collector: &C,
         ef: usize,
         level: u8,
+        result_limit: usize,
     ) -> Result<Vec<(u32, f32)>>
     where
         D: Distance,
@@ -415,13 +445,11 @@ impl HNSWIndex {
                 }
             }
 
-            // Return (node_id, distance) pairs sorted by distance
+            debug_assert!(result_limit <= ef, "result_limit must not exceed ef");
+
+            // Return the top `result_limit` (node_id, distance) pairs sorted by distance.
             results_buf.extend(working.drain());
-            results_buf.sort_unstable_by_key(|c| c.distance);
-            let output: Vec<(u32, f32)> = results_buf
-                .iter()
-                .map(|c| (c.node_id, c.distance.into_inner()))
-                .collect();
+            let output = finalize_search_results(results_buf, result_limit);
             Ok(output)
         })
     }
@@ -504,17 +532,17 @@ impl HNSWIndex {
         // the greedy traversal loop is skipped entirely and we search directly from the
         // entry point without any allocation.
         let candidates = if entry_level == 0 {
-            self.search_layer(query, std::slice::from_ref(&entry_point), search_ef, 0)?
+            self.search_layer(query, std::slice::from_ref(&entry_point), search_ef, 0, k)?
         } else {
             let mut nearest = vec![entry_point];
             for level in (1..=entry_level).rev() {
                 nearest = self
-                    .search_layer(query, &nearest, 1, level)?
+                    .search_layer(query, &nearest, 1, level, 1)?
                     .into_iter()
                     .map(|(id, _)| id)
                     .collect();
             }
-            self.search_layer(query, &nearest, search_ef, 0)?
+            self.search_layer(query, &nearest, search_ef, 0, k)?
         };
 
         // Convert comparison distances to actual (e.g., sqrt for L2)
@@ -641,13 +669,14 @@ impl HNSWIndex {
                 std::slice::from_ref(&entry_point),
                 search_ef,
                 0,
+                search_ef,
                 &slot_filter,
             )?
         } else {
             let mut nearest = vec![entry_point];
             for level in (1..=entry_level).rev() {
                 let pairs =
-                    self.search_layer_with_filter(query, &nearest, 1, level, &slot_filter)?;
+                    self.search_layer_with_filter(query, &nearest, 1, level, 1, &slot_filter)?;
                 if pairs.is_empty() {
                     debug!(level, "No matches at this level, falling back");
                     // Keep nearest as-is (still points to entry_point or last good result)
@@ -655,7 +684,7 @@ impl HNSWIndex {
                     nearest = pairs.into_iter().map(|(id, _)| id).collect();
                 }
             }
-            self.search_layer_with_filter(query, &nearest, search_ef, 0, &slot_filter)?
+            self.search_layer_with_filter(query, &nearest, search_ef, 0, search_ef, &slot_filter)?
         };
 
         // Already sorted: comparison_to_actual() is monotonic
@@ -749,6 +778,7 @@ impl HNSWIndex {
         entry_points: &[u32],
         ef: usize,
         level: u8,
+        result_limit: usize,
         filter_fn: &F,
     ) -> Result<Vec<(u32, f32)>>
     where
@@ -760,6 +790,7 @@ impl HNSWIndex {
                 entry_points,
                 ef,
                 level,
+                result_limit,
                 filter_fn,
             )
         })
@@ -779,6 +810,7 @@ impl HNSWIndex {
         entry_points: &[u32],
         ef: usize,
         level: u8,
+        result_limit: usize,
         filter_fn: &F,
     ) -> Result<Vec<(u32, f32)>>
     where
@@ -791,14 +823,21 @@ impl HNSWIndex {
             m: self.params.m,
         };
 
-        self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
+        self.search_layer_internal::<D, _>(
+            entry_points,
+            &ctx,
+            &collector,
+            ef,
+            level,
+            result_limit,
+        )
     }
 
     /// Search for nearest neighbors at a specific level
     ///
     /// Search layer returning (node_id, comparison_distance) pairs.
     ///
-    /// Returns up to `ef` nearest neighbors sorted by distance (closest first).
+    /// Returns up to `result_limit` nearest neighbors sorted by distance (closest first).
     /// Distances are comparison distances (L2 squared, raw cosine/dot) — callers
     /// use `distance_fn.comparison_to_actual()` to convert for user-facing results.
     ///
@@ -809,9 +848,10 @@ impl HNSWIndex {
         entry_points: &[u32],
         ef: usize,
         level: u8,
+        result_limit: usize,
     ) -> Result<Vec<(u32, f32)>> {
         dispatch_distance!(self.distance_fn, D => {
-            self.search_layer_mono::<D>(query, entry_points, ef, level, false)
+            self.search_layer_mono::<D>(query, entry_points, ef, level, result_limit, false)
         })
     }
 
@@ -824,9 +864,10 @@ impl HNSWIndex {
         entry_points: &[u32],
         ef: usize,
         level: u8,
+        result_limit: usize,
     ) -> Result<Vec<(u32, f32)>> {
         dispatch_distance!(self.distance_fn, D => {
-            self.search_layer_mono::<D>(query, entry_points, ef, level, true)
+            self.search_layer_mono::<D>(query, entry_points, ef, level, result_limit, true)
         })
     }
 
@@ -843,9 +884,9 @@ impl HNSWIndex {
         level: u8,
     ) -> Result<Vec<(u32, f32)>> {
         if self.storage.is_sq8() && self.params.use_quantized_construction {
-            self.search_layer(query, entry_points, ef, level)
+            self.search_layer(query, entry_points, ef, level, ef)
         } else {
-            self.search_layer_full_precision(query, entry_points, ef, level)
+            self.search_layer_full_precision(query, entry_points, ef, level, ef)
         }
     }
 
@@ -856,6 +897,7 @@ impl HNSWIndex {
         entry_points: &[u32],
         ef: usize,
         level: u8,
+        result_limit: usize,
         full_precision: bool,
     ) -> Result<Vec<(u32, f32)>> {
         let ctx = DistanceContext::new::<D>(query, self, full_precision);
@@ -863,6 +905,50 @@ impl HNSWIndex {
             storage: &self.storage,
         };
 
-        self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level)
+        self.search_layer_internal::<D, _>(
+            entry_points,
+            &ctx,
+            &collector,
+            ef,
+            level,
+            result_limit,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finalize_search_results_uses_partial_sort_for_top_k() {
+        let mut results = vec![
+            Candidate::new(10, 9.0),
+            Candidate::new(11, 1.0),
+            Candidate::new(12, 8.0),
+            Candidate::new(13, 2.0),
+            Candidate::new(14, 7.0),
+            Candidate::new(15, 3.0),
+            Candidate::new(16, 6.0),
+            Candidate::new(17, 4.0),
+            Candidate::new(18, 5.0),
+        ];
+
+        let output = finalize_search_results(&mut results, 2);
+
+        assert_eq!(output, vec![(11, 1.0), (13, 2.0)]);
+    }
+
+    #[test]
+    fn finalize_search_results_keeps_full_order_when_small() {
+        let mut results = vec![
+            Candidate::new(10, 3.0),
+            Candidate::new(11, 1.0),
+            Candidate::new(12, 2.0),
+        ];
+
+        let output = finalize_search_results(&mut results, 3);
+
+        assert_eq!(output, vec![(11, 1.0), (12, 2.0), (10, 3.0)]);
     }
 }
