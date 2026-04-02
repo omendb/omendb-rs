@@ -20,7 +20,7 @@ use tracing::{debug, error, instrument};
 /// to `new()`, which prevents `sq8_prep` from being populated.
 struct DistanceContext<'a> {
     query: &'a [f32],
-    query_norm_sq: f32,
+    query_norm_sq: Option<f32>,
     query_norm: Option<f32>,
     allow_l2_decomposition: bool,
     sq8_prep: Option<QueryPrep>,
@@ -33,9 +33,22 @@ impl<'a> DistanceContext<'a> {
     /// If `force_full_precision` is true, the SQ8 path is disabled regardless
     /// of storage mode. This is used during graph construction where quantization
     /// noise would hurt graph quality.
-    fn new<D: Distance>(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
-        let query_norm_sq = dot_product(query, query);
-        let query_norm = (D::as_enum() == crate::types::Metric::Cosine).then(|| query_norm_sq.sqrt());
+    fn new<D: Distance>(
+        query: &'a [f32],
+        index: &'a HNSWIndex,
+        force_full_precision: bool,
+    ) -> Self {
+        let allow_l2_decomposition = !force_full_precision;
+        let is_l2 = D::as_enum() == crate::types::Metric::L2;
+        let query_norm_sq = if is_l2 && allow_l2_decomposition {
+            Some(dot_product(query, query))
+        } else {
+            None
+        };
+        let query_norm = (D::as_enum() == crate::types::Metric::Cosine).then(|| {
+            let norm_sq = dot_product(query, query);
+            norm_sq.sqrt()
+        });
         let sq8_prep = if force_full_precision {
             None
         } else {
@@ -46,7 +59,7 @@ impl<'a> DistanceContext<'a> {
             query,
             query_norm_sq,
             query_norm,
-            allow_l2_decomposition: !force_full_precision,
+            allow_l2_decomposition,
             sq8_prep,
             storage: &index.storage,
         }
@@ -68,10 +81,11 @@ impl<'a> DistanceContext<'a> {
         // Full-precision L2 can use cached norms to avoid one SIMD pass over the candidate.
         if self.can_use_l2_decomposition::<D>()
             && let Some(vec_norm) = self.storage.get_norm(node_id)
+            && let Some(query_norm_sq) = self.query_norm_sq
         {
             let vec = self.storage.vector(node_id);
             let dot = dot_product(self.query, vec);
-            return Ok(self.query_norm_sq + vec_norm - 2.0 * dot);
+            return Ok(query_norm_sq + vec_norm - 2.0 * dot);
         }
 
         // SQ8 fast path
