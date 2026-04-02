@@ -27,9 +27,11 @@ use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::vector::{EngineSearchResult, OptimizationStats, VectorEngine, VectorEngineView};
+use crate::vector::{
+    EngineSearchResult, MutableVectorEngine, OptimizationStats, VectorEngine, VectorEngineView,
+};
 
-impl VectorEngine for SegmentManager {
+impl MutableVectorEngine for SegmentManager {
     fn dimensions(&self) -> usize {
         self.config.dimensions
     }
@@ -125,7 +127,9 @@ impl VectorEngine for SegmentManager {
     fn generation(&self) -> u64 {
         self.generation()
     }
+}
 
+impl VectorEngine for SegmentManager {
     fn read_view(&self) -> Arc<dyn VectorEngineView> {
         Arc::clone(&self.published.current) as Arc<dyn VectorEngineView>
     }

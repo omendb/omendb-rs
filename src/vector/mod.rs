@@ -73,14 +73,22 @@ pub trait VectorEngineView: Send + Sync {
     fn total_memory(&self) -> usize;
 }
 
+/// Marker trait for frozen dense generations.
+///
+/// This is intentionally the same capability set as `VectorEngineView`, but the
+/// separate name makes the mutable/frozen split explicit in the codebase.
+pub trait FrozenVectorEngineView: VectorEngineView {}
+
+impl<T: VectorEngineView + ?Sized> FrozenVectorEngineView for T {}
+
 /// Statistics from an optimization operation
 pub struct OptimizationStats {
     pub vectors_reordered: usize,
     pub segments_merged: usize,
 }
 
-/// Core trait for dense vector retrieval engines.
-pub trait VectorEngine: Send + Sync {
+/// Core trait for a mutable dense retrieval engine.
+pub trait MutableVectorEngine: Send + Sync {
     /// Dimension of vectors this engine supports.
     fn dimensions(&self) -> usize;
 
@@ -142,7 +150,12 @@ pub trait VectorEngine: Send + Sync {
 
     /// Generation counter for the current engine state.
     fn generation(&self) -> u64;
+}
 
+/// Full dense engine interface.
+///
+/// This extends the mutable engine role with a read-only published view.
+pub trait VectorEngine: MutableVectorEngine {
     /// Get a thread-safe read-only view of the current engine state.
     fn read_view(&self) -> std::sync::Arc<dyn VectorEngineView>;
 }
