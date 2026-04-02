@@ -120,7 +120,10 @@ pub trait VectorEngine: Send + Sync {
     fn checkpoint(&mut self, path: &std::path::Path) -> Result<()>;
 
     /// Set a storage backend for persistence.
-    fn set_storage(&mut self, storage: std::sync::Arc<parking_lot::RwLock<dyn crate::omen::StorageBackend>>);
+    fn set_storage(
+        &mut self,
+        storage: std::sync::Arc<parking_lot::RwLock<dyn crate::omen::StorageBackend>>,
+    );
 
     /// Set the directory for background merge artifacts.
     fn set_pending_merge_dir(&mut self, dir: std::path::PathBuf);

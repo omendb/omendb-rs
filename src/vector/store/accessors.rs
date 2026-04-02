@@ -215,11 +215,11 @@ impl VectorStore {
     ) -> Result<T> {
         let mut engine = self.engine.write();
         let result = f(&mut engine);
-        
+
         // Sync published view ArcSwap after mutation
         let new_view = engine.as_ref().map(SegmentManager::read_view);
         self.published_view.store(Arc::new(new_view));
-        
+
         result
     }
 

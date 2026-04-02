@@ -54,13 +54,7 @@ impl VectorStore {
         if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
             let meta_bytes = metadata.as_ref().map(serde_json::to_vec).transpose()?;
-            storage.log_insert_edge(
-                from_id,
-                to_id,
-                edge_type,
-                weight,
-                meta_bytes.as_deref(),
-            )?;
+            storage.log_insert_edge(from_id, to_id, edge_type, weight, meta_bytes.as_deref())?;
             storage.sync()?;
         }
 

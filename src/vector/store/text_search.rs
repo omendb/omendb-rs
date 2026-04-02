@@ -4,12 +4,12 @@
 //! that combines vector similarity with text relevance using RRF fusion.
 
 use super::helpers;
-use super::record_store::RecordStore;
 use super::planner::QueryPlanner;
+use super::record_store::RecordStore;
 use super::{MetadataFilter, VectorStore};
 use crate::text::{
-    DEFAULT_RRF_K, HybridResult, TextEngine, TextIndex, TextSearchConfig, weighted_reciprocal_rank_fusion,
-    weighted_reciprocal_rank_fusion_with_subscores,
+    DEFAULT_RRF_K, HybridResult, TextEngine, TextIndex, TextSearchConfig,
+    weighted_reciprocal_rank_fusion, weighted_reciprocal_rank_fusion_with_subscores,
 };
 use crate::vector::store::input::HybridParams;
 use crate::vector::types::Vector;
@@ -250,7 +250,12 @@ impl VectorStore {
                 params = params.filter(f.clone());
             }
 
-            return planner.search_hybrid_with_subscores(&query_vector.data, query_text, k, &params);
+            return planner.search_hybrid_with_subscores(
+                &query_vector.data,
+                query_text,
+                k,
+                &params,
+            );
         }
 
         let (vector_results, text_results) =

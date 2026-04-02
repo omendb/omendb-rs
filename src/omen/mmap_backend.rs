@@ -60,8 +60,13 @@ impl StorageBackend for MmapBackend {
         Ok(())
     }
 
-    fn log_insert(&mut self, _id: &str, _vector: &[f32], _metadata: &serde_json::Value) -> Result<()> {
-        // MmapBackend doesn't have a WAL. It's intended for read-only or 
+    fn log_insert(
+        &mut self,
+        _id: &str,
+        _vector: &[f32],
+        _metadata: &serde_json::Value,
+    ) -> Result<()> {
+        // MmapBackend doesn't have a WAL. It's intended for read-only or
         // direct-to-file scenarios.
         anyhow::bail!("MmapBackend does not support WAL logging")
     }

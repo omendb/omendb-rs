@@ -368,7 +368,8 @@ impl SegmentManager {
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         if vectors.is_empty() {
             self.generation += 1;
-            self.published.restore_all_frozen(segments_to_merge, self.generation);
+            self.published
+                .restore_all_frozen(segments_to_merge, self.generation);
             return Ok(None);
         }
 
@@ -378,7 +379,8 @@ impl SegmentManager {
             Ok(result) => result,
             Err(e) => {
                 self.generation += 1;
-                self.published.restore_all_frozen(segments_to_merge, self.generation);
+                self.published
+                    .restore_all_frozen(segments_to_merge, self.generation);
                 return Err(e);
             }
         };
@@ -432,7 +434,8 @@ impl SegmentManager {
         let (vectors, slots) = Self::collect_from_segments(&segments_to_merge);
         if vectors.is_empty() {
             self.generation += 1;
-            self.published.restore_frozen_indices(indices, segments_to_merge, self.generation);
+            self.published
+                .restore_frozen_indices(indices, segments_to_merge, self.generation);
             return Ok(None);
         }
 

@@ -40,10 +40,10 @@ use super::hnsw::{HNSWParams, PublishedSegmentView, SegmentConfig, SegmentManage
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::sparse::SparseIndex;
 use super::types::Vector;
-use arc_swap::ArcSwap;
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use edge_store::EdgeStore;
 use parking_lot::RwLock;
 use rayon::prelude::*;
