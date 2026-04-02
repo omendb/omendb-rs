@@ -21,7 +21,7 @@ use tracing::{debug, error, instrument};
 struct DistanceContext<'a> {
     query: &'a [f32],
     query_norm_sq: f32,
-    query_norm: f32,
+    query_norm: Option<f32>,
     allow_l2_decomposition: bool,
     sq8_prep: Option<QueryPrep>,
     storage: &'a NodeStorage,
@@ -33,9 +33,9 @@ impl<'a> DistanceContext<'a> {
     /// If `force_full_precision` is true, the SQ8 path is disabled regardless
     /// of storage mode. This is used during graph construction where quantization
     /// noise would hurt graph quality.
-    fn new(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
+    fn new<D: Distance>(query: &'a [f32], index: &'a HNSWIndex, force_full_precision: bool) -> Self {
         let query_norm_sq = dot_product(query, query);
-        let query_norm = query_norm_sq.sqrt();
+        let query_norm = (D::as_enum() == crate::types::Metric::Cosine).then(|| query_norm_sq.sqrt());
         let sq8_prep = if force_full_precision {
             None
         } else {
@@ -52,13 +52,21 @@ impl<'a> DistanceContext<'a> {
         }
     }
 
+    #[inline(always)]
+    fn can_use_l2_decomposition<D: Distance>(&self) -> bool {
+        D::as_enum() == crate::types::Metric::L2 && self.allow_l2_decomposition && !self.storage.sq8
+    }
+
+    #[inline(always)]
+    fn query_norm(&self) -> f32 {
+        self.query_norm.unwrap_or(0.0)
+    }
+
     /// Compute distance to a node using the best available method
     #[inline(always)]
     fn compute<D: Distance>(&self, node_id: u32) -> Result<f32> {
         // Full-precision L2 can use cached norms to avoid one SIMD pass over the candidate.
-        if D::as_enum() == crate::types::Metric::L2
-            && self.allow_l2_decomposition
-            && !self.storage.sq8
+        if self.can_use_l2_decomposition::<D>()
             && let Some(vec_norm) = self.storage.get_norm(node_id)
         {
             let vec = self.storage.vector(node_id);
@@ -79,10 +87,10 @@ impl<'a> DistanceContext<'a> {
                 .storage
                 .get_dequantized(node_id)
                 .ok_or(HNSWError::VectorNotFound(node_id))?;
-            Ok(D::distance_precomputed(self.query, &vec, self.query_norm))
+            Ok(D::distance_precomputed(self.query, &vec, self.query_norm()))
         } else {
             let vec = self.storage.vector(node_id);
-            Ok(D::distance_precomputed(self.query, vec, self.query_norm))
+            Ok(D::distance_precomputed(self.query, vec, self.query_norm()))
         }
     }
 
@@ -762,7 +770,7 @@ impl HNSWIndex {
     where
         F: Fn(u32) -> bool,
     {
-        let ctx = DistanceContext::new(query, self, false);
+        let ctx = DistanceContext::new::<D>(query, self, false);
         let collector = AcornCollector {
             storage: &self.storage,
             filter_fn,
@@ -836,7 +844,7 @@ impl HNSWIndex {
         level: u8,
         full_precision: bool,
     ) -> Result<Vec<(u32, f32)>> {
-        let ctx = DistanceContext::new(query, self, full_precision);
+        let ctx = DistanceContext::new::<D>(query, self, full_precision);
         let collector = StandardCollector {
             storage: &self.storage,
         };
