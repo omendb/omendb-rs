@@ -32,26 +32,28 @@ impl VectorStore {
         let mut all_slots = Vec::with_capacity(vectors.len());
         let base_slot = self.records.slot_count();
 
-        for (i, vector) in vectors.iter().enumerate() {
+        for (i, vector) in vectors.into_iter().enumerate() {
             let id = format!("_batch_{}", base_slot + i as u32);
-            let slot = self.records.set(id, vector.data.clone(), None)?;
+            let slot = self.records.set(id, vector.data, None)?;
             all_slots.push(slot as usize);
         }
 
         let slots: Vec<u32> = all_slots.iter().map(|&s| s as u32).collect();
 
         if self.has_engine() {
-            let vector_data: Vec<Vec<f32>> = vectors.into_iter().map(|v| v.data).collect();
-            self.with_engine_mut(|engine| {
-                if let Some(engine) = engine.as_mut() {
-                    engine.insert_batch_parallel(vector_data, &slots)?;
-                }
-                Ok(())
+            self.records.with_vectors_by_slots(&slots, |vectors| {
+                self.with_engine_mut(|engine| {
+                    if let Some(engine) = engine.as_mut() {
+                        engine.insert_batch_parallel_from_refs(vectors, &slots)?;
+                    }
+                    Ok(())
+                })
             })?;
         } else {
             // Build new engine with parallel construction
-            let vector_data: Vec<Vec<f32>> = vectors.into_iter().map(|v| v.data).collect();
-            self.build_and_publish_engine(dimensions, vector_data, &slots)?;
+            self.records.with_vectors_by_slots(&slots, |vectors| {
+                self.build_and_publish_engine_from_refs(dimensions, vectors, &slots)
+            })?;
         }
 
         Ok(all_slots)
@@ -95,8 +97,18 @@ impl VectorStore {
         vectors: Vec<Vec<f32>>,
         slots: &[u32],
     ) -> Result<()> {
+        let vectors: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        self.build_and_publish_engine_from_refs(dimensions, vectors, slots)
+    }
+
+    pub(crate) fn build_and_publish_engine_from_refs(
+        &self,
+        dimensions: usize,
+        vectors: Vec<&[f32]>,
+        slots: &[u32],
+    ) -> Result<()> {
         let config = self.segment_config(dimensions);
-        let mut segs = SegmentManager::build_parallel_with_slots(config, vectors, slots)
+        let mut segs = SegmentManager::build_parallel_with_slots_from_refs(config, vectors, slots)
             .map_err(|e| anyhow::anyhow!("Engine parallel build failed: {e}"))?;
 
         if let Some(ref path) = self.storage_path {

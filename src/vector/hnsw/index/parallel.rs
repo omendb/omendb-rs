@@ -58,17 +58,17 @@ thread_local! {
 /// Parallel HNSW builder
 ///
 /// Uses atomic neighbor storage for lock-free reads during search.
-/// Vectors are cached separately for lock-free distance computation.
+/// Vectors are cached as borrowed slices for lock-free distance computation.
 ///
 /// Thread safety:
 /// 1. `neighbors` uses atomic operations for lock-free reads, per-node locks for writes
 /// 2. `vectors` is immutable after allocation, safe to share
 /// 3. `levels` is immutable after allocation, safe to share
-pub struct ParallelBuilder {
+pub struct ParallelBuilder<'a> {
     /// Vector dimensions
     dimensions: usize,
     /// Cached vectors for lock-free distance computation
-    vectors: Vec<Vec<f32>>,
+    vectors: Vec<&'a [f32]>,
     /// Atomic neighbor storage with lock-free reads
     neighbors: NeighborStorage,
     /// Node levels
@@ -92,7 +92,7 @@ pub struct ParallelBuilder {
 /// Number of nodes to insert sequentially before switching to parallel
 const WARM_START_SIZE: usize = 512;
 
-impl ParallelBuilder {
+impl<'a> ParallelBuilder<'a> {
     /// Create a new parallel builder
     pub fn new(
         dimensions: usize,
@@ -122,7 +122,7 @@ impl ParallelBuilder {
     }
 
     /// Build index from vectors using parallel construction
-    pub fn build(mut self, vectors: Vec<Vec<f32>>) -> Result<HNSWIndex> {
+    pub fn build(mut self, vectors: Vec<&'a [f32]>) -> Result<HNSWIndex> {
         if vectors.is_empty() {
             return self.into_index();
         }
@@ -190,7 +190,7 @@ impl ParallelBuilder {
     }
 
     /// Allocate all nodes and assign levels
-    fn allocate_all_nodes(&mut self, vectors: Vec<Vec<f32>>) {
+    fn allocate_all_nodes(&mut self, vectors: Vec<&'a [f32]>) {
         let n = vectors.len();
         self.vectors = vectors;
         self.levels = Vec::with_capacity(n);
@@ -272,7 +272,7 @@ impl ParallelBuilder {
         }
 
         let entry_level = self.levels[entry_point as usize];
-        let vector = &self.vectors[node_id as usize];
+        let vector = self.vectors[node_id as usize];
         let query_norm = dot_product(vector, vector).sqrt();
 
         // Search for nearest neighbors
@@ -654,7 +654,7 @@ impl ParallelBuilder {
             id,
             self.vectors.len()
         );
-        let vec = &self.vectors[id as usize];
+        let vec = self.vectors[id as usize];
         self.distance_fn
             .distance_for_comparison_precomputed(query, vec, query_norm)
     }
@@ -674,8 +674,8 @@ impl ParallelBuilder {
             id_b,
             self.vectors.len()
         );
-        let vec_a = &self.vectors[id_a as usize];
-        let vec_b = &self.vectors[id_b as usize];
+        let vec_a = self.vectors[id_a as usize];
+        let vec_b = self.vectors[id_b as usize];
         self.distance_fn.distance_for_comparison(vec_a, vec_b)
     }
 
@@ -709,7 +709,7 @@ impl ParallelBuilder {
             // Allocate node and set metadata
             storage.allocate_node();
             storage
-                .set_vector(node_id_u32, &self.vectors[node_id])
+                .set_vector(node_id_u32, self.vectors[node_id])
                 .map_err(HNSWError::storage)?;
             storage.set_slot(node_id_u32, node_id_u32);
             storage.set_level(node_id_u32, level);
@@ -743,7 +743,7 @@ impl ParallelBuilder {
 }
 
 // SAFETY: ParallelBuilder is Sync because:
-// 1. `vectors` (Vec<Vec<f32>>) - immutable after allocation, safe to share
+// 1. `vectors` (Vec<&[f32]>) - immutable after allocation, safe to share
 // 2. `neighbors` (NeighborStorage) - uses atomic operations and internal per-node locks
 // 3. `levels` (Vec<u8>) - immutable after allocation, safe to share
 // 4. `ready_bitmap` (AtomicBitVec) - uses atomics, safe to share
@@ -753,7 +753,7 @@ impl ParallelBuilder {
 // 8. `distance_fn` (Metric enum) - immutable, safe to share
 // 9. `rng_state` (AtomicU64) - atomic, safe to share
 // 10. `dimensions`, `use_quantization` - immutable primitives, safe to share
-unsafe impl Sync for ParallelBuilder {}
+unsafe impl Sync for ParallelBuilder<'_> {}
 
 impl HNSWIndex {
     /// Build index from vectors using parallel construction
@@ -774,12 +774,25 @@ impl HNSWIndex {
         use_quantization: bool,
         vectors: Vec<Vec<f32>>,
     ) -> Result<Self> {
+        let vectors: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        Self::build_parallel_from_refs(dimensions, params, distance_fn, use_quantization, vectors)
+    }
+
+    /// Build index from borrowed vectors using parallel construction.
+    pub fn build_parallel_from_refs(
+        dimensions: usize,
+        params: HNSWParams,
+        distance_fn: Metric,
+        use_quantization: bool,
+        vectors: Vec<&[f32]>,
+    ) -> Result<Self> {
         if use_quantization && params.use_quantized_construction {
             info!(
                 "SQ8 quantized construction currently uses the sequential builder; skipping ParallelBuilder"
             );
             let mut index = Self::new_with_sq8(dimensions, params, distance_fn)?;
-            let _ = index.batch_insert(vectors)?;
+            let owned_vectors: Vec<Vec<f32>> = vectors.into_iter().map(<[f32]>::to_vec).collect();
+            let _ = index.batch_insert(owned_vectors)?;
             return Ok(index);
         }
 

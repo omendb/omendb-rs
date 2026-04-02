@@ -43,7 +43,7 @@ impl VectorStore {
         // Upsert into RecordStore
         let slot = self
             .records
-            .set(id.to_string(), vector.data.clone(), Some(metadata.clone()))?
+            .set(id.to_string(), vector.data, Some(metadata.clone()))?
             as usize;
 
         debug_assert_eq!(
@@ -56,13 +56,17 @@ impl VectorStore {
             "RecordStore does not contain the returned slot {slot}",
         );
 
-        self.with_engine_mut(|engine| {
-            if let Some(engine) = engine.as_mut() {
-                engine
-                    .insert_with_slot(&vector.data, slot as u32)
-                    .map_err(|e| anyhow::anyhow!("Engine insert failed: {e}"))?;
-            }
-            Ok(())
+        self.records.with_vector_by_slot(slot as u32, |vector| {
+            self.with_engine_mut(|engine| {
+                if let Some(engine) = engine.as_mut()
+                    && let Some(vector) = vector
+                {
+                    engine
+                        .insert_with_slot(vector, slot as u32)
+                        .map_err(|e| anyhow::anyhow!("Engine insert failed: {e}"))?;
+                }
+                Ok(())
+            })
         })?;
 
         // Update metadata index and migrate sparse entry to new slot
@@ -77,14 +81,19 @@ impl VectorStore {
             .index_json(slot as u32, &metadata);
 
         // WAL for crash durability
-        let needs_checkpoint = if let Some(ref storage) = self.storage {
-            let mut storage = storage.write();
-            storage.log_insert(id, &vector.data, &metadata)?;
-            storage.sync()?;
-            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
-        } else {
-            false
-        };
+        let needs_checkpoint = self.records.with_vector_by_slot(slot as u32, |vector| {
+            if let Some(ref storage) = self.storage {
+                let mut storage = storage.write();
+                let vector = vector.ok_or_else(|| anyhow::anyhow!("Record vector missing"))?;
+                storage.log_insert(id, vector, &metadata)?;
+                storage.sync()?;
+                Ok::<bool, anyhow::Error>(
+                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize,
+                )
+            } else {
+                Ok(false)
+            }
+        })?;
 
         if needs_checkpoint {
             self.checkpoint_wal_locked()?;
@@ -132,17 +141,20 @@ impl VectorStore {
             let mut sparse_index = self.sparse_index.write();
             self.with_engine_mut(|engine| {
                 for (old_slot, id, vector, metadata) in updates {
-                    let new_slot = self.records.set(
-                        id.clone(),
-                        vector.data.clone(),
-                        Some(metadata.clone()),
-                    )?;
+                    let new_slot = self
+                        .records
+                        .set(id.clone(), vector.data, Some(metadata.clone()))?;
 
-                    if let Some(engine) = engine.as_mut() {
-                        engine
-                            .insert_with_slot(&vector.data, new_slot)
-                            .map_err(|e| anyhow::anyhow!("Engine insert failed: {e}"))?;
-                    }
+                    self.records.with_vector_by_slot(new_slot, |vector| {
+                        if let Some(engine) = engine.as_mut()
+                            && let Some(vector) = vector
+                        {
+                            engine
+                                .insert_with_slot(vector, new_slot)
+                                .map_err(|e| anyhow::anyhow!("Engine insert failed: {e}"))?;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })?;
 
                     metadata_index.remove(old_slot);
                     if let Some(sparse_index) = sparse_index.as_mut() {
@@ -168,24 +180,23 @@ impl VectorStore {
 
                 let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());
-                let mut vectors_data = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in inserts {
-                    let vector_data = vector.data;
                     let slot = self.records.set(
                         id,
-                        vector_data.clone(),
+                        vector.data,
                         Some(metadata.clone()),
                     )?;
                     slots.push(slot);
                     metadata_index.index_json(slot, &metadata);
-                    vectors_data.push(vector_data);
                 }
 
-                self.with_engine_mut(|engine| {
-                    if let Some(engine) = engine.as_mut() {
-                        engine.insert_batch_parallel(vectors_data, &slots)?;
-                    }
-                    Ok(())
+                self.records.with_vectors_by_slots(&slots, |vectors| {
+                    self.with_engine_mut(|engine| {
+                        if let Some(engine) = engine.as_mut() {
+                            engine.insert_batch_parallel_from_refs(vectors, &slots)?;
+                        }
+                        Ok(())
+                    })
                 })?;
 
                 result_indices.extend(slots.iter().map(|&s| s as usize));
@@ -195,20 +206,19 @@ impl VectorStore {
 
                 let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());
-                let mut vectors_data = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in inserts {
-                    let vector_data = vector.data;
                     let slot = self.records.set(
                         id,
-                        vector_data.clone(),
+                        vector.data,
                         Some(metadata.clone()),
                     )?;
                     slots.push(slot);
                     metadata_index.index_json(slot, &metadata);
-                    vectors_data.push(vector_data);
                 }
 
-                self.build_and_publish_engine(dimensions, vectors_data, &slots)?;
+                self.records.with_vectors_by_slots(&slots, |vectors| {
+                    self.build_and_publish_engine_from_refs(dimensions, vectors, &slots)
+                })?;
 
                 if self.is_quantized()
                     && let Some(ref storage) = self.storage

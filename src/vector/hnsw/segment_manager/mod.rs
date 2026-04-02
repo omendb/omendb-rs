@@ -865,7 +865,13 @@ impl SegmentManager {
     /// Uses HNSWIndex::build_parallel for fast initial construction.
     /// Slots are sequential starting from 0.
     pub fn build_parallel(config: SegmentConfig, vectors: Vec<Vec<f32>>) -> Result<Self> {
-        let index = HNSWIndex::build_parallel(
+        let vectors: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        Self::build_parallel_from_refs(config, vectors)
+    }
+
+    /// Create segment manager from borrowed vectors.
+    pub fn build_parallel_from_refs(config: SegmentConfig, vectors: Vec<&[f32]>) -> Result<Self> {
+        let index = HNSWIndex::build_parallel_from_refs(
             config.dimensions,
             config.params,
             config.distance_fn,
@@ -895,7 +901,17 @@ impl SegmentManager {
         vectors: Vec<Vec<f32>>,
         slots: &[u32],
     ) -> Result<Self> {
-        let index = HNSWIndex::build_parallel(
+        let vectors: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        Self::build_parallel_with_slots_from_refs(config, vectors, slots)
+    }
+
+    /// Create segment manager from borrowed vectors with explicit slots.
+    pub fn build_parallel_with_slots_from_refs(
+        config: SegmentConfig,
+        vectors: Vec<&[f32]>,
+        slots: &[u32],
+    ) -> Result<Self> {
+        let index = HNSWIndex::build_parallel_from_refs(
             config.dimensions,
             config.params,
             config.distance_fn,
@@ -1092,8 +1108,18 @@ impl SegmentManager {
         vectors: Vec<Vec<f32>>,
         slots: &[u32],
     ) -> anyhow::Result<()> {
+        let vectors: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        self.insert_batch_parallel_from_refs(vectors, slots)
+    }
+
+    /// Add multiple borrowed vectors in parallel.
+    pub fn insert_batch_parallel_from_refs(
+        &mut self,
+        vectors: Vec<&[f32]>,
+        slots: &[u32],
+    ) -> anyhow::Result<()> {
         let config = self.config.clone();
-        let index = HNSWIndex::build_parallel(
+        let index = HNSWIndex::build_parallel_from_refs(
             config.dimensions,
             config.params,
             config.distance_fn,

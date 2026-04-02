@@ -790,14 +790,18 @@ impl VectorStore {
                     let delta = active_count - loaded.len();
                     let mut inserted = 0;
                     for &slot in modified_slots {
-                        if let Some(record) = records.get_by_slot(slot)
-                            && !records.deleted_bitmap().contains(slot)
-                        {
-                            loaded.insert_with_slot(&record.vector, slot).map_err(|e| {
-                                anyhow::anyhow!("Failed to insert WAL delta vector: {e}")
-                            })?;
-                            inserted += 1;
+                        if records.deleted_bitmap().contains(slot) {
+                            continue;
                         }
+                        records.with_vector_by_slot(slot, |vector| {
+                            if let Some(vector) = vector {
+                                loaded.insert_with_slot(vector, slot).map_err(|e| {
+                                    anyhow::anyhow!("Failed to insert WAL delta vector: {e}")
+                                })?;
+                                inserted += 1;
+                            }
+                            Ok::<_, anyhow::Error>(())
+                        })?;
                     }
                     let loaded_view = loaded.read_view();
                     tracing::info!(
