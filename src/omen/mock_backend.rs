@@ -2,7 +2,7 @@
 //!
 //! Provides an in-memory implementation of StorageBackend for unit tests.
 
-use crate::omen::{Metric, StorageBackend, CheckpointOptions};
+use crate::omen::{CheckpointOptions, Metric, StorageBackend};
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -49,15 +49,20 @@ impl StorageBackend for MockStorageBackend {
         Ok(())
     }
 
-    fn log_insert(&mut self, id: &str, _vector: &[f32], _metadata: &serde_json::Value) -> Result<()> {
-        self.wal.push(format!("insert:{}", id));
-        // In a real mock, we might want to store the vector here too if we want to 
+    fn log_insert(
+        &mut self,
+        id: &str,
+        _vector: &[f32],
+        _metadata: &serde_json::Value,
+    ) -> Result<()> {
+        self.wal.push(format!("insert:{id}"));
+        // In a real mock, we might want to store the vector here too if we want to
         // simulate recovery.
         Ok(())
     }
 
     fn log_delete(&mut self, id: &str) -> Result<()> {
-        self.wal.push(format!("delete:{}", id));
+        self.wal.push(format!("delete:{id}"));
         Ok(())
     }
 
@@ -69,12 +74,14 @@ impl StorageBackend for MockStorageBackend {
         _weight: f32,
         _metadata: Option<&[u8]>,
     ) -> Result<()> {
-        self.wal.push(format!("insert_edge:{}:{}:{}", from_id, to_id, edge_type));
+        self.wal
+            .push(format!("insert_edge:{from_id}:{to_id}:{edge_type}"));
         Ok(())
     }
 
     fn log_delete_edge(&mut self, from_id: &str, to_id: &str, edge_type: &str) -> Result<()> {
-        self.wal.push(format!("delete_edge:{}:{}:{}", from_id, to_id, edge_type));
+        self.wal
+            .push(format!("delete_edge:{from_id}:{to_id}:{edge_type}"));
         Ok(())
     }
 
@@ -149,7 +156,9 @@ mod tests {
         assert_eq!(backend.metric(), Metric::L2);
 
         let v1 = vec![1.0, 0.0, 0.0, 0.0];
-        backend.log_insert("doc1", &v1, &serde_json::json!({})).unwrap();
+        backend
+            .log_insert("doc1", &v1, &serde_json::json!({}))
+            .unwrap();
         assert_eq!(backend.wal_len(), 1);
 
         backend.checkpoint().unwrap();
@@ -160,13 +169,15 @@ mod tests {
     fn test_mock_backend_checkpoint() {
         let mut backend = MockStorageBackend::new(4, Metric::L2);
         let records = RecordStore::new(4);
-        records.set("doc1".to_string(), vec![1.0, 2.0, 3.0, 4.0], None).unwrap();
-        
+        records
+            .set("doc1".to_string(), vec![1.0, 2.0, 3.0, 4.0], None)
+            .unwrap();
+
         let mut dirty = roaring::RoaringBitmap::new();
         dirty.insert(0);
 
         backend.checkpoint_vectors_only(&records, &dirty).unwrap();
-        
+
         let v = backend.vectors.get(&0).expect("should have vector");
         assert_eq!(*v, vec![1.0, 2.0, 3.0, 4.0]);
     }

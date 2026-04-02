@@ -6,13 +6,16 @@
 //! - Managing multi-vector reranking (MaxSim).
 //! - Applying metadata filters across retrieval paths.
 
-use crate::text::{TextEngine, weighted_reciprocal_rank_fusion, HybridResult, weighted_reciprocal_rank_fusion_with_subscores};
-use crate::vector::{VectorEngineView, EngineSearchResult};
-use crate::vector::store::SearchResult;
-use crate::vector::store::record_store::RecordStore;
+use crate::text::{
+    HybridResult, TextEngine, weighted_reciprocal_rank_fusion,
+    weighted_reciprocal_rank_fusion_with_subscores,
+};
 use crate::vector::metadata::MetadataIndex;
+use crate::vector::store::SearchResult;
 use crate::vector::store::helpers;
 use crate::vector::store::input::HybridParams;
+use crate::vector::store::record_store::RecordStore;
+use crate::vector::{EngineSearchResult, VectorEngineView};
 use anyhow::Result;
 
 pub struct QueryPlanner<'a> {
@@ -38,12 +41,7 @@ impl<'a> QueryPlanner<'a> {
     }
 
     /// Execute a standard dense search.
-    pub fn search_dense(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef: usize,
-    ) -> Result<Vec<SearchResult>> {
+    pub fn search_dense(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
         let results = self.vector_engine.search(query, k, ef)?;
         Ok(self.map_engine_results(results))
     }
@@ -56,7 +54,9 @@ impl<'a> QueryPlanner<'a> {
         ef: usize,
         filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
     ) -> Result<Vec<SearchResult>> {
-        let results = self.vector_engine.search_with_filter(query, k, ef, filter_fn)?;
+        let results = self
+            .vector_engine
+            .search_with_filter(query, k, ef, filter_fn)?;
         Ok(self.map_engine_results(results))
     }
 
@@ -68,44 +68,53 @@ impl<'a> QueryPlanner<'a> {
         k: usize,
         params: &HybridParams,
     ) -> Result<Vec<SearchResult>> {
-        let text_engine = self.text_engine.ok_or_else(|| {
-            anyhow::anyhow!("Text search not enabled")
-        })?;
+        let text_engine = self
+            .text_engine
+            .ok_or_else(|| anyhow::anyhow!("Text search not enabled"))?;
 
         // 1. Fetch candidates from both engines
         // We fetch more candidates than k to improve fusion quality
-        let fetch_k = if params.filter.is_some() { k * 4 } else { k * 2 };
+        let fetch_k = if params.filter.is_some() {
+            k * 4
+        } else {
+            k * 2
+        };
         let ef = params.ef.unwrap_or(fetch_k * 2);
-// Vector retrieval with optional filtering
-let vector_results = if let Some(ref filter) = params.filter {
-    let filter_bitmap = self.metadata_index.and_then(|idx| filter.evaluate_bitmap(idx));
+        // Vector retrieval with optional filtering
+        let vector_results = if let Some(ref filter) = params.filter {
+            let filter_bitmap = self
+                .metadata_index
+                .and_then(|idx| filter.evaluate_bitmap(idx));
 
-    if let Some(bitmap) = filter_bitmap {
-        let filter_fn = move |slot: u32| -> bool { bitmap.contains(slot) };
-        self.vector_engine.search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
-    } else {
-        let filter_fn = |slot: u32| -> bool {
-            if let Some(rec) = self.records.get_by_slot(slot) {
-                if let Some(ref meta) = rec.metadata {
-                    return filter.matches(meta);
-                }
+            if let Some(bitmap) = filter_bitmap {
+                let filter_fn = move |slot: u32| -> bool { bitmap.contains(slot) };
+                self.vector_engine
+                    .search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
+            } else {
+                let filter_fn = |slot: u32| -> bool {
+                    if let Some(rec) = self.records.get_by_slot(slot)
+                        && let Some(ref meta) = rec.metadata
+                    {
+                        return filter.matches(meta);
+                    }
+                    false
+                };
+                self.vector_engine
+                    .search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
             }
-            false
-        };        self.vector_engine.search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
-    }
-} else {
-    self.vector_engine.search(query_vector, fetch_k, ef)?
-};
+        } else {
+            self.vector_engine.search(query_vector, fetch_k, ef)?
+        };
 
         let mut text_results = text_engine.search(query_text, fetch_k)?;
 
         // Apply metadata filter to text results if present
         if let Some(ref filter) = params.filter {
             text_results.retain(|r| {
-                if let Some(rec) = self.records.get(&r.id) {
-                    if let Some(ref meta) = rec.metadata {
-                        return filter.matches(meta);
-                    }
+                if let Some(rec) = self.records.get(&r.id)
+                    && let Some(ref meta) = rec.metadata
+                {
+                    return filter.matches(meta);
                 }
                 false
             });
@@ -115,14 +124,14 @@ let vector_results = if let Some(ref filter) = params.filter {
         let vector_scored_ids: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|r| {
-                self.records.get_id(r.slot).map(|id| (id.clone(), r.distance))
+                self.records
+                    .get_id(r.slot)
+                    .map(|id| (id.clone(), r.distance))
             })
             .collect();
 
-        let text_scored_ids: Vec<(String, f32)> = text_results
-            .into_iter()
-            .map(|r| (r.id, r.score))
-            .collect();
+        let text_scored_ids: Vec<(String, f32)> =
+            text_results.into_iter().map(|r| (r.id, r.score)).collect();
 
         // 3. Fuse results using RRF
         let fused = weighted_reciprocal_rank_fusion(
@@ -137,7 +146,9 @@ let vector_results = if let Some(ref filter) = params.filter {
         Ok(fused
             .into_iter()
             .map(|(id, score)| {
-                let metadata = self.records.get(&id)
+                let metadata = self
+                    .records
+                    .get(&id)
                     .and_then(|r| r.metadata.clone())
                     .unwrap_or_else(helpers::default_metadata);
                 SearchResult::new(id, score, metadata)
@@ -153,41 +164,50 @@ let vector_results = if let Some(ref filter) = params.filter {
         k: usize,
         params: &HybridParams,
     ) -> Result<Vec<(HybridResult, serde_json::Value)>> {
-        let text_engine = self.text_engine.ok_or_else(|| {
-            anyhow::anyhow!("Text search not enabled")
-        })?;
+        let text_engine = self
+            .text_engine
+            .ok_or_else(|| anyhow::anyhow!("Text search not enabled"))?;
 
-        let fetch_k = if params.filter.is_some() { k * 4 } else { k * 2 };
+        let fetch_k = if params.filter.is_some() {
+            k * 4
+        } else {
+            k * 2
+        };
         let ef = params.ef.unwrap_or(fetch_k * 2);
-// Vector retrieval with optional filtering
-let vector_results = if let Some(ref filter) = params.filter {
-    let filter_bitmap = self.metadata_index.and_then(|idx| filter.evaluate_bitmap(idx));
+        // Vector retrieval with optional filtering
+        let vector_results = if let Some(ref filter) = params.filter {
+            let filter_bitmap = self
+                .metadata_index
+                .and_then(|idx| filter.evaluate_bitmap(idx));
 
-    if let Some(bitmap) = filter_bitmap {
-        let filter_fn = move |slot: u32| -> bool { bitmap.contains(slot) };
-        self.vector_engine.search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
-    } else {
-        let filter_fn = |slot: u32| -> bool {
-            if let Some(rec) = self.records.get_by_slot(slot) {
-                if let Some(ref meta) = rec.metadata {
-                    return filter.matches(meta);
-                }
+            if let Some(bitmap) = filter_bitmap {
+                let filter_fn = move |slot: u32| -> bool { bitmap.contains(slot) };
+                self.vector_engine
+                    .search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
+            } else {
+                let filter_fn = |slot: u32| -> bool {
+                    if let Some(rec) = self.records.get_by_slot(slot)
+                        && let Some(ref meta) = rec.metadata
+                    {
+                        return filter.matches(meta);
+                    }
+                    false
+                };
+                self.vector_engine
+                    .search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
             }
-            false
-        };        self.vector_engine.search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
-    }
-} else {
-    self.vector_engine.search(query_vector, fetch_k, ef)?
-};
+        } else {
+            self.vector_engine.search(query_vector, fetch_k, ef)?
+        };
 
         let mut text_results = text_engine.search(query_text, fetch_k)?;
 
         if let Some(ref filter) = params.filter {
             text_results.retain(|r| {
-                if let Some(rec) = self.records.get(&r.id) {
-                    if let Some(ref meta) = rec.metadata {
-                        return filter.matches(meta);
-                    }
+                if let Some(rec) = self.records.get(&r.id)
+                    && let Some(ref meta) = rec.metadata
+                {
+                    return filter.matches(meta);
                 }
                 false
             });
@@ -196,14 +216,14 @@ let vector_results = if let Some(ref filter) = params.filter {
         let vector_scored_ids: Vec<(String, f32)> = vector_results
             .into_iter()
             .filter_map(|r| {
-                self.records.get_id(r.slot).map(|id| (id.clone(), r.distance))
+                self.records
+                    .get_id(r.slot)
+                    .map(|id| (id.clone(), r.distance))
             })
             .collect();
 
-        let text_scored_ids: Vec<(String, f32)> = text_results
-            .into_iter()
-            .map(|r| (r.id, r.score))
-            .collect();
+        let text_scored_ids: Vec<(String, f32)> =
+            text_results.into_iter().map(|r| (r.id, r.score)).collect();
 
         let fused = weighted_reciprocal_rank_fusion_with_subscores(
             vector_scored_ids,
@@ -216,7 +236,9 @@ let vector_results = if let Some(ref filter) = params.filter {
         Ok(fused
             .into_iter()
             .map(|result| {
-                let metadata = self.records.get(&result.id)
+                let metadata = self
+                    .records
+                    .get(&result.id)
                     .and_then(|r| r.metadata.clone())
                     .unwrap_or_else(helpers::default_metadata);
                 (result, metadata)

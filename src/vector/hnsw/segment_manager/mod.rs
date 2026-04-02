@@ -43,7 +43,7 @@ impl VectorEngine for SegmentManager {
     }
 
     fn insert(&mut self, vector: &[f32], slot: u32) -> anyhow::Result<u32> {
-        self.insert_with_slot(vector, slot).map_err(|e| e.into())
+        self.insert_with_slot(vector, slot).map_err(Into::into)
     }
 
     fn search(
@@ -74,7 +74,7 @@ impl VectorEngine for SegmentManager {
     }
 
     fn flush(&mut self) -> anyhow::Result<()> {
-        self.flush().map_err(|e| e.into())
+        self.flush().map_err(Into::into)
     }
 
     fn optimize(&mut self) -> anyhow::Result<OptimizationStats> {
@@ -82,7 +82,7 @@ impl VectorEngine for SegmentManager {
     }
 
     fn checkpoint(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        self.save(path).map_err(|e| e.into())
+        self.save(path).map_err(Into::into)
     }
 
     fn set_storage(&mut self, storage: Arc<RwLock<dyn crate::omen::StorageBackend>>) {
@@ -102,7 +102,7 @@ impl VectorEngine for SegmentManager {
     }
 
     fn freeze_mutable(&mut self) -> anyhow::Result<()> {
-        self.freeze_mutable().map_err(|e| e.into())
+        self.freeze_mutable().map_err(Into::into)
     }
 
     fn insert_batch_parallel(

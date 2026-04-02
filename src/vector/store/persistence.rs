@@ -12,8 +12,8 @@ use crate::omen::{
     parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
 };
 use crate::text::TextIndex;
-use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use crate::vector::VectorEngineView;
+use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use crate::vector::metadata::MetadataIndex;
 use crate::vector::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use crate::vector::sparse::SparseIndex;
@@ -70,7 +70,7 @@ impl VectorStore {
         // 1. Load recovery context (snapshots, WAL epochs, HNSW params)
         let ctx = {
             let ctx = Self::load_recovery_context(&mut storage_local)?;
-            
+
             // 2. Build initial RecordStore from snapshot
             let mut records = Self::build_initial_records(&ctx.snapshot, ctx.dimensions);
 
@@ -84,8 +84,9 @@ impl VectorStore {
             } else {
                 &wal_modified_slots
             };
-            let engine = Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
-            
+            let engine =
+                Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
+
             // 5. Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
             let ancillary = Self::initialize_ancillary_indexes(
                 path,
@@ -99,8 +100,9 @@ impl VectorStore {
             (ctx, records, engine, ancillary)
         };
         let (ctx, records, mut engine, ancillary) = ctx;
-        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage_local));
-        
+        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> =
+            Arc::new(RwLock::new(storage_local));
+
         if let Some(ref mut engine) = engine {
             engine.set_storage(Arc::clone(&storage));
         }
@@ -156,7 +158,9 @@ impl VectorStore {
         if store.dimensions() == 0 {
             store.records.set_dimensions(dimensions as u32);
             if let Some(ref storage) = store.storage {
-                storage.write().put_config("dimensions", dimensions as u64)?;
+                storage
+                    .write()
+                    .put_config("dimensions", dimensions as u64)?;
             }
         }
         Ok(store)
@@ -177,10 +181,11 @@ impl VectorStore {
             if store.dimensions() == 0 {
                 store.records.set_dimensions(options.dimensions as u32);
                 if let Some(ref storage) = store.storage {
-                    storage.write().put_config("dimensions", options.dimensions as u64)?;
+                    storage
+                        .write()
+                        .put_config("dimensions", options.dimensions as u64)?;
                 }
             }
-
 
             // Apply ef_search if specified
             if let Some(ef) = options.ef_search {
@@ -241,7 +246,7 @@ impl VectorStore {
 
         let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage));
         let records = RecordStore::new(dimensions as u32);
-        
+
         Ok(Self {
             records,
             engine: RwLock::new(None),
@@ -394,7 +399,7 @@ impl VectorStore {
                     // missing from dirty_since_flush, making them invisible to ANN search
                     // after recovery via slim snapshot.
                     self.records.restore_dirty_slots(dirty);
-                    return Err(e.into());
+                    return Err(e);
                 }
             }
             Ok(())
@@ -432,7 +437,7 @@ impl VectorStore {
                 // Without this, a failed checkpoint silently drops the slots —
                 // same pattern as checkpoint_wal (persistence.rs:652).
                 self.records.restore_dirty_slots(dirty);
-                return Err(e.into());
+                return Err(e);
             }
         }
 
@@ -482,8 +487,9 @@ impl VectorStore {
             self.hnsw_ef_search
                 .load(std::sync::atomic::Ordering::Relaxed) as u16,
         );
-        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage_local));
-        
+        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> =
+            Arc::new(RwLock::new(storage_local));
+
         // Wire storage to existing engine if any
         if let Some(ref mut engine) = *self.engine.write() {
             engine.set_storage(Arc::clone(&storage));
@@ -620,11 +626,7 @@ impl VectorStore {
             }
         }
 
-        RecordStore::from_snapshot(
-            slots,
-            deleted_bitmap,
-            dimensions as u32,
-        )
+        RecordStore::from_snapshot(slots, deleted_bitmap, dimensions as u32)
     }
 
     /// Replay WAL entries directly into RecordStore.
@@ -957,7 +959,9 @@ impl VectorStore {
                 .transpose()?;
 
             // Apply WAL deletions to the manifest base FIRST.
-            if !wal_edge_deletes.is_empty() && let Some(ref mut store) = base {
+            if !wal_edge_deletes.is_empty()
+                && let Some(ref mut store) = base
+            {
                 for (from_id, to_id, edge_type) in wal_edge_deletes {
                     store.remove_edge(from_id, to_id, edge_type);
                 }
@@ -999,7 +1003,9 @@ impl VectorStore {
                     // Update config with new generation so the manifest checkpoint below
                     // writes the correct value.
                     if let Some(ref storage) = self.storage {
-                        storage.write().put_config("segments_generation", engine.generation())?;
+                        storage
+                            .write()
+                            .put_config("segments_generation", engine.generation())?;
                     }
                 }
             }
@@ -1032,25 +1038,26 @@ impl VectorStore {
 
         // Export multi-vector data if present
         let multivec_guard = self.multivec_storage.read();
-        let (multivec_bytes, multivec_offsets, multivec_config) =
-            if let (Some(mvs), Some(enc)) = (multivec_guard.as_ref(), self.muvera_encoder.as_ref()) {
-                let config = enc.config();
-                (
-                    Some(mvs.vectors_to_bytes()),
-                    Some(mvs.offsets_to_bytes()),
-                    Some(PersistedMuveraConfig {
-                        repetitions: config.repetitions,
-                        partition_bits: config.partition_bits,
-                        seed: config.seed,
-                        token_dim: enc.token_dimension(),
-                        d_proj: config.d_proj,
-                        pool_factor: config.pool_factor,
-                        max_tokens: config.max_tokens,
-                    }),
-                )
-            } else {
-                (None, None, None)
-            };
+        let (multivec_bytes, multivec_offsets, multivec_config) = if let (Some(mvs), Some(enc)) =
+            (multivec_guard.as_ref(), self.muvera_encoder.as_ref())
+        {
+            let config = enc.config();
+            (
+                Some(mvs.vectors_to_bytes()),
+                Some(mvs.offsets_to_bytes()),
+                Some(PersistedMuveraConfig {
+                    repetitions: config.repetitions,
+                    partition_bits: config.partition_bits,
+                    seed: config.seed,
+                    token_dim: enc.token_dimension(),
+                    d_proj: config.d_proj,
+                    pool_factor: config.pool_factor,
+                    max_tokens: config.max_tokens,
+                }),
+            )
+        } else {
+            (None, None, None)
+        };
 
         // Export sparse index if present
         let sparse_index_bytes = self

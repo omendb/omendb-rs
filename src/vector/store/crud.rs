@@ -210,7 +210,9 @@ impl VectorStore {
                 if self.is_quantized()
                     && let Some(ref storage) = self.storage
                 {
-                    storage.write().put_config("quantization", helpers::quantization_to_id(true) as u64)?;
+                    storage
+                        .write()
+                        .put_config("quantization", helpers::quantization_to_id(true))?;
                 }
 
                 result_indices.extend(slots.iter().map(|&s| s as usize));
@@ -322,7 +324,6 @@ impl VectorStore {
         } else {
             false
         };
-
 
         if let Some(ref mut text_index) = *self.text_index.write() {
             text_index.delete_document(id)?;

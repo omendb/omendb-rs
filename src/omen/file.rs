@@ -466,18 +466,29 @@ impl crate::omen::StorageBackend for OmenFile {
         Ok(())
     }
 
-    fn set_hnsw_params(&mut self, m: u16, ef_construction: u16, ef_search: u16) -> anyhow::Result<()> {
+    fn set_hnsw_params(
+        &mut self,
+        m: u16,
+        ef_construction: u16,
+        ef_search: u16,
+    ) -> anyhow::Result<()> {
         self.set_hnsw_params(m, ef_construction, ef_search);
         Ok(())
     }
 
-    fn log_insert(&mut self, id: &str, vector: &[f32], metadata: &serde_json::Value) -> anyhow::Result<()> {
+    fn log_insert(
+        &mut self,
+        id: &str,
+        vector: &[f32],
+        metadata: &serde_json::Value,
+    ) -> anyhow::Result<()> {
         let metadata_bytes = serde_json::to_vec(metadata)?;
-        self.wal_append_insert(id, vector, Some(&metadata_bytes)).map_err(|e| e.into())
+        self.wal_append_insert(id, vector, Some(&metadata_bytes))
+            .map_err(Into::into)
     }
 
     fn log_delete(&mut self, id: &str) -> anyhow::Result<()> {
-        self.wal_append_delete(id).map_err(|e| e.into())
+        self.wal_append_delete(id).map_err(Into::into)
     }
 
     fn log_insert_edge(
@@ -489,12 +500,17 @@ impl crate::omen::StorageBackend for OmenFile {
         metadata: Option<&[u8]>,
     ) -> anyhow::Result<()> {
         self.wal_append_insert_edge(from_id, to_id, edge_type, weight, metadata)
-            .map_err(|e| e.into())
+            .map_err(Into::into)
     }
 
-    fn log_delete_edge(&mut self, from_id: &str, to_id: &str, edge_type: &str) -> anyhow::Result<()> {
+    fn log_delete_edge(
+        &mut self,
+        from_id: &str,
+        to_id: &str,
+        edge_type: &str,
+    ) -> anyhow::Result<()> {
         self.wal_append_delete_edge(from_id, to_id, edge_type)
-            .map_err(|e| e.into())
+            .map_err(Into::into)
     }
 
     fn checkpoint(&mut self) -> anyhow::Result<()> {
@@ -504,11 +520,11 @@ impl crate::omen::StorageBackend for OmenFile {
     }
 
     fn sync(&mut self) -> anyhow::Result<()> {
-        self.wal_sync().map_err(|e| e.into())
+        self.wal_sync().map_err(Into::into)
     }
 
     fn put_config(&mut self, key: &str, value: u64) -> anyhow::Result<()> {
-        self.put_config(key, value).map_err(|e| e.into())
+        self.put_config(key, value)
     }
 
     fn wal_len(&self) -> usize {
@@ -524,7 +540,8 @@ impl crate::omen::StorageBackend for OmenFile {
         records: &crate::vector::store::record_store::RecordStore,
         dirty_slots: &roaring::RoaringBitmap,
     ) -> anyhow::Result<()> {
-        self.checkpoint_vectors_only(records, dirty_slots).map_err(|e| e.into())
+        self.checkpoint_vectors_only(records, dirty_slots)
+            .map_err(Into::into)
     }
 
     fn checkpoint_incremental(
@@ -533,7 +550,8 @@ impl crate::omen::StorageBackend for OmenFile {
         dirty_slots: &roaring::RoaringBitmap,
         options: crate::omen::CheckpointOptions,
     ) -> anyhow::Result<()> {
-        self.checkpoint_incremental(records, dirty_slots, options).map_err(|e| e.into())
+        self.checkpoint_incremental(records, dirty_slots, options)
+            .map_err(Into::into)
     }
 
     fn checkpoint_full(
@@ -541,7 +559,7 @@ impl crate::omen::StorageBackend for OmenFile {
         records: &crate::vector::store::record_store::RecordStore,
         options: crate::omen::CheckpointOptions,
     ) -> anyhow::Result<()> {
-        self.checkpoint_full(records, options).map_err(|e| e.into())
+        self.checkpoint_full(records, options).map_err(Into::into)
     }
 }
 
