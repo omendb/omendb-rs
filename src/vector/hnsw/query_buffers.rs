@@ -218,10 +218,9 @@ impl SearchWorkset {
 
     #[inline(always)]
     pub fn consider(&mut self, neighbor: Candidate, ef: usize) {
-        let admit = self
-            .accepted
-            .peek()
-            .is_none_or(|&farthest| neighbor.distance < farthest.distance || self.accepted.len() < ef);
+        let admit = self.accepted.peek().is_none_or(|&farthest| {
+            neighbor.distance < farthest.distance || self.accepted.len() < ef
+        });
         if !admit {
             return;
         }

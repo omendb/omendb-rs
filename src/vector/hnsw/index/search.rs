@@ -131,13 +131,7 @@ impl<'a> DistanceContext<'a> {
 /// Trait for collecting neighbors during HNSW traversal
 trait NeighborCollector {
     /// Collect unvisited neighbors into the output buffer
-    fn collect(
-        &self,
-        node_id: u32,
-        level: u8,
-        visited: &VisitedList,
-        output: &mut Vec<u32>,
-    );
+    fn collect(&self, node_id: u32, level: u8, visited: &VisitedList, output: &mut Vec<u32>);
 
     /// Get initial entry points (some collectors may expand them)
     fn prepare_entry_points(
@@ -156,13 +150,7 @@ struct StandardCollector<'a> {
 
 impl NeighborCollector for StandardCollector<'_> {
     #[inline(always)]
-    fn collect(
-        &self,
-        node_id: u32,
-        level: u8,
-        visited: &VisitedList,
-        output: &mut Vec<u32>,
-    ) {
+    fn collect(&self, node_id: u32, level: u8, visited: &VisitedList, output: &mut Vec<u32>) {
         output.clear();
         if level == 0 {
             // Level 0: colocated neighbors
@@ -216,13 +204,7 @@ where
     F: Fn(u32) -> bool,
 {
     #[inline(always)]
-    fn collect(
-        &self,
-        node_id: u32,
-        level: u8,
-        visited: &VisitedList,
-        output: &mut Vec<u32>,
-    ) {
+    fn collect(&self, node_id: u32, level: u8, visited: &VisitedList, output: &mut Vec<u32>) {
         crate::vector::hnsw::acorn::collect_matching_neighbors(
             self.storage,
             node_id,
@@ -338,7 +320,8 @@ impl HNSWIndex {
                     if batch_distances.len() < num_neighbors {
                         batch_distances.resize(num_neighbors, 0.0);
                     }
-                    let computed = ctx.compute_batch(&neighbors, &mut batch_distances[..num_neighbors]);
+                    let computed =
+                        ctx.compute_batch(&neighbors, &mut batch_distances[..num_neighbors]);
                     debug_assert_eq!(computed, num_neighbors, "batch distance count mismatch");
 
                     // Process all computed distances, marking visited as we go
@@ -372,7 +355,10 @@ impl HNSWIndex {
                         if !workset.record_visited(neighbor_id) {
                             continue;
                         }
-                        workset.consider(Candidate::new(neighbor_id, ctx.compute::<D>(neighbor_id)?), ef);
+                        workset.consider(
+                            Candidate::new(neighbor_id, ctx.compute::<D>(neighbor_id)?),
+                            ef,
+                        );
                     }
                 }
 
