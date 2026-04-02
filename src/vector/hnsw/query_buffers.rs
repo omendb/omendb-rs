@@ -18,6 +18,8 @@ use std::collections::BinaryHeap;
 
 use super::types::Candidate;
 
+const SEARCH_RESULT_PARTIAL_SORT_THRESHOLD: usize = 4;
+
 /// Fast visited list using generation markers (like hnswlib)
 ///
 /// O(1) insert, O(1) contains, O(1) clear (just increment generation)
@@ -106,61 +108,156 @@ impl VisitedList {
     }
 }
 
-/// Reusable buffers for search operations
+/// Reusable workset for query-time HNSW traversal.
 ///
-/// These are cleared and reused across queries to avoid allocations.
-pub struct QueryBuffers {
-    /// Visited nodes during graph traversal (fast generation-based)
-    pub visited: VisitedList,
-
-    /// Candidate queue (min-heap)
-    pub candidates: BinaryHeap<Reverse<Candidate>>,
-
-    /// Working set (max-heap)
-    pub working: BinaryHeap<Candidate>,
-
-    /// Entry points for layer traversal
-    pub entry_points: Vec<u32>,
-
-    /// Pre-allocated buffer for unvisited neighbors
-    pub unvisited: Vec<u32>,
-
-    /// Pre-allocated buffer for search results (avoids allocation in return path)
-    pub results: Vec<Candidate>,
-
-    /// Pre-allocated buffer for batch distance computation (SQ8 mode)
-    pub batch_distances: Vec<f32>,
+/// This owns the full mutable search state so the hot path does not have to
+/// manually coordinate multiple buffers and heaps.
+pub struct SearchWorkset {
+    visited: VisitedList,
+    frontier: BinaryHeap<Reverse<Candidate>>,
+    accepted: BinaryHeap<Candidate>,
+    neighbors: Vec<u32>,
+    finalized: Vec<Candidate>,
+    batch_distances: Vec<f32>,
 }
 
-impl Default for QueryBuffers {
+impl Default for SearchWorkset {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl QueryBuffers {
-    /// Create new empty buffers
+impl SearchWorkset {
+    /// Create new empty workset
     pub fn new() -> Self {
         Self {
             visited: VisitedList::new(),
-            candidates: BinaryHeap::new(),
-            working: BinaryHeap::new(),
-            entry_points: Vec::new(),
-            unvisited: Vec::new(),
-            results: Vec::new(),
+            frontier: BinaryHeap::new(),
+            accepted: BinaryHeap::new(),
+            neighbors: Vec::new(),
+            finalized: Vec::new(),
             batch_distances: Vec::new(),
         }
     }
 
-    /// Clear all buffers for reuse
+    /// Clear all state for reuse
     pub fn clear(&mut self) {
-        self.visited.clear(); // O(1) now!
-        self.candidates.clear();
-        self.working.clear();
-        self.entry_points.clear();
-        self.unvisited.clear();
-        self.results.clear();
+        self.visited.clear();
+        self.frontier.clear();
+        self.accepted.clear();
+        self.neighbors.clear();
+        self.finalized.clear();
         // batch_distances doesn't need clearing - overwritten each use
+    }
+
+    pub fn entry_buffers(&mut self) -> (&mut VisitedList, &mut Vec<u32>) {
+        (&mut self.visited, &mut self.neighbors)
+    }
+
+    #[inline(always)]
+    pub fn collector_buffers(&mut self) -> (&VisitedList, &mut Vec<u32>) {
+        (&self.visited, &mut self.neighbors)
+    }
+
+    #[inline(always)]
+    pub fn take_neighbors(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.neighbors)
+    }
+
+    #[inline(always)]
+    pub fn restore_neighbors(&mut self, neighbors: Vec<u32>) {
+        self.neighbors = neighbors;
+    }
+
+    #[inline(always)]
+    pub fn take_batch_distances(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.batch_distances)
+    }
+
+    #[inline(always)]
+    pub fn restore_batch_distances(&mut self, batch_distances: Vec<f32>) {
+        self.batch_distances = batch_distances;
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.frontier.is_empty()
+    }
+
+    #[inline(always)]
+    pub fn pop_frontier(&mut self) -> Option<Candidate> {
+        self.frontier.pop().map(|Reverse(candidate)| candidate)
+    }
+
+    #[inline(always)]
+    pub fn should_stop(&self, current: Candidate) -> bool {
+        self.accepted
+            .peek()
+            .is_some_and(|&farthest| current.distance > farthest.distance)
+    }
+
+    #[inline(always)]
+    pub fn seed(&mut self, candidate: Candidate) {
+        self.frontier.push(Reverse(candidate));
+        self.accepted.push(candidate);
+    }
+
+    #[inline(always)]
+    pub fn record_visited(&mut self, node_id: u32) -> bool {
+        if self.visited.contains(node_id) {
+            return false;
+        }
+        self.visited.insert(node_id);
+        true
+    }
+
+    #[inline(always)]
+    pub fn prefetch_visited(&self, node_id: u32) {
+        self.visited.prefetch(node_id);
+    }
+
+    #[inline(always)]
+    pub fn consider(&mut self, neighbor: Candidate, ef: usize) {
+        let admit = self
+            .accepted
+            .peek()
+            .is_none_or(|&farthest| neighbor.distance < farthest.distance || self.accepted.len() < ef);
+        if !admit {
+            return;
+        }
+
+        self.frontier.push(Reverse(neighbor));
+        self.accepted.push(neighbor);
+        if self.accepted.len() > ef {
+            self.accepted.pop();
+        }
+    }
+
+    pub fn finalize(&mut self, result_limit: usize) -> Vec<(u32, f32)> {
+        if result_limit == 0 || self.accepted.is_empty() {
+            return Vec::new();
+        }
+
+        self.finalized.extend(self.accepted.drain());
+        let result_limit = result_limit.min(self.finalized.len());
+
+        if self.finalized.len() > result_limit.saturating_mul(SEARCH_RESULT_PARTIAL_SORT_THRESHOLD)
+        {
+            self.finalized
+                .select_nth_unstable_by(result_limit, |a, b| a.distance.cmp(&b.distance));
+            self.finalized.truncate(result_limit);
+            self.finalized
+                .sort_unstable_by(|a, b| a.distance.cmp(&b.distance));
+        } else {
+            self.finalized
+                .sort_unstable_by(|a, b| a.distance.cmp(&b.distance));
+            self.finalized.truncate(result_limit);
+        }
+
+        self.finalized
+            .iter()
+            .map(|candidate| (candidate.node_id, candidate.distance.into_inner()))
+            .collect()
     }
 }
 
@@ -168,21 +265,21 @@ thread_local! {
     /// Thread-local query buffers
     ///
     /// Each thread gets its own buffers, avoiding contention and allocations.
-    static QUERY_BUFFERS: RefCell<QueryBuffers> = RefCell::new(QueryBuffers::new());
+    static QUERY_WORKSET: RefCell<SearchWorkset> = RefCell::new(SearchWorkset::new());
 }
 
-/// Use thread-local buffers for a query
+/// Use thread-local search workset for a query
 ///
-/// Clears buffers before use. Buffers retain capacity across queries
+/// Clears state before use. Buffers retain capacity across queries
 /// for amortized allocation.
-pub fn with_buffers<F, R>(f: F) -> R
+pub fn with_workset<F, R>(f: F) -> R
 where
-    F: FnOnce(&mut QueryBuffers) -> R,
+    F: FnOnce(&mut SearchWorkset) -> R,
 {
-    QUERY_BUFFERS.with(|buffers| {
-        let mut buffers = buffers.borrow_mut();
-        buffers.clear();
-        f(&mut buffers)
+    QUERY_WORKSET.with(|workset| {
+        let mut workset = workset.borrow_mut();
+        workset.clear();
+        f(&mut workset)
     })
 }
 
@@ -245,40 +342,41 @@ mod tests {
     }
 
     #[test]
-    fn test_query_buffers_creation() {
-        let buffers = QueryBuffers::new();
-        assert!(buffers.visited.is_empty());
-        assert!(buffers.candidates.is_empty());
-        assert!(buffers.working.is_empty());
-        assert!(buffers.entry_points.is_empty());
+    fn test_search_workset_creation() {
+        let workset = SearchWorkset::new();
+        assert!(workset.visited.is_empty());
+        assert!(workset.is_empty());
+        assert!(workset.neighbors.is_empty());
     }
 
     #[test]
-    fn test_query_buffers_clear() {
-        let mut buffers = QueryBuffers::new();
+    fn test_search_workset_clear() {
+        let mut workset = SearchWorkset::new();
 
         // Add some data
-        buffers.visited.insert(1);
-        buffers.entry_points.push(0);
+        workset.record_visited(1);
+        workset.neighbors.push(0);
+        workset.seed(Candidate::new(42, 1.0));
 
         // Clear
-        buffers.clear();
+        workset.clear();
 
-        assert!(!buffers.visited.contains(1));
-        assert!(buffers.entry_points.is_empty());
+        assert!(!workset.visited.contains(1));
+        assert!(workset.neighbors.is_empty());
+        assert!(workset.is_empty());
     }
 
     #[test]
-    fn test_with_buffers() {
-        // Use buffers
-        with_buffers(|buffers| {
-            buffers.visited.insert(42);
-            assert!(buffers.visited.contains(42));
+    fn test_with_workset() {
+        // Use workset
+        with_workset(|workset| {
+            workset.record_visited(42);
+            assert!(workset.visited.contains(42));
         });
 
-        // Buffers should be cleared after use
-        with_buffers(|buffers| {
-            assert!(!buffers.visited.contains(42));
+        // Workset should be cleared after use
+        with_workset(|workset| {
+            assert!(!workset.visited.contains(42));
         });
     }
 
@@ -287,24 +385,62 @@ mod tests {
         use std::thread;
 
         // Main thread
-        with_buffers(|buffers| {
-            buffers.visited.insert(1);
+        with_workset(|workset| {
+            workset.record_visited(1);
         });
 
         // Spawn new thread
         let handle = thread::spawn(|| {
-            with_buffers(|buffers| {
+            with_workset(|workset| {
                 // Should not see main thread's data
-                assert!(!buffers.visited.contains(1));
-                buffers.visited.insert(2);
+                assert!(!workset.visited.contains(1));
+                workset.record_visited(2);
             });
         });
 
         handle.join().unwrap();
 
         // Main thread should not see spawned thread's data
-        with_buffers(|buffers| {
-            assert!(!buffers.visited.contains(2));
+        with_workset(|workset| {
+            assert!(!workset.visited.contains(2));
         });
+    }
+
+    #[test]
+    fn finalize_uses_partial_sort_for_top_k() {
+        let mut workset = SearchWorkset::new();
+        for candidate in [
+            Candidate::new(10, 9.0),
+            Candidate::new(11, 1.0),
+            Candidate::new(12, 8.0),
+            Candidate::new(13, 2.0),
+            Candidate::new(14, 7.0),
+            Candidate::new(15, 3.0),
+            Candidate::new(16, 6.0),
+            Candidate::new(17, 4.0),
+            Candidate::new(18, 5.0),
+        ] {
+            workset.seed(candidate);
+        }
+
+        let output = workset.finalize(2);
+
+        assert_eq!(output, vec![(11, 1.0), (13, 2.0)]);
+    }
+
+    #[test]
+    fn finalize_keeps_full_order_when_small() {
+        let mut workset = SearchWorkset::new();
+        for candidate in [
+            Candidate::new(10, 3.0),
+            Candidate::new(11, 1.0),
+            Candidate::new(12, 2.0),
+        ] {
+            workset.seed(candidate);
+        }
+
+        let output = workset.finalize(3);
+
+        assert_eq!(output, vec![(11, 1.0), (12, 2.0), (10, 3.0)]);
     }
 }

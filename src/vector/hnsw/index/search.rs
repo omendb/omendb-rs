@@ -6,6 +6,7 @@ use super::HNSWIndex;
 use crate::distance::dot_product;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::node_storage::{NodeStorage, QueryPrep};
+use crate::vector::hnsw::query_buffers::VisitedList;
 use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
 use tracing::{debug, error, instrument};
 
@@ -134,7 +135,7 @@ trait NeighborCollector {
         &self,
         node_id: u32,
         level: u8,
-        visited: &crate::vector::hnsw::query_buffers::VisitedList,
+        visited: &VisitedList,
         output: &mut Vec<u32>,
     );
 
@@ -143,7 +144,7 @@ trait NeighborCollector {
         &self,
         entry_points: &[u32],
         level: u8,
-        visited: &mut crate::vector::hnsw::query_buffers::VisitedList,
+        visited: &mut VisitedList,
         output: &mut Vec<u32>,
     );
 }
@@ -159,7 +160,7 @@ impl NeighborCollector for StandardCollector<'_> {
         &self,
         node_id: u32,
         level: u8,
-        visited: &crate::vector::hnsw::query_buffers::VisitedList,
+        visited: &VisitedList,
         output: &mut Vec<u32>,
     ) {
         output.clear();
@@ -185,7 +186,7 @@ impl NeighborCollector for StandardCollector<'_> {
         &self,
         entry_points: &[u32],
         _level: u8,
-        visited: &mut crate::vector::hnsw::query_buffers::VisitedList,
+        visited: &mut VisitedList,
         output: &mut Vec<u32>,
     ) {
         output.clear();
@@ -219,7 +220,7 @@ where
         &self,
         node_id: u32,
         level: u8,
-        visited: &crate::vector::hnsw::query_buffers::VisitedList,
+        visited: &VisitedList,
         output: &mut Vec<u32>,
     ) {
         crate::vector::hnsw::acorn::collect_matching_neighbors(
@@ -238,7 +239,7 @@ where
         &self,
         entry_points: &[u32],
         level: u8,
-        visited: &mut crate::vector::hnsw::query_buffers::VisitedList,
+        visited: &mut VisitedList,
         output: &mut Vec<u32>,
     ) {
         output.clear();
@@ -276,35 +277,6 @@ enum SearchValidation {
     Empty,
 }
 
-const SEARCH_RESULT_PARTIAL_SORT_THRESHOLD: usize = 4;
-
-fn finalize_search_results(
-    results_buf: &mut Vec<Candidate>,
-    result_limit: usize,
-) -> Vec<(u32, f32)> {
-    if result_limit == 0 || results_buf.is_empty() {
-        return Vec::new();
-    }
-
-    let result_limit = result_limit.min(results_buf.len());
-
-    if results_buf.len() > result_limit.saturating_mul(SEARCH_RESULT_PARTIAL_SORT_THRESHOLD) {
-        // `select_nth_unstable_by(result_limit, ...)` keeps the first `result_limit`
-        // items in the left partition, which is exactly the top-k prefix we want.
-        results_buf.select_nth_unstable_by(result_limit, |a, b| a.distance.cmp(&b.distance));
-        results_buf.truncate(result_limit);
-        results_buf.sort_unstable_by(|a, b| a.distance.cmp(&b.distance));
-    } else {
-        results_buf.sort_unstable_by(|a, b| a.distance.cmp(&b.distance));
-        results_buf.truncate(result_limit);
-    }
-
-    results_buf
-        .iter()
-        .map(|c| (c.node_id, c.distance.into_inner()))
-        .collect()
-}
-
 impl HNSWIndex {
     /// Unified search layer loop for both standard and filtered search.
     #[inline(always)]
@@ -322,26 +294,20 @@ impl HNSWIndex {
         C: NeighborCollector,
     {
         use super::super::query_buffers;
-        use std::cmp::Reverse;
 
-        query_buffers::with_buffers(|buffers| {
-            let visited = &mut buffers.visited;
-            let candidates = &mut buffers.candidates;
-            let working = &mut buffers.working;
-            let unvisited = &mut buffers.unvisited;
-            let results_buf = &mut buffers.results;
-            let batch_distances = &mut buffers.batch_distances;
-
+        query_buffers::with_workset(|workset| {
             // Prepare entry points
-            collector.prepare_entry_points(entry_points, level, visited, unvisited);
-            for &ep in unvisited.iter() {
+            let (visited, neighbors_buf) = workset.entry_buffers();
+            collector.prepare_entry_points(entry_points, level, visited, neighbors_buf);
+            let mut neighbors = workset.take_neighbors();
+            for &ep in &neighbors {
                 let dist = ctx.compute::<D>(ep)?;
-                let candidate = Candidate::new(ep, dist);
-                candidates.push(Reverse(candidate));
-                working.push(candidate);
+                workset.seed(Candidate::new(ep, dist));
             }
+            neighbors.clear();
+            workset.restore_neighbors(neighbors);
 
-            if candidates.is_empty() {
+            if workset.is_empty() {
                 return Ok(Vec::new());
             }
 
@@ -349,57 +315,40 @@ impl HNSWIndex {
             let use_batch = ctx.has_batch();
 
             // Greedy search
-            while let Some(Reverse(current)) = candidates.pop() {
-                if let Some(&farthest) = working.peek()
-                    && current.distance > farthest.distance
-                {
+            while let Some(current) = workset.pop_frontier() {
+                if workset.should_stop(current) {
                     break;
                 }
 
                 // Collect neighbors using specialized collector
-                collector.collect(current.node_id, level, visited, unvisited);
+                let (visited, neighbors_buf) = workset.collector_buffers();
+                collector.collect(current.node_id, level, visited, neighbors_buf);
 
-                let neighbors_slice = unvisited.as_slice();
-                let num_neighbors = neighbors_slice.len();
+                let mut neighbors = workset.take_neighbors();
+                let num_neighbors = neighbors.len();
 
                 if num_neighbors == 0 {
+                    workset.restore_neighbors(neighbors);
                     continue;
                 }
 
                 if use_batch {
                     // Batch path: compute all distances at once (SQ8 mode)
-                    // Ensure buffer is large enough
+                    let mut batch_distances = workset.take_batch_distances();
                     if batch_distances.len() < num_neighbors {
                         batch_distances.resize(num_neighbors, 0.0);
                     }
-
-                    let computed = ctx.compute_batch(neighbors_slice, batch_distances);
+                    let computed = ctx.compute_batch(&neighbors, &mut batch_distances[..num_neighbors]);
                     debug_assert_eq!(computed, num_neighbors, "batch distance count mismatch");
 
                     // Process all computed distances, marking visited as we go
-                    for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
-                        // Guard against duplicates in neighbor list
-                        if visited.contains(neighbor_id) {
+                    for (i, &neighbor_id) in neighbors.iter().enumerate() {
+                        if !workset.record_visited(neighbor_id) {
                             continue;
                         }
-                        visited.insert(neighbor_id);
-
-                        let dist = batch_distances[i];
-                        let neighbor = Candidate::new(neighbor_id, dist);
-
-                        if let Some(&farthest) = working.peek() {
-                            if neighbor.distance < farthest.distance || working.len() < ef {
-                                candidates.push(Reverse(neighbor));
-                                working.push(neighbor);
-                                if working.len() > ef {
-                                    working.pop();
-                                }
-                            }
-                        } else {
-                            candidates.push(Reverse(neighbor));
-                            working.push(neighbor);
-                        }
+                        workset.consider(Candidate::new(neighbor_id, batch_distances[i]), ef);
                     }
+                    workset.restore_batch_distances(batch_distances);
                 } else {
                     // Per-neighbor path (full precision or single neighbor)
                     use crate::vector::hnsw::prefetch::PrefetchConfig;
@@ -407,49 +356,34 @@ impl HNSWIndex {
                     const PREFETCH_DISTANCE: usize = PrefetchConfig::stride();
 
                     if PREFETCH_ENABLED {
-                        for &id in neighbors_slice.iter().take(PREFETCH_DISTANCE) {
+                        for &id in neighbors.iter().take(PREFETCH_DISTANCE) {
                             self.storage.prefetch(id);
-                            visited.prefetch(id);
+                            workset.prefetch_visited(id);
                         }
                     }
 
-                    for (i, &neighbor_id) in neighbors_slice.iter().enumerate() {
+                    for (i, &neighbor_id) in neighbors.iter().enumerate() {
                         if PREFETCH_ENABLED && i + PREFETCH_DISTANCE < num_neighbors {
-                            let prefetch_id = neighbors_slice[i + PREFETCH_DISTANCE];
+                            let prefetch_id = neighbors[i + PREFETCH_DISTANCE];
                             self.storage.prefetch(prefetch_id);
-                            visited.prefetch(prefetch_id);
+                            workset.prefetch_visited(prefetch_id);
                         }
 
-                        // Guard against duplicates in neighbor list
-                        if visited.contains(neighbor_id) {
+                        if !workset.record_visited(neighbor_id) {
                             continue;
                         }
-                        visited.insert(neighbor_id);
-
-                        let dist = ctx.compute::<D>(neighbor_id)?;
-                        let neighbor = Candidate::new(neighbor_id, dist);
-
-                        if let Some(&farthest) = working.peek() {
-                            if neighbor.distance < farthest.distance || working.len() < ef {
-                                candidates.push(Reverse(neighbor));
-                                working.push(neighbor);
-                                if working.len() > ef {
-                                    working.pop();
-                                }
-                            }
-                        } else {
-                            candidates.push(Reverse(neighbor));
-                            working.push(neighbor);
-                        }
+                        workset.consider(Candidate::new(neighbor_id, ctx.compute::<D>(neighbor_id)?), ef);
                     }
                 }
+
+                neighbors.clear();
+                workset.restore_neighbors(neighbors);
             }
 
             debug_assert!(result_limit <= ef, "result_limit must not exceed ef");
 
             // Return the top `result_limit` (node_id, distance) pairs sorted by distance.
-            results_buf.extend(working.drain());
-            let output = finalize_search_results(results_buf, result_limit);
+            let output = workset.finalize(result_limit);
             Ok(output)
         })
     }
@@ -899,42 +833,5 @@ impl HNSWIndex {
         };
 
         self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level, result_limit)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finalize_search_results_uses_partial_sort_for_top_k() {
-        let mut results = vec![
-            Candidate::new(10, 9.0),
-            Candidate::new(11, 1.0),
-            Candidate::new(12, 8.0),
-            Candidate::new(13, 2.0),
-            Candidate::new(14, 7.0),
-            Candidate::new(15, 3.0),
-            Candidate::new(16, 6.0),
-            Candidate::new(17, 4.0),
-            Candidate::new(18, 5.0),
-        ];
-
-        let output = finalize_search_results(&mut results, 2);
-
-        assert_eq!(output, vec![(11, 1.0), (13, 2.0)]);
-    }
-
-    #[test]
-    fn finalize_search_results_keeps_full_order_when_small() {
-        let mut results = vec![
-            Candidate::new(10, 3.0),
-            Candidate::new(11, 1.0),
-            Candidate::new(12, 2.0),
-        ];
-
-        let output = finalize_search_results(&mut results, 3);
-
-        assert_eq!(output, vec![(11, 1.0), (12, 2.0), (10, 3.0)]);
     }
 }
