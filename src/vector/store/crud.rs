@@ -158,9 +158,6 @@ impl VectorStore {
 
         // Process inserts with batch optimization
         if !inserts.is_empty() {
-            let vectors_data: Vec<Vec<f32>> =
-                inserts.iter().map(|(_, v, _)| v.data.clone()).collect();
-
             if self.has_engine() {
                 let expected_dims = self.dimensions();
                 for (_, vector, _) in &inserts {
@@ -171,14 +168,17 @@ impl VectorStore {
 
                 let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());
-                for (id, vector, metadata) in &inserts {
+                let mut vectors_data = Vec::with_capacity(inserts.len());
+                for (id, vector, metadata) in inserts {
+                    let vector_data = vector.data;
                     let slot = self.records.set(
-                        id.clone(),
-                        vector.data.clone(),
+                        id,
+                        vector_data.clone(),
                         Some(metadata.clone()),
                     )?;
                     slots.push(slot);
-                    metadata_index.index_json(slot, metadata);
+                    metadata_index.index_json(slot, &metadata);
+                    vectors_data.push(vector_data);
                 }
 
                 self.with_engine_mut(|engine| {
@@ -195,14 +195,17 @@ impl VectorStore {
 
                 let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());
-                for (id, vector, metadata) in &inserts {
+                let mut vectors_data = Vec::with_capacity(inserts.len());
+                for (id, vector, metadata) in inserts {
+                    let vector_data = vector.data;
                     let slot = self.records.set(
-                        id.clone(),
-                        vector.data.clone(),
+                        id,
+                        vector_data.clone(),
                         Some(metadata.clone()),
                     )?;
                     slots.push(slot);
-                    metadata_index.index_json(slot, metadata);
+                    metadata_index.index_json(slot, &metadata);
+                    vectors_data.push(vector_data);
                 }
 
                 self.build_and_publish_engine(dimensions, vectors_data, &slots)?;

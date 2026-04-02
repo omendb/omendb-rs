@@ -38,11 +38,10 @@ impl VectorStore {
             all_slots.push(slot as usize);
         }
 
-        // Build or extend engine
-        let vector_data: Vec<Vec<f32>> = vectors.iter().map(|v| v.data.clone()).collect();
         let slots: Vec<u32> = all_slots.iter().map(|&s| s as u32).collect();
 
         if self.has_engine() {
+            let vector_data: Vec<Vec<f32>> = vectors.into_iter().map(|v| v.data).collect();
             self.with_engine_mut(|engine| {
                 if let Some(engine) = engine.as_mut() {
                     engine.insert_batch_parallel(vector_data, &slots)?;
@@ -51,6 +50,7 @@ impl VectorStore {
             })?;
         } else {
             // Build new engine with parallel construction
+            let vector_data: Vec<Vec<f32>> = vectors.into_iter().map(|v| v.data).collect();
             self.build_and_publish_engine(dimensions, vector_data, &slots)?;
         }
 
@@ -314,7 +314,11 @@ impl VectorStore {
         let old_to_new = self.records.compact();
 
         debug_assert!(
-            old_to_new.len() == old_to_new.values().collect::<std::collections::HashSet<_>>().len(),
+            old_to_new.len()
+                == old_to_new
+                    .values()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
             "Slot remapping is not bijective (contains duplicate target slots)"
         );
         debug_assert!(
