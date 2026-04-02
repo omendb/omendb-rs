@@ -70,35 +70,24 @@ impl VectorStore {
             return Ok(());
         }
 
-        // Collect live vectors and their slots
-        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(self.records.len() as usize);
+        // Collect live slots, then borrow the vectors for the rebuild.
         let mut slots: Vec<u32> = Vec::with_capacity(self.records.len() as usize);
-        for (slot, record) in self.records.iter_live() {
-            vectors.push(record.vector.clone());
+        for (slot, _) in self.records.iter_live() {
             slots.push(slot);
         }
 
         // Build config
         let dims = self.dimensions();
 
-        // Rebuild with parallel construction
-        self.build_and_publish_engine(dims, vectors, &slots)
+        // Rebuild with parallel construction without cloning the vector batch.
+        self.records.with_vectors_by_slots(&slots, |vectors| {
+            self.build_and_publish_engine_from_refs(dims, vectors, &slots)
+        })
     }
 
     /// Merge another `VectorStore` into this one using IGTM algorithm
     pub fn merge_from(&mut self, other: &VectorStore) -> Result<usize> {
         self.merge_from_with_prefix(other, None)
-    }
-
-    /// Build engine in parallel from provided vectors and publish it.
-    pub(crate) fn build_and_publish_engine(
-        &self,
-        dimensions: usize,
-        vectors: Vec<Vec<f32>>,
-        slots: &[u32],
-    ) -> Result<()> {
-        let vectors: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-        self.build_and_publish_engine_from_refs(dimensions, vectors, slots)
     }
 
     pub(crate) fn build_and_publish_engine_from_refs(

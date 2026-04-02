@@ -837,10 +837,8 @@ impl VectorStore {
             Ok(Some(engine))
         } else {
             // Slow path: rebuild from vectors
-            let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(active_count);
             let mut slots: Vec<u32> = Vec::with_capacity(active_count);
-            for (slot, record) in records.iter_live() {
-                vectors.push(record.vector.clone());
+            for (slot, _) in records.iter_live() {
                 slots.push(slot);
             }
 
@@ -849,8 +847,11 @@ impl VectorStore {
                 .with_distance(ctx.distance_metric)
                 .with_quantization(ctx.quantization);
 
-            let mut segs = SegmentManager::build_parallel_with_slots(config, vectors, &slots)
-                .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))?;
+            let segs = records.with_vectors_by_slots(&slots, |vectors| {
+                SegmentManager::build_parallel_with_slots_from_refs(config, vectors, &slots)
+                    .map_err(|e| anyhow::anyhow!("Segment build failed: {e}"))
+            })?;
+            let mut segs = segs;
             segs.set_pending_merge_dir(segments_dir);
             Ok(Some(segs))
         }

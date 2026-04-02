@@ -823,14 +823,7 @@ impl HNSWIndex {
             m: self.params.m,
         };
 
-        self.search_layer_internal::<D, _>(
-            entry_points,
-            &ctx,
-            &collector,
-            ef,
-            level,
-            result_limit,
-        )
+        self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level, result_limit)
     }
 
     /// Search for nearest neighbors at a specific level
@@ -905,14 +898,7 @@ impl HNSWIndex {
             storage: &self.storage,
         };
 
-        self.search_layer_internal::<D, _>(
-            entry_points,
-            &ctx,
-            &collector,
-            ef,
-            level,
-            result_limit,
-        )
+        self.search_layer_internal::<D, _>(entry_points, &ctx, &collector, ef, level, result_limit)
     }
 }
 

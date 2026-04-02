@@ -370,11 +370,7 @@ impl RecordStore {
     /// This is for hot write paths that already own the source vector and only
     /// need a temporary borrow into the record store before handing the slice
     /// to the dense engine.
-    pub fn with_vector_by_slot<T>(
-        &self,
-        slot: u32,
-        f: impl FnOnce(Option<&[f32]>) -> T,
-    ) -> T {
+    pub fn with_vector_by_slot<T>(&self, slot: u32, f: impl FnOnce(Option<&[f32]>) -> T) -> T {
         let slots = self.slots.read();
         let vector = slots
             .get(slot as usize)
@@ -385,11 +381,7 @@ impl RecordStore {
     /// Borrow vector slices for a list of slots while holding the slot lock.
     ///
     /// The slices are only valid for the duration of the callback.
-    pub fn with_vectors_by_slots<T>(
-        &self,
-        slots: &[u32],
-        f: impl FnOnce(Vec<&[f32]>) -> T,
-    ) -> T {
+    pub fn with_vectors_by_slots<T>(&self, slots: &[u32], f: impl FnOnce(Vec<&[f32]>) -> T) -> T {
         let records = self.slots.read();
         let vectors = slots
             .iter()

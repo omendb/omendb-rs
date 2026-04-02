@@ -43,8 +43,7 @@ impl VectorStore {
         // Upsert into RecordStore
         let slot = self
             .records
-            .set(id.to_string(), vector.data, Some(metadata.clone()))?
-            as usize;
+            .set(id.to_string(), vector.data, Some(metadata.clone()))? as usize;
 
         debug_assert_eq!(
             self.records.get_slot(id),
@@ -141,9 +140,9 @@ impl VectorStore {
             let mut sparse_index = self.sparse_index.write();
             self.with_engine_mut(|engine| {
                 for (old_slot, id, vector, metadata) in updates {
-                    let new_slot = self
-                        .records
-                        .set(id.clone(), vector.data, Some(metadata.clone()))?;
+                    let new_slot =
+                        self.records
+                            .set(id.clone(), vector.data, Some(metadata.clone()))?;
 
                     self.records.with_vector_by_slot(new_slot, |vector| {
                         if let Some(engine) = engine.as_mut()
@@ -181,11 +180,7 @@ impl VectorStore {
                 let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in inserts {
-                    let slot = self.records.set(
-                        id,
-                        vector.data,
-                        Some(metadata.clone()),
-                    )?;
+                    let slot = self.records.set(id, vector.data, Some(metadata.clone()))?;
                     slots.push(slot);
                     metadata_index.index_json(slot, &metadata);
                 }
@@ -207,11 +202,7 @@ impl VectorStore {
                 let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());
                 for (id, vector, metadata) in inserts {
-                    let slot = self.records.set(
-                        id,
-                        vector.data,
-                        Some(metadata.clone()),
-                    )?;
+                    let slot = self.records.set(id, vector.data, Some(metadata.clone()))?;
                     slots.push(slot);
                     metadata_index.index_json(slot, &metadata);
                 }

@@ -247,10 +247,10 @@ impl SegmentManager {
             .is_some_and(|input| self.should_merge_input(&input))
     }
 
-    /// Collect vectors and slots from frozen segments into separate vecs
+    /// Collect borrowed vectors and slots from frozen segments.
     pub(super) fn collect_from_segments(
         segments: &[Arc<FrozenSegment>],
-    ) -> (Vec<Vec<f32>>, Vec<u32>) {
+    ) -> (Vec<&[f32]>, Vec<u32>) {
         let total_len: usize = segments.iter().map(|s| s.len()).sum();
         let mut vectors = Vec::with_capacity(total_len);
         let mut slots = Vec::with_capacity(total_len);
@@ -263,7 +263,7 @@ impl SegmentManager {
 
             let storage = frozen.storage();
             for id in 0..frozen.len() as u32 {
-                vectors.push(storage.get_vector_ref(id).to_vec());
+                vectors.push(storage.get_vector_ref(id));
                 slots.push(storage.slot(id));
             }
         }
@@ -274,12 +274,12 @@ impl SegmentManager {
     /// Build a merged HNSWIndex via parallel construction, then remap slots
     pub(super) fn build_merged_index(
         config: &SegmentConfig,
-        vectors: Vec<Vec<f32>>,
+        vectors: Vec<&[f32]>,
         slots: &[u32],
     ) -> Result<(HNSWIndex, std::time::Duration)> {
         let start = std::time::Instant::now();
 
-        let mut index = HNSWIndex::build_parallel(
+        let mut index = HNSWIndex::build_parallel_from_refs(
             config.dimensions,
             config.params,
             config.distance_fn,
