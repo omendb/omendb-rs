@@ -54,7 +54,7 @@ fn main() {
 
     let tmp = TempDir::new().expect("tempdir");
     let path = tmp.path().join("store.omen");
-    let mut store = VectorStore::open_with_dimensions(&path, dim).expect("open");
+    let store = VectorStore::open_with_dimensions(&path, dim).expect("open");
 
     let chunk_size = 10_000;
     eprintln!("ingesting in chunks of {}...", chunk_size);
