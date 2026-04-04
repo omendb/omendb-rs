@@ -28,7 +28,7 @@ fn bench_multi_segment_search(c: &mut Criterion) {
         let vectors = generate_vectors(n_vectors, dim);
 
         // Use 25K segment capacity so 50K = 2 frozen, 100K = 4 frozen
-        let mut store = VectorStore::new(dim).with_segment_capacity(25_000);
+        let store = VectorStore::new(dim).with_segment_capacity(25_000);
         for (i, v) in vectors.iter().enumerate() {
             store
                 .set(&format!("v{i}"), v.clone(), json!({"cat": i % 10}))
@@ -65,7 +65,7 @@ fn bench_single_vs_multi_segment(c: &mut Criterion) {
         let vectors = generate_vectors(n_vectors, dim);
 
         // Single segment (capacity > n_vectors)
-        let mut single = VectorStore::new(dim).with_segment_capacity(200_000);
+        let single = VectorStore::new(dim).with_segment_capacity(200_000);
         for (i, v) in vectors.iter().enumerate() {
             single
                 .set(&format!("v{i}"), v.clone(), json!({}))
@@ -74,7 +74,7 @@ fn bench_single_vs_multi_segment(c: &mut Criterion) {
         single.ensure_index_ready().expect("index ready");
 
         // Multi segment (capacity = 25K, so 50K = 2 frozen, 100K = 4 frozen)
-        let mut multi = VectorStore::new(dim).with_segment_capacity(25_000);
+        let multi = VectorStore::new(dim).with_segment_capacity(25_000);
         for (i, v) in vectors.iter().enumerate() {
             multi
                 .set(&format!("v{i}"), v.clone(), json!({}))

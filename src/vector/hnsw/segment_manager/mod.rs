@@ -1601,7 +1601,7 @@ mod tests {
         let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
 
         for i in 0..9 {
-            manager.insert(&vec![i as f32, 0.0, 0.0, 0.0]).unwrap();
+            manager.insert(&[i as f32, 0.0, 0.0, 0.0]).unwrap();
         }
         manager.flush().unwrap();
 
@@ -1630,7 +1630,7 @@ mod tests {
         let mut manager = SegmentManager::with_merge_policy(config, policy).unwrap();
 
         for i in 0..9 {
-            manager.insert(&vec![i as f32, 0.0, 0.0, 0.0]).unwrap();
+            manager.insert(&[i as f32, 0.0, 0.0, 0.0]).unwrap();
         }
         manager.flush().unwrap();
 
@@ -1707,8 +1707,7 @@ mod tests {
         let slot_after = results_after[0].slot;
         assert_eq!(
             slot_after, slot_before,
-            "Slot should be preserved after merge: expected {}, got {}",
-            slot_before, slot_after
+            "Slot should be preserved after merge: expected {slot_before}, got {slot_after}"
         );
 
         // Verify all slots are preserved by searching for each vector
@@ -1740,13 +1739,13 @@ mod tests {
 
         // Insert 10 vectors and flush (creates segment with 10 vectors)
         for i in 0..10 {
-            manager.insert(&vec![i as f32, 0.0, 0.0, 0.0]).unwrap();
+            manager.insert(&[i as f32, 0.0, 0.0, 0.0]).unwrap();
         }
         manager.flush().unwrap();
 
         // Insert 3 vectors and flush (creates segment with 3 vectors)
         for i in 0..3 {
-            manager.insert(&vec![i as f32, 0.0, 0.0, 0.0]).unwrap();
+            manager.insert(&[i as f32, 0.0, 0.0, 0.0]).unwrap();
         }
 
         // Don't call flush() here - it would trigger freeze_mutable which auto-merges

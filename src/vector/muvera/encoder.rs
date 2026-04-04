@@ -559,7 +559,7 @@ mod tests {
                     normalize(&v)
                 })
                 .collect();
-            let query: Vec<&[f32]> = query_vecs.iter().map(|v| v.as_slice()).collect();
+            let query: Vec<&[f32]> = query_vecs.iter().map(std::vec::Vec::as_slice).collect();
 
             // Generate random document (20-50 tokens), L2-normalized
             let num_d = rng.gen_range(20..=50);
@@ -569,7 +569,7 @@ mod tests {
                     normalize(&v)
                 })
                 .collect();
-            let doc: Vec<&[f32]> = doc_vecs.iter().map(|v| v.as_slice()).collect();
+            let doc: Vec<&[f32]> = doc_vecs.iter().map(std::vec::Vec::as_slice).collect();
 
             // Compute FDE dot product
             let query_fde = encoder.encode_query(&query);
@@ -590,8 +590,7 @@ mod tests {
         // (0.7 is achievable with more reps, but 0.65 is safe for k_sim=3, r_reps=5)
         assert!(
             correlation > 0.65,
-            "FDE correlation with MaxSim should be > 0.65, got {:.3}",
-            correlation
+            "FDE correlation with MaxSim should be > 0.65, got {correlation:.3}"
         );
     }
 
@@ -637,7 +636,7 @@ mod tests {
                     normalize(&v)
                 })
                 .collect();
-            let query: Vec<&[f32]> = query_vecs.iter().map(|v| v.as_slice()).collect();
+            let query: Vec<&[f32]> = query_vecs.iter().map(std::vec::Vec::as_slice).collect();
 
             let num_d = rng.gen_range(20..=50);
             let doc_vecs: Vec<Vec<f32>> = (0..num_d)
@@ -646,7 +645,7 @@ mod tests {
                     normalize(&v)
                 })
                 .collect();
-            let doc: Vec<&[f32]> = doc_vecs.iter().map(|v| v.as_slice()).collect();
+            let doc: Vec<&[f32]> = doc_vecs.iter().map(std::vec::Vec::as_slice).collect();
 
             let query_fde = encoder.encode_query(&query);
             let doc_fde = encoder.encode_document(&doc);
@@ -663,8 +662,7 @@ mod tests {
         // Note: MUVERA paper shows ~70% quality, reranking recovers to ~99%
         assert!(
             correlation > 0.70,
-            "Higher params FDE correlation should be > 0.70, got {:.3}",
-            correlation
+            "Higher params FDE correlation should be > 0.70, got {correlation:.3}"
         );
     }
 
@@ -790,7 +788,7 @@ mod tests {
         let query_vecs: Vec<Vec<f32>> = (0..10)
             .map(|_| (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect())
             .collect();
-        let query: Vec<&[f32]> = query_vecs.iter().map(|v| v.as_slice()).collect();
+        let query: Vec<&[f32]> = query_vecs.iter().map(std::vec::Vec::as_slice).collect();
 
         // Generate 50 documents with varying token counts
         let docs: Vec<Vec<Vec<f32>>> = (0..50)
@@ -804,7 +802,7 @@ mod tests {
 
         let docs_refs: Vec<Vec<&[f32]>> = docs
             .iter()
-            .map(|doc| doc.iter().map(|v| v.as_slice()).collect())
+            .map(|doc| doc.iter().map(std::vec::Vec::as_slice).collect())
             .collect();
 
         // Compare sequential and parallel

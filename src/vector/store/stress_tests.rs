@@ -21,7 +21,7 @@ fn random_vector(seed: usize, dim: usize) -> Vec<f32> {
     (0..dim)
         .map(|_| {
             // Simple LCG for reproducibility
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            rng_state = rng_state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
             ((rng_state >> 33) as f32 / u32::MAX as f32) * 2.0 - 1.0
         })
         .collect()
@@ -94,7 +94,7 @@ fn stress_mixed_read_write() {
                 let mut i = 0;
                 while running.load(Ordering::Relaxed) {
                     let id = format!("live_w{writer_id}_v{i}");
-                    let vec = Vector::new(random_vector(writer_id * 100000 + i, 128));
+                    let vec = Vector::new(random_vector(writer_id * 100_000 + i, 128));
                     if store.set(&id, vec, serde_json::json!({})).is_ok() {
                         write_count.fetch_add(1, Ordering::Relaxed);
                     }
@@ -225,7 +225,7 @@ fn stress_concurrent_deletes() {
 
 /// Large vector count - 50K vectors, 128D
 #[test]
-#[ignore] // Run with --ignored for slow tests
+#[ignore = "Run with --ignored for slow tests"]
 fn stress_large_vector_count() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("large_count.omen");

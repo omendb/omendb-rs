@@ -88,34 +88,34 @@ where
 ///
 /// # Safety
 /// `ptr` (if non-null) must point to a valid null-terminated string.
-unsafe fn read_cstr<'a>(ptr: *const c_char, name: &str) -> Result<&'a str, String> {
+unsafe fn read_cstr<'a>(ptr: *const c_char, name: &str) -> Result<&'a str, String> { unsafe {
     if ptr.is_null() {
         return Err(format!("Null {name} pointer"));
     }
     CStr::from_ptr(ptr)
         .to_str()
         .map_err(|e| format!("Invalid {name}: {e}"))
-}
+}}
 
 /// Write a JSON string to an output pointer as a CString.
 ///
 /// # Safety
 /// `out` must be a valid, writable pointer.
-unsafe fn write_result(out: *mut *mut c_char, json: String) -> Result<i32, String> {
+unsafe fn write_result(out: *mut *mut c_char, json: String) -> Result<i32, String> { unsafe {
     if out.is_null() {
         return Err("Output pointer is NULL".to_string());
     }
     let cstr = CString::new(json).map_err(|e| format!("CString error: {e}"))?;
     *out = cstr.into_raw();
     Ok(0)
-}
+}}
 
 /// Parse an optional metadata filter from a JSON C string.
 /// Returns `Ok(None)` if `ptr` is null.
 ///
 /// # Safety
 /// `ptr` (if non-null) must point to a valid null-terminated string.
-unsafe fn parse_filter(ptr: *const c_char) -> Result<Option<MetadataFilter>, String> {
+unsafe fn parse_filter(ptr: *const c_char) -> Result<Option<MetadataFilter>, String> { unsafe {
     if ptr.is_null() {
         return Ok(None);
     }
@@ -125,7 +125,7 @@ unsafe fn parse_filter(ptr: *const c_char) -> Result<Option<MetadataFilter>, Str
     let filter =
         MetadataFilter::from_json(&value).map_err(|e| format!("Invalid filter format: {e}"))?;
     Ok(Some(filter))
-}
+}}
 
 /// Parse id, vector data, and metadata from a JSON item object.
 fn parse_vector_item(item: &JsonValue) -> Result<(&str, Vec<f32>, JsonValue), String> {
@@ -169,12 +169,12 @@ pub struct OmenDB {
 /// # Safety
 /// - `path` must be a valid, null-terminated UTF-8 string
 /// - `config_json` must be NULL or a valid, null-terminated UTF-8 string
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn omendb_open(
     path: *const c_char,
     dimensions: usize,
     config_json: *const c_char,
-) -> *mut OmenDB {
+) -> *mut OmenDB { unsafe {
     ffi_boundary(ptr::null_mut(), || {
         let path = read_cstr(path, "path")?;
 
@@ -218,22 +218,22 @@ pub unsafe extern "C" fn omendb_open(
 
         Ok(Box::into_raw(Box::new(OmenDB { store })))
     })
-}
+}}
 
 /// Close database and free resources.
 ///
 /// # Safety
 /// - `db` must be NULL or a valid pointer returned by `omendb_open`
 /// - After calling, `db` is invalid and must not be used
-#[no_mangle]
-pub unsafe extern "C" fn omendb_close(db: *mut OmenDB) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_close(db: *mut OmenDB) { unsafe {
     if !db.is_null() {
         drop(Box::from_raw(db));
     }
-}
+}}
 
 /// Get `OmenDB` version string.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn omendb_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0")
         .as_ptr()
@@ -241,7 +241,7 @@ pub extern "C" fn omendb_version() -> *const c_char {
 }
 
 /// Get last error message. Returns NULL if no error. Valid until next FFI call.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn omendb_last_error() -> *const c_char {
     LAST_ERROR.with(|e| match &*e.borrow() {
         Some(cstr) => cstr.as_ptr(),
@@ -254,12 +254,12 @@ pub extern "C" fn omendb_last_error() -> *const c_char {
 /// # Safety
 /// - `s` must be NULL or a valid pointer returned by an `OmenDB` function
 /// - After calling, `s` is invalid and must not be used
-#[no_mangle]
-pub unsafe extern "C" fn omendb_free_string(s: *mut c_char) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_free_string(s: *mut c_char) { unsafe {
     if !s.is_null() {
         drop(CString::from_raw(s));
     }
-}
+}}
 
 // ─── CRUD ────────────────────────────────────────────────────────────────────
 
@@ -272,8 +272,8 @@ pub unsafe extern "C" fn omendb_free_string(s: *mut c_char) {
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
 /// - `items_json` must be a valid, null-terminated UTF-8 string
-#[no_mangle]
-pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) -> i64 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) -> i64 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         let items_str = read_cstr(items_json, "items_json")?;
@@ -290,7 +290,7 @@ pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) 
         }
         Ok(count)
     })
-}
+}}
 
 /// Get vectors by ID.
 ///
@@ -301,12 +301,12 @@ pub unsafe extern "C" fn omendb_set(db: *mut OmenDB, items_json: *const c_char) 
 /// - `db` must be a valid pointer returned by `omendb_open`
 /// - `ids_json` must be a valid, null-terminated UTF-8 string
 /// - `result` must be a valid pointer to a `*mut c_char`
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn omendb_get(
     db: *mut OmenDB,
     ids_json: *const c_char,
     result: *mut *mut c_char,
-) -> i32 {
+) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_ref().ok_or("Null database handle")?;
         let ids_str = read_cstr(ids_json, "ids_json")?;
@@ -326,7 +326,7 @@ pub unsafe extern "C" fn omendb_get(
             serde_json::to_string(&results).map_err(|e| format!("JSON serialize error: {e}"))?;
         write_result(result, json)
     })
-}
+}}
 
 /// Delete vectors by ID.
 ///
@@ -335,8 +335,8 @@ pub unsafe extern "C" fn omendb_get(
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
 /// - `ids_json` must be a valid, null-terminated UTF-8 string
-#[no_mangle]
-pub unsafe extern "C" fn omendb_delete(db: *mut OmenDB, ids_json: *const c_char) -> i64 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_delete(db: *mut OmenDB, ids_json: *const c_char) -> i64 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         let ids_str = read_cstr(ids_json, "ids_json")?;
@@ -348,7 +348,7 @@ pub unsafe extern "C" fn omendb_delete(db: *mut OmenDB, ids_json: *const c_char)
             .map_err(|e| format!("Delete failed: {e}"))?;
         Ok(i64::try_from(count).unwrap_or(i64::MAX))
     })
-}
+}}
 
 /// Check if a vector ID exists.
 ///
@@ -357,26 +357,26 @@ pub unsafe extern "C" fn omendb_delete(db: *mut OmenDB, ids_json: *const c_char)
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
 /// - `id` must be a valid, null-terminated UTF-8 string
-#[no_mangle]
-pub unsafe extern "C" fn omendb_exists(db: *const OmenDB, id: *const c_char) -> i32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_exists(db: *const OmenDB, id: *const c_char) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_ref().ok_or("Null database handle")?;
         let id_str = read_cstr(id, "id")?;
         Ok(i32::from(db.store.contains(id_str)))
     })
-}
+}}
 
 /// Get number of vectors in database. Returns -1 if db is NULL.
 ///
 /// # Safety
 /// - `db` must be NULL or a valid pointer returned by `omendb_open`
-#[no_mangle]
-pub unsafe extern "C" fn omendb_count(db: *const OmenDB) -> i64 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_count(db: *const OmenDB) -> i64 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_ref().ok_or("Null database handle")?;
         Ok(i64::try_from(db.store.len()).unwrap_or(i64::MAX))
     })
-}
+}}
 
 /// Update a vector's data and/or metadata.
 ///
@@ -387,14 +387,14 @@ pub unsafe extern "C" fn omendb_count(db: *const OmenDB) -> i64 {
 /// - `id` must be a valid, null-terminated UTF-8 string
 /// - `vector` must be NULL or point to at least `vector_dim` valid f32 values
 /// - `metadata_json` must be NULL or a valid, null-terminated UTF-8 string
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn omendb_update(
     db: *mut OmenDB,
     id: *const c_char,
     vector: *const f32,
     vector_dim: usize,
     metadata_json: *const c_char,
-) -> i32 {
+) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         let id_str = read_cstr(id, "id")?;
@@ -424,7 +424,7 @@ pub unsafe extern "C" fn omendb_update(
             .map_err(|e| format!("Update failed: {e}"))?;
         Ok(0)
     })
-}
+}}
 
 /// Delete vectors matching a metadata filter.
 ///
@@ -433,11 +433,11 @@ pub unsafe extern "C" fn omendb_update(
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
 /// - `filter_json` must be a valid, null-terminated UTF-8 string
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn omendb_delete_by_filter(
     db: *mut OmenDB,
     filter_json: *const c_char,
-) -> i64 {
+) -> i64 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         let filter_str = read_cstr(filter_json, "filter_json")?;
@@ -451,7 +451,7 @@ pub unsafe extern "C" fn omendb_delete_by_filter(
             .map_err(|e| format!("Delete by filter failed: {e}"))?;
         Ok(i64::try_from(count).unwrap_or(i64::MAX))
     })
-}
+}}
 
 // ─── Search ──────────────────────────────────────────────────────────────────
 
@@ -464,7 +464,7 @@ pub unsafe extern "C" fn omendb_delete_by_filter(
 /// - `query` must point to at least `query_len` valid f32 values
 /// - `filter_json` must be NULL or a valid, null-terminated UTF-8 string
 /// - `result` must be a valid pointer to a `*mut c_char`
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn omendb_search(
     db: *mut OmenDB,
     query: *const f32,
@@ -472,7 +472,7 @@ pub unsafe extern "C" fn omendb_search(
     k: usize,
     filter_json: *const c_char,
     result: *mut *mut c_char,
-) -> i32 {
+) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         if query.is_null() {
@@ -503,7 +503,7 @@ pub unsafe extern "C" fn omendb_search(
             .map_err(|e| format!("JSON serialize error: {e}"))?;
         write_result(result, json)
     })
-}
+}}
 
 // ─── Text & Hybrid Search ────────────────────────────────────────────────────
 
@@ -511,8 +511,8 @@ pub unsafe extern "C" fn omendb_search(
 ///
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
-#[no_mangle]
-pub unsafe extern "C" fn omendb_enable_text_search(db: *mut OmenDB) -> i32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_enable_text_search(db: *mut OmenDB) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         db.store
@@ -520,19 +520,19 @@ pub unsafe extern "C" fn omendb_enable_text_search(db: *mut OmenDB) -> i32 {
             .map_err(|e| format!("Failed to enable text search: {e}"))?;
         Ok(0)
     })
-}
+}}
 
 /// Check if text search is enabled. Returns 1 if enabled, 0 if not, -1 on error.
 ///
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
-#[no_mangle]
-pub unsafe extern "C" fn omendb_has_text_search(db: *const OmenDB) -> i32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_has_text_search(db: *const OmenDB) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_ref().ok_or("Null database handle")?;
         Ok(i32::from(db.store.has_text_search()))
     })
-}
+}}
 
 /// Insert vectors with associated text for hybrid search.
 ///
@@ -543,8 +543,8 @@ pub unsafe extern "C" fn omendb_has_text_search(db: *const OmenDB) -> i32 {
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
 /// - `items_json` must be a valid, null-terminated UTF-8 string
-#[no_mangle]
-pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *const c_char) -> i64 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *const c_char) -> i64 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         if !db.store.has_text_search() {
@@ -571,7 +571,7 @@ pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *cons
         }
         Ok(count)
     })
-}
+}}
 
 /// Text-only search using BM25.
 ///
@@ -579,13 +579,13 @@ pub unsafe extern "C" fn omendb_set_with_text(db: *mut OmenDB, items_json: *cons
 ///
 /// # Safety
 /// - All pointer arguments must be valid
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn omendb_text_search(
     db: *mut OmenDB,
     query: *const c_char,
     k: usize,
     result: *mut *mut c_char,
-) -> i32 {
+) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_ref().ok_or("Null database handle")?;
         let query_str = read_cstr(query, "query")?;
@@ -607,7 +607,7 @@ pub unsafe extern "C" fn omendb_text_search(
             .map_err(|e| format!("JSON serialize error: {e}"))?;
         write_result(result, json)
     })
-}
+}}
 
 /// Hybrid search combining vector similarity and BM25 text search.
 ///
@@ -615,7 +615,7 @@ pub unsafe extern "C" fn omendb_text_search(
 ///
 /// # Safety
 /// - All pointer arguments must be valid (except `filter_json` which can be NULL)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn omendb_hybrid_search(
     db: *mut OmenDB,
     query_vector: *const f32,
@@ -626,7 +626,7 @@ pub unsafe extern "C" fn omendb_hybrid_search(
     rrf_k: usize,
     filter_json: *const c_char,
     result: *mut *mut c_char,
-) -> i32 {
+) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         if query_vector.is_null() {
@@ -661,7 +661,7 @@ pub unsafe extern "C" fn omendb_hybrid_search(
             .map_err(|e| format!("JSON serialize error: {e}"))?;
         write_result(result, json)
     })
-}
+}}
 
 // ─── Maintenance ─────────────────────────────────────────────────────────────
 
@@ -669,14 +669,14 @@ pub unsafe extern "C" fn omendb_hybrid_search(
 ///
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
-#[no_mangle]
-pub unsafe extern "C" fn omendb_flush(db: *mut OmenDB) -> i32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_flush(db: *mut OmenDB) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         db.store.flush().map_err(|e| format!("Flush failed: {e}"))?;
         Ok(0)
     })
-}
+}}
 
 /// Compact the database by removing deleted records.
 ///
@@ -684,8 +684,8 @@ pub unsafe extern "C" fn omendb_flush(db: *mut OmenDB) -> i32 {
 ///
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
-#[no_mangle]
-pub unsafe extern "C" fn omendb_compact(db: *mut OmenDB) -> i64 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_compact(db: *mut OmenDB) -> i64 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         let count = db
@@ -694,7 +694,7 @@ pub unsafe extern "C" fn omendb_compact(db: *mut OmenDB) -> i64 {
             .map_err(|e| format!("Compact failed: {e}"))?;
         Ok(i64::try_from(count).unwrap_or(i64::MAX))
     })
-}
+}}
 
 /// Optimize index for cache-efficient search. Reorders nodes for better memory locality.
 ///
@@ -702,8 +702,8 @@ pub unsafe extern "C" fn omendb_compact(db: *mut OmenDB) -> i64 {
 ///
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
-#[no_mangle]
-pub unsafe extern "C" fn omendb_optimize(db: *mut OmenDB) -> i64 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_optimize(db: *mut OmenDB) -> i64 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_mut().ok_or("Null database handle")?;
         let stats = db
@@ -712,7 +712,7 @@ pub unsafe extern "C" fn omendb_optimize(db: *mut OmenDB) -> i64 {
             .map_err(|e| format!("Optimize failed: {e}"))?;
         Ok(i64::try_from(stats.vectors_reordered).unwrap_or(i64::MAX))
     })
-}
+}}
 
 // ─── Info ────────────────────────────────────────────────────────────────────
 
@@ -723,8 +723,8 @@ pub unsafe extern "C" fn omendb_optimize(db: *mut OmenDB) -> i64 {
 /// # Safety
 /// - `db` must be a valid pointer returned by `omendb_open`
 /// - `result` must be a valid pointer to a `*mut c_char`
-#[no_mangle]
-pub unsafe extern "C" fn omendb_stats(db: *const OmenDB, result: *mut *mut c_char) -> i32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn omendb_stats(db: *const OmenDB, result: *mut *mut c_char) -> i32 { unsafe {
     ffi_boundary(-1, || {
         let db = db.as_ref().ok_or("Null database handle")?;
         let stats = json!({
@@ -737,7 +737,7 @@ pub unsafe extern "C" fn omendb_stats(db: *const OmenDB, result: *mut *mut c_cha
             serde_json::to_string(&stats).map_err(|e| format!("JSON serialize error: {e}"))?;
         write_result(result, json)
     })
-}
+}}
 
 #[cfg(test)]
 mod tests;

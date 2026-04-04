@@ -296,7 +296,7 @@ fn test_edge_store_gc_orphaned() {
 
     let live: FxHashSet<String> = ["live", "also_live"]
         .iter()
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
     let removed = store.gc_orphaned(&live);
     assert_eq!(removed, 1);

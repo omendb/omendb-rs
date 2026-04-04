@@ -15,20 +15,20 @@ fn main() -> anyhow::Result<()> {
 
     // Create and populate store
     {
-        let mut store = VectorStore::open_with_dimensions(&db_path, 64)?;
+        let store = VectorStore::open_with_dimensions(&db_path, 64)?;
 
         store.set(
-            "a".into(),
+            "a",
             Vector::new(vec![1.0; 64]),
             json!({"name": "first"}),
         )?;
         store.set(
-            "b".into(),
+            "b",
             Vector::new(vec![2.0; 64]),
             json!({"name": "second"}),
         )?;
         store.set(
-            "c".into(),
+            "c",
             Vector::new(vec![3.0; 64]),
             json!({"name": "third"}),
         )?;

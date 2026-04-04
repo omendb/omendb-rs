@@ -403,7 +403,7 @@ fn test_set_writes_to_wal() {
     // Check WAL file
     let wal_path = db_path.with_extension("wal");
     let wal_size = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
-    println!("WAL file size: {} bytes", wal_size);
+    println!("WAL file size: {wal_size} bytes");
     assert!(wal_size > 0, "WAL file should not be empty after insert");
 
     // Reopen and verify

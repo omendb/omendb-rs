@@ -24,7 +24,7 @@ fn bench_search(c: &mut Criterion) {
         let queries = generate_vectors(100, dim);
 
         // Create and populate store
-        let mut store = VectorStore::new(dim);
+        let store = VectorStore::new(dim);
         for (i, v) in vectors.iter().enumerate() {
             store
                 .set(&format!("v{i}"), v.clone(), json!({}))
@@ -60,7 +60,7 @@ fn bench_search_ef_comparison(c: &mut Criterion) {
     let vectors = generate_vectors(n, dim);
     let queries = generate_vectors(100, dim);
 
-    let mut store = VectorStore::new(dim);
+    let store = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         store
             .set(&format!("v{i}"), v.clone(), json!({}))
@@ -98,7 +98,7 @@ fn bench_search_with_metadata(c: &mut Criterion) {
     let vectors = generate_vectors(n, dim);
     let queries = generate_vectors(100, dim);
 
-    let mut store = VectorStore::new(dim);
+    let store = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         store
             .set(&format!("d{i}"), v.clone(), json!({"cat": i % 10}))
@@ -141,7 +141,7 @@ fn bench_metadata_overhead(c: &mut Criterion) {
     let queries = generate_vectors(100, dim);
 
     // Store with empty metadata
-    let mut store_empty = VectorStore::new(dim);
+    let store_empty = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         store_empty
             .set(&format!("v{i}"), v.clone(), json!({}))
@@ -150,7 +150,7 @@ fn bench_metadata_overhead(c: &mut Criterion) {
     store_empty.ensure_index_ready().expect("index ready");
 
     // Store with ~1KB metadata per record
-    let mut store_heavy = VectorStore::new(dim);
+    let store_heavy = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         let metadata = json!({
             "title": format!("Document number {} with a reasonably long title for testing purposes", i),
@@ -247,7 +247,7 @@ fn bench_recall(c: &mut Criterion) {
         let vectors = generate_vectors(n, dim);
         let queries = generate_vectors(50, dim);
 
-        let mut store = VectorStore::new_with_params(dim, 16, 100, ef, metric);
+        let store = VectorStore::new_with_params(dim, 16, 100, ef, metric);
         for (i, v) in vectors.iter().enumerate() {
             store
                 .set(&format!("v{i}"), v.clone(), json!({}))
@@ -293,7 +293,7 @@ fn bench_cosine_search(c: &mut Criterion) {
     let vectors = generate_vectors(n, dim);
     let queries = generate_vectors(100, dim);
 
-    let mut store = VectorStore::new_with_params(dim, 16, 100, 100, Metric::Cosine);
+    let store = VectorStore::new_with_params(dim, 16, 100, 100, Metric::Cosine);
     for (i, v) in vectors.iter().enumerate() {
         store
             .set(&format!("v{i}"), v.clone(), json!({}))

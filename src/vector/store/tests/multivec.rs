@@ -46,7 +46,7 @@ mod muvera {
         let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         let tokens = random_tokens(10, 4, 0);
-        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         store
             .set_multi("doc1", &token_refs, serde_json::json!({"title": "test"}))
@@ -63,10 +63,10 @@ mod muvera {
 
         for i in 0..10 {
             let tokens = random_tokens(5 + i, 4, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
                 .set_multi(
-                    &format!("doc{}", i),
+                    &format!("doc{i}"),
                     &token_refs,
                     serde_json::json!({"i": i}),
                 )
@@ -81,7 +81,7 @@ mod muvera {
         let mut store = VectorStore::new(128);
 
         let tokens = random_tokens(10, 128, 0);
-        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let result = store.set_multi("doc1", &token_refs, serde_json::json!({}));
         assert!(result.is_err());
@@ -104,7 +104,7 @@ mod muvera {
         let mut store = VectorStore::multi_vector_with(128, MultiVectorConfig::default()).unwrap();
 
         let tokens = random_tokens(10, 64, 0); // Wrong dimension
-        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let result = store.set_multi("doc1", &token_refs, serde_json::json!({}));
         assert!(result.is_err());
@@ -119,10 +119,10 @@ mod muvera {
         // Insert 100 documents
         for i in 0..100 {
             let tokens = random_tokens(10, 4, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
                 .set_multi(
-                    &format!("doc{}", i),
+                    &format!("doc{i}"),
                     &token_refs,
                     serde_json::json!({"i": i}),
                 )
@@ -131,7 +131,7 @@ mod muvera {
 
         // Search - use exact same tokens as a document to ensure it's found
         let query_tokens = random_tokens(10, 4, 0); // Same as doc0
-        let query_refs: Vec<&[f32]> = query_tokens.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query_tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let results = store.search_multi_approx(&query_refs, 10).unwrap();
 
@@ -148,7 +148,7 @@ mod muvera {
         let mut store = VectorStore::multi_vector_with(4, config).unwrap();
 
         let tokens = random_tokens(10, 4, 0);
-        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
         store
             .set_multi(
                 "doc1",
@@ -169,7 +169,7 @@ mod muvera {
         let store = VectorStore::new(128);
 
         let tokens = random_tokens(10, 128, 0);
-        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let result = store.search_multi_approx(&token_refs, 10);
         assert!(result.is_err());
@@ -181,7 +181,7 @@ mod muvera {
 
         // Insert a document first
         let tokens = random_tokens(10, 128, 0);
-        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
         store
             .set_multi("doc1", &token_refs, serde_json::json!({}))
             .unwrap();
@@ -203,7 +203,7 @@ mod muvera {
             .map(|i| {
                 let tokens = random_tokens(10 + (i % 10), 4, i);
                 (
-                    format!("doc{}", i).leak() as &str,
+                    format!("doc{i}").leak() as &str,
                     tokens,
                     serde_json::json!({"i": i}),
                 )
@@ -214,7 +214,7 @@ mod muvera {
 
         assert_eq!(store.len(), 100);
         for i in 0..100 {
-            assert!(store.contains(&format!("doc{}", i)));
+            assert!(store.contains(&format!("doc{i}")));
         }
     }
 
@@ -227,7 +227,7 @@ mod muvera {
             .map(|i| {
                 let tokens = random_tokens(10, 4, i);
                 (
-                    format!("doc{}", i).leak() as &str,
+                    format!("doc{i}").leak() as &str,
                     tokens,
                     serde_json::json!({"i": i}),
                 )
@@ -238,7 +238,7 @@ mod muvera {
 
         // Search
         let query = random_tokens(5, 4, 25);
-        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
         let results = store.search_multi_approx(&query_refs, 10).unwrap();
 
         assert_eq!(results.len(), 10);
@@ -278,10 +278,10 @@ mod muvera {
         // Insert 100 documents
         for i in 0..100 {
             let tokens = random_tokens(10, 4, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
                 .set_multi(
-                    &format!("doc{}", i),
+                    &format!("doc{i}"),
                     &token_refs,
                     serde_json::json!({"i": i}),
                 )
@@ -290,7 +290,7 @@ mod muvera {
 
         // Search with reranking
         let query_tokens = random_tokens(10, 4, 0); // Same as doc0
-        let query_refs: Vec<&[f32]> = query_tokens.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query_tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let results = store.search_multi(&query_refs, 10).unwrap();
 
@@ -309,14 +309,14 @@ mod muvera {
         // Insert 20 documents with varying similarity to query
         for i in 0..20 {
             let tokens = random_tokens(10, 4, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({}))
                 .unwrap();
         }
 
         let query = random_tokens(5, 4, 0); // Similar to doc0
-        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
         // Get results with reranking
         let results = store.search_multi(&query_refs, 10).unwrap();
@@ -349,14 +349,14 @@ mod muvera {
 
         // Insert document with known tokens
         let doc_tokens: Vec<Vec<f32>> = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
-        let doc_refs: Vec<&[f32]> = doc_tokens.iter().map(|t| t.as_slice()).collect();
+        let doc_refs: Vec<&[f32]> = doc_tokens.iter().map(std::vec::Vec::as_slice).collect();
         store
             .set_multi("doc1", &doc_refs, serde_json::json!({}))
             .unwrap();
 
         // Query matching first token exactly
         let query_tokens: Vec<Vec<f32>> = vec![vec![1.0, 0.0, 0.0, 0.0]];
-        let query_refs: Vec<&[f32]> = query_tokens.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query_tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let results = store.search_multi(&query_refs, 1).unwrap();
 
@@ -375,7 +375,7 @@ mod muvera {
         let store = VectorStore::new(128);
 
         let tokens = random_tokens(10, 128, 0);
-        let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let result = store.search_multi(&token_refs, 10);
         assert!(result.is_err());
@@ -386,7 +386,7 @@ mod muvera {
         let store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
 
         let query = random_tokens(5, 4, 0);
-        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
         let results = store.search_multi(&query_refs, 10).unwrap();
         assert!(results.is_empty());
@@ -399,14 +399,14 @@ mod muvera {
         // Insert 20 documents
         for i in 0..20 {
             let tokens = random_tokens(10, 4, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({}))
                 .unwrap();
         }
 
         let query = random_tokens(5, 4, 0);
-        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
         // With k=5, rerank_factor=2 -> fetches 10 candidates
         let results = store.search_multi_rerank(&query_refs, 5, 2).unwrap();
@@ -424,14 +424,14 @@ mod muvera {
         // Insert 50 documents
         for i in 0..50 {
             let tokens = random_tokens(10, 4, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({}))
                 .unwrap();
         }
 
         let query = random_tokens(5, 4, 0);
-        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
         let results = store.search_multi(&query_refs, 10).unwrap();
 
@@ -914,8 +914,8 @@ mod persistence_tests {
             assert!(store.is_multi_vector());
 
             // Query tokens aligned with doc1
-            let query = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
-            let query_refs: Vec<&[f32]> = query.iter().map(|v| v.as_slice()).collect();
+            let query = [vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+            let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
             let results = store.search_multi_rerank(&query_refs, 2, 10).unwrap();
 
@@ -951,8 +951,8 @@ mod persistence_tests {
                 )
                 .unwrap();
 
-            let query = vec![vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
-            let query_refs: Vec<&[f32]> = query.iter().map(|v| v.as_slice()).collect();
+            let query = [vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
+            let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
             let before = store.search_multi(&query_refs, 2).unwrap();
             assert_eq!(before.len(), 2);
@@ -966,8 +966,8 @@ mod persistence_tests {
             assert!(store.is_multi_vector());
             assert_eq!(store.len(), 2);
 
-            let query = vec![vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
-            let query_refs: Vec<&[f32]> = query.iter().map(|v| v.as_slice()).collect();
+            let query = [vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
+            let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
             let approx = store.search_multi_approx(&query_refs, 2).unwrap();
             assert_eq!(approx.len(), 2);
@@ -1160,14 +1160,14 @@ mod persistence_tests {
         // Insert 10 docs; doc0 uses seed=0 so it's most similar to a seed=0 query
         for i in 0..10 {
             let tokens = random_tokens(5, 4, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({}))
                 .unwrap();
         }
 
         let query = random_tokens(5, 4, 0);
-        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
         // doc0 must appear in results before delete
         let before = store.search_multi(&query_refs, 10).unwrap();
@@ -1196,9 +1196,9 @@ mod persistence_tests {
         // Insert doc0 and some background docs
         for i in 0..5 {
             let tokens = random_tokens(5, 4, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({}))
                 .unwrap();
         }
 
@@ -1207,13 +1207,13 @@ mod persistence_tests {
 
         // Re-insert doc0 with a completely different seed
         let new_tokens = random_tokens(5, 4, 99);
-        let new_refs: Vec<&[f32]> = new_tokens.iter().map(|t| t.as_slice()).collect();
+        let new_refs: Vec<&[f32]> = new_tokens.iter().map(std::vec::Vec::as_slice).collect();
         store
             .set_multi("doc0", &new_refs, serde_json::json!({"version": 2}))
             .unwrap();
 
         // Query matching the new tokens — doc0 should reappear
-        let query_refs: Vec<&[f32]> = new_tokens.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = new_tokens.iter().map(std::vec::Vec::as_slice).collect();
         let results = store.search_multi(&query_refs, 5).unwrap();
         assert!(
             results.iter().any(|r| r.id == "doc0"),
@@ -1240,14 +1240,14 @@ mod persistence_tests {
         // Insert 20 docs; doc0 is most similar to a seed=0 query
         for i in 0..20 {
             let tokens = random_tokens(10, token_dim, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({}))
                 .unwrap();
         }
 
         let query = random_tokens(10, token_dim, 0);
-        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
         let results = store.search_multi(&query_refs, 5).unwrap();
 
@@ -1281,14 +1281,14 @@ mod persistence_tests {
         // Insert 50 docs (well below 5000 threshold → brute-force path)
         for i in 0..50 {
             let tokens = random_tokens(5, token_dim, i);
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(&format!("doc{}", i), &token_refs, serde_json::json!({}))
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({}))
                 .unwrap();
         }
 
         let query = random_tokens(5, token_dim, 0); // Identical to doc0
-        let query_refs: Vec<&[f32]> = query.iter().map(|t| t.as_slice()).collect();
+        let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
         let results = store.search_multi(&query_refs, 10).unwrap();
 
@@ -1320,7 +1320,7 @@ mod persistence_tests {
 
         // Query with wrong dimension should return error, not panic
         let wrong_dim_query: Vec<Vec<f32>> = vec![vec![0.1; token_dim * 2]];
-        let refs: Vec<&[f32]> = wrong_dim_query.iter().map(|t| t.as_slice()).collect();
+        let refs: Vec<&[f32]> = wrong_dim_query.iter().map(std::vec::Vec::as_slice).collect();
         let result = store.query(&refs, 1);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();

@@ -516,7 +516,7 @@ mod tests {
             let tokens: Vec<Vec<f32>> = (0..num_tokens)
                 .map(|t| vec![(i * num_tokens + t) as f32; 128])
                 .collect();
-            let token_refs: Vec<&[f32]> = tokens.iter().map(|v| v.as_slice()).collect();
+            let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             storage.add(&token_refs).unwrap();
         }
 

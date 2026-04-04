@@ -9,16 +9,16 @@ use serde_json::json;
 
 fn main() -> anyhow::Result<()> {
     // Create an in-memory store (128-dimensional vectors)
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert vectors with metadata
     let v1 = Vector::new(vec![1.0; 128]);
     let v2 = Vector::new(vec![0.9; 128]);
     let v3 = Vector::new(vec![0.0; 128]);
 
-    store.set("doc1".into(), v1, json!({"type": "article", "year": 2024}))?;
-    store.set("doc2".into(), v2, json!({"type": "article", "year": 2023}))?;
-    store.set("doc3".into(), v3, json!({"type": "note", "year": 2024}))?;
+    store.set("doc1", v1, json!({"type": "article", "year": 2024}))?;
+    store.set("doc2", v2, json!({"type": "article", "year": 2023}))?;
+    store.set("doc3", v3, json!({"type": "note", "year": 2024}))?;
 
     println!("Inserted {} vectors", store.len());
 

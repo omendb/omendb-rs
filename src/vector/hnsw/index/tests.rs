@@ -423,9 +423,7 @@ fn test_save_load_small() {
         for (o, l) in orig.iter().zip(load.iter()) {
             assert!(
                 (o - l).abs() < 1e-5,
-                "Vectors differ: {:?} vs {:?}",
-                orig,
-                load
+                "Vectors differ: {orig:?} vs {load:?}"
             );
         }
     }
@@ -1227,13 +1225,12 @@ fn test_sq8_recall_regression() {
     }
     let mean_recall = total_recall / n_queries as f32;
 
-    println!("SQ8 HNSW recall@{k} (1K vectors): {:.4}", mean_recall);
+    println!("SQ8 HNSW recall@{k} (1K vectors): {mean_recall:.4}");
 
     // SQ8 should achieve at least 90% recall
     assert!(
         mean_recall >= 0.90,
-        "SQ8 recall too low: {:.4} (expected >= 0.90)",
-        mean_recall
+        "SQ8 recall too low: {mean_recall:.4} (expected >= 0.90)"
     );
 }
 
@@ -1303,13 +1300,12 @@ fn test_sq8_recall_10k() {
     }
     let mean_recall = total_recall / n_queries as f32;
 
-    println!("SQ8 HNSW recall@{k} (10K vectors): {:.4}", mean_recall);
+    println!("SQ8 HNSW recall@{k} (10K vectors): {mean_recall:.4}");
 
     // At 10K scale, allow lower recall (CI threshold is 0.88)
     assert!(
         mean_recall >= 0.85,
-        "SQ8 recall too low: {:.4} (expected >= 0.85)",
-        mean_recall
+        "SQ8 recall too low: {mean_recall:.4} (expected >= 0.85)"
     );
 }
 
@@ -1418,13 +1414,12 @@ fn test_sq8_distance_accuracy() {
     let recall = intersection as f32 / 10.0;
 
     println!("SQ8 vs brute force top-10 overlap: {}/{}", intersection, 10);
-    println!("Recall: {:.2}", recall);
+    println!("Recall: {recall:.2}");
 
     // SQ8 should achieve at least 80% overlap with brute force top-10
     assert!(
         recall >= 0.80,
-        "SQ8 distance accuracy too low: {:.2} (expected >= 0.80)",
-        recall
+        "SQ8 distance accuracy too low: {recall:.2} (expected >= 0.80)"
     );
 }
 
@@ -1495,13 +1490,12 @@ fn test_optimize_maintains_recall() {
     }
     recall_before /= n_queries as f32;
 
-    println!("Recall before optimize: {:.4}", recall_before);
+    println!("Recall before optimize: {recall_before:.4}");
 
     // Verify we have reasonable recall to start with
     assert!(
         recall_before >= 0.85,
-        "Pre-optimize recall too low: {:.4} (expected >= 0.85)",
-        recall_before
+        "Pre-optimize recall too low: {recall_before:.4} (expected >= 0.85)"
     );
 
     // Optimize cache locality
@@ -1523,7 +1517,7 @@ fn test_optimize_maintains_recall() {
     // Verify mapping is valid (sanity check)
     assert_eq!(mapping.len(), n_vectors);
 
-    println!("Recall after optimize: {:.4}", recall_after);
+    println!("Recall after optimize: {recall_after:.4}");
 
     // Recall should be maintained (within 1% tolerance for HNSW variance)
     assert!(
@@ -1596,7 +1590,7 @@ fn test_optimize_maintains_recall_sq8() {
     }
     recall_before /= n_queries as f32;
 
-    println!("SQ8 recall before optimize: {:.4}", recall_before);
+    println!("SQ8 recall before optimize: {recall_before:.4}");
 
     // Optimize
     let mapping = index.optimize_cache_locality().unwrap();
@@ -1615,13 +1609,11 @@ fn test_optimize_maintains_recall_sq8() {
     // Verify mapping is valid
     assert_eq!(mapping.len(), n_vectors);
 
-    println!("SQ8 recall after optimize: {:.4}", recall_after);
+    println!("SQ8 recall after optimize: {recall_after:.4}");
 
     // Allow slightly more tolerance for SQ8 due to quantization
     assert!(
         recall_after >= recall_before * 0.95,
-        "SQ8 recall dropped after optimize: {:.4} -> {:.4}",
-        recall_before,
-        recall_after
+        "SQ8 recall dropped after optimize: {recall_before:.4} -> {recall_after:.4}"
     );
 }

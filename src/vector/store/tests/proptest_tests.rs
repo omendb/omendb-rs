@@ -135,12 +135,12 @@ mod general {
                 store.flush().unwrap();
 
                 // Verify count before close
-                prop_assert!(store.len() > 0, "Store should not be empty");
+                prop_assert!(!store.is_empty(), "Store should not be empty");
             }
 
             // Load and verify
             let loaded = VectorStore::open(&path).unwrap();
-            prop_assert!(loaded.len() > 0, "Loaded store should not be empty");
+            prop_assert!(!loaded.is_empty(), "Loaded store should not be empty");
 
             // Verify all IDs are searchable
             for batch in 0..3 {
@@ -326,7 +326,7 @@ mod persistence {
 
                 for i in 0..num_vectors {
                     let data: Vec<f32> = (0..dim).map(|j| (i * 100 + j) as f32 * 0.01).collect();
-                    let id = format!("v{}", i);
+                    let id = format!("v{i}");
                     store.set(&id, Vector::new(data.clone()), serde_json::json!({"i": i})).unwrap();
                     expected_vectors.push((id, data, i));
                 }
@@ -364,12 +364,12 @@ mod persistence {
 
                 for i in 0..num_inserts {
                     let data: Vec<f32> = (0..dim).map(|j| (i + j) as f32).collect();
-                    store.set(&format!("v{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                    store.set(&format!("v{i}"), Vector::new(data), serde_json::json!({})).unwrap();
                 }
 
                 // Delete first N vectors
                 for i in 0..num_deletes {
-                    store.delete(&format!("v{}", i)).unwrap();
+                    store.delete(&format!("v{i}")).unwrap();
                 }
                 // NO flush
             }
@@ -382,13 +382,13 @@ mod persistence {
 
                 // Deleted vectors should not exist
                 for i in 0..num_deletes {
-                    let id = format!("v{}", i);
+                    let id = format!("v{i}");
                     prop_assert!(!store.contains(&id), "Deleted vector should not exist");
                 }
 
                 // Remaining vectors should exist
                 for i in num_deletes..num_inserts {
-                    let id = format!("v{}", i);
+                    let id = format!("v{i}");
                     prop_assert!(store.contains(&id), "Vector should exist");
                 }
             }
@@ -410,14 +410,14 @@ mod persistence {
                 // First batch - will be checkpointed
                 for i in 0..checkpoint_count {
                     let data: Vec<f32> = (0..dim).map(|j| (i + j) as f32).collect();
-                    store.set(&format!("cp{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                    store.set(&format!("cp{i}"), Vector::new(data), serde_json::json!({})).unwrap();
                 }
                 store.flush().unwrap();
 
                 // Second batch - only in WAL
                 for i in 0..wal_count {
                     let data: Vec<f32> = (0..dim).map(|j| (i + j + 1000) as f32).collect();
-                    store.set(&format!("wal{}", i), Vector::new(data), serde_json::json!({})).unwrap();
+                    store.set(&format!("wal{i}"), Vector::new(data), serde_json::json!({})).unwrap();
                 }
                 // NO flush for second batch
             }
@@ -428,11 +428,11 @@ mod persistence {
                 prop_assert_eq!(store.len(), checkpoint_count + wal_count);
 
                 for i in 0..checkpoint_count {
-                    let id = format!("cp{}", i);
+                    let id = format!("cp{i}");
                     prop_assert!(store.contains(&id));
                 }
                 for i in 0..wal_count {
-                    let id = format!("wal{}", i);
+                    let id = format!("wal{i}");
                     prop_assert!(store.contains(&id));
                 }
             }
@@ -561,7 +561,7 @@ mod persistence {
                     let items: Vec<_> = (0..batch_size).map(|i| {
                         let idx = batch_idx * batch_size + i;
                         let data: Vec<f32> = (0..dim).map(|j| (idx * 10 + j) as f32).collect();
-                        (format!("b{}_i{}", batch_idx, i), Vector::new(data), serde_json::json!({"batch": batch_idx, "i": i}))
+                        (format!("b{batch_idx}_i{i}"), Vector::new(data), serde_json::json!({"batch": batch_idx, "i": i}))
                     }).collect();
                     store.set_batch(items).unwrap();
                 }
@@ -575,7 +575,7 @@ mod persistence {
 
                 for batch_idx in 0..num_batches {
                     for i in 0..batch_size {
-                        let id = format!("b{}_i{}", batch_idx, i);
+                        let id = format!("b{batch_idx}_i{i}");
                         prop_assert!(store.contains(&id), "Missing ID");
                     }
                 }

@@ -860,11 +860,11 @@ mod tests {
 
         // Build with parallel
         let parallel_index =
-            HNSWIndex::build_parallel(64, params.clone(), Metric::L2, false, vectors.clone())
+            HNSWIndex::build_parallel(64, params, Metric::L2, false, vectors.clone())
                 .unwrap();
 
         // Build with sequential
-        let mut sequential_index = HNSWIndex::new(64, params.clone(), Metric::L2, false).unwrap();
+        let mut sequential_index = HNSWIndex::new(64, params, Metric::L2, false).unwrap();
         for vec in &vectors {
             sequential_index.insert(vec).unwrap();
         }
@@ -903,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Benchmark test - run with: cargo test --release -- --ignored test_parallel_build_benchmark
+    #[ignore = "Benchmark test - run with: cargo test --release -- --ignored test_parallel_build_benchmark"]
     fn test_parallel_build_benchmark() {
         let vectors = random_vectors(10_000, 128);
         let params = HNSWParams {
@@ -927,8 +927,7 @@ mod tests {
 
         assert!(
             rate > 5_000.0,
-            "Build too slow: {:.0} vec/s (target: >5000 vec/s)",
-            rate
+            "Build too slow: {rate:.0} vec/s (target: >5000 vec/s)"
         );
     }
 

@@ -26,7 +26,7 @@ fn test_planner_hybrid_search() {
     store.enable_text_search().unwrap();
 
     for i in 0..10 {
-        let id = format!("doc{}", i);
+        let id = format!("doc{i}");
         let text = if i % 2 == 0 {
             "apple pie"
         } else {

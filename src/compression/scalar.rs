@@ -526,7 +526,7 @@ mod tests {
             })
             .collect();
 
-        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let refs: Vec<&[f32]> = vectors.iter().map(std::vec::Vec::as_slice).collect();
         let params = ScalarParams::train(&refs).unwrap();
 
         let quantized: Vec<_> = vectors.iter().map(|v| params.quantize(v)).collect();
@@ -593,9 +593,7 @@ mod tests {
         for (orig, deq) in vectors[0].iter().zip(dequantized.iter()) {
             assert!(
                 (orig - deq).abs() < 0.05,
-                "Roundtrip error too large: {} vs {}",
-                orig,
-                deq
+                "Roundtrip error too large: {orig} vs {deq}"
             );
         }
     }

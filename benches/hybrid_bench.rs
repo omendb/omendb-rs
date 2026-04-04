@@ -156,7 +156,7 @@ fn bench_hybrid_overhead(c: &mut Criterion) {
     let query_text = "vector database search";
 
     // Vector-only store
-    let mut vector_store = VectorStore::new(dim);
+    let vector_store = VectorStore::new(dim);
     for (i, v) in vectors.iter().enumerate() {
         vector_store
             .set(&format!("doc{i}"), v.clone(), json!({}))

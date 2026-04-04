@@ -249,9 +249,7 @@ mod tests {
             let dist_val = dist.unwrap();
             assert!(
                 dist_val >= -0.01,
-                "Distance {} for vector {} is too negative",
-                dist_val,
-                id
+                "Distance {dist_val} for vector {id} is too negative"
             );
         }
 
@@ -260,8 +258,7 @@ mod tests {
         let self_dist = storage.distance_sq8(&prep, 256).unwrap();
         assert!(
             self_dist.abs() < 0.1,
-            "Self-distance should be near zero, got {}",
-            self_dist
+            "Self-distance should be near zero, got {self_dist}"
         );
     }
 

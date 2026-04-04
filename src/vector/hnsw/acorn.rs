@@ -122,7 +122,7 @@ mod tests {
         };
 
         let visited = VisitedList::new();
-        let filter = |id: u32| id % 2 == 0; // even nodes match
+        let filter = |id: u32| id.is_multiple_of(2); // even nodes match
         let mut output = Vec::new();
 
         collect_matching_neighbors(&storage, 0, 0, &visited, &filter, 10, &mut output);

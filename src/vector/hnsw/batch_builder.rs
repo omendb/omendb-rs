@@ -418,7 +418,7 @@ mod tests {
         assert!(clusters.len() >= 2 && clusters.len() <= 4);
 
         // Total vectors should match
-        let total: usize = clusters.iter().map(|c| c.len()).sum();
+        let total: usize = clusters.iter().map(super::Cluster::len).sum();
         assert_eq!(total, 40);
     }
 
@@ -572,7 +572,7 @@ mod tests {
 
         // Should find vectors from at least 2 clusters in overlap region
         assert!(
-            found_clusters.len() >= 1,
+            !found_clusters.is_empty(),
             "Expected vectors from at least 1 cluster, found {}",
             found_clusters.len()
         );

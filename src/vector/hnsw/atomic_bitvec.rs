@@ -201,7 +201,7 @@ mod tests {
         // All bits should be set
         assert_eq!(bv.count_ones(), 1000);
         for i in 0..1000 {
-            assert!(bv.is_ready(i), "Bit {} should be set", i);
+            assert!(bv.is_ready(i), "Bit {i} should be set");
         }
     }
 

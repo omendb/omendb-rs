@@ -8,7 +8,7 @@ use omendb::{MetadataFilter, Vector, VectorStore};
 use serde_json::json;
 
 fn main() -> anyhow::Result<()> {
-    let mut store = VectorStore::new(64);
+    let store = VectorStore::new(64);
 
     // Insert papers with metadata
     let papers = vec![
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     ];
 
     for (id, vec, meta) in papers {
-        store.set(id.into(), Vector::new(vec), meta)?;
+        store.set(id, Vector::new(vec), meta)?;
     }
 
     let query = Vector::new(vec![0.3; 64]);

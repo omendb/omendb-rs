@@ -3,6 +3,7 @@
 //! Compares MUVERA retrieval quality vs brute-force MaxSim.
 //!
 //! Run: cargo bench --bench muvera_quality
+#![allow(clippy::needless_range_loop)]
 
 use omendb::vector::muvera::{MultiVectorConfig, MuveraEncoder, maxsim};
 use rand::prelude::*;

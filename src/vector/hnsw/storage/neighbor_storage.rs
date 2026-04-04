@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(storage.get_neighbors(0, 1), vec![10]);
 
         // with_neighbors API
-        let count = storage.with_neighbors(0, 0, |n| n.len());
+        let count = storage.with_neighbors(0, 0, <[u32]>::len);
         assert_eq!(count, 3);
     }
 

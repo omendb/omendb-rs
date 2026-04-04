@@ -25,7 +25,7 @@ fn bench_filtered_search(c: &mut Criterion) {
     let vectors = generate_vectors(n, dim);
     let queries = generate_vectors(50, dim);
 
-    let mut store = VectorStore::new(dim);
+    let store = VectorStore::new(dim);
 
     // Insert with category metadata (10 categories, ~1000 vectors each)
     for (i, v) in vectors.iter().enumerate() {
@@ -102,7 +102,7 @@ fn bench_filtered_recall(c: &mut Criterion) {
     let vectors = generate_vectors(n, dim);
     let queries = generate_vectors(20, dim);
 
-    let mut store = VectorStore::new(dim);
+    let store = VectorStore::new(dim);
 
     for (i, v) in vectors.iter().enumerate() {
         store

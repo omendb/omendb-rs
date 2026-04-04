@@ -13,6 +13,11 @@
     clippy::cast_sign_loss,
     clippy::cast_lossless,
     // Documentation - errors/panics are clear from context
+    clippy::cloned_ref_to_slice_refs,
+    clippy::float_cmp,
+    clippy::needless_range_loop,
+    clippy::unreadable_literal,
+    clippy::useless_vec,
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
     clippy::doc_markdown, // Math notation in docs doesn't need backticks

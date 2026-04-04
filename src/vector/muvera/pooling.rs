@@ -282,7 +282,7 @@ mod tests {
             vec![0.0, 0.0, 1.0, 0.0],
             vec![0.0, 0.0, 0.9, 0.1], // Similar to token 2
         ];
-        let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let pooled = pool_tokens(&refs, 2);
         assert_eq!(pooled.len(), 2);
@@ -296,7 +296,7 @@ mod tests {
     fn test_pool_factor_3() {
         // 9 tokens -> 3 pooled (factor 3)
         let tokens: Vec<Vec<f32>> = (0..9).map(|i| vec![i as f32; 8]).collect();
-        let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let pooled = pool_tokens(&refs, 3);
         assert_eq!(pooled.len(), 3);
@@ -305,8 +305,8 @@ mod tests {
     #[test]
     fn test_skip_small() {
         // 3 tokens with pool_factor=2 -> 2 pooled (ceiling division)
-        let tokens = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
-        let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let tokens = [vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
+        let refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let pooled = pool_tokens(&refs, 2);
         // ceil(3/2) = 2, so should pool
@@ -316,8 +316,8 @@ mod tests {
     #[test]
     fn test_single_token() {
         // 1 token -> 1 (no pooling possible)
-        let tokens = vec![vec![1.0, 2.0, 3.0]];
-        let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let tokens = [vec![1.0, 2.0, 3.0]];
+        let refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let pooled = pool_tokens(&refs, 2);
         assert_eq!(pooled.len(), 1);
@@ -327,13 +327,11 @@ mod tests {
     #[test]
     fn test_deterministic() {
         // Same input -> same output
-        let tokens = vec![
-            vec![1.0, 0.0, 0.0],
+        let tokens = [vec![1.0, 0.0, 0.0],
             vec![0.0, 1.0, 0.0],
             vec![0.0, 0.0, 1.0],
-            vec![1.0, 1.0, 0.0],
-        ];
-        let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+            vec![1.0, 1.0, 0.0]];
+        let refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let pooled1 = pool_tokens(&refs, 2);
         let pooled2 = pool_tokens(&refs, 2);
@@ -350,7 +348,7 @@ mod tests {
         let tokens: Vec<Vec<f32>> = (0..100)
             .map(|i| (0..128).map(|j| ((i * 128 + j) as f32).sin()).collect())
             .collect();
-        let refs: Vec<&[f32]> = tokens.iter().map(|t| t.as_slice()).collect();
+        let refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let pooled = pool_tokens(&refs, 2);
         assert_eq!(pooled.len(), 50);

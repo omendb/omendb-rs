@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(sum, 60);
 
         // Empty node
-        let count = storage.with_neighbors(1, |neighbors| neighbors.len());
+        let count = storage.with_neighbors(1, <[u32]>::len);
         assert_eq!(count, 0);
     }
 
