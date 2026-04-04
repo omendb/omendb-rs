@@ -2,7 +2,7 @@
 
 [package]
 name = "omendb-ffi"
-version = "0.0.33"
+version = "0.0.34"
 edition = "2021"
 authors = ["OmenDB Team"]
 description = "C FFI bindings for OmenDB vector database"
@@ -17,7 +17,7 @@ name = "omendb"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-omendb = { version = "0.0.33", path = ".." }
+omendb = { version = "0.0.34", path = ".." }
 serde_json = "1.0"
 
 [dev-dependencies]

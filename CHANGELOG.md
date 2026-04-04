@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.0.34
+
+### Security and Robustness
+
+- Upgrade `tantivy` to 0.26.0 to resolve a transitive vulnerability in `lru` (RUSTSEC-2026-0002)
+- Remove all remaining `.unwrap()` calls across the core library to ensure panic-free operation
+
+### Testing and CI
+
+- Add a deterministic golden dataset testing suite for hybrid ranking stability and FTS regression
+- Optimize CI workflows to run PR checks exclusively on `ubuntu-latest` (saving resources), keeping the full matrix for `main`
+
 ## v0.0.33
 
 ### Engine Abstractions and Traits
