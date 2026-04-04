@@ -10,12 +10,14 @@ fn c_str(s: &str) -> CString {
     CString::new(s).unwrap()
 }
 
-unsafe fn read_and_free(ptr: *mut c_char) -> String { unsafe {
-    assert!(!ptr.is_null(), "expected non-null result pointer");
-    let s = CStr::from_ptr(ptr).to_str().unwrap().to_string();
-    omendb_free_string(ptr);
-    s
-}}
+unsafe fn read_and_free(ptr: *mut c_char) -> String {
+    unsafe {
+        assert!(!ptr.is_null(), "expected non-null result pointer");
+        let s = CStr::from_ptr(ptr).to_str().unwrap().to_string();
+        omendb_free_string(ptr);
+        s
+    }
+}
 
 fn last_error() -> Option<String> {
     let ptr = omendb_last_error();
