@@ -639,8 +639,8 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
-          registry-url: "https://registry.npmjs.org"
+          node-version: 22
+      - run: npm install -g npm@latest
       - run: npm install
         working-directory: node
 
@@ -691,8 +691,6 @@ jobs:
 
       - name: Publish platform packages
         if: steps.npm-skip.outputs.skip != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for dir in npm/*/; do
             echo "Publishing $dir"
@@ -714,8 +712,6 @@ jobs:
 
       - name: Publish @omendb/omendb
         if: steps.npm-skip.outputs.skip != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set +e
           output=$(npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }} 2>&1)
@@ -734,8 +730,6 @@ jobs:
 
       - name: Publish omendb wrapper
         if: steps.npm-skip.outputs.skip != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set +e
           output=$(npm publish --provenance --access public ${{ steps.npm-tag.outputs.tag }} 2>&1)
