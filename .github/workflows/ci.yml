@@ -104,7 +104,7 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Unit tests
-        run: cargo nextest run --lib --partition hash:1/1 --filter-expr 'not test(stress_)'
+        run: cargo nextest run --lib --filter-expr 'not test(stress_)'
         timeout-minutes: 15
 
   ffi:
@@ -142,7 +142,7 @@ jobs:
           toolchain: ${{ env.RUST_NIGHTLY }}
       - uses: Swatinem/rust-cache@v2
       - name: Property-based tests
-        run: cargo test --lib proptest
+        run: cargo nextest run --lib -E 'test(proptest)'
         timeout-minutes: 15
         env:
           PROPTEST_CASES: 200
@@ -288,9 +288,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7.5.0
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
+      - uses: oven-sh/setup-bun@v2
 
       - name: Run examples
         run: ./scripts/verify-examples.sh

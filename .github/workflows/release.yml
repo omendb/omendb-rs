@@ -132,12 +132,28 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --check
+      - name: Check formatting (FFI)
+        working-directory: omendb-ffi
+        run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: |
+          cargo clippy --lib -- \
+            -D warnings \
+            -D clippy::correctness \
+            -W clippy::suspicious
+      - name: Clippy (FFI)
+        working-directory: omendb-ffi
+        run: |
+          cargo clippy --tests -- \
+            -D warnings \
+            -D clippy::correctness \
+            -W clippy::suspicious
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
       - name: Test
-        run: cargo test --lib -- --skip stress_
+        run: cargo nextest run --lib --filter-expr 'not test(stress_)'
 
   # ============================================================================
   # STAGE 1.5: Recall Validation (runs PARALLEL with builds)
@@ -214,25 +230,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
-
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: oven-sh/setup-bun@v2
+
       - name: Install dependencies
         working-directory: node
-        run: npm install
+        run: bun install --frozen-lockfile
 
       - name: Build
         working-directory: node
-        run: npm run build
+        run: bun run build
 
       - name: Test
         working-directory: node
-        run: npm test
+        run: bun test
 
   examples:
     needs: [verify]
@@ -252,9 +268,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7.5.0
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
+      - uses: oven-sh/setup-bun@v2
 
       - name: Run examples
         run: ./scripts/verify-examples.sh
