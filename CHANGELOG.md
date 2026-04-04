@@ -6,6 +6,7 @@
 
 - Upgrade `tantivy` to 0.26.0 to resolve a transitive vulnerability in `lru` (RUSTSEC-2026-0002)
 - Remove all remaining `.unwrap()` calls across the core library to ensure panic-free operation
+- Migrate entire workspace to **Rust Edition 2024** and resolve 143 pedantic `clippy` warnings for better code hygiene and safety
 
 ### Testing and CI
 
