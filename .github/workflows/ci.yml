@@ -90,15 +90,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Full matrix on push to main, Ubuntu-only on PR to save minutes
+        os: >-
+          ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+              && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]')
+              || fromJSON('["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_NIGHTLY }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
       - name: Unit tests
-        run: cargo test --lib -- --skip stress_
+        run: cargo nextest run --lib --partition hash:1/1 --filter-expr 'not test(stress_)'
         timeout-minutes: 15
 
   ffi:
@@ -108,16 +114,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: >-
+          ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+              && fromJSON('["ubuntu-latest", "windows-latest"]')
+              || fromJSON('["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_NIGHTLY }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
       - name: FFI tests
         working-directory: omendb-ffi
-        run: cargo test
+        run: cargo nextest run
         timeout-minutes: 10
 
   proptest:
@@ -147,7 +158,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: >-
+          ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+              && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]')
+              || fromJSON('["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v5
 
@@ -228,7 +242,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: >-
+          ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+              && fromJSON('["ubuntu-latest", "macos-latest"]')
+              || fromJSON('["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v5
 
