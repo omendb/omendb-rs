@@ -141,6 +141,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_NIGHTLY }}
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
       - name: Property-based tests
         run: cargo nextest run --lib -E 'test(proptest)'
         timeout-minutes: 15
