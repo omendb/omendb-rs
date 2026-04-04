@@ -335,7 +335,7 @@ fn test_hybrid_search_large_k() {
 
 #[test]
 fn test_hybrid_search_without_text_enabled() {
-    let mut store = VectorStore::new(4);
+    let store = VectorStore::new(4);
     // Don't enable text search
 
     store

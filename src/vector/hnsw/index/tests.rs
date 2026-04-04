@@ -818,7 +818,7 @@ fn bench_vectorstore_qps() {
         .collect();
 
     // Create store with batch insert
-    let mut store = VectorStore::new(dim);
+    let store = VectorStore::new(dim);
     let start = Instant::now();
     let batch: Vec<(String, Vector, serde_json::Value)> = vectors
         .iter()
@@ -917,7 +917,7 @@ fn profile_persistence_comprehensive() {
         .collect();
 
     println!("=== 1. In-Memory Mode (no persistence) ===");
-    let mut inmem_store = VectorStore::new(dim);
+    let inmem_store = VectorStore::new(dim);
 
     // Insert
     let start = Instant::now();
@@ -961,7 +961,7 @@ fn profile_persistence_comprehensive() {
     println!("\n=== 2. Persistent Mode (disk) ===");
     let tmpdir = tempfile::tempdir().unwrap();
     let path = tmpdir.path().join("profile-oadb");
-    let mut persist_store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+    let persist_store = VectorStore::open_with_dimensions(&path, dim).unwrap();
 
     // Insert
     let start = Instant::now();
@@ -1117,7 +1117,7 @@ fn profile_persistence_impl(_n: usize) {
     // Create VectorStore with persistence
     let tmpdir = tempfile::tempdir().unwrap();
     let path = tmpdir.path().join("profile-omen");
-    let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+    let store = VectorStore::open_with_dimensions(&path, dim).unwrap();
 
     // Insert vectors (batch)
     let start = Instant::now();

@@ -448,15 +448,36 @@ impl HNSWIndex {
 
         let mut pos = 0;
 
+        let read_u32 = |data: &[u8], p: &mut usize| -> Result<u32> {
+            let val = u32::from_le_bytes(
+                data.get(*p..*p + 4)
+                    .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?
+                    .try_into()
+                    .map_err(|e| HNSWError::Storage(format!("Byte conversion error: {e}")))?,
+            );
+            *p += 4;
+            Ok(val)
+        };
+
+        let read_u64 = |data: &[u8], p: &mut usize| -> Result<u64> {
+            let val = u64::from_le_bytes(
+                data.get(*p..*p + 8)
+                    .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?
+                    .try_into()
+                    .map_err(|e| HNSWError::Storage(format!("Byte conversion error: {e}")))?,
+            );
+            *p += 8;
+            Ok(val)
+        };
+
         // Magic bytes
-        if &data[pos..pos + 8] != b"HNSWIDX\0" {
+        if data.get(pos..pos + 8) != Some(b"HNSWIDX\0") {
             return Err(HNSWError::Storage("Invalid magic bytes".to_string()));
         }
         pos += 8;
 
         // Version
-        let version = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-        pos += 4;
+        let version = read_u32(data, &mut pos)?;
         if version != 4 {
             return Err(HNSWError::Storage(format!(
                 "Unsupported version: {version} (expected 4)"
@@ -464,10 +485,9 @@ impl HNSWIndex {
         }
 
         // Entry point
-        let entry_point = if data[pos] == 1 {
+        let entry_point = if data.get(pos) == Some(&1) {
             pos += 1;
-            let ep = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-            pos += 4;
+            let ep = read_u32(data, &mut pos)?;
             Some(ep)
         } else {
             pos += 1;
@@ -475,26 +495,31 @@ impl HNSWIndex {
         };
 
         // Distance function
-        let df_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        let distance_fn: Metric = postcard::from_bytes(&data[pos..pos + df_len])?;
+        let df_len = read_u32(data, &mut pos)? as usize;
+        let distance_fn: Metric = postcard::from_bytes(
+            data.get(pos..pos + df_len)
+                .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?,
+        )?;
         pos += df_len;
 
         // Params
-        let params_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        let params: HNSWParams = postcard::from_bytes(&data[pos..pos + params_len])?;
+        let params_len = read_u32(data, &mut pos)? as usize;
+        let params: HNSWParams = postcard::from_bytes(
+            data.get(pos..pos + params_len)
+                .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?,
+        )?;
         pos += params_len;
 
         // RNG state
-        let rng_state = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
-        pos += 8;
+        let rng_state = read_u64(data, &mut pos)?;
 
         // Storage
-        let storage_len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        let storage = NodeStorage::deserialize_full(&data[pos..pos + storage_len])
-            .map_err(|e| HNSWError::Storage(format!("Failed to deserialize storage: {e}")))?;
+        let storage_len = read_u64(data, &mut pos)? as usize;
+        let storage = NodeStorage::deserialize_full(
+            data.get(pos..pos + storage_len)
+                .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?,
+        )
+        .map_err(|e| HNSWError::Storage(format!("Failed to deserialize storage: {e}")))?;
 
         Ok(Self {
             storage,

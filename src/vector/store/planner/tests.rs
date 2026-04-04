@@ -5,7 +5,7 @@ use crate::vector::store::tests::random_vector;
 
 #[test]
 fn test_planner_dense_search() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
     for i in 0..10 {
         store.insert(random_vector(128, i)).unwrap();
     }

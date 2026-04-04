@@ -321,8 +321,8 @@ fn test_concurrent_reads() {
                 // Each thread performs multiple searches
                 for i in 0..25 {
                     let query = query_parser.parse_query("searchable").unwrap();
-                    let results = searcher
-                        .search(&query, &tantivy::collector::TopDocs::with_limit(10))
+                    let results: Vec<(f32, tantivy::DocAddress)> = searcher
+                        .search(&query, &tantivy::collector::TopDocs::with_limit(10).order_by_score())
                         .unwrap();
                     assert!(!results.is_empty(), "Thread {thread_id} iteration {i}");
                 }
@@ -368,8 +368,8 @@ fn test_read_while_write() {
                 for _ in 0..50 {
                     let searcher = reader.searcher();
                     let query = query_parser.parse_query("content").unwrap();
-                    let results = searcher
-                        .search(&query, &tantivy::collector::TopDocs::with_limit(10))
+                    let results: Vec<(f32, tantivy::DocAddress)> = searcher
+                        .search(&query, &tantivy::collector::TopDocs::with_limit(10).order_by_score())
                         .unwrap();
                     // Results may vary as writes happen, but should never error
                     assert!(results.len() <= 10);

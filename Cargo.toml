@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "omendb"
-version = "0.0.33"
+version = "0.0.34"
 edition = "2024"
 authors = ["OmenDB Team"]
 description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
@@ -36,7 +36,6 @@ parking_lot = "0.12"
 
 # HNSW dependencies
 ordered-float = "4.2"
-lru = "0.16"
 memmap2 = "0.9"
 
 # Logging
@@ -55,7 +54,7 @@ rand_distr = "0.4"
 multiversion = "0.7"
 
 # Full-text search
-tantivy = { version = "0.25", default-features = false, features = ["mmap", "lz4-compression"] }
+tantivy = { version = "0.26.0", default-features = false, features = ["mmap", "lz4-compression", "stemmer"] }
 
 # Bit manipulation
 roaring = { version = "0.11", features = ["serde"] }

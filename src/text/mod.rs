@@ -267,7 +267,7 @@ impl TextIndex {
             .parse_query(query_str)
             .map_err(|e| anyhow!("Invalid query: {e}"))?;
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
+        let top_docs: Vec<(f32, tantivy::DocAddress)> = searcher.search(&query, &TopDocs::with_limit(limit).order_by_score())?;
 
         let results = top_docs
             .into_iter()
