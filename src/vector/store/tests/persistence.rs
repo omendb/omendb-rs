@@ -11,7 +11,7 @@ fn test_open_new_database() {
     let db_path = temp_dir.path().join("test-oadb");
 
     // Open new database
-    let mut store = VectorStore::open(&db_path).unwrap();
+    let store = VectorStore::open(&db_path).unwrap();
     assert!(store.is_persistent());
     assert_eq!(store.len(), 0);
 
@@ -45,7 +45,7 @@ fn test_persistent_roundtrip() {
 
     // Create and populate store
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
 
         store
             .set(
@@ -106,7 +106,7 @@ fn test_persistent_delete() {
 
     // Create, populate, and delete
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
 
         store
             .set("keep", random_vector(128, 1), serde_json::json!({}))
@@ -143,7 +143,7 @@ fn test_persistent_search() {
 
     // Create and populate
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
 
         for i in 0..100 {
             store
@@ -187,7 +187,7 @@ mod incremental_tests {
     #[test]
     fn test_incremental_set_batch() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+        let store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
 
         // Single item inserts
         store
@@ -250,7 +250,7 @@ mod incremental_tests {
     #[test]
     fn test_interleaved_insert_search() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+        let store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
 
         let mut total_inserted = 0;
 
@@ -290,7 +290,7 @@ mod incremental_tests {
     #[test]
     fn test_batch_then_single_insert() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+        let store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
 
         // Batch insert
         let batch: Vec<_> = (0..50)
@@ -333,7 +333,7 @@ mod incremental_tests {
     #[test]
     fn test_insert_search_cycle_from_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
+        let store = VectorStore::open_with_dimensions(dir.path(), 4).unwrap();
 
         let query = Vector::new(vec![1.0, 0.0, 0.0, 0.0]);
 
@@ -389,7 +389,7 @@ fn test_set_writes_to_wal() {
 
     // Create and insert
     {
-        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        let store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
         store
             .set(
                 "vec1",
@@ -421,7 +421,7 @@ fn test_recovery_skips_stale_wal_after_full_flush_publish() {
     let wal_meta_path = db_path.with_extension("wal.meta");
 
     let stale_wal = {
-        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        let store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
         store
             .set(
                 "vec1",
@@ -456,7 +456,7 @@ fn test_recovery_replays_wal_if_manifest_publish_did_not_happen() {
     let wal_meta_path = db_path.with_extension("wal.meta");
 
     {
-        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        let store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
         store
             .set(
                 "base",
@@ -470,7 +470,7 @@ fn test_recovery_replays_wal_if_manifest_publish_did_not_happen() {
     let old_manifest = std::fs::read(&omen_path).unwrap();
 
     let (pending_wal, pending_meta) = {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
         store
             .set(
                 "new_doc",
@@ -501,7 +501,7 @@ fn test_vector_only_checkpoint_recovers_legitimate_zero_vector() {
     let db_path = dir.path().join("zero_vector_recovery");
 
     {
-        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        let store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
         store
             .set(
                 "base",

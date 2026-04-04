@@ -3,7 +3,7 @@ use super::random_vector;
 
 #[test]
 fn test_quantization_insert() {
-    let mut store = VectorStore::new_with_quantization(128);
+    let store = VectorStore::new_with_quantization(128);
 
     // Insert vectors
     for i in 0..50 {
@@ -17,7 +17,7 @@ fn test_quantization_insert() {
 
 #[test]
 fn test_quantization_search_accuracy() {
-    let mut store = VectorStore::new_with_quantization(128);
+    let store = VectorStore::new_with_quantization(128);
 
     // Insert vectors
     for i in 0..100 {

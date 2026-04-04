@@ -3,7 +3,7 @@ use super::random_vector;
 
 #[test]
 fn test_vector_store_insert() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     let v1 = random_vector(128, 0);
     let v2 = random_vector(128, 1);
@@ -18,7 +18,7 @@ fn test_vector_store_insert() {
 
 #[test]
 fn test_dimension_mismatch() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
     let wrong_dim = Vector::new(vec![1.0; 64]);
 
     assert!(store.insert(wrong_dim).is_err());
@@ -26,7 +26,7 @@ fn test_dimension_mismatch() {
 
 #[test]
 fn test_ef_search_tuning() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert vectors to initialize HNSW
     for i in 0..10 {
@@ -43,7 +43,7 @@ fn test_ef_search_tuning() {
 
 #[test]
 fn test_rebuild_index() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert vectors
     for i in 0..100 {
@@ -76,7 +76,7 @@ fn test_rebuild_index() {
 
 #[test]
 fn test_compact_basic() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert 100 vectors
     for i in 0..100 {
@@ -119,7 +119,7 @@ fn test_compact_basic() {
 
 #[test]
 fn test_compact_empty() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert some vectors but don't delete any
     for i in 0..10 {
@@ -134,7 +134,7 @@ fn test_compact_empty() {
 
 #[test]
 fn test_compact_all_deleted() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert and delete all
     for i in 0..10 {
@@ -160,7 +160,7 @@ fn test_compact_all_deleted() {
 #[test]
 fn test_new_with_params_functional() {
     // Verify new_with_params works functionally
-    let mut store = VectorStore::new_with_params(128, 16, 100, 100, Metric::L2);
+    let store = VectorStore::new_with_params(128, 16, 100, 100, Metric::L2);
 
     // Insert vectors
     for i in 0..100 {
@@ -181,7 +181,7 @@ fn test_new_with_params_functional() {
 
 #[test]
 fn test_insert_with_metadata() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     let metadata = serde_json::json!({
         "title": "Test Document",
@@ -200,7 +200,7 @@ fn test_insert_with_metadata() {
 
 #[test]
 fn test_set_insert() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     let metadata = serde_json::json!({"title": "Doc 1"});
 
@@ -215,7 +215,7 @@ fn test_set_insert() {
 
 #[test]
 fn test_set_update() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert initial document
     store
@@ -249,7 +249,7 @@ fn test_set_update() {
 
 #[test]
 fn test_delete() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     store
         .insert_with_metadata(
@@ -271,7 +271,7 @@ fn test_delete() {
 
 #[test]
 fn test_update() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     store
         .insert_with_metadata(
@@ -297,7 +297,7 @@ fn test_update() {
 
 #[test]
 fn test_update_vector_reindexes_hnsw() {
-    let mut store = VectorStore::new(4);
+    let store = VectorStore::new(4);
 
     // Insert 50 vectors so HNSW is used
     for i in 0..50 {
@@ -335,7 +335,7 @@ fn test_update_vector_reindexes_hnsw() {
 
 #[test]
 fn test_get() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     let vector = random_vector(128, 0);
     let metadata = serde_json::json!({"title": "Test"});
@@ -358,7 +358,7 @@ fn test_get() {
 fn test_merge_from_with_key_prefix() {
     let dim = 3;
     let mut main = VectorStore::new(dim);
-    let mut sub = VectorStore::new(dim);
+    let sub = VectorStore::new(dim);
 
     sub.set(
         "foo.py",
@@ -391,7 +391,7 @@ fn test_merge_from_with_key_prefix() {
 fn test_merge_from_prefix_skips_conflicts() {
     let dim = 3;
     let mut main = VectorStore::new(dim);
-    let mut sub = VectorStore::new(dim);
+    let sub = VectorStore::new(dim);
 
     // Pre-existing item in main with the prefixed name
     main.set(
@@ -418,7 +418,7 @@ fn test_auto_compact_triggers_on_flush() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("auto-compact-test");
 
-    let mut store = VectorStore::open(&db_path).unwrap();
+    let store = VectorStore::open(&db_path).unwrap();
 
     // Insert 100 vectors
     for i in 0..100 {
@@ -457,7 +457,7 @@ fn test_auto_compact_no_trigger_below_threshold() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("no-auto-compact-test");
 
-    let mut store = VectorStore::open(&db_path).unwrap();
+    let store = VectorStore::open(&db_path).unwrap();
 
     // Insert 100 vectors
     for i in 0..100 {
@@ -491,7 +491,7 @@ fn test_auto_compact_no_trigger_below_threshold() {
 
 #[test]
 fn test_explicit_compact_still_works() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert and delete (in-memory store, no auto-compact from flush)
     for i in 0..50 {

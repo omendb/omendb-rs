@@ -169,7 +169,11 @@ impl VectorStore {
     /// Used by public constructors to avoid field duplication.
     fn with_defaults(dimensions: usize, distance_metric: Metric) -> Self {
         Self {
-            records: RecordStore::new(dimensions.try_into().unwrap()),
+            records: RecordStore::new(
+                dimensions
+                    .try_into()
+                    .expect("vector dimension exceeds u32::MAX"),
+            ),
             engine: RwLock::new(None),
             published_view: ArcSwap::new(Arc::new(None)),
             metadata_index: RwLock::new(MetadataIndex::new()),

@@ -68,7 +68,7 @@ impl Default for StorageBacking {
     fn default() -> Self {
         StorageBacking::Owned {
             data: NonNull::dangling(),
-            layout: Layout::from_size_align(0, 1).unwrap(),
+            layout: Layout::from_size_align(0, 1).expect("empty layout is valid"),
             capacity: 0,
         }
     }

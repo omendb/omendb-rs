@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_brute_force_cosine() {
-        let mut records = RecordStore::new(3);
+        let records = RecordStore::new(3);
         records
             .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
             .unwrap();
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_brute_force_inner_product() {
-        let mut records = RecordStore::new(3);
+        let records = RecordStore::new(3);
         records
             .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
             .unwrap();
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_rescore_results_basic() {
-        let mut records = RecordStore::new(3);
+        let records = RecordStore::new(3);
         records
             .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
             .unwrap();

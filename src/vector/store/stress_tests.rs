@@ -230,7 +230,7 @@ fn stress_large_vector_count() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("large_count.omen");
 
-    let mut store = VectorStoreOptions::default()
+    let store = VectorStoreOptions::default()
         .dimensions(128)
         .open(&path)
         .unwrap();
@@ -315,7 +315,7 @@ fn stress_crash_mid_batch() {
 
     // Phase 1: Insert, flush (checkpoint), insert more (WAL only)
     {
-        let mut store = VectorStoreOptions::default()
+        let store = VectorStoreOptions::default()
             .dimensions(64)
             .open(&path)
             .unwrap();
@@ -377,7 +377,7 @@ fn stress_crash_after_deletes() {
 
     // Phase 1: Insert, flush, delete, crash
     {
-        let mut store = VectorStoreOptions::default()
+        let store = VectorStoreOptions::default()
             .dimensions(64)
             .open(&path)
             .unwrap();
@@ -436,7 +436,7 @@ fn stress_repeated_crash_recovery() {
     for cycle in 0..num_cycles {
         // Open, insert, crash
         {
-            let mut store = if cycle == 0 {
+            let store = if cycle == 0 {
                 VectorStore::open_with_dimensions(&path, 64).unwrap()
             } else {
                 VectorStore::open(&path).unwrap()
@@ -472,7 +472,7 @@ fn stress_large_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("large_meta.omen");
 
-    let mut store = VectorStoreOptions::default()
+    let store = VectorStoreOptions::default()
         .dimensions(64)
         .open(&path)
         .unwrap();
@@ -579,7 +579,7 @@ fn stress_crash_after_vector_only_checkpoint() {
 
     // Phase 1: flush batch (durable), then individual inserts trigger auto-checkpoint
     {
-        let mut store = VectorStoreOptions::default()
+        let store = VectorStoreOptions::default()
             .dimensions(dim)
             .open(&path)
             .unwrap();
@@ -639,7 +639,7 @@ fn stress_crash_checkpoint_plus_wal_tail() {
     let dim = 16;
 
     {
-        let mut store = VectorStoreOptions::default()
+        let store = VectorStoreOptions::default()
             .dimensions(dim)
             .open(&path)
             .unwrap();
@@ -709,7 +709,7 @@ fn stress_crash_after_upserts() {
 
     // Phase 1: insert + flush
     {
-        let mut store = VectorStoreOptions::default()
+        let store = VectorStoreOptions::default()
             .dimensions(dim)
             .open(&path)
             .unwrap();
@@ -778,7 +778,7 @@ fn stress_crash_search_correctness() {
 
     // Phase 1: insert vectors at known positions, flush, add WAL vectors, crash
     {
-        let mut store = VectorStoreOptions::default()
+        let store = VectorStoreOptions::default()
             .dimensions(dim)
             .open(&path)
             .unwrap();
@@ -865,7 +865,7 @@ fn stress_crash_mixed_operations() {
 
     // Phase 1
     {
-        let mut store = VectorStoreOptions::default()
+        let store = VectorStoreOptions::default()
             .dimensions(dim)
             .open(&path)
             .unwrap();
@@ -954,7 +954,7 @@ fn stress_flush_reopen_identity() {
     let n = 500;
 
     // Build original store
-    let mut store = VectorStoreOptions::default()
+    let store = VectorStoreOptions::default()
         .dimensions(dim)
         .open(&path)
         .unwrap();
@@ -999,7 +999,7 @@ fn stress_metadata_crash_recovery() {
     let db_path = dir.path().join("meta_crash_test");
 
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
         store
             .set(
                 "doc1",
@@ -1011,7 +1011,7 @@ fn stress_metadata_crash_recovery() {
     }
 
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
         store
             .update("doc1", None, Some(serde_json::json!({"title": "updated"})))
             .unwrap();
@@ -1037,7 +1037,7 @@ fn stress_batch_without_flush_data_lost() {
     let db_path = dir.path().join("batch_no_flush_test");
 
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
         let batch: Vec<(String, Vector, serde_json::Value)> = (0..100)
             .map(|i| {
                 (
@@ -1071,7 +1071,7 @@ fn stress_batch_with_flush_data_survives() {
     let count = 100;
 
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
         let batch: Vec<(String, Vector, serde_json::Value)> = (0..count)
             .map(|i| {
                 (
@@ -1111,7 +1111,7 @@ fn stress_delete_batch_single_sync() {
     let count = 500;
 
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
         let batch: Vec<(String, Vector, serde_json::Value)> = (0..count)
             .map(|i| {
                 (
@@ -1126,7 +1126,7 @@ fn stress_delete_batch_single_sync() {
     }
 
     {
-        let mut store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::open(&db_path).unwrap();
         assert_eq!(store.len(), count);
 
         let ids: Vec<String> = (0..count).map(|i| format!("doc{i}")).collect();
@@ -1418,7 +1418,7 @@ fn stress_multiple_flush_reopen_cycles() {
     let cycles = 5;
 
     for cycle in 0..cycles {
-        let mut store = if cycle == 0 {
+        let store = if cycle == 0 {
             VectorStoreOptions::default()
                 .dimensions(dim)
                 .open(&path)

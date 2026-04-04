@@ -4,7 +4,7 @@ use crate::vector::VectorEngineView;
 
 #[test]
 fn test_vector_store_knn_with_hnsw() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert some vectors
     for i in 0..100 {
@@ -25,7 +25,7 @@ fn test_vector_store_knn_with_hnsw() {
 
 #[test]
 fn test_vector_store_brute_force() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert some vectors
     for i in 0..100 {
@@ -46,7 +46,7 @@ fn test_vector_store_brute_force() {
 
 #[test]
 fn test_search_with_filter() {
-    let mut store = VectorStore::new(128);
+    let store = VectorStore::new(128);
 
     // Insert vectors with metadata
     store
@@ -87,7 +87,7 @@ fn test_search_with_filter() {
 
 #[test]
 fn test_vector_store_with_segment_view_exposes_published_search_state() {
-    let mut store = VectorStore::new(4);
+    let store = VectorStore::new(4);
     for i in 0..8 {
         store
             .insert(Vector::new(vec![i as f32, 0.0, 0.0, 0.0]))
@@ -112,7 +112,7 @@ fn test_vector_store_with_segment_view_exposes_published_search_state() {
 
 #[test]
 fn test_vector_store_cosine_zero_query_rejected_in_brute_force_path() {
-    let mut store = VectorStore::new_with_params(3, 16, 100, 100, Metric::Cosine);
+    let store = VectorStore::new_with_params(3, 16, 100, 100, Metric::Cosine);
     store
         .records
         .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
@@ -127,7 +127,7 @@ fn test_vector_store_cosine_zero_query_rejected_in_brute_force_path() {
 
 #[test]
 fn test_vector_store_search_with_options_rejects_non_finite_query() {
-    let mut store = VectorStore::new(3);
+    let store = VectorStore::new(3);
     store
         .records
         .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
@@ -142,7 +142,7 @@ fn test_vector_store_search_with_options_rejects_non_finite_query() {
 
 #[test]
 fn test_vector_store_search_batch_reports_invalid_query() {
-    let mut store = VectorStore::new_with_params(3, 16, 100, 100, Metric::Cosine);
+    let store = VectorStore::new_with_params(3, 16, 100, 100, Metric::Cosine);
     store
         .records
         .set("a".to_string(), vec![1.0, 0.0, 0.0], None)
@@ -163,7 +163,7 @@ fn test_vector_store_search_batch_reports_invalid_query() {
 
 #[test]
 fn test_vector_store_search_rejects_k_zero_without_segments() {
-    let mut store = VectorStore::new(3);
+    let store = VectorStore::new(3);
     store
         .records
         .set("a".to_string(), vec![1.0, 0.0, 0.0], None)

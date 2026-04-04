@@ -185,15 +185,29 @@ impl MultiVecStorage {
         // Parse vectors
         let vectors: Vec<f32> = vec_bytes
             .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .map(|chunk| {
+                f32::from_le_bytes(
+                    chunk
+                        .try_into()
+                        .expect("chunks_exact(4) guarantees 4-byte slice"),
+                )
+            })
             .collect();
 
         // Parse offsets
         let offsets: Vec<(u32, u16)> = off_bytes
             .chunks_exact(6)
             .map(|chunk| {
-                let start = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
-                let count = u16::from_le_bytes(chunk[4..6].try_into().unwrap());
+                let start = u32::from_le_bytes(
+                    chunk[0..4]
+                        .try_into()
+                        .expect("chunks_exact(6) guarantees at least 4 bytes"),
+                );
+                let count = u16::from_le_bytes(
+                    chunk[4..6]
+                        .try_into()
+                        .expect("chunks_exact(6) guarantees 6 bytes"),
+                );
                 (start, count)
             })
             .collect();

@@ -17,7 +17,7 @@ mod general {
 
             // Create store with specific params using VectorStoreOptions
             {
-                let mut store = VectorStoreOptions::default()
+                let store = VectorStoreOptions::default()
                     .dimensions(dimensions)
                     .m(m)
                     .ef_construction(ef_construction)
@@ -48,7 +48,7 @@ mod general {
             num_inserts in 10usize..100,
             num_deletes in 0usize..10
         ) {
-            let mut store = VectorStore::new(8);
+            let store = VectorStore::new(8);
 
             // Insert vectors
             let mut ids = Vec::new();
@@ -84,7 +84,7 @@ mod general {
 
             // Create non-quantized store
             {
-                let mut store = VectorStoreOptions::default()
+                let store = VectorStoreOptions::default()
                     .dimensions(64)
                     .open(&path)
                     .unwrap();
@@ -113,7 +113,7 @@ mod general {
 
             // Create SQ8 quantized store
             {
-                let mut store = VectorStoreOptions::default()
+                let store = VectorStoreOptions::default()
                     .dimensions(64)
                     .quantization(true)
                     .open(&path)
@@ -322,7 +322,7 @@ mod persistence {
 
             // Insert without flush
             {
-                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+                let store = VectorStore::open_with_dimensions(&path, dim).unwrap();
 
                 for i in 0..num_vectors {
                     let data: Vec<f32> = (0..dim).map(|j| (i * 100 + j) as f32 * 0.01).collect();
@@ -360,7 +360,7 @@ mod persistence {
 
             // Insert then delete without flush
             {
-                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+                let store = VectorStore::open_with_dimensions(&path, dim).unwrap();
 
                 for i in 0..num_inserts {
                     let data: Vec<f32> = (0..dim).map(|j| (i + j) as f32).collect();
@@ -405,7 +405,7 @@ mod persistence {
 
             // Insert, flush, insert more (no flush)
             {
-                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+                let store = VectorStore::open_with_dimensions(&path, dim).unwrap();
 
                 // First batch - will be checkpointed
                 for i in 0..checkpoint_count {
@@ -447,7 +447,7 @@ mod persistence {
 
             // Store exact values
             {
-                let mut store = VectorStore::open_with_dimensions(&path, 16).unwrap();
+                let store = VectorStore::open_with_dimensions(&path, 16).unwrap();
                 store.set("test", Vector::new(values.clone()), serde_json::json!({})).unwrap();
                 store.flush().unwrap();
             }
@@ -490,7 +490,7 @@ mod persistence {
 
             // Store
             {
-                let mut store = VectorStore::open_with_dimensions(&path, 4).unwrap();
+                let store = VectorStore::open_with_dimensions(&path, 4).unwrap();
                 store.set("test", Vector::new(vec![1.0, 2.0, 3.0, 4.0]), metadata.clone()).unwrap();
                 store.flush().unwrap();
             }
@@ -523,7 +523,7 @@ mod persistence {
 
             // Insert then update multiple times
             {
-                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+                let store = VectorStore::open_with_dimensions(&path, dim).unwrap();
 
                 for update in 0..num_updates {
                     let data: Vec<f32> = (0..dim).map(|i| (update * 100 + i) as f32).collect();
@@ -555,7 +555,7 @@ mod persistence {
 
             // Insert in batches
             {
-                let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+                let store = VectorStore::open_with_dimensions(&path, dim).unwrap();
 
                 for batch_idx in 0..num_batches {
                     let items: Vec<_> = (0..batch_size).map(|i| {

@@ -2,6 +2,7 @@ use super::*;
 
 mod crud;
 mod edges;
+mod golden_data;
 mod hybrid;
 mod metadata;
 mod multivec;

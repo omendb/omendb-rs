@@ -47,10 +47,19 @@ impl ManifestHeader {
                 "Manifest header too short",
             ));
         }
-        Ok(Self {
-            length: u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
-            crc: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
-        })
+        
+        let length = u32::from_le_bytes(
+            bytes[0..4]
+                .try_into()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        );
+        let crc = u32::from_le_bytes(
+            bytes[4..8]
+                .try_into()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        );
+        
+        Ok(Self { length, crc })
     }
 
     /// Verify CRC against manifest bytes
@@ -138,17 +147,42 @@ impl OmenFooter {
     }
 
     /// Deserialize from 64-byte array
-    #[must_use]
-    pub fn from_bytes(bytes: &[u8; 64]) -> Self {
-        Self {
-            magic: u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
-            version: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
-            manifest_offset: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
-            total_len: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
-            _reserved: bytes[24..56].try_into().unwrap(),
-            _reserved2: u32::from_le_bytes(bytes[56..60].try_into().unwrap()),
-            crc: u32::from_le_bytes(bytes[60..64].try_into().unwrap()),
-        }
+    pub fn from_bytes(bytes: &[u8; 64]) -> io::Result<Self> {
+        Ok(Self {
+            magic: u32::from_le_bytes(
+                bytes[0..4]
+                    .try_into()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            ),
+            version: u32::from_le_bytes(
+                bytes[4..8]
+                    .try_into()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            ),
+            manifest_offset: u64::from_le_bytes(
+                bytes[8..16]
+                    .try_into()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            ),
+            total_len: u64::from_le_bytes(
+                bytes[16..24]
+                    .try_into()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            ),
+            _reserved: bytes[24..56]
+                .try_into()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            _reserved2: u32::from_le_bytes(
+                bytes[56..60]
+                    .try_into()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            ),
+            crc: u32::from_le_bytes(
+                bytes[60..64]
+                    .try_into()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            ),
+        })
     }
 }
 

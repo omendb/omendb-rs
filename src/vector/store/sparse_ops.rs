@@ -84,7 +84,7 @@ impl VectorStore {
         self.sparse_index
             .write()
             .as_mut()
-            .unwrap()
+            .expect("sparse_index enabled by enable_sparse")
             .insert(slot, &sparse);
         Ok(())
     }
@@ -109,7 +109,7 @@ impl VectorStore {
         self.sparse_index
             .write()
             .as_mut()
-            .unwrap()
+            .expect("sparse_index enabled by enable_sparse")
             .insert(slot, &sparse);
 
         Ok(())

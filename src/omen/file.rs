@@ -245,7 +245,7 @@ impl OmenFile {
             file.seek(SeekFrom::End(-(OmenFooter::SIZE as i64)))?;
             let mut footer_buf = [0u8; OmenFooter::SIZE];
             file.read_exact(&mut footer_buf)?;
-            let f = OmenFooter::from_bytes(&footer_buf);
+            let f = OmenFooter::from_bytes(&footer_buf)?;
             if f.verify() {
                 footer = Some(f);
             }
@@ -1149,7 +1149,11 @@ impl OmenFile {
         if &data[0..4] != MAGIC {
             return Ok(None);
         }
-        let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
+        let version = u32::from_le_bytes(
+            data[4..8]
+                .try_into()
+                .expect("data.len() >= 8 was checked above"),
+        );
         if version != 2 {
             tracing::warn!(version, "Unrecognized slim records snapshot version");
             return Ok(None);
@@ -1355,7 +1359,7 @@ impl OmenFile {
 
         if required_size > current_size {
             self.vec_mmap = None;
-            let vf = self.vec_file.as_ref().unwrap();
+            let vf = self.vec_file.as_ref().expect(".vecs file is open");
             vf.set_len(required_size)?;
             self.vec_mmap = Some(unsafe { MmapMut::map_mut(vf)? });
         }
@@ -1409,7 +1413,7 @@ impl OmenFile {
         }
 
         // fsync .vecs
-        self.vec_file.as_ref().unwrap().sync_all()?;
+        self.vec_file.as_ref().expect(".vecs file is open").sync_all()?;
 
         // Accumulate dirty slots across auto-checkpoints in memory. The .records snapshot
         // must contain the union of all dirty slots since the last full flush so crash
@@ -1467,7 +1471,7 @@ impl OmenFile {
         if required_size > current_size {
             // Drop mmap before resize
             self.vec_mmap = None;
-            let vf = self.vec_file.as_ref().unwrap();
+            let vf = self.vec_file.as_ref().expect(".vecs file is open");
             vf.set_len(required_size)?;
             // Re-mmap
             // SAFETY: File exclusively owned via .omen lock
@@ -1523,7 +1527,7 @@ impl OmenFile {
         }
 
         // fsync .vecs
-        self.vec_file.as_ref().unwrap().sync_all()?;
+        self.vec_file.as_ref().expect(".vecs file is open").sync_all()?;
 
         // Write .omen manifest (atomic temp+rename)
         self.write_omen_manifest(records, options)?;
@@ -2383,7 +2387,7 @@ mod tests {
                 .unwrap();
             let mut footer_buf = [0u8; OmenFooter::SIZE];
             file.read_exact(&mut footer_buf).unwrap();
-            let footer = OmenFooter::from_bytes(&footer_buf);
+            let footer = OmenFooter::from_bytes(&footer_buf).unwrap();
 
             // Corrupt one byte of manifest data (after the 8-byte header)
             let corrupt_offset = footer.manifest_offset + 8 + 1; // Skip header, corrupt second byte

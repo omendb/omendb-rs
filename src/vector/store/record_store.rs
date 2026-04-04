@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_set_insert() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         let slot = store
             .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_set_update() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         let slot1 = store
             .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         store
             .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_delete_nonexistent() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
         store
             .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
             .unwrap();
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_reinsert_after_delete() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         let slot1 = store
             .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_dimension_mismatch() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         store
             .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_iter_live() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         store
             .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_compact() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         store
             .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_metadata() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         let meta = serde_json::json!({"key": "value"});
         store
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn test_get_result_fields_by_slot() {
-        let mut store = RecordStore::new(3);
+        let store = RecordStore::new(3);
 
         let meta = serde_json::json!({"key": "value"});
         let slot = store
