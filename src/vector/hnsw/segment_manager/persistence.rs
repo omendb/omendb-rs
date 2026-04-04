@@ -2,7 +2,7 @@
 //!
 //! Save and load segment manager state to/from disk.
 
-use super::{
+use crate::vector::hnsw::segment_manager::{
     MergePolicy, PublishedFrozenSnapshot, PublishedSegments, SegmentConfig, SegmentManager,
 };
 use crate::vector::hnsw::error::Result;

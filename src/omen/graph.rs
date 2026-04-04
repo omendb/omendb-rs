@@ -50,6 +50,7 @@ impl GraphSection {
             });
         }
 
+        // SAFETY: The offset and length are validated by the caller to be within the mmap bounds.
         let ptr = unsafe { mmap.as_ptr().add(offset) };
 
         // Calculate section boundaries with overflow checks
@@ -102,7 +103,7 @@ impl GraphSection {
         if node_id as u64 >= self.count || self.data.is_null() {
             return None;
         }
-        // Safety: bounds checked
+        // SAFETY: node_id is bounds-checked against count, and data is verified to be non-null.
         unsafe { Some(*self.data.add(node_id as usize)) }
     }
 
@@ -120,7 +121,7 @@ impl GraphSection {
             return None;
         }
 
-        // SAFETY: Bounds checked above
+        // SAFETY: Bounds checked above. Offset reading is safe as it's within data_len.
         let offset = unsafe {
             let ptr = self.data.add(offset_pos).cast::<u32>();
             ptr.read_unaligned().to_le() as usize
@@ -132,7 +133,7 @@ impl GraphSection {
             return None;
         }
 
-        // SAFETY: Bounds checked above
+        // SAFETY: Bounds checked above. neighbor_count reading is safe as it's within data_len.
         let neighbor_count = unsafe {
             let ptr = self.data.add(neighbor_start).cast::<u32>();
             ptr.read_unaligned().to_le() as usize
@@ -149,6 +150,7 @@ impl GraphSection {
             return None;
         }
 
+        // SAFETY: The neighbors_ptr and neighbors_end are bounds-checked against the mmap limits.
         unsafe {
             let ptr = self.data.add(neighbors_ptr).cast::<u32>();
             Some(std::slice::from_raw_parts(ptr, neighbor_count))
