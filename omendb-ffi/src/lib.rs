@@ -185,12 +185,10 @@ pub unsafe extern "C" fn omendb_open(
             Some(serde_json::from_str(s).map_err(|e| format!("Invalid config JSON: {e}"))?)
         };
 
-        if let Some(ref cfg) = config {
-            if cfg.get("multi_vector").is_some() {
-                return Err("Multi-vector stores are not supported in the C FFI. \
-                    Use the Python or Node.js bindings."
-                    .to_string());
-            }
+        if let Some(ref cfg) = config && cfg.get("multi_vector").is_some() {
+            return Err("Multi-vector stores are not supported in the C FFI. \
+                Use the Python or Node.js bindings."
+                .to_string());
         }
 
         let store = if let Some(cfg) = config {
