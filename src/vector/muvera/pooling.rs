@@ -327,10 +327,12 @@ mod tests {
     #[test]
     fn test_deterministic() {
         // Same input -> same output
-        let tokens = [vec![1.0, 0.0, 0.0],
+        let tokens = [
+            vec![1.0, 0.0, 0.0],
             vec![0.0, 1.0, 0.0],
             vec![0.0, 0.0, 1.0],
-            vec![1.0, 1.0, 0.0]];
+            vec![1.0, 1.0, 0.0],
+        ];
         let refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
 
         let pooled1 = pool_tokens(&refs, 2);

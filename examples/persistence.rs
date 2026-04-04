@@ -17,21 +17,9 @@ fn main() -> anyhow::Result<()> {
     {
         let store = VectorStore::open_with_dimensions(&db_path, 64)?;
 
-        store.set(
-            "a",
-            Vector::new(vec![1.0; 64]),
-            json!({"name": "first"}),
-        )?;
-        store.set(
-            "b",
-            Vector::new(vec![2.0; 64]),
-            json!({"name": "second"}),
-        )?;
-        store.set(
-            "c",
-            Vector::new(vec![3.0; 64]),
-            json!({"name": "third"}),
-        )?;
+        store.set("a", Vector::new(vec![1.0; 64]), json!({"name": "first"}))?;
+        store.set("b", Vector::new(vec![2.0; 64]), json!({"name": "second"}))?;
+        store.set("c", Vector::new(vec![3.0; 64]), json!({"name": "third"}))?;
 
         store.flush()?;
         println!("Saved {} vectors to {:?}", store.len(), db_path);

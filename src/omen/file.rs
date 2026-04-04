@@ -1413,7 +1413,10 @@ impl OmenFile {
         }
 
         // fsync .vecs
-        self.vec_file.as_ref().expect(".vecs file is open").sync_all()?;
+        self.vec_file
+            .as_ref()
+            .expect(".vecs file is open")
+            .sync_all()?;
 
         // Accumulate dirty slots across auto-checkpoints in memory. The .records snapshot
         // must contain the union of all dirty slots since the last full flush so crash
@@ -1527,7 +1530,10 @@ impl OmenFile {
         }
 
         // fsync .vecs
-        self.vec_file.as_ref().expect(".vecs file is open").sync_all()?;
+        self.vec_file
+            .as_ref()
+            .expect(".vecs file is open")
+            .sync_all()?;
 
         // Write .omen manifest (atomic temp+rename)
         self.write_omen_manifest(records, options)?;

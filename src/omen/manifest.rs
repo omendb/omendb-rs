@@ -47,7 +47,7 @@ impl ManifestHeader {
                 "Manifest header too short",
             ));
         }
-        
+
         let length = u32::from_le_bytes(
             bytes[0..4]
                 .try_into()
@@ -58,7 +58,7 @@ impl ManifestHeader {
                 .try_into()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
         );
-        
+
         Ok(Self { length, crc })
     }
 

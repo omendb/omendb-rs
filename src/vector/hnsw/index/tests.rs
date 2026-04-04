@@ -421,10 +421,7 @@ fn test_save_load_small() {
         let load = loaded.get_vector_dequantized(i).unwrap();
         // Compare within floating point tolerance
         for (o, l) in orig.iter().zip(load.iter()) {
-            assert!(
-                (o - l).abs() < 1e-5,
-                "Vectors differ: {orig:?} vs {load:?}"
-            );
+            assert!((o - l).abs() < 1e-5, "Vectors differ: {orig:?} vs {load:?}");
         }
     }
 

@@ -860,8 +860,7 @@ mod tests {
 
         // Build with parallel
         let parallel_index =
-            HNSWIndex::build_parallel(64, params, Metric::L2, false, vectors.clone())
-                .unwrap();
+            HNSWIndex::build_parallel(64, params, Metric::L2, false, vectors.clone()).unwrap();
 
         // Build with sequential
         let mut sequential_index = HNSWIndex::new(64, params, Metric::L2, false).unwrap();

@@ -2,11 +2,11 @@
 //!
 //! Save and load segment manager state to/from disk.
 
+use crate::vector::hnsw::error::Result;
+use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment};
 use crate::vector::hnsw::segment_manager::{
     MergePolicy, PublishedFrozenSnapshot, PublishedSegments, SegmentConfig, SegmentManager,
 };
-use crate::vector::hnsw::error::Result;
-use crate::vector::hnsw::segment::{FrozenSegment, MutableSegment};
 use crate::vector::hnsw::types::{HNSWParams, Metric};
 use std::sync::Arc;
 use tracing::{debug, info};

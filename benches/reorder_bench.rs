@@ -29,9 +29,8 @@ fn bench_reorder_impact(c: &mut Criterion) {
     let params = HNSWParams::default();
 
     // 1. Build unoptimized index
-    let unoptimized =
-        HNSWIndex::build_parallel(dim, params, Metric::L2, false, vectors.clone())
-            .expect("build unoptimized");
+    let unoptimized = HNSWIndex::build_parallel(dim, params, Metric::L2, false, vectors.clone())
+        .expect("build unoptimized");
 
     // 2. Build optimized index (copy unoptimized, then reorder)
     // We can't clone HNSWIndex easily, so we build it again but optimize it.

@@ -21,7 +21,9 @@ fn random_vector(seed: usize, dim: usize) -> Vec<f32> {
     (0..dim)
         .map(|_| {
             // Simple LCG for reproducibility
-            rng_state = rng_state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            rng_state = rng_state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             ((rng_state >> 33) as f32 / u32::MAX as f32) * 2.0 - 1.0
         })
         .collect()

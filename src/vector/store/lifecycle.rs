@@ -194,7 +194,9 @@ impl VectorStore {
                 *self.sparse_index.write() = Some(crate::vector::sparse::SparseIndex::new());
             }
             let mut self_sparse = self.sparse_index.write();
-            let self_sparse = self_sparse.as_mut().expect("sparse_index was just initialized");
+            let self_sparse = self_sparse
+                .as_mut()
+                .expect("sparse_index was just initialized");
             for (other_slot, id) in &merged_slots {
                 if let Some(sv) = other_sparse.get(*other_slot)
                     && let Some(new_slot) = self.records.get_slot(id)

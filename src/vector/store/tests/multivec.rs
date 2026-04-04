@@ -65,11 +65,7 @@ mod muvera {
             let tokens = random_tokens(5 + i, 4, i);
             let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(
-                    &format!("doc{i}"),
-                    &token_refs,
-                    serde_json::json!({"i": i}),
-                )
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({"i": i}))
                 .unwrap();
         }
 
@@ -121,11 +117,7 @@ mod muvera {
             let tokens = random_tokens(10, 4, i);
             let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(
-                    &format!("doc{i}"),
-                    &token_refs,
-                    serde_json::json!({"i": i}),
-                )
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({"i": i}))
                 .unwrap();
         }
 
@@ -280,11 +272,7 @@ mod muvera {
             let tokens = random_tokens(10, 4, i);
             let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
             store
-                .set_multi(
-                    &format!("doc{i}"),
-                    &token_refs,
-                    serde_json::json!({"i": i}),
-                )
+                .set_multi(&format!("doc{i}"), &token_refs, serde_json::json!({"i": i}))
                 .unwrap();
         }
 
@@ -1320,7 +1308,10 @@ mod persistence_tests {
 
         // Query with wrong dimension should return error, not panic
         let wrong_dim_query: Vec<Vec<f32>> = vec![vec![0.1; token_dim * 2]];
-        let refs: Vec<&[f32]> = wrong_dim_query.iter().map(std::vec::Vec::as_slice).collect();
+        let refs: Vec<&[f32]> = wrong_dim_query
+            .iter()
+            .map(std::vec::Vec::as_slice)
+            .collect();
         let result = store.query(&refs, 1);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
