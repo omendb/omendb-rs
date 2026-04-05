@@ -640,6 +640,17 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+      - name: Upgrade npm to v11
+        run: |
+          # Node 22.22.2 ships with broken npm 10.9.7 (arborist missing promise-retry),
+          # which prevents npm install -g npm@latest. npm 11 is required for OIDC trusted
+          # publishing. Bypass by downloading the tarball and replacing in-place.
+          version=$(curl -fsSL https://registry.npmjs.org/npm/latest | python3 -c "import sys,json;print(json.load(sys.stdin)['version'])")
+          curl -fsSL "https://registry.npmjs.org/npm/-/npm-${version}.tgz" | tar xzf - -C /tmp
+          npm_dir=$(npm root -g)/npm
+          sudo rm -rf "$npm_dir"
+          sudo mv /tmp/package "$npm_dir"
+          npm --version
       - run: npm install
         working-directory: node
 
