@@ -530,7 +530,7 @@ fn test_vector_only_checkpoint_recovers_legitimate_zero_vector() {
 }
 
 #[test]
-fn test_vector_only_checkpoint_recovers_sparse_placeholder() {
+fn test_vector_only_checkpoint_recovers_sparse_only_record() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("sparse_placeholder_recovery");
 
@@ -557,10 +557,7 @@ fn test_vector_only_checkpoint_recovers_sparse_placeholder() {
 
     let store = VectorStore::open(&db_path).unwrap();
     assert!(store.contains("sparse_doc"));
-
-    let (vector, metadata) = store.get("sparse_doc").unwrap();
-    assert_eq!(vector.data, vec![0.0, 0.0, 0.0, 0.0]);
-    assert_eq!(metadata["phase"], "sparse");
+    assert!(store.get("sparse_doc").is_none());
 }
 
 #[test]

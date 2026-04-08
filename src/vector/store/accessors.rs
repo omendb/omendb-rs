@@ -98,9 +98,10 @@ impl VectorStore {
     pub fn items(&self) -> Vec<(String, Vec<f32>, JsonValue)> {
         self.records
             .iter_live()
-            .map(|(_, record)| {
+            .filter_map(|(_, record)| {
+                let vector = record.vector?;
                 let metadata = record.metadata.clone().unwrap_or_default();
-                (record.id.clone(), record.vector.to_vec(), metadata)
+                Some((record.id.clone(), vector.to_vec(), metadata))
             })
             .collect()
     }
@@ -116,7 +117,7 @@ impl VectorStore {
     pub fn memory_usage(&self) -> usize {
         self.records
             .iter_live()
-            .map(|(_, r)| r.vector.as_slice().len() * 4)
+            .filter_map(|(_, r)| r.vector.map(|vector| vector.as_slice().len() * 4))
             .sum()
     }
 
@@ -229,7 +230,7 @@ impl VectorStore {
         let vector_bytes = self
             .records
             .iter_live()
-            .map(|(_, r)| r.vector.as_slice().len() * 4)
+            .filter_map(|(_, r)| r.vector.map(|vector| vector.as_slice().len() * 4))
             .sum::<usize>();
 
         let (frozen_count, mutable_vecs, graph_bytes, segment_capacity) =

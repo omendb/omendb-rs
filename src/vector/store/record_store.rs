@@ -35,7 +35,7 @@ pub enum SnapshotVectorData {
 #[derive(Debug, Clone)]
 pub(crate) struct SnapshotRecord {
     pub id: String,
-    pub vector: SnapshotVectorData,
+    pub vector: Option<SnapshotVectorData>,
     pub metadata: Option<JsonValue>,
 }
 
@@ -71,7 +71,7 @@ enum StoredVectorData {
 #[derive(Debug, Clone)]
 struct StoredRecord {
     id: String,
-    vector: StoredVectorData,
+    vector: Option<StoredVectorData>,
     sparse: Option<SparseVector>,
     multi: Option<Vec<Vec<f32>>>,
     metadata: Option<JsonValue>,
@@ -81,7 +81,7 @@ struct StoredRecord {
 #[derive(Debug, Clone)]
 pub struct Record {
     pub id: String,
-    pub vector: VectorData,
+    pub vector: Option<VectorData>,
     pub metadata: Option<JsonValue>,
 }
 
@@ -90,7 +90,10 @@ impl serde::Serialize for Record {
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("Record", 3)?;
         state.serialize_field("id", &self.id)?;
-        state.serialize_field("vector", self.vector.as_slice())?;
+        state.serialize_field(
+            "vector",
+            &self.vector.as_ref().map(VectorData::as_slice).map(<[f32]>::to_vec),
+        )?;
         state.serialize_field("metadata", &self.metadata)?;
         state.end()
     }
@@ -101,11 +104,15 @@ impl<'de> serde::Deserialize<'de> for Record {
         #[derive(serde::Deserialize)]
         struct RecordData {
             id: String,
-            vector: Vec<f32>,
+            vector: Option<Vec<f32>>,
             metadata: Option<JsonValue>,
         }
         let data = RecordData::deserialize(deserializer)?;
-        Ok(Record::new(data.id, data.vector, data.metadata))
+        Ok(Self {
+            id: data.id,
+            vector: data.vector.map(VectorData::Owned),
+            metadata: data.metadata,
+        })
     }
 }
 
@@ -115,7 +122,7 @@ impl Record {
     pub fn new(id: String, vector: Vec<f32>, metadata: Option<JsonValue>) -> Self {
         Self {
             id,
-            vector: VectorData::Owned(vector),
+            vector: Some(VectorData::Owned(vector)),
             metadata,
         }
     }
@@ -131,7 +138,7 @@ impl Record {
     ) -> Self {
         Self {
             id,
-            vector: VectorData::Mmap(mmap, offset, len),
+            vector: Some(VectorData::Mmap(mmap, offset, len)),
             metadata,
         }
     }
@@ -210,7 +217,9 @@ impl RecordStore {
             .map(|record| {
                 record.map(|record| StoredRecord {
                     id: record.id,
-                    vector: self.store_snapshot_vector(record.vector, &vec_mmap, &main_mmap),
+                    vector: record
+                        .vector
+                        .map(|vector| self.store_snapshot_vector(vector, &vec_mmap, &main_mmap)),
                     sparse: None,
                     multi: None,
                     metadata: record.metadata,
@@ -288,7 +297,46 @@ impl RecordStore {
         let slot = slots.len() as u32;
         slots.push(Some(StoredRecord {
             id: id.clone(),
-            vector: StoredVectorData::Owned(vector),
+            vector: Some(StoredVectorData::Owned(vector)),
+            sparse: carried_sparse,
+            multi: carried_multi,
+            metadata,
+        }));
+        self.id_to_slot.insert(id, slot);
+        self.live_count.fetch_add(1, Ordering::Relaxed);
+        self.dirty_slots.write().insert(slot);
+
+        Ok(slot)
+    }
+
+    /// Insert or update a record without a dense payload.
+    pub fn set_without_vector(&self, id: String, metadata: Option<JsonValue>) -> anyhow::Result<u32> {
+        let mut carried_sparse = None;
+        let mut carried_multi = None;
+        if let Some(old_slot_ref) = self.id_to_slot.get(&id) {
+            let old_slot = *old_slot_ref;
+            if let Some(record) = self
+                .slots
+                .read()
+                .get(old_slot as usize)
+                .and_then(|record| record.as_ref())
+            {
+                carried_sparse = record.sparse.clone();
+                carried_multi = record.multi.clone();
+            }
+            let mut deleted = self.deleted.write();
+            if !deleted.contains(old_slot) {
+                deleted.insert(old_slot);
+                self.dirty_slots.write().insert(old_slot);
+                self.live_count.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+
+        let mut slots = self.slots.write();
+        let slot = slots.len() as u32;
+        slots.push(Some(StoredRecord {
+            id: id.clone(),
+            vector: None,
             sparse: carried_sparse,
             multi: carried_multi,
             metadata,
@@ -540,6 +588,25 @@ impl RecordStore {
             .collect()
     }
 
+    /// Return live slots that carry a dense payload.
+    pub fn dense_slots(&self) -> Vec<u32> {
+        let deleted = self.deleted.read().clone();
+        self.slots
+            .read()
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, record)| {
+                let slot = slot as u32;
+                if deleted.contains(slot) {
+                    return None;
+                }
+                record
+                    .as_ref()
+                    .and_then(|record| record.vector.as_ref().map(|_| slot))
+            })
+            .collect()
+    }
+
     /// Export vector references for checkpoint (returns owned copy for stability)
     pub fn export_vectors(&self) -> Vec<Option<Vec<f32>>> {
         let slots = self.slots.read();
@@ -547,7 +614,8 @@ impl RecordStore {
             .iter()
             .map(|opt| {
                 opt.as_ref()
-                    .map(|record| self.materialize_vector(&record.vector).to_vec())
+                    .and_then(|record| record.vector.as_ref())
+                    .map(|vector| self.materialize_vector(vector).to_vec())
             })
             .collect()
     }
@@ -596,7 +664,8 @@ impl RecordStore {
             .read()
             .get(slot as usize)?
             .as_ref()
-            .map(|record| self.materialize_vector(&record.vector))
+            .and_then(|record| record.vector.as_ref())
+            .map(|vector| self.materialize_vector(vector))
     }
 
     /// Borrow vector data for a slot while holding the slot lock.
@@ -622,7 +691,12 @@ impl RecordStore {
                 records
                     .get(slot as usize)
                     .and_then(|record| record.as_ref())
-                    .map(|record| Self::stored_vector_as_slice(&mmaps, &record.vector))
+                    .and_then(|record| {
+                        record
+                            .vector
+                            .as_ref()
+                            .map(|vector| Self::stored_vector_as_slice(&mmaps, vector))
+                    })
             })
             .collect();
         f(vectors)
@@ -688,7 +762,7 @@ impl RecordStore {
     fn store_record(&self, record: Record) -> StoredRecord {
         StoredRecord {
             id: record.id,
-            vector: self.store_vector(record.vector),
+            vector: record.vector.map(|vector| self.store_vector(vector)),
             sparse: None,
             multi: None,
             metadata: record.metadata,
@@ -757,7 +831,10 @@ impl RecordStore {
     fn materialize_record_from_parts(mmaps: &[Arc<Mmap>], record: &StoredRecord) -> Record {
         Record {
             id: record.id.clone(),
-            vector: Self::materialize_vector_from_parts(mmaps, &record.vector),
+            vector: record
+                .vector
+                .as_ref()
+                .map(|vector| Self::materialize_vector_from_parts(mmaps, vector)),
             metadata: record.metadata.clone(),
         }
     }
@@ -784,8 +861,12 @@ impl RecordStore {
         f: impl FnOnce(Option<&[f32]>) -> T,
     ) -> T {
         if let Some(record) = record {
-            let mmaps = self.mmaps.read();
-            f(Some(Self::stored_vector_as_slice(&mmaps, &record.vector)))
+            if let Some(vector) = record.vector.as_ref() {
+                let mmaps = self.mmaps.read();
+                f(Some(Self::stored_vector_as_slice(&mmaps, vector)))
+            } else {
+                f(None)
+            }
         } else {
             f(None)
         }
@@ -854,7 +935,10 @@ mod tests {
 
         // Check updated vector at new slot
         let record = store.get_by_slot(1).unwrap();
-        assert_eq!(record.vector.as_slice(), &[7.0, 8.0, 9.0]);
+        assert_eq!(
+            record.vector.as_ref().map(VectorData::as_slice),
+            Some(&[7.0, 8.0, 9.0][..])
+        );
 
         // Old slot is deleted (get_by_slot respects deleted bitmap)
         assert!(store.get_by_slot(0).is_none());
@@ -1071,5 +1155,22 @@ mod tests {
         assert_eq!(store.get_slot("vec1"), Some(0));
         assert_eq!(store.get_slot("vec2"), None); // deleted
         assert_eq!(store.get_slot("vec3"), Some(2));
+    }
+
+    #[test]
+    fn test_set_without_vector_creates_sparse_only_record() {
+        let store = RecordStore::new(3);
+
+        let slot = store
+            .set_without_vector("doc".to_string(), Some(serde_json::json!({"kind": "sparse"})))
+            .unwrap();
+
+        assert_eq!(slot, 0);
+        assert_eq!(store.len(), 1);
+        assert!(store.get_vector(slot).is_none());
+
+        let record = store.get("doc").unwrap();
+        assert!(record.vector.is_none());
+        assert_eq!(record.metadata, Some(serde_json::json!({"kind": "sparse"})));
     }
 }

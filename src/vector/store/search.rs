@@ -46,9 +46,10 @@ pub(crate) fn brute_force_search(
 
     let mut distances: Vec<(usize, f32)> = records
         .iter_live()
-        .map(|(slot, record)| {
-            let dist = compute_distance(metric, query, record.vector.as_slice(), query_norm);
-            (slot as usize, dist)
+        .filter_map(|(slot, record)| {
+            let vector = record.vector?;
+            let dist = compute_distance(metric, query, vector.as_slice(), query_norm);
+            Some((slot as usize, dist))
         })
         .collect();
 
@@ -224,6 +225,7 @@ fn brute_force_filtered(
     let mut candidates: Vec<(u32, f32)> = records
         .iter_live()
         .filter_map(|(slot, record)| {
+            let vector = record.vector?;
             let passes_filter = if let Some(bitmap) = filter_bitmap {
                 bitmap.contains(slot)
             } else {
@@ -238,7 +240,7 @@ fn brute_force_filtered(
                 return None;
             }
 
-            let distance = compute_distance(metric, query, record.vector.as_slice(), query_norm);
+            let distance = compute_distance(metric, query, vector.as_slice(), query_norm);
             Some((slot, distance))
         })
         .collect();
@@ -280,7 +282,8 @@ pub(crate) fn rescore_results(
         .into_iter()
         .filter_map(|(slot, _sq8_dist)| {
             let record = records.get_by_slot(slot as u32)?;
-            let dist = compute_distance(metric, query, record.vector.as_slice(), query_norm);
+            let vector = record.vector?;
+            let dist = compute_distance(metric, query, vector.as_slice(), query_norm);
             Some((slot, dist))
         })
         .collect();

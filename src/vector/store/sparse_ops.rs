@@ -58,28 +58,19 @@ impl VectorStore {
 
             // WAL write for metadata update
             if let Some(ref storage) = self.storage
-                && let Some(record) = self.records.get_by_slot(slot)
+                && let Some(vector) = self.records.get_vector(slot)
             {
                 let mut storage = storage.write();
-                storage.log_insert(id, record.vector.as_slice(), &metadata)?;
+                storage.log_insert(id, vector.as_slice(), &metadata)?;
                 storage.sync()?;
             }
             slot
         } else {
-            // New ID: create record slot with zero-filled placeholder vector
-            let dims = self.dimensions();
-            let zero_vec = vec![0.0f32; dims];
             let slot =
                 self.records
-                    .set(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
+                    .set_without_vector(id.to_string(), Some(metadata.clone()))?;
             self.records.update_sparse(slot, Some(sparse.clone()))?;
             self.metadata_index.write().index_json(slot, &metadata);
-
-            if let Some(ref storage) = self.storage {
-                let mut storage = storage.write();
-                storage.log_insert(id, &zero_vec, &metadata)?;
-                storage.sync()?;
-            }
             slot
         };
 

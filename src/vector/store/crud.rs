@@ -415,7 +415,8 @@ impl VectorStore {
             .metadata
             .clone()
             .unwrap_or_else(helpers::default_metadata);
-        Some((Vector::new(record.vector.to_vec()), metadata))
+        let vector = record.vector?;
+        Some((Vector::new(vector.to_vec()), metadata))
     }
 
     /// Get multiple vectors by string IDs

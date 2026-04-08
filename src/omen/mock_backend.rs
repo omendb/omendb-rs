@@ -113,8 +113,8 @@ impl StorageBackend for MockStorageBackend {
         dirty_slots: &roaring::RoaringBitmap,
     ) -> Result<()> {
         for slot in dirty_slots {
-            if let Some(record) = records.get_by_slot(slot) {
-                self.vectors.insert(slot, record.vector.to_vec());
+            if let Some(vector) = records.get_vector(slot) {
+                self.vectors.insert(slot, vector.to_vec());
             } else {
                 self.vectors.remove(&slot);
             }
@@ -138,7 +138,9 @@ impl StorageBackend for MockStorageBackend {
     ) -> Result<()> {
         self.vectors.clear();
         for (slot, record) in records.iter_live() {
-            self.vectors.insert(slot, record.vector.to_vec());
+            if let Some(vector) = record.vector {
+                self.vectors.insert(slot, vector.to_vec());
+            }
         }
         Ok(())
     }

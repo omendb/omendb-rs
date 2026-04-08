@@ -539,6 +539,7 @@ impl VectorStore {
         let mut slim_snapshot_loaded = false;
         let mut slim_wal_epoch: u64 = 0;
         let mut slim_live_slots = RoaringBitmap::new();
+        let mut slim_dense_slots = RoaringBitmap::new();
         let mut slim_snapshot = None;
         let manifest_wal_cutoff = storage.manifest_wal_replay_cutoff();
 
@@ -546,6 +547,7 @@ impl VectorStore {
             match storage.load_records_snapshot() {
                 Ok(Some(slim)) => {
                     slim_live_slots = slim.id_to_slot.values().copied().collect();
+                    slim_dense_slots = slim.dense_slots.iter().copied().collect();
                     slim_snapshot = Some(slim);
                 }
                 Ok(None) => {}
@@ -562,6 +564,7 @@ impl VectorStore {
             vec_mmap.as_ref(),
             main_mmap.as_ref(),
             (!slim_live_slots.is_empty()).then_some(&slim_live_slots),
+            (!slim_dense_slots.is_empty()).then_some(&slim_dense_slots),
         );
 
         if let Some(slim) = slim_snapshot {
@@ -576,6 +579,7 @@ impl VectorStore {
             snapshot.id_to_slot = slim.id_to_slot;
             snapshot.deleted = slim.deleted;
             snapshot.metadata = slim.metadata;
+            snapshot.dense_slots = slim.dense_slots;
             slim_snapshot_loaded = true;
         }
 
@@ -662,19 +666,10 @@ impl VectorStore {
 
             if let Some(id) = id {
                 let metadata = snapshot.metadata.get(&slot_u32).cloned();
-                let record = if let Some(v) = vec_data {
-                    SnapshotRecord {
-                        id,
-                        vector: v.clone(),
-                        metadata,
-                    }
-                } else {
-                    let zero_vec = vec![0.0f32; dimensions];
-                    SnapshotRecord {
-                        id,
-                        vector: super::record_store::SnapshotVectorData::Owned(zero_vec),
-                        metadata,
-                    }
+                let record = SnapshotRecord {
+                    id,
+                    vector: vec_data.cloned(),
+                    metadata,
                 };
                 slots.push(Some(record));
                 live_count += 1;
@@ -683,7 +678,7 @@ impl VectorStore {
                 let metadata = snapshot.metadata.get(&slot_u32).cloned();
                 slots.push(Some(SnapshotRecord {
                     id,
-                    vector: vec_data.clone(),
+                    vector: Some(vec_data.clone()),
                     metadata,
                 }));
                 live_count += 1;
@@ -819,8 +814,9 @@ impl VectorStore {
         modified_slots: &[u32],
         ctx: &RecoveryContext<'_>,
     ) -> Result<Option<SegmentManager>> {
-        let active_count = records.len() as usize;
-        if active_count == 0 || ctx.dimensions == 0 {
+        let dense_slots = records.dense_slots();
+        let dense_count = dense_slots.len();
+        if dense_count == 0 || ctx.dimensions == 0 {
             return Ok(None);
         }
 
@@ -836,14 +832,14 @@ impl VectorStore {
 
             match load_result {
                 Ok(loaded)
-                    if loaded.len() == active_count
+                    if loaded.len() == dense_count
                         && loaded.generation() == stored_generation
                         && modified_slots.is_empty() =>
                 {
                     let loaded_view = loaded.read_view();
                     tracing::info!(
                         segments = loaded_view.frozen_count(),
-                        total_vectors = active_count,
+                        total_vectors = dense_count,
                         generation = stored_generation,
                         "Loaded persisted segments (skipped rebuild)"
                     );
@@ -851,13 +847,13 @@ impl VectorStore {
                 }
                 Ok(mut loaded)
                     if loaded.generation() == stored_generation
-                        && loaded.len() < active_count
+                        && loaded.len() < dense_count
                         && !modified_slots.is_empty() =>
                 {
-                    let delta = active_count - loaded.len();
+                    let delta = dense_count - loaded.len();
                     let mut inserted = 0;
                     for &slot in modified_slots {
-                        if records.deleted_bitmap().contains(slot) {
+                        if records.deleted_bitmap().contains(slot) || records.get_vector(slot).is_none() {
                             continue;
                         }
                         records.with_vector_by_slot(slot, |vector| {
@@ -883,7 +879,7 @@ impl VectorStore {
                 Ok(loaded) => {
                     tracing::info!(
                         segment_vectors = loaded.len(),
-                        record_vectors = active_count,
+                        record_vectors = dense_count,
                         segment_generation = loaded.generation(),
                         stored_generation,
                         "Segment count or generation mismatch, rebuilding index"
@@ -904,10 +900,7 @@ impl VectorStore {
             Ok(Some(engine))
         } else {
             // Slow path: rebuild from vectors
-            let mut slots: Vec<u32> = Vec::with_capacity(active_count);
-            for (slot, _) in records.iter_live() {
-                slots.push(slot);
-            }
+            let slots = dense_slots;
 
             let config = SegmentConfig::new(ctx.dimensions)
                 .with_params(ctx.hnsw_params)

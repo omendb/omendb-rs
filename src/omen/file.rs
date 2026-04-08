@@ -749,6 +749,8 @@ pub struct OmenSnapshot<'a> {
     pub deleted: Vec<u32>,
     /// Metadata by slot
     pub metadata: HashMap<u32, serde_json::Value>,
+    /// Live slots that carry a dense vector payload
+    pub dense_slots: Vec<u32>,
     /// Vector dimensions
     pub dimensions: u32,
     /// HNSW index bytes (if persisted)
@@ -805,6 +807,7 @@ pub struct SlimRecordsSnapshot {
     pub id_to_slot: HashMap<String, u32>,
     pub deleted: Vec<u32>,
     pub metadata: HashMap<u32, serde_json::Value>,
+    pub dense_slots: Vec<u32>,
     pub dirty_since_flush: RoaringBitmap,
     pub wal_truncation_epoch: u64,
 }
@@ -900,8 +903,12 @@ impl OmenFile {
     pub fn load_persisted_snapshot(&self) -> OmenSnapshot<'static> {
         let vec_mmap = self.get_vec_mmap_arc();
         let main_mmap = self.get_main_mmap_arc();
-        let mut snapshot =
-            self.load_persisted_snapshot_borrowed(vec_mmap.as_ref(), main_mmap.as_ref(), None);
+        let mut snapshot = self.load_persisted_snapshot_borrowed(
+            vec_mmap.as_ref(),
+            main_mmap.as_ref(),
+            None,
+            None,
+        );
         snapshot._vec_mmap = vec_mmap;
         snapshot._mmap = main_mmap;
         snapshot
@@ -913,6 +920,7 @@ impl OmenFile {
         vec_mmap: Option<&Arc<Mmap>>,
         main_mmap: Option<&Arc<Mmap>>,
         extra_live_slots: Option<&RoaringBitmap>,
+        extra_dense_slots: Option<&RoaringBitmap>,
     ) -> OmenSnapshot<'static> {
         let dim = self.header.dimensions as usize;
         let mut snapshot = OmenSnapshot {
@@ -923,6 +931,14 @@ impl OmenFile {
             self.manifest.id_to_index.values().copied().collect();
         if let Some(extra_live_slots) = extra_live_slots {
             known_live_slots |= extra_live_slots;
+        }
+        let mut known_dense_slots: RoaringBitmap = if self.manifest.dense_slots.is_empty() {
+            known_live_slots.clone()
+        } else {
+            self.manifest.dense_slots.iter().copied().collect()
+        };
+        if let Some(extra_dense_slots) = extra_dense_slots {
+            known_dense_slots |= extra_dense_slots;
         }
 
         // Load vectors from .vecs mmap
@@ -950,7 +966,7 @@ impl OmenFile {
                                 }
                             }
 
-                            if !is_zero || known_live_slots.contains(slot as u32) {
+                            if !is_zero || known_dense_slots.contains(slot as u32) {
                                 snapshot.vectors[slot] = Some(SnapshotVectorData::Mmap {
                                     source: SnapshotMmapSource::VecFile,
                                     offset: start,
@@ -996,6 +1012,7 @@ impl OmenFile {
         }
 
         // Load HNSW index bytes and MultiVectors segment
+        snapshot.dense_slots = self.manifest.dense_slots.clone();
         if let Some(mmap) = main_mmap {
             for location in &self.manifest.nodes {
                 match location.segment_type {
@@ -1098,8 +1115,8 @@ impl OmenFile {
 
     /// Write a slim records snapshot atomically (tmp → fsync → rename).
     ///
-    /// Format: magic "OREC" + version 2 + id_to_slot + deleted bitmap +
-    /// metadata JSON + dirty_since_flush bitmap.
+    /// Format: magic "OREC" + version 3 + id_to_slot + deleted bitmap +
+    /// metadata JSON + dense_slots + dirty_since_flush bitmap.
     ///
     /// `dirty_since_flush` should be the union of all dirty slots since the last flush(),
     /// accumulated by the caller across multiple auto-checkpoints.
@@ -1110,7 +1127,7 @@ impl OmenFile {
         wal_truncation_epoch: u64,
     ) -> io::Result<()> {
         const MAGIC: &[u8; 4] = b"OREC";
-        const VERSION: u32 = 2;
+        const VERSION: u32 = 3;
 
         let tmp_path = {
             let mut p = self.records_path.as_os_str().to_os_string();
@@ -1155,6 +1172,13 @@ impl OmenFile {
                     w.write_all(&slot.to_le_bytes())?;
                     w.write_all(&(json_bytes.len() as u32).to_le_bytes())?;
                     w.write_all(&json_bytes)?;
+                }
+
+                // dense_slots section
+                let dense_slots = records.dense_slots();
+                w.write_all(&(dense_slots.len() as u32).to_le_bytes())?;
+                for slot in &dense_slots {
+                    w.write_all(&slot.to_le_bytes())?;
                 }
 
                 // dirty_since_flush bitmap section
@@ -1211,7 +1235,7 @@ impl OmenFile {
                 .try_into()
                 .expect("data.len() >= 8 was checked above"),
         );
-        if version != 2 {
+        if version != 2 && version != 3 {
             tracing::warn!(version, "Unrecognized slim records snapshot version");
             return Ok(None);
         }
@@ -1289,6 +1313,23 @@ impl OmenFile {
             }
         }
 
+        // dense_slots section (v3+)
+        let dense_slots = if version >= 3 {
+            cursor.read_exact(&mut buf4)?;
+            let dense_count = u32::from_le_bytes(buf4) as usize;
+            if dense_count > MAX_RECORD_COUNT {
+                return Ok(None);
+            }
+            let mut dense_slots = Vec::with_capacity(dense_count.min(max_entries_by_size));
+            for _ in 0..dense_count {
+                cursor.read_exact(&mut buf4)?;
+                dense_slots.push(u32::from_le_bytes(buf4));
+            }
+            dense_slots
+        } else {
+            id_to_slot.values().copied().collect()
+        };
+
         // dirty_since_flush bitmap section
         cursor.read_exact(&mut buf4)?;
         let dirty_len = u32::from_le_bytes(buf4) as usize;
@@ -1311,6 +1352,7 @@ impl OmenFile {
             id_to_slot,
             deleted,
             metadata,
+            dense_slots,
             dirty_since_flush,
             wal_truncation_epoch,
         }))
@@ -1654,6 +1696,7 @@ impl OmenFile {
             .iter()
             .map(|(id, slot)| (*slot, id.clone()))
             .collect();
+        manifest.dense_slots = records.dense_slots();
 
         // Convert metadata to bytes (skip deleted slots)
         let deleted_bitmap = records.deleted_bitmap();
@@ -1908,6 +1951,11 @@ impl OmenFile {
 
         manifest.id_to_index.clone_from(id_to_slot);
         manifest.index_to_id = index_to_id;
+        manifest.dense_slots = vectors
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, vector)| vector.map(|_| slot as u32))
+            .collect();
 
         // Convert metadata to bytes (skip deleted slots)
         let mut metadata_bytes: HashMap<u32, Vec<u8>> = HashMap::new();

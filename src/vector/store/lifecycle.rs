@@ -72,8 +72,14 @@ impl VectorStore {
 
         // Collect live slots, then borrow the vectors for the rebuild.
         let mut slots: Vec<u32> = Vec::with_capacity(self.records.len() as usize);
-        for (slot, _) in self.records.iter_live() {
-            slots.push(slot);
+        for (slot, record) in self.records.iter_live() {
+            if record.vector.is_some() {
+                slots.push(slot);
+            }
+        }
+
+        if slots.is_empty() {
+            return Ok(());
         }
 
         // Build config
@@ -180,8 +186,13 @@ impl VectorStore {
             }
 
             // Insert into our RecordStore
-            self.records
-                .set(id.clone(), record.vector.to_vec(), record.metadata.clone())?;
+            if let Some(vector) = record.vector {
+                self.records
+                    .set(id.clone(), vector.to_vec(), record.metadata.clone())?;
+            } else {
+                self.records
+                    .set_without_vector(id.clone(), record.metadata.clone())?;
+            }
             merged_slots.push((slot, id));
             merged_count += 1;
         }

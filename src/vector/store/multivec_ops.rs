@@ -940,7 +940,8 @@ impl VectorStore {
             .metadata
             .clone()
             .unwrap_or_else(helpers::default_metadata);
-        Some((record.vector.to_vec(), metadata))
+        let vector = record.vector?;
+        Some((vector.to_vec(), metadata))
     }
 
     /// Internal: get multi-vector tokens.

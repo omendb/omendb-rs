@@ -236,6 +236,9 @@ pub struct OmenManifest {
     pub id_to_index: std::collections::HashMap<String, u32>,
     pub index_to_id: std::collections::HashMap<u32, String>,
     pub metadata: std::collections::HashMap<u32, Vec<u8>>,
+    /// Live slots that carry a dense vector payload.
+    #[serde(default)]
+    pub dense_slots: Vec<u32>,
     /// Serialized MetadataIndex for fast recovery (optional for backward compat)
     #[serde(default)]
     pub metadata_index: Option<Vec<u8>>,
@@ -263,6 +266,7 @@ impl OmenManifest {
             id_to_index: std::collections::HashMap::new(),
             index_to_id: std::collections::HashMap::new(),
             metadata: std::collections::HashMap::new(),
+            dense_slots: Vec::new(),
             metadata_index: None,
             config: std::collections::HashMap::new(),
             multivec_offsets: None,
