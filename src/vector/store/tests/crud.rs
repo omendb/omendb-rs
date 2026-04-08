@@ -25,6 +25,23 @@ fn test_dimension_mismatch() {
 }
 
 #[test]
+fn test_dimensions_infer_on_first_batch_insert() {
+    let store = VectorStoreOptions::default().dimensions(0).build().unwrap();
+
+    assert_eq!(store.dimensions(), 0);
+
+    store
+        .set_batch(vec![(
+            "v1".to_string(),
+            Vector::new(vec![0.1, 0.2, 0.3]),
+            serde_json::json!({}),
+        )])
+        .unwrap();
+
+    assert_eq!(store.dimensions(), 3);
+}
+
+#[test]
 fn test_ef_search_tuning() {
     let store = VectorStore::new(128);
 

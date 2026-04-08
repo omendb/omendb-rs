@@ -43,19 +43,17 @@ impl VectorDatabase {
         let col_embedding_fn = embedding_fn
             .map(Arc::new)
             .or_else(|| self.embedding_fn.clone());
+        let current_dimensions = self.live_dimensions();
 
         {
             let cache = self.collections_cache.read();
             if let Some(cached_inner) = cache.get(&name) {
                 let base_path = std::path::Path::new(&self.path);
                 let collection_path = base_path.join("collections").join(&name);
-                let is_multi_vector = cached_inner.read().store.is_multi_vector();
                 return Ok(VectorDatabase {
                     inner: Arc::clone(cached_inner),
                     path: collection_path.to_string_lossy().to_string(),
-                    dimensions: self.dimensions,
                     is_persistent: true,
-                    is_multi_vector,
                     embedding_fn: col_embedding_fn.clone(),
                     collections_cache: RwLock::new(HashMap::new()),
                 });
@@ -67,13 +65,10 @@ impl VectorDatabase {
         if let Some(cached_inner) = cache.get(&name) {
             let base_path = std::path::Path::new(&self.path);
             let collection_path = base_path.join("collections").join(&name);
-            let is_multi_vector = cached_inner.read().store.is_multi_vector();
             return Ok(VectorDatabase {
                 inner: Arc::clone(cached_inner),
                 path: collection_path.to_string_lossy().to_string(),
-                dimensions: self.dimensions,
                 is_persistent: true,
-                is_multi_vector,
                 embedding_fn: col_embedding_fn.clone(),
                 collections_cache: RwLock::new(HashMap::new()),
             });
@@ -105,21 +100,19 @@ impl VectorDatabase {
         } else if parent_is_multi {
             let token_dim = parent_token_dimension
                 .unwrap_or(parent_dimensions)
-                .max(self.dimensions as usize);
+                .max(current_dimensions as usize);
             let config = parent_multi_config
                 .expect("multi-vector parent should expose multi-vector config");
             VectorStore::multi_vector_with(token_dim, config)
                 .map_err(crate::conversions::convert_error)?
                 .persist(&collection_path)
                 .map_err(crate::conversions::convert_error)?
-        } else if self.dimensions == 0 {
+        } else if current_dimensions == 0 {
             VectorStore::open(&collection_path).map_err(crate::conversions::convert_error)?
         } else {
-            VectorStore::open_with_dimensions(&collection_path, self.dimensions as usize)
+            VectorStore::open_with_dimensions(&collection_path, current_dimensions as usize)
                 .map_err(crate::conversions::convert_error)?
         };
-        let is_multi_vector = store.is_multi_vector();
-
         let inner = Arc::new(RwLock::new(VectorDatabaseInner { store }));
 
         cache.insert(name, Arc::clone(&inner));
@@ -127,9 +120,7 @@ impl VectorDatabase {
         Ok(VectorDatabase {
             inner,
             path: collection_path.to_string_lossy().to_string(),
-            dimensions: self.dimensions,
             is_persistent: true,
-            is_multi_vector,
             embedding_fn: col_embedding_fn,
             collections_cache: RwLock::new(HashMap::new()),
         })

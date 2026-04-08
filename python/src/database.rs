@@ -16,6 +16,25 @@ pub(crate) struct VectorDatabaseInner {
     pub(crate) store: VectorStore,
 }
 
+impl VectorDatabase {
+    pub(crate) fn live_is_multi_vector(&self) -> bool {
+        let inner = self.inner.read();
+        inner.store.is_multi_vector()
+    }
+
+    pub(crate) fn live_dimensions(&self) -> usize {
+        let inner = self.inner.read();
+        if inner.store.is_multi_vector() {
+            inner
+                .store
+                .token_dimension()
+                .unwrap_or(inner.store.dimensions())
+        } else {
+            inner.store.dimensions()
+        }
+    }
+}
+
 /// High-performance embedded vector database.
 ///
 /// Provides fast similarity search using HNSW indexing with:
@@ -38,9 +57,7 @@ pub(crate) struct VectorDatabaseInner {
 pub struct VectorDatabase {
     pub(crate) inner: Arc<RwLock<VectorDatabaseInner>>,
     pub(crate) path: String,
-    pub(crate) dimensions: usize,
     pub(crate) is_persistent: bool,
-    pub(crate) is_multi_vector: bool,
     /// Optional embedding function: (list[str]) -> ndarray[n, dim]
     pub(crate) embedding_fn: Option<Py<PyAny>>,
     /// Cache of open collection handles (same name = same object)
@@ -230,7 +247,7 @@ impl VectorDatabase {
             // Handle batch: set([{...}, {...}])
             if let Ok(items) = id_or_items.cast::<PyList>() {
                 // Multi-vector store: use "vectors" key
-                if self.is_multi_vector {
+                if self.live_is_multi_vector() {
                     let parsed = parse_multi_vec_items(items)?;
                     let inner_arc = Arc::clone(&self.inner);
                     let count = py.detach(move || -> PyResult<usize> {
@@ -700,13 +717,13 @@ impl VectorDatabase {
     ///     int: Dimensionality of vectors in this database
     #[getter]
     fn dimensions(&self) -> usize {
-        self.dimensions
+        self.live_dimensions()
     }
 
     /// Whether this is a multi-vector store (for ColBERT-style retrieval).
     #[getter]
     fn is_multi_vector(&self) -> bool {
-        self.is_multi_vector
+        self.live_is_multi_vector()
     }
 
     /// The embedding function, if configured.
@@ -890,7 +907,7 @@ impl VectorDatabase {
     fn stats(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let inner = self.inner.read();
         let dict = PyDict::new(py);
-        dict.set_item("dimensions", self.dimensions)?;
+        dict.set_item("dimensions", self.live_dimensions())?;
         dict.set_item("count", inner.store.len())?;
         dict.set_item("path", &self.path)?;
         Ok(dict.into())

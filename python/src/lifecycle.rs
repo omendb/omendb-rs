@@ -50,7 +50,7 @@ impl VectorDatabase {
         inner.store.flush().map_err(convert_error)?;
         // Replace with minimal in-memory store to release file lock
         let dummy_store = VectorStoreOptions::default()
-            .dimensions(self.dimensions)
+            .dimensions(self.live_dimensions())
             .build()
             .map_err(convert_error)?;
         inner.store = dummy_store;

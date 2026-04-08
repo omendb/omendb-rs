@@ -82,7 +82,7 @@ impl VectorDatabase {
             Either3::B(typed) => Vector::new(typed.to_vec()),
         };
 
-        let expected_dims = self.dimensions;
+        let expected_dims = self.live_dimensions();
         if expected_dims > 0 && query_vec.dim() != expected_dims as usize {
             return Err(Error::from_reason(format!(
                 "Query vector dimension ({}) does not match database dimension ({})",
@@ -148,7 +148,7 @@ impl VectorDatabase {
         rerank: Option<bool>,
         rerank_factor: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
-        if !self.is_multi_vector {
+        if !self.live_is_multi_vector() {
             return Err(Error::new(
                 Status::InvalidArg,
                 "searchMulti requires a multi-vector store. Use open() with multiVector: true",

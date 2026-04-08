@@ -87,7 +87,7 @@ fn parse_text_search_config(
 ///
 /// Args:
 ///     path (str): Database directory path, or ":memory:" for in-memory
-///     dimensions (int): Vector dimensionality (default: 128, auto-detected on first insert)
+///     dimensions (int): Vector dimensionality (default: infer on first insert for single-vector stores)
 ///     m (int): HNSW neighbors per node (default: 16, range: 4-64)
 ///     ef_construction (int): Build quality (default: 100, higher = better graph)
 ///     ef_search (int): Search quality (default: 100, higher = better recall)
@@ -180,13 +180,18 @@ pub(crate) fn open(
         }
     }
 
-    // Resolve effective dimensions (use 128 as default if not specified)
-    let effective_dims = if dimensions == 0 { 128 } else { dimensions };
+    let effective_dims = dimensions;
 
     // Parse multi-vector config
     let mv_config = parse_multi_vector(multi_vector)?;
     let is_multi_vec = mv_config.is_some();
     let text_search_config = parse_text_search_config(text_search)?;
+
+    if is_multi_vec && effective_dims == 0 {
+        return Err(PyValueError::new_err(
+            "dimensions must be greater than 0 for multi-vector stores",
+        ));
+    }
 
     // Multi-vector stores don't support quantization yet
     if is_multi_vec && quant_mode {
@@ -220,9 +225,7 @@ pub(crate) fn open(
             return Ok(VectorDatabase {
                 inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
                 path,
-                dimensions: effective_dims,
                 is_persistent: false,
-                is_multi_vector: true,
                 embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
                 collections_cache: RwLock::new(HashMap::new()),
             });
@@ -252,9 +255,7 @@ pub(crate) fn open(
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
-            dimensions: effective_dims,
             is_persistent: false,
-            is_multi_vector: false,
             embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
             collections_cache: RwLock::new(HashMap::new()),
         });
@@ -281,7 +282,6 @@ pub(crate) fn open(
                     .map_err(convert_error)?;
             }
             let is_mv = store.is_multi_vector();
-            let actual_dims = store.dimensions();
 
             // If multi_vector param conflicts with existing store, error
             if is_multi_vec && !is_mv {
@@ -293,13 +293,7 @@ pub(crate) fn open(
             return Ok(VectorDatabase {
                 inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
                 path,
-                dimensions: if actual_dims > 0 {
-                    actual_dims
-                } else {
-                    effective_dims
-                },
                 is_persistent: true,
-                is_multi_vector: is_mv,
                 embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
                 collections_cache: RwLock::new(HashMap::new()),
             });
@@ -321,9 +315,7 @@ pub(crate) fn open(
             return Ok(VectorDatabase {
                 inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
                 path,
-                dimensions: effective_dims,
                 is_persistent: true,
-                is_multi_vector: true,
                 embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
                 collections_cache: RwLock::new(HashMap::new()),
             });
@@ -365,9 +357,7 @@ pub(crate) fn open(
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
-            dimensions: effective_dims,
             is_persistent: true,
-            is_multi_vector: false,
             embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
             collections_cache: RwLock::new(HashMap::new()),
         });
@@ -397,9 +387,7 @@ pub(crate) fn open(
     Ok(VectorDatabase {
         inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
         path,
-        dimensions: effective_dims,
         is_persistent: false,
-        is_multi_vector: false,
         embedding_fn,
         collections_cache: RwLock::new(HashMap::new()),
     })

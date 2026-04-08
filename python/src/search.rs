@@ -115,7 +115,7 @@ impl VectorDatabase {
         }
 
         // Multi-vector store: use query() with SearchOptions
-        if self.is_multi_vector {
+        if self.live_is_multi_vector() {
             let query_tokens = extract_multi_vector_query(query)?;
 
             // Build rerank mode
@@ -164,7 +164,7 @@ impl VectorDatabase {
         let query_vec = Vector::new(extract_query_vector(query)?);
 
         // Validate query dimensions match the database
-        let expected_dims = self.dimensions;
+        let expected_dims = self.live_dimensions();
         if expected_dims > 0 && query_vec.dim() != expected_dims {
             return Err(PyValueError::new_err(format!(
                 "Query vector dimension ({}) does not match database dimension ({})",

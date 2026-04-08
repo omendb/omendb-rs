@@ -700,4 +700,21 @@ describe("VectorDatabase", () => {
 			expect(() => db.collection("test")).toThrow();
 		});
 	});
+
+	describe("dimension inference", () => {
+		it("should infer dimensions from first insert for regular stores", async () => {
+			const db = open(":memory:");
+			expect(db.dimensions).toBe(0);
+
+			await db.set([{ id: "v1", vector: [0.1, 0.2, 0.3] }]);
+
+			expect(db.dimensions).toBe(3);
+			const results = await db.search([0.1, 0.2, 0.3], 1);
+			expect(results).toHaveLength(1);
+		});
+
+		it("should require explicit dimensions for multi-vector stores", () => {
+			expect(() => open(":memory:", { multiVector: true })).toThrow(/dimensions/);
+		});
+	});
 });

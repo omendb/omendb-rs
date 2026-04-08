@@ -21,13 +21,30 @@ pub(crate) struct VectorDatabaseInner {
 pub(crate) type EmbeddingFn =
     ThreadsafeFunction<Vec<String>, Vec<Float32Array>, Vec<String>, Status, false>;
 
+impl VectorDatabase {
+    pub(crate) fn live_is_multi_vector(&self) -> bool {
+        let inner = self.inner.read();
+        inner.store.is_multi_vector()
+    }
+
+    pub(crate) fn live_dimensions(&self) -> u32 {
+        let inner = self.inner.read();
+        if inner.store.is_multi_vector() {
+            inner
+                .store
+                .token_dimension()
+                .unwrap_or(inner.store.dimensions()) as u32
+        } else {
+            inner.store.dimensions() as u32
+        }
+    }
+}
+
 #[napi]
 pub struct VectorDatabase {
     pub(crate) inner: Arc<RwLock<VectorDatabaseInner>>,
     pub(crate) path: String,
-    pub(crate) dimensions: u32,
     pub(crate) is_persistent: bool,
-    pub(crate) is_multi_vector: bool,
     pub(crate) embedding_fn: Option<Arc<EmbeddingFn>>,
     pub(crate) collections_cache: RwLock<HashMap<String, Arc<RwLock<VectorDatabaseInner>>>>,
 }
@@ -99,7 +116,7 @@ impl VectorDatabase {
             items
         };
 
-        if self.is_multi_vector {
+        if self.live_is_multi_vector() {
             let mut inner = self.inner.write();
             let count = items.len();
 
@@ -453,13 +470,13 @@ impl VectorDatabase {
     /// Get vector dimensions of this database.
     #[napi(getter)]
     pub fn dimensions(&self) -> u32 {
-        self.dimensions
+        self.live_dimensions()
     }
 
     /// Check if this is a multi-vector store.
     #[napi(getter, js_name = "isMultiVector")]
     pub fn is_multi_vector(&self) -> bool {
-        self.is_multi_vector
+        self.live_is_multi_vector()
     }
 
     /// Check if an embedding function is configured.
@@ -480,7 +497,7 @@ impl VectorDatabase {
     pub fn stats(&self) -> StatsResult {
         let inner = self.inner.read();
         StatsResult {
-            dimensions: self.dimensions,
+            dimensions: self.live_dimensions(),
             count: inner.store.len() as u32,
             path: self.path.clone(),
         }
@@ -560,7 +577,7 @@ impl VectorDatabase {
         let mut inner = self.inner.write();
         inner.store.flush().map_err(convert_error)?;
         let dummy_store = VectorStoreOptions::default()
-            .dimensions(self.dimensions as usize)
+            .dimensions(self.live_dimensions() as usize)
             .build()
             .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
         inner.store = dummy_store;

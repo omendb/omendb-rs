@@ -810,7 +810,8 @@ def open(
 
     Args:
         path: Database path, or ":memory:" for in-memory.
-        dimensions: Vector dimensionality.
+        dimensions: Vector dimensionality. Use 0 to infer on first insert for
+            single-vector stores. Multi-vector stores require an explicit value.
         m: HNSW neighbors per node (default: 16, range: 4-64).
         ef_construction: Build quality (default: 100).
         ef_search: Search quality (default: 100).

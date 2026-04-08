@@ -13,7 +13,7 @@ use crate::database::{EmbeddingFn, VectorDatabase, VectorDatabaseInner};
 /// Configuration options for opening a vector database.
 ///
 /// All fields are optional with sensible defaults:
-/// - dimensions: 128 (auto-detected on first insert if not specified)
+/// - dimensions: inferred from first insert when omitted for single-vector stores
 /// - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
 /// - efConstruction: 100 (build quality, higher = better graph, slower build)
 /// - efSearch: 100 (search quality, higher = better recall, slower search)
@@ -21,7 +21,7 @@ use crate::database::{EmbeddingFn, VectorDatabase, VectorDatabaseInner};
 /// - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
 #[napi(object)]
 pub struct OpenOptions {
-    /// Vector dimensions (default: 128, auto-detected on first insert)
+    /// Vector dimensions (default: inferred on first insert for single-vector stores)
     pub dimensions: Option<u32>,
     /// HNSW M parameter: neighbors per node (default: 16, range: 4-64)
     pub m: Option<u32>,
@@ -106,7 +106,7 @@ pub fn open(
 
     let embedding_tsfn = embedding_fn.map(Arc::new);
 
-    let dimensions = opts.dimensions.unwrap_or(128) as usize;
+    let dimensions = opts.dimensions.map_or(0, |v| v as usize);
     let m = opts.m.map(|v| v as usize);
     let ef_construction = opts.ef_construction.map(|v| v as usize);
     let ef_search = opts.ef_search.map(|v| v as usize);
@@ -150,10 +150,10 @@ pub fn open(
         }
     }
 
-    if dimensions == 0 {
+    if is_multi_vector && dimensions == 0 {
         return Err(Error::new(
             Status::InvalidArg,
-            "dimensions must be greater than 0",
+            "dimensions must be greater than 0 for multi-vector stores",
         ));
     }
 
@@ -241,13 +241,10 @@ pub fn open(
                 .enable_text_search_with_config(Some(config))
                 .map_err(convert_error)?;
         }
-
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
-            dimensions: dimensions as u32,
             is_persistent: false,
-            is_multi_vector,
             embedding_fn: embedding_tsfn.clone(),
             collections_cache: RwLock::new(HashMap::new()),
         });
@@ -263,9 +260,13 @@ pub fn open(
     };
 
     if omen_path.exists() {
-        let store = VectorStore::open(&path).map_err(convert_error)?;
+        let mut store = VectorStore::open(&path).map_err(convert_error)?;
+        if let Some(config) = text_search_config.clone() {
+            store
+                .enable_text_search_with_config(Some(config))
+                .map_err(convert_error)?;
+        }
         let is_mv = store.is_multi_vector();
-        let actual_dims = store.dimensions();
 
         if is_multi_vector && !is_mv {
             return Err(Error::new(
@@ -274,18 +275,10 @@ pub fn open(
             ));
         }
 
-        let resolved_dims = if actual_dims > 0 {
-            actual_dims as u32
-        } else {
-            dimensions as u32
-        };
-
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
-            dimensions: resolved_dims,
             is_persistent: true,
-            is_multi_vector: is_mv,
             embedding_fn: embedding_tsfn.clone(),
             collections_cache: RwLock::new(HashMap::new()),
         });
@@ -307,13 +300,10 @@ pub fn open(
                 .enable_text_search_with_config(Some(config))
                 .map_err(convert_error)?;
         }
-
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path,
-            dimensions: dimensions as u32,
             is_persistent: true,
-            is_multi_vector: true,
             embedding_fn: embedding_tsfn.clone(),
             collections_cache: RwLock::new(HashMap::new()),
         });
@@ -335,13 +325,10 @@ pub fn open(
             .enable_text_search_with_config(Some(config))
             .map_err(convert_error)?;
     }
-
     Ok(VectorDatabase {
         inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
         path,
-        dimensions: dimensions as u32,
         is_persistent: true,
-        is_multi_vector: false,
         embedding_fn: embedding_tsfn,
         collections_cache: RwLock::new(HashMap::new()),
     })

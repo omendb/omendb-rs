@@ -59,6 +59,24 @@ def test_dimensions_parameter(temp_db_path):
         assert len(results) == 1
 
 
+def test_dimensions_can_infer_from_first_insert():
+    """Single-vector stores should preserve 0-dim inference at open time."""
+    db = omendb.open(":memory:")
+    assert db.dimensions == 0
+
+    db.set([{"id": "v1", "vector": [0.1, 0.2, 0.3], "metadata": {}}])
+
+    assert db.dimensions == 3
+    results = db.search([0.1, 0.2, 0.3], k=1)
+    assert len(results) == 1
+
+
+def test_multi_vector_requires_dimensions():
+    """Multi-vector stores should still require explicit token dimensions."""
+    with pytest.raises((TypeError, ValueError)):
+        omendb.open(":memory:", multi_vector=True)
+
+
 def test_config_persistence(temp_db_path):
     """Configured HNSW settings should persist across reopen."""
     db = omendb.open(
