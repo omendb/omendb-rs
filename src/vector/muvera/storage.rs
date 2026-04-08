@@ -230,6 +230,36 @@ impl MultiVecStorage {
         })
     }
 
+    /// Build helper storage from slot-indexed token payloads.
+    #[must_use]
+    pub fn from_slot_tokens(dim: usize, payloads: &[(u32, Vec<Vec<f32>>)]) -> Self {
+        if payloads.is_empty() {
+            return Self::new(dim);
+        }
+
+        let max_slot = payloads.iter().map(|(slot, _)| *slot as usize).max().unwrap_or(0);
+        let mut storage = Self {
+            vectors: Vec::new(),
+            offsets: vec![(0, 0); max_slot + 1],
+            dim,
+        };
+
+        let mut sorted = payloads.to_vec();
+        sorted.sort_unstable_by_key(|(slot, _)| *slot);
+
+        for (slot, tokens) in sorted {
+            let start = (storage.vectors.len() / dim) as u32;
+            let count = u16::try_from(tokens.len()).expect("token count fits u16");
+            for token in &tokens {
+                debug_assert_eq!(token.len(), dim);
+                storage.vectors.extend_from_slice(token);
+            }
+            storage.offsets[slot as usize] = (start, count);
+        }
+
+        storage
+    }
+
     /// Remap slots after RecordStore compaction, reclaiming orphaned token data.
     ///
     /// `old_to_new` maps old_slot -> new_slot for live records only.

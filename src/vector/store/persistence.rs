@@ -111,6 +111,16 @@ impl VectorStore {
                     }
                 }
             }
+            let ancillary = if let Some(ref encoder) = ancillary.muvera_encoder {
+                let rebuilt =
+                    MultiVecStorage::from_slot_tokens(encoder.token_dimension(), &records.iter_multi());
+                AncillaryIndexes {
+                    multivec_storage: Some(rebuilt),
+                    ..ancillary
+                }
+            } else {
+                ancillary
+            };
             (
                 records,
                 engine,
@@ -973,7 +983,7 @@ impl VectorStore {
                 };
                 let encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
 
-                // Reconstruct storage from persisted bytes
+                // Load persisted helper bytes, then rebuild helper state from RecordStore.
                 let token_dim = mv_cfg.token_dim;
                 let storage = match (&snapshot.multivec_bytes, &snapshot.multivec_offsets) {
                     (Some(vec_bytes), Some(off_bytes)) => {
@@ -1102,14 +1112,14 @@ impl VectorStore {
         let metadata_index_bytes = Some(self.metadata_index.read().to_bytes()?);
 
         // Export multi-vector data if present
-        let multivec_guard = self.multivec_storage.read();
-        let (multivec_bytes, multivec_offsets, multivec_config) = if let (Some(mvs), Some(enc)) =
-            (multivec_guard.as_ref(), self.muvera_encoder.as_ref())
-        {
+        let (multivec_bytes, multivec_offsets, multivec_config) =
+            if let Some(enc) = self.muvera_encoder.as_ref() {
+            let helper =
+                MultiVecStorage::from_slot_tokens(enc.token_dimension(), &self.records.iter_multi());
             let config = enc.config();
             (
-                Some(mvs.vectors_to_bytes()),
-                Some(mvs.offsets_to_bytes()),
+                Some(helper.vectors_to_bytes()),
+                Some(helper.offsets_to_bytes()),
                 Some(PersistedMuveraConfig {
                     repetitions: config.repetitions,
                     partition_bits: config.partition_bits,
@@ -1120,9 +1130,9 @@ impl VectorStore {
                     max_tokens: config.max_tokens,
                 }),
             )
-        } else {
-            (None, None, None)
-        };
+            } else {
+                (None, None, None)
+            };
 
         // Export sparse index if present
         let sparse_payloads = self.records.iter_sparse();
