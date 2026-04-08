@@ -1,14 +1,13 @@
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
-use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::vector::{Vector, VectorStore, VectorStoreOptions};
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::conversions::convert_error;
+use crate::conversions::{convert_error, parse_text_search_config};
 use crate::filters::parse_filter;
 use crate::types::{GetResult, InfoResult, SetItem, StatsResult};
 
@@ -222,31 +221,21 @@ impl VectorDatabase {
         }
     }
 
-    /// Enable text search with optional buffer and tokenizer configuration.
+    /// Enable text search with optional typed text-search configuration.
     ///
-    /// @param bufferMb - Writer buffer size in MB (default: 50)
-    /// @param tokenizer - Tokenizer preset: "default", "code", or "raw"
+    /// @param config - Optional text search config with buffer and tokenizer
     #[napi(js_name = "enableTextSearch")]
     pub fn enable_text_search(
         &self,
-        buffer_mb: Option<u32>,
-        tokenizer: Option<String>,
+        #[napi(ts_arg_type = "{ bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null")]
+        config: Option<JsonValue>,
     ) -> Result<()> {
         let mut inner = self.inner.write();
-
-        let config = match (buffer_mb, tokenizer) {
-            (None, None) => None,
-            (buffer_mb, tokenizer) => {
-                let tokenizer = match tokenizer {
-                    Some(name) => TokenizerPreset::parse(&name).map_err(convert_error)?,
-                    None => TokenizerPreset::default(),
-                };
-                Some(TextSearchConfig {
-                    writer_buffer_mb: buffer_mb.unwrap_or(50) as usize,
-                    tokenizer,
-                })
-            }
-        };
+        let config = config
+            .as_ref()
+            .map(parse_text_search_config)
+            .transpose()?
+            .flatten();
 
         inner
             .store

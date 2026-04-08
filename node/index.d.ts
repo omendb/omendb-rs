@@ -30,12 +30,11 @@ export declare class VectorDatabase {
    */
   set(items: Array<SetItem>): Promise<number>
   /**
-   * Enable text search with optional buffer and tokenizer configuration.
+   * Enable text search with optional typed text-search configuration.
    *
-   * @param bufferMb - Writer buffer size in MB (default: 50)
-   * @param tokenizer - Tokenizer preset: "default", "code", or "raw"
+   * @param config - Optional text search config with buffer and tokenizer
    */
-  enableTextSearch(bufferMb?: number | undefined | null, tokenizer?: string | undefined | null): void
+  enableTextSearch(config?: { bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null): void
   /** Get a vector by ID. */
   get(id: string): GetResult | null
   /**

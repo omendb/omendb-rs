@@ -204,6 +204,10 @@ class VectorDatabase {
 		return this._native.searchBatch(queries, k, ef);
 	}
 
+	enableTextSearch(config) {
+		return this._native.enableTextSearch(config ?? null);
+	}
+
 	get(id) {
 		return this._native.get(id);
 	}

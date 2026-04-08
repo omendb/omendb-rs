@@ -49,7 +49,7 @@ pub(crate) fn build_store_options(
     Ok(options)
 }
 
-fn parse_text_search_config(
+pub(crate) fn parse_text_search_config(
     text_search: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<TextSearchConfig>> {
     let Some(value) = text_search else {

@@ -3,7 +3,7 @@ use crate::conversions::{
 };
 use crate::database::VectorDatabase;
 use crate::filters::parse_filter;
-use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
+use crate::open::parse_text_search_config;
 use omendb_lib::vector::Vector;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -15,35 +15,20 @@ impl VectorDatabase {
     /// Enable text search for hybrid (vector + text) search.
     ///
     /// Note: This is called automatically when using set() with items that have
-    /// a `text` field. Only call manually if you need custom buffer_mb config.
+    /// a `text` field. Only call manually if you need custom text-search config.
     ///
     /// Args:
-    ///     buffer_mb (int, optional): Writer buffer size in MB (default: 50)
-    ///     tokenizer (str, optional): Tokenizer preset: "default", "code", or "raw"
+    ///     config (dict, optional): Text search config with:
+    ///         - buffer_mb / writer_buffer_mb: Writer buffer size in MB (default: 50)
+    ///         - tokenizer: Tokenizer preset: "default", "code", or "raw"
     ///
     /// Examples:
-    ///     >>> db.enable_text_search(buffer_mb=100)  # For high-throughput
-    #[pyo3(name = "enable_text_search", signature = (buffer_mb=None, tokenizer=None))]
-    fn enable_text_search(
-        &self,
-        buffer_mb: Option<usize>,
-        tokenizer: Option<&str>,
-    ) -> PyResult<()> {
+    ///     >>> db.enable_text_search({"buffer_mb": 100})
+    ///     >>> db.enable_text_search({"tokenizer": "code"})
+    #[pyo3(name = "enable_text_search", signature = (config=None))]
+    fn enable_text_search(&self, config: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         let mut inner = self.inner.write();
-
-        let config = match (buffer_mb, tokenizer) {
-            (None, None) => None,
-            (buffer_mb, tokenizer) => {
-                let tokenizer = match tokenizer {
-                    Some(name) => TokenizerPreset::parse(name).map_err(convert_error)?,
-                    None => TokenizerPreset::default(),
-                };
-                Some(TextSearchConfig {
-                    writer_buffer_mb: buffer_mb.unwrap_or(50),
-                    tokenizer,
-                })
-            }
-        };
+        let config = parse_text_search_config(config)?;
 
         inner
             .store

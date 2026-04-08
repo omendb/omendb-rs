@@ -131,6 +131,8 @@ db.search_batch(queries, k)             # Batch search (parallel)
 db.search_hybrid(query_vector, query_text, k)
 db.search_hybrid("query text", k=10)    # String query (auto-embeds both)
 db.search_text(query_text, k)           # Text-only BM25
+db.enable_text_search()                 # Default text-search config
+db.enable_text_search({"tokenizer": "code", "buffer_mb": 64})
 
 # Iteration
 len(db)                                 # Count
