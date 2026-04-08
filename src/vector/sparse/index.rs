@@ -47,15 +47,12 @@ impl PostingList {
 ///
 /// Supports exact top-k dot product search via score accumulation.
 /// At OmenDB's target scale (1K-100K), exact search completes in <2ms.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SparseIndex {
     /// dim_id -> posting list
     postings: HashMap<u32, PostingList>,
-    /// slot -> original sparse vector (for delete/update)
-    vectors: HashMap<u32, SparseVector>,
-    /// Legacy field kept for serialization compatibility. Derived from vectors.len().
-    #[serde(default)]
-    len: usize,
+    /// Indexed slots.
+    slots: RoaringBitmap,
 }
 
 impl SparseIndex {
@@ -64,40 +61,28 @@ impl SparseIndex {
     pub fn new() -> Self {
         Self {
             postings: HashMap::new(),
-            vectors: HashMap::new(),
-            len: 0,
+            slots: RoaringBitmap::new(),
         }
     }
 
     /// Number of indexed vectors.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.vectors.len()
+        self.slots.len() as usize
     }
 
     /// Check if index is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.vectors.is_empty()
-    }
-
-    /// Get the sparse vector for a given slot, if it exists.
-    #[must_use]
-    pub fn get(&self, slot: u32) -> Option<&SparseVector> {
-        self.vectors.get(&slot)
-    }
-
-    /// Iterate over all (slot, sparse_vector) pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (u32, &SparseVector)> {
-        self.vectors.iter().map(|(&slot, vec)| (slot, vec))
+        self.slots.is_empty()
     }
 
     /// Insert a sparse vector at the given slot.
     ///
     /// If the slot already exists, the old vector is removed first (upsert).
     pub fn insert(&mut self, slot: u32, vector: &SparseVector) {
-        // Remove old vector if updating
-        if self.vectors.contains_key(&slot) {
+        // Remove old postings if updating
+        if self.slots.contains(slot) {
             self.remove(slot);
         }
 
@@ -115,35 +100,28 @@ impl SparseIndex {
                 .push(slot, weight);
         }
 
-        // Store original vector for future removal
-        self.vectors.insert(slot, vector.clone());
-        self.len = self.vectors.len();
+        self.slots.insert(slot);
     }
 
     /// Remove a vector by slot ID.
     ///
     /// Returns true if the vector was found and removed.
     pub fn remove(&mut self, slot: u32) -> bool {
-        let vector = match self.vectors.remove(&slot) {
-            Some(v) => v,
-            None => return false,
-        };
+        if !self.slots.contains(slot) {
+            return false;
+        }
 
-        // Collect empty dims to remove in a second pass
+        self.slots.remove(slot);
         let mut empty_dims: Vec<u32> = Vec::new();
-        for &dim in vector.indices() {
-            if let Some(posting) = self.postings.get_mut(&dim) {
-                posting.remove(slot);
-                if posting.elements.is_empty() {
-                    empty_dims.push(dim);
-                }
+        for (&dim, posting) in &mut self.postings {
+            posting.remove(slot);
+            if posting.elements.is_empty() {
+                empty_dims.push(dim);
             }
         }
         for dim in empty_dims {
             self.postings.remove(&dim);
         }
-
-        self.len = self.vectors.len();
         true
     }
 
@@ -204,24 +182,21 @@ impl SparseIndex {
     /// Used when `RecordStore::upsert` creates a new slot for an existing ID.
     /// Returns true if the entry was found and remapped.
     pub fn remap_slot(&mut self, old_slot: u32, new_slot: u32) -> bool {
-        let vector = match self.vectors.remove(&old_slot) {
-            Some(v) => v,
-            None => return false,
-        };
+        if !self.slots.contains(old_slot) {
+            return false;
+        }
 
         // Update slot IDs in posting lists
-        for &dim in vector.indices() {
-            if let Some(posting) = self.postings.get_mut(&dim) {
-                for entry in &mut posting.elements {
-                    if entry.id == old_slot {
-                        entry.id = new_slot;
-                        break;
-                    }
+        for posting in self.postings.values_mut() {
+            for entry in &mut posting.elements {
+                if entry.id == old_slot {
+                    entry.id = new_slot;
                 }
             }
         }
 
-        self.vectors.insert(new_slot, vector);
+        self.slots.remove(old_slot);
+        self.slots.insert(new_slot);
         true
     }
 
@@ -245,30 +220,48 @@ impl SparseIndex {
         }
         self.postings = new_postings;
 
-        // Rebuild vectors map with new slot IDs, consuming old data
-        let old_vectors = std::mem::take(&mut self.vectors);
-        let mut new_vectors: HashMap<u32, SparseVector> = HashMap::new();
-        for (old_slot, vector) in old_vectors {
-            if let Some(&new_slot) = old_to_new.get(&old_slot) {
-                new_vectors.insert(new_slot, vector);
-            }
-        }
-        self.vectors = new_vectors;
-        self.len = self.vectors.len();
+        self.slots = old_to_new.values().copied().collect();
     }
 
     /// Serialize to bytes (postcard format).
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        postcard::to_allocvec(self).map_err(|e| anyhow::anyhow!("SparseIndex serialize: {e}"))
+        let persisted = PersistedSparseIndex {
+            postings: self.postings.clone(),
+            payloads: HashMap::new(),
+            len: self.len(),
+        };
+        postcard::to_allocvec(&persisted).map_err(|e| anyhow::anyhow!("SparseIndex serialize: {e}"))
+    }
+
+    /// Serialize to bytes with sparse payloads for recovery.
+    pub fn to_bytes_with_payloads(
+        &self,
+        payloads: impl IntoIterator<Item = (u32, SparseVector)>,
+    ) -> Result<Vec<u8>> {
+        let persisted = PersistedSparseIndex {
+            postings: self.postings.clone(),
+            payloads: payloads.into_iter().collect(),
+            len: self.len(),
+        };
+        postcard::to_allocvec(&persisted).map_err(|e| anyhow::anyhow!("SparseIndex serialize: {e}"))
     }
 
     /// Deserialize from bytes (postcard format).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut index: Self = postcard::from_bytes(bytes)
+        let persisted: PersistedSparseIndex = postcard::from_bytes(bytes)
+            .map_err(|e| anyhow::anyhow!("SparseIndex deserialize: {e}"))?;
+        Ok(Self {
+            slots: derive_slots(&persisted.postings, &persisted.payloads, persisted.len),
+            postings: persisted.postings,
+        })
+    }
+
+    /// Deserialize from bytes and return sparse payloads for RecordStore recovery.
+    pub fn from_bytes_with_payloads(bytes: &[u8]) -> Result<(Self, HashMap<u32, SparseVector>)> {
+        let persisted: PersistedSparseIndex = postcard::from_bytes(bytes)
             .map_err(|e| anyhow::anyhow!("SparseIndex deserialize: {e}"))?;
 
-        // Validate embedded vectors
-        for (slot, sv) in &index.vectors {
+        for (slot, sv) in &persisted.payloads {
             if sv.indices().len() != sv.values().len() {
                 anyhow::bail!(
                     "Corrupted SparseIndex: vector at slot {slot} has mismatched lengths"
@@ -290,10 +283,14 @@ impl SparseIndex {
             }
         }
 
-        // Sync len from vectors (len field is legacy)
-        index.len = index.vectors.len();
-
-        Ok(index)
+        let slots = derive_slots(&persisted.postings, &persisted.payloads, persisted.len);
+        Ok((
+            Self {
+                postings: persisted.postings,
+                slots,
+            },
+            persisted.payloads,
+        ))
     }
 }
 
@@ -325,4 +322,33 @@ fn top_k_from_scores(scores: HashMap<u32, f32>, k: usize) -> Vec<(u32, f32)> {
         .collect();
     results.sort_by(|a, b| b.1.total_cmp(&a.1));
     results
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedSparseIndex {
+    postings: HashMap<u32, PostingList>,
+    #[serde(default)]
+    payloads: HashMap<u32, SparseVector>,
+    #[serde(default)]
+    len: usize,
+}
+
+fn derive_slots(
+    postings: &HashMap<u32, PostingList>,
+    payloads: &HashMap<u32, SparseVector>,
+    legacy_len: usize,
+) -> RoaringBitmap {
+    if !payloads.is_empty() {
+        return payloads.keys().copied().collect();
+    }
+
+    let mut slots = RoaringBitmap::new();
+    for posting in postings.values() {
+        for entry in &posting.elements {
+            slots.insert(entry.id);
+        }
+    }
+
+    debug_assert!(legacy_len == 0 || slots.len() as usize == legacy_len);
+    slots
 }

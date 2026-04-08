@@ -102,12 +102,6 @@ impl VectorStore {
                 &wal_edge_deletes,
                 ctx.distance_metric,
             )?;
-            if let Some(ref sparse_index) = ancillary.sparse_index {
-                for (slot, sparse) in sparse_index.iter() {
-                    records.update_sparse(slot, Some(sparse.clone()))?;
-                }
-            }
-
             (
                 records,
                 engine,
@@ -999,8 +993,11 @@ impl VectorStore {
             .sparse_index_bytes
             .as_deref()
             .map(|bytes| {
-                let index = crate::vector::sparse::SparseIndex::from_bytes(bytes)
+                let (index, payloads) = crate::vector::sparse::SparseIndex::from_bytes_with_payloads(bytes)
                     .map_err(|e| anyhow::anyhow!("Failed to deserialize SparseIndex: {e}"))?;
+                for (slot, sparse) in payloads {
+                    records.update_sparse(slot, Some(sparse))?;
+                }
                 tracing::info!(vectors = index.len(), "Loaded SparseIndex from disk");
                 Ok::<_, anyhow::Error>(index)
             })
@@ -1119,11 +1116,12 @@ impl VectorStore {
         };
 
         // Export sparse index if present
+        let sparse_payloads = self.records.iter_sparse();
         let sparse_index_bytes = self
             .sparse_index
             .read()
             .as_ref()
-            .map(SparseIndex::to_bytes)
+            .map(|index| index.to_bytes_with_payloads(sparse_payloads))
             .transpose()?;
 
         // Export edge store if present

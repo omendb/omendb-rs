@@ -187,9 +187,7 @@ impl VectorStore {
         }
 
         // Copy sparse vectors for merged IDs
-        if let Some(other_sparse) = other.sparse_index.read().as_ref()
-            && !other_sparse.is_empty()
-        {
+        if other.has_sparse() {
             if self.sparse_index.read().is_none() {
                 *self.sparse_index.write() = Some(crate::vector::sparse::SparseIndex::new());
             }
@@ -198,10 +196,11 @@ impl VectorStore {
                 .as_mut()
                 .expect("sparse_index was just initialized");
             for (other_slot, id) in &merged_slots {
-                if let Some(sv) = other_sparse.get(*other_slot)
+                if let Some(sv) = other.records.get_sparse(*other_slot)
                     && let Some(new_slot) = self.records.get_slot(id)
                 {
-                    self_sparse.insert(new_slot, sv);
+                    self.records.update_sparse(new_slot, Some(sv.clone()))?;
+                    self_sparse.insert(new_slot, &sv);
                 }
             }
         }

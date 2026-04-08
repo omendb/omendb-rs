@@ -471,6 +471,26 @@ impl RecordStore {
             .and_then(|record| record.sparse.clone())
     }
 
+    /// Iterate cloned sparse payloads keyed by slot.
+    pub fn iter_sparse(&self) -> Vec<(u32, SparseVector)> {
+        let deleted = self.deleted.read().clone();
+        self.slots
+            .read()
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, record)| {
+                let slot = slot as u32;
+                if deleted.contains(slot) {
+                    return None;
+                }
+                record
+                    .as_ref()
+                    .and_then(|record| record.sparse.clone())
+                    .map(|sparse| (slot, sparse))
+            })
+            .collect()
+    }
+
     /// Export vector references for checkpoint (returns owned copy for stability)
     pub fn export_vectors(&self) -> Vec<Option<Vec<f32>>> {
         let slots = self.slots.read();
