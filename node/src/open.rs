@@ -32,7 +32,7 @@ pub struct OpenOptions {
     /// Quantization mode (default: null = no quantization)
     /// - true or "sq8": SQ8 4x compression, ~99% recall (RECOMMENDED)
     /// - false/null: Full precision (no quantization)
-    #[napi(ts_type = "boolean | string | number | null | undefined")]
+    #[napi(ts_type = "boolean | 'sq8' | 'scalar' | null | undefined")]
     pub quantization: Option<serde_json::Value>,
     /// Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip"
     pub metric: Option<String>,
@@ -42,7 +42,7 @@ pub struct OpenOptions {
     /// - dProj: Dimension projection (16 = 8x smaller FDE, null = full token dim)
     /// - false/null: Disabled (default, single-vector mode)
     #[napi(
-        ts_type = "boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null } | null | undefined"
+        ts_type = "boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null; poolFactor?: number | null } | null | undefined"
     )]
     pub multi_vector: Option<serde_json::Value>,
     /// SQ8 refiner: rescore with full precision (default: true when quantized)
@@ -51,9 +51,9 @@ pub struct OpenOptions {
     pub oversample: Option<f64>,
     /// Enable text search at open time.
     /// - true: default buffer/tokenizer
-    /// - { bufferMb?, tokenizer? }: custom text config
+    /// - { bufferMb?, writerBufferMb?, tokenizer? }: custom text config
     /// - false/null: disabled
-    #[napi(ts_type = "boolean | { bufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null | undefined")]
+    #[napi(ts_type = "boolean | { bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null | undefined")]
     pub text_search: Option<serde_json::Value>,
 }
 

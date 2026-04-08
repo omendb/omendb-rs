@@ -688,6 +688,12 @@ describe("VectorDatabase", () => {
 			expect(() => open(":memory:", { dimensions: 128, m: 100 })).toThrow();
 		});
 
+		it("should reject numeric quantization modes", () => {
+			expect(() =>
+				open(":memory:", { dimensions: 128, quantization: 8 as never })
+			).toThrow(/quantization/);
+		});
+
 		it("should reject empty collection name", () => {
 			const db = open(":memory:", { dimensions: 128 });
 			// Collections require persistent storage
