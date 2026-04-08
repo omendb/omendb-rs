@@ -38,6 +38,19 @@ impl VectorData {
     }
 }
 
+#[derive(Debug, Clone)]
+enum StoredVectorData {
+    Owned(Vec<f32>),
+    Mmap { mmap_id: usize, offset: usize, len: usize },
+}
+
+#[derive(Debug, Clone)]
+struct StoredRecord {
+    id: String,
+    vector: StoredVectorData,
+    metadata: Option<JsonValue>,
+}
+
 /// A single record in the store
 #[derive(Debug, Clone)]
 pub struct Record {
@@ -105,10 +118,13 @@ impl Record {
 #[derive(Debug)]
 pub struct RecordStore {
     /// Slot-based storage - Some(record) for live, None for deleted/empty
-    slots: RwLock<Vec<Option<Record>>>,
+    slots: RwLock<Vec<Option<StoredRecord>>>,
 
     /// Single deleted bitmap (RoaringBitmap for O(1) operations)
     deleted: RwLock<RoaringBitmap>,
+
+    /// Shared mmap ownership for all mmap-backed vectors in the store.
+    mmaps: RwLock<Vec<Arc<Mmap>>>,
 
     /// Single ID to slot mapping - Thread-safe for concurrent lookups
     id_to_slot: DashMap<String, u32, BuildHasherDefault<FxHasher>>,
@@ -129,6 +145,7 @@ impl RecordStore {
         Self {
             slots: RwLock::new(Vec::new()),
             deleted: RwLock::new(RoaringBitmap::new()),
+            mmaps: RwLock::new(Vec::new()),
             id_to_slot: DashMap::default(),
             live_count: AtomicU32::new(0),
             dimensions: AtomicU32::new(dimensions),
@@ -142,29 +159,16 @@ impl RecordStore {
         deleted: RoaringBitmap,
         dimensions: u32,
     ) -> Self {
-        // Rebuild id_to_slot mapping from slots
-        let id_to_slot = DashMap::default();
-        let mut live_count = 0u32;
-
-        for (slot, record_opt) in slots.iter().enumerate() {
-            let slot = slot as u32;
-            if deleted.contains(slot) {
-                continue;
-            }
-            if let Some(record) = record_opt {
-                id_to_slot.insert(record.id.clone(), slot);
-                live_count += 1;
-            }
-        }
-
-        Self {
-            slots: RwLock::new(slots),
-            deleted: RwLock::new(deleted),
-            id_to_slot,
-            live_count: AtomicU32::new(live_count),
-            dimensions: AtomicU32::new(dimensions),
-            dirty_slots: RwLock::new(RoaringBitmap::new()),
-        }
+        let store = Self::new(dimensions);
+        let stored_slots: Vec<Option<StoredRecord>> = slots
+            .into_iter()
+            .map(|record| record.map(|record| store.store_record(record)))
+            .collect();
+        let live_count = store.rebuild_indexes_from_slots(&stored_slots, &deleted);
+        *store.slots.write() = stored_slots;
+        *store.deleted.write() = deleted;
+        store.live_count.store(live_count, Ordering::SeqCst);
+        store
     }
 
     /// Restore internal state from snapshot data (used during recovery)
@@ -174,19 +178,13 @@ impl RecordStore {
         deleted: RoaringBitmap,
         live_count: u32,
     ) {
-        // Rebuild id_to_slot mapping from slots
+        let stored_slots: Vec<Option<StoredRecord>> = slots
+            .into_iter()
+            .map(|record| record.map(|record| self.store_record(record)))
+            .collect();
         self.id_to_slot.clear();
-        for (slot, record_opt) in slots.iter().enumerate() {
-            let slot = slot as u32;
-            if deleted.contains(slot) {
-                continue;
-            }
-            if let Some(record) = record_opt {
-                self.id_to_slot.insert(record.id.clone(), slot);
-            }
-        }
-
-        *self.slots.write() = slots;
+        self.rebuild_indexes_from_slots(&stored_slots, &deleted);
+        *self.slots.write() = stored_slots;
         *self.deleted.write() = deleted;
         self.live_count.store(live_count, Ordering::SeqCst);
     }
@@ -242,7 +240,11 @@ impl RecordStore {
         // Insert at new slot
         let mut slots = self.slots.write();
         let slot = slots.len() as u32;
-        slots.push(Some(Record::new(id.clone(), vector, metadata)));
+        slots.push(Some(StoredRecord {
+            id: id.clone(),
+            vector: StoredVectorData::Owned(vector),
+            metadata,
+        }));
         self.id_to_slot.insert(id, slot);
         self.live_count.fetch_add(1, Ordering::Relaxed);
         self.dirty_slots.write().insert(slot);
@@ -276,7 +278,8 @@ impl RecordStore {
         self.slots
             .read()
             .get(slot as usize)
-            .and_then(std::clone::Clone::clone)
+            .and_then(|record| record.as_ref())
+            .map(|record| self.materialize_record(record))
     }
 
     /// Get a record by slot index
@@ -287,7 +290,8 @@ impl RecordStore {
         self.slots
             .read()
             .get(slot as usize)
-            .and_then(std::clone::Clone::clone)
+            .and_then(|record| record.as_ref())
+            .map(|record| self.materialize_record(record))
     }
 
     /// Get just the search result fields for a slot.
@@ -367,6 +371,7 @@ impl RecordStore {
     pub fn iter_live(&self) -> impl Iterator<Item = (u32, Record)> {
         let slots = self.slots.read().clone();
         let deleted = self.deleted.read().clone();
+        let mmaps = self.mmaps.read().clone();
 
         slots
             .into_iter()
@@ -376,7 +381,12 @@ impl RecordStore {
                 if deleted.contains(slot) {
                     return None;
                 }
-                record_opt.map(|r| (slot, r))
+                record_opt.map(|record| {
+                    (
+                        slot,
+                        RecordStore::materialize_record_from_parts(&mmaps, &record),
+                    )
+                })
             })
     }
 
@@ -400,10 +410,13 @@ impl RecordStore {
 
     /// Export vector references for checkpoint (returns owned copy for stability)
     pub fn export_vectors(&self) -> Vec<Option<Vec<f32>>> {
-        self.slots
-            .read()
+        let slots = self.slots.read();
+        slots
             .iter()
-            .map(|opt| opt.as_ref().map(|r| r.vector.to_vec()))
+            .map(|opt| {
+                opt.as_ref()
+                    .map(|record| self.materialize_vector(&record.vector).to_vec())
+            })
             .collect()
     }
 
@@ -427,7 +440,7 @@ impl RecordStore {
             .read()
             .iter()
             .enumerate()
-            .filter_map(|(slot, opt): (usize, &Option<Record>)| {
+            .filter_map(|(slot, opt): (usize, &Option<StoredRecord>)| {
                 opt.as_ref()
                     .and_then(|r| r.metadata.clone())
                     .map(|m| (slot as u32, m))
@@ -451,7 +464,7 @@ impl RecordStore {
             .read()
             .get(slot as usize)?
             .as_ref()
-            .map(|r| r.vector.clone())
+            .map(|record| self.materialize_vector(&record.vector))
     }
 
     /// Borrow vector data for a slot while holding the slot lock.
@@ -461,10 +474,8 @@ impl RecordStore {
     /// to the dense engine.
     pub fn with_vector_by_slot<T>(&self, slot: u32, f: impl FnOnce(Option<&[f32]>) -> T) -> T {
         let slots = self.slots.read();
-        let vector = slots
-            .get(slot as usize)
-            .and_then(|record| record.as_ref().map(|r| r.vector.as_slice()));
-        f(vector)
+        let record = slots.get(slot as usize).and_then(|record| record.as_ref());
+        self.with_record_slice(record, f)
     }
 
     /// Borrow vector slices for a list of slots while holding the slot lock.
@@ -472,12 +483,14 @@ impl RecordStore {
     /// The slices are only valid for the duration of the callback.
     pub fn with_vectors_by_slots<T>(&self, slots: &[u32], f: impl FnOnce(Vec<&[f32]>) -> T) -> T {
         let records = self.slots.read();
+        let mmaps = self.mmaps.read();
         let vectors = slots
             .iter()
             .filter_map(|&slot| {
                 records
                     .get(slot as usize)
-                    .and_then(|record| record.as_ref().map(|r| r.vector.as_slice()))
+                    .and_then(|record| record.as_ref())
+                    .map(|record| Self::stored_vector_as_slice(&mmaps, &record.vector))
             })
             .collect();
         f(vectors)
@@ -486,7 +499,7 @@ impl RecordStore {
     /// Compact the store - removes deleted records and reassigns slots
     pub fn compact(&self) -> FxHashMap<u32, u32> {
         let mut old_to_new: FxHashMap<u32, u32> = FxHashMap::default();
-        let mut new_slots: Vec<Option<Record>> = Vec::with_capacity(self.len() as usize);
+        let mut new_slots: Vec<Option<StoredRecord>> = Vec::with_capacity(self.len() as usize);
         let mut new_id_to_slot: Vec<(String, u32)> = Vec::with_capacity(self.len() as usize);
 
         let slots = self.slots.read();
@@ -519,6 +532,110 @@ impl RecordStore {
         *self.dirty_slots.write() = (0..self.slots.read().len() as u32).collect();
 
         old_to_new
+    }
+
+    fn rebuild_indexes_from_slots(
+        &self,
+        slots: &[Option<StoredRecord>],
+        deleted: &RoaringBitmap,
+    ) -> u32 {
+        let mut live_count = 0u32;
+        for (slot, record_opt) in slots.iter().enumerate() {
+            let slot = slot as u32;
+            if deleted.contains(slot) {
+                continue;
+            }
+            if let Some(record) = record_opt {
+                self.id_to_slot.insert(record.id.clone(), slot);
+                live_count += 1;
+            }
+        }
+        live_count
+    }
+
+    fn store_record(&self, record: Record) -> StoredRecord {
+        StoredRecord {
+            id: record.id,
+            vector: self.store_vector(record.vector),
+            metadata: record.metadata,
+        }
+    }
+
+    fn store_vector(&self, vector: VectorData) -> StoredVectorData {
+        match vector {
+            VectorData::Owned(vector) => StoredVectorData::Owned(vector),
+            VectorData::Mmap(mmap, offset, len) => StoredVectorData::Mmap {
+                mmap_id: self.add_mmap(mmap),
+                offset,
+                len,
+            },
+        }
+    }
+
+    fn add_mmap(&self, mmap: Arc<Mmap>) -> usize {
+        let mut mmaps = self.mmaps.write();
+        if let Some(idx) = mmaps.iter().position(|existing| Arc::ptr_eq(existing, &mmap)) {
+            idx
+        } else {
+            let idx = mmaps.len();
+            mmaps.push(mmap);
+            idx
+        }
+    }
+
+    fn materialize_record(&self, record: &StoredRecord) -> Record {
+        let mmaps = self.mmaps.read();
+        Self::materialize_record_from_parts(&mmaps, record)
+    }
+
+    fn materialize_record_from_parts(mmaps: &[Arc<Mmap>], record: &StoredRecord) -> Record {
+        Record {
+            id: record.id.clone(),
+            vector: Self::materialize_vector_from_parts(mmaps, &record.vector),
+            metadata: record.metadata.clone(),
+        }
+    }
+
+    fn materialize_vector(&self, vector: &StoredVectorData) -> VectorData {
+        let mmaps = self.mmaps.read();
+        Self::materialize_vector_from_parts(&mmaps, vector)
+    }
+
+    fn materialize_vector_from_parts(mmaps: &[Arc<Mmap>], vector: &StoredVectorData) -> VectorData {
+        match vector {
+            StoredVectorData::Owned(vector) => VectorData::Owned(vector.clone()),
+            StoredVectorData::Mmap {
+                mmap_id,
+                offset,
+                len,
+            } => VectorData::Mmap(mmaps[*mmap_id].clone(), *offset, *len),
+        }
+    }
+
+    fn with_record_slice<T>(
+        &self,
+        record: Option<&StoredRecord>,
+        f: impl FnOnce(Option<&[f32]>) -> T,
+    ) -> T {
+        if let Some(record) = record {
+            let mmaps = self.mmaps.read();
+            f(Some(Self::stored_vector_as_slice(&mmaps, &record.vector)))
+        } else {
+            f(None)
+        }
+    }
+
+    fn stored_vector_as_slice<'a>(mmaps: &'a [Arc<Mmap>], vector: &'a StoredVectorData) -> &'a [f32] {
+        match vector {
+            StoredVectorData::Owned(vector) => vector.as_slice(),
+            StoredVectorData::Mmap {
+                mmap_id,
+                offset,
+                len,
+            } => unsafe {
+                std::slice::from_raw_parts(mmaps[*mmap_id].as_ptr().add(*offset).cast::<f32>(), *len)
+            },
+        }
     }
 }
 
