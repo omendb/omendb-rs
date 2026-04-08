@@ -101,8 +101,8 @@ impl VectorDatabase {
             let token_dim = parent_token_dimension
                 .unwrap_or(parent_dimensions)
                 .max(current_dimensions as usize);
-            let config = parent_multi_config
-                .expect("multi-vector parent should expose multi-vector config");
+            let config =
+                parent_multi_config.expect("multi-vector parent should expose multi-vector config");
             VectorStore::multi_vector_with(token_dim, config)
                 .map_err(crate::conversions::convert_error)?
                 .persist(&collection_path)

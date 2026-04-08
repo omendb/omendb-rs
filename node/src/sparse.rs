@@ -1,7 +1,7 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use omendb_lib::vector::sparse::SparseVector;
 use omendb_lib::vector::Vector;
+use omendb_lib::vector::sparse::SparseVector;
 use serde_json::Value as JsonValue;
 
 use crate::conversions::convert_error;
@@ -268,7 +268,7 @@ impl VectorDatabase {
             let inner = self.inner.read();
             if inner.store.needs_index_rebuild() {
                 drop(inner);
-                let mut inner = self.inner.write();
+                let inner = self.inner.write();
                 inner.store.ensure_index_ready().map_err(convert_error)?;
             }
         }

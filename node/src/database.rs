@@ -227,7 +227,9 @@ impl VectorDatabase {
     #[napi(js_name = "enableTextSearch")]
     pub fn enable_text_search(
         &self,
-        #[napi(ts_arg_type = "{ bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null")]
+        #[napi(
+            ts_arg_type = "{ bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null"
+        )]
         config: Option<JsonValue>,
     ) -> Result<()> {
         let mut inner = self.inner.write();
@@ -276,7 +278,7 @@ impl VectorDatabase {
             Either::A(single) => vec![single],
             Either::B(multiple) => multiple,
         };
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         let result = inner.store.delete_batch(&id_vec).map_err(convert_error)?;
         Ok(result as u32)
     }
@@ -307,7 +309,7 @@ impl VectorDatabase {
     ) -> Result<u32> {
         let parsed_filter = parse_filter(&filter)?;
 
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         let result = inner
             .store
             .delete_by_filter(&parsed_filter)
@@ -373,12 +375,17 @@ impl VectorDatabase {
     pub fn update(
         &self,
         id: String,
-        #[napi(ts_arg_type = "{ vector?: number[] | Float32Array; metadata?: Record<string, unknown>; text?: string }")]
+        #[napi(
+            ts_arg_type = "{ vector?: number[] | Float32Array; metadata?: Record<string, unknown>; text?: string }"
+        )]
         options: JsonValue,
     ) -> Result<()> {
         let vector_val = options.get("vector");
         let metadata_val = options.get("metadata").cloned();
-        let text_val = options.get("text").and_then(|v| v.as_str()).map(String::from);
+        let text_val = options
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         if vector_val.is_none() && metadata_val.is_none() && text_val.is_none() {
             return Err(Error::from_reason(
@@ -404,9 +411,7 @@ impl VectorDatabase {
                     .collect::<Result<Vec<f32>>>()?;
                 Some(Vector::new(floats))
             } else {
-                return Err(Error::from_reason(
-                    "vector must be an array of numbers",
-                ));
+                return Err(Error::from_reason("vector must be an array of numbers"));
             }
         } else {
             None
@@ -415,9 +420,10 @@ impl VectorDatabase {
         let mut inner = self.inner.write();
 
         if let Some(ref new_text) = text_val {
-            let (existing_vec, existing_meta) = inner.store.get(&id).ok_or_else(|| {
-                Error::from_reason(format!("Vector with ID '{}' not found", id))
-            })?;
+            let (existing_vec, existing_meta) = inner
+                .store
+                .get(&id)
+                .ok_or_else(|| Error::from_reason(format!("Vector with ID '{}' not found", id)))?;
 
             let final_vec = vector.unwrap_or(existing_vec);
 
@@ -527,7 +533,7 @@ impl VectorDatabase {
     /// Set ef_search value.
     #[napi(setter, js_name = "efSearch")]
     pub fn set_ef_search(&self, ef_search: u32) {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         inner.store.set_ef_search(ef_search as usize);
     }
 
@@ -548,7 +554,7 @@ impl VectorDatabase {
     /// ```
     #[napi]
     pub fn compact(&self) -> Result<u32> {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         let removed = inner.store.compact().map_err(convert_error)?;
         Ok(removed as u32)
     }
@@ -581,7 +587,7 @@ impl VectorDatabase {
     /// @returns Number of nodes reordered
     #[napi]
     pub fn optimize(&self) -> Result<u32> {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         let stats = inner.store.optimize().map_err(convert_error)?;
         Ok(stats.vectors_reordered as u32)
     }
@@ -592,11 +598,7 @@ impl VectorDatabase {
     /// @param keyPrefix - Optional prefix for all source IDs (e.g., "subdir/")
     /// @returns Number of vectors merged
     #[napi]
-    pub fn merge_from(
-        &self,
-        other: &VectorDatabase,
-        key_prefix: Option<String>,
-    ) -> Result<u32> {
+    pub fn merge_from(&self, other: &VectorDatabase, key_prefix: Option<String>) -> Result<u32> {
         if Arc::ptr_eq(&self.inner, &other.inner) {
             return Err(napi::Error::from_reason(
                 "cannot merge a database into itself",
@@ -685,5 +687,4 @@ impl VectorDatabase {
             })
             .collect()
     }
-
 }

@@ -4,7 +4,9 @@ use omendb_lib::vector::Vector;
 use omendb_lib::{Rerank, SearchOptions};
 use std::sync::Arc;
 
-use crate::conversions::{convert_error, distance_to_score, extract_multi_vector_query, extract_query_vector};
+use crate::conversions::{
+    convert_error, distance_to_score, extract_multi_vector_query, extract_query_vector,
+};
 use crate::database::VectorDatabase;
 use crate::filters::parse_filter;
 use crate::types::SearchResult;
@@ -30,10 +32,15 @@ impl VectorDatabase {
     #[napi]
     pub async fn search(
         &self,
-        #[napi(ts_arg_type = "Array<number> | Float32Array | string")]
-        query: Either3<Vec<f64>, Float32Array, String>,
+        #[napi(ts_arg_type = "Array<number> | Float32Array | string")] query: Either3<
+            Vec<f64>,
+            Float32Array,
+            String,
+        >,
         k: u32,
-        #[napi(ts_arg_type = "{ filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined")]
+        #[napi(
+            ts_arg_type = "{ filter?: Record<string, unknown>; ef?: number; maxDistance?: number } | undefined"
+        )]
         options: Option<serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         if k == 0 {
@@ -42,9 +49,7 @@ impl VectorDatabase {
 
         let (filter, ef, max_distance) = if let Some(ref opts) = options {
             let filter = opts.get("filter").cloned();
-            let ef = opts
-                .get("ef")
-                .and_then(|v| v.as_u64().map(|n| n as u32));
+            let ef = opts.get("ef").and_then(|v| v.as_u64().map(|n| n as u32));
             let max_distance = opts.get("maxDistance").and_then(|v| v.as_f64());
             (filter, ef, max_distance)
         } else {
@@ -99,7 +104,7 @@ impl VectorDatabase {
             let inner = self.inner.read();
             if inner.store.needs_index_rebuild() {
                 drop(inner);
-                let mut inner = self.inner.write();
+                let inner = self.inner.write();
                 inner.store.ensure_index_ready().map_err(convert_error)?;
             }
         }
@@ -218,7 +223,7 @@ impl VectorDatabase {
             .collect();
 
         {
-            let mut inner = self.inner.write();
+            let inner = self.inner.write();
             inner.store.ensure_index_ready().map_err(convert_error)?;
         }
 
@@ -233,10 +238,7 @@ impl VectorDatabase {
 
         let output = tokio::task::spawn_blocking(move || {
             let inner = inner_arc.read();
-            let all_results =
-                inner
-                    .store
-                    .search_batch(&query_vecs, k_usize, ef_usize);
+            let all_results = inner.store.search_batch(&query_vecs, k_usize, ef_usize);
 
             let mut output = Vec::with_capacity(all_results.len());
             for result in all_results {

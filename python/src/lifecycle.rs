@@ -15,7 +15,7 @@ impl VectorDatabase {
     ///     >>> db.set_with_text([...])
     ///     >>> db.flush()  # Text now searchable
     fn flush(&self) -> PyResult<()> {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         inner.store.flush().map_err(convert_error)
     }
 
@@ -85,7 +85,7 @@ impl VectorDatabase {
     ///     Compaction rebuilds the HNSW index, which is O(n log n).
     ///     Call periodically after bulk deletes, not after every delete.
     fn compact(&self) -> PyResult<usize> {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         inner.store.compact().map_err(convert_error)
     }
 
@@ -154,7 +154,7 @@ impl VectorDatabase {
     ///     >>> db.optimize()  # Optimize for search
     ///     >>> db.search(...)  # Faster queries
     fn optimize(&mut self) -> PyResult<usize> {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         let stats = inner.store.optimize().map_err(convert_error)?;
         Ok(stats.vectors_reordered)
     }

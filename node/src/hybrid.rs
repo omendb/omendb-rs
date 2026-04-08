@@ -30,7 +30,7 @@ impl VectorDatabase {
         }
 
         {
-            let mut inner = self.inner.write();
+            let inner = self.inner.write();
             if inner.store.has_text_search() {
                 inner.store.flush().map_err(convert_error)?;
             }
@@ -85,11 +85,16 @@ impl VectorDatabase {
     #[napi(js_name = "searchHybrid")]
     pub async fn search_hybrid(
         &self,
-        #[napi(ts_arg_type = "Array<number> | Float32Array | string")]
-        query_vector: Either3<Vec<f64>, Float32Array, String>,
+        #[napi(ts_arg_type = "Array<number> | Float32Array | string")] query_vector: Either3<
+            Vec<f64>,
+            Float32Array,
+            String,
+        >,
         query_text: Option<String>,
         k: u32,
-        #[napi(ts_arg_type = "{ filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined")]
+        #[napi(
+            ts_arg_type = "{ filter?: Record<string, unknown>; alpha?: number; rrfK?: number; subscores?: boolean } | undefined"
+        )]
         options: Option<serde_json::Value>,
     ) -> Result<Vec<HybridSearchResult>> {
         if k == 0 {
@@ -156,7 +161,7 @@ impl VectorDatabase {
         let rrf_k_usize = rrf_k.map(|k| k as usize);
 
         {
-            let mut inner = self.inner.write();
+            let inner = self.inner.write();
             if inner.store.has_text_search() {
                 inner.store.flush().map_err(convert_error)?;
             }
@@ -218,7 +223,7 @@ impl VectorDatabase {
     /// For hybrid search, this commits text index changes.
     #[napi]
     pub fn flush(&self) -> Result<()> {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         inner.store.flush().map_err(convert_error)
     }
 }

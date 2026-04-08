@@ -64,7 +64,7 @@ impl VectorDatabase {
             return Err(PyValueError::new_err("k must be greater than 0"));
         }
 
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
 
         // Auto-flush text index to ensure search sees latest inserts
         if inner.store.has_text_search() {
@@ -181,7 +181,7 @@ impl VectorDatabase {
 
         let rust_filter = filter.map(parse_filter).transpose()?;
 
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
 
         // Auto-flush text index to ensure search sees latest inserts
         if inner.store.has_text_search() {

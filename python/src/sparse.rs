@@ -252,7 +252,7 @@ impl VectorDatabase {
             let inner = self.inner.read();
             if inner.store.needs_index_rebuild() {
                 drop(inner);
-                let mut inner = self.inner.write();
+                let inner = self.inner.write();
                 inner.store.ensure_index_ready().map_err(convert_error)?;
             }
         }

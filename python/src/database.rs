@@ -169,7 +169,7 @@ impl VectorDatabase {
 
             let inner_arc = Arc::clone(&self.inner);
             let result = py.detach(|| {
-                let mut inner = inner_arc.write();
+                let inner = inner_arc.write();
                 inner.store.set_batch(batch).map_err(convert_error)
             })?;
             return Ok(result.len());
@@ -200,7 +200,7 @@ impl VectorDatabase {
             // Release GIL during batch insert
             let inner_arc = Arc::clone(&self.inner);
             let result = py.detach(|| {
-                let mut inner = inner_arc.write();
+                let inner = inner_arc.write();
                 inner.store.set_batch(batch).map_err(convert_error)
             })?;
             return Ok(result.len());
@@ -236,7 +236,7 @@ impl VectorDatabase {
                     .transpose()?
                     .unwrap_or_else(|| serde_json::json!({}));
 
-                let mut inner = self.inner.write();
+                let inner = self.inner.write();
                 inner
                     .store
                     .set(&id_str, Vector::new(vec_data), meta)
@@ -362,7 +362,7 @@ impl VectorDatabase {
     fn delete(&self, ids: &Bound<'_, PyAny>) -> PyResult<usize> {
         // Try single string first
         if let Ok(single_id) = ids.extract::<String>() {
-            let mut inner = self.inner.write();
+            let inner = self.inner.write();
             return inner
                 .store
                 .delete_batch(&[single_id])
@@ -370,7 +370,7 @@ impl VectorDatabase {
         }
         // Fall back to list of strings
         let id_vec: Vec<String> = ids.extract()?;
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         inner.store.delete_batch(&id_vec).map_err(convert_error)
     }
 
@@ -404,7 +404,7 @@ impl VectorDatabase {
     fn delete_by_filter(&self, filter: &Bound<'_, PyDict>) -> PyResult<usize> {
         let parsed_filter = crate::filters::parse_filter(filter)?;
 
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         inner
             .store
             .delete_by_filter(&parsed_filter)
@@ -663,7 +663,7 @@ impl VectorDatabase {
         _exc_val: Option<Py<PyAny>>,
         _exc_tb: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         inner.store.flush().map_err(convert_error)?;
         Ok(false) // Don't suppress exceptions
     }
@@ -684,7 +684,7 @@ impl VectorDatabase {
 
     #[setter]
     fn set_ef_search(&mut self, value: usize) {
-        let mut inner = self.inner.write();
+        let inner = self.inner.write();
         inner.store.set_ef_search(value);
     }
 
@@ -749,7 +749,7 @@ impl VectorDatabase {
     ///     10000
     ///     >>> info["total_memory_bytes"]
     ///     5242880
-    fn info(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let inner = self.inner.read();
         let info = inner.store.info();
         let dict = pyo3::types::PyDict::new(py);

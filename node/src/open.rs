@@ -53,7 +53,9 @@ pub struct OpenOptions {
     /// - true: default buffer/tokenizer
     /// - { bufferMb?, writerBufferMb?, tokenizer? }: custom text config
     /// - false/null: disabled
-    #[napi(ts_type = "boolean | { bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null | undefined")]
+    #[napi(
+        ts_type = "boolean | { bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null | undefined"
+    )]
     pub text_search: Option<serde_json::Value>,
 }
 

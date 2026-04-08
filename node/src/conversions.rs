@@ -1,6 +1,6 @@
 use napi::bindgen_prelude::*;
-use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::omen::Metric;
+use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::vector::muvera::MultiVectorConfig;
 
 /// Convert raw distance to a normalized similarity score (0-1, higher = more similar).
@@ -58,9 +58,10 @@ pub(crate) fn parse_multi_vector(value: &serde_json::Value) -> Result<Option<Mul
         serde_json::Value::Object(obj) => {
             let mut config = MultiVectorConfig::default();
             if let Some(reps) = obj.get("repetitions") {
-                config.repetitions = reps.as_u64().ok_or_else(|| {
-                    Error::new(Status::InvalidArg, "repetitions must be a number")
-                })? as u8;
+                config.repetitions = reps
+                    .as_u64()
+                    .ok_or_else(|| Error::new(Status::InvalidArg, "repetitions must be a number"))?
+                    as u8;
             }
             if let Some(bits) = obj.get("partitionBits") {
                 config.partition_bits = bits.as_u64().ok_or_else(|| {
@@ -133,21 +134,14 @@ pub(crate) fn parse_text_search_config(
             let mut config = TextSearchConfig::default();
             if let Some(buffer_mb) = obj.get("bufferMb").or_else(|| obj.get("writerBufferMb")) {
                 config.writer_buffer_mb = buffer_mb.as_u64().ok_or_else(|| {
-                    Error::new(
-                        Status::InvalidArg,
-                        "textSearch.bufferMb must be a number",
-                    )
+                    Error::new(Status::InvalidArg, "textSearch.bufferMb must be a number")
                 })? as usize;
             }
             if let Some(tokenizer) = obj.get("tokenizer") {
                 let tokenizer_name = tokenizer.as_str().ok_or_else(|| {
-                    Error::new(
-                        Status::InvalidArg,
-                        "textSearch.tokenizer must be a string",
-                    )
+                    Error::new(Status::InvalidArg, "textSearch.tokenizer must be a string")
                 })?;
-                config.tokenizer =
-                    TokenizerPreset::parse(tokenizer_name).map_err(convert_error)?;
+                config.tokenizer = TokenizerPreset::parse(tokenizer_name).map_err(convert_error)?;
             }
             Ok(Some(config))
         }
