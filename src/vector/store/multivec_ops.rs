@@ -7,7 +7,7 @@
 use super::helpers;
 use super::input::{BatchItem, QueryData, Rerank, SearchOptions, VectorData, VectorInput};
 use super::{SearchResult, VectorStore};
-use crate::vector::muvera::MuveraEncoder;
+use crate::vector::muvera::{MultiVectorConfig, MuveraEncoder};
 use crate::vector::types::Vector;
 use anyhow::Result;
 use rayon::prelude::*;
@@ -34,6 +34,14 @@ impl VectorStore {
         self.muvera_encoder
             .as_ref()
             .map(MuveraEncoder::fde_dimension)
+    }
+
+    /// Get the MUVERA configuration for multi-vector stores.
+    #[must_use]
+    pub fn multi_vector_config(&self) -> Option<MultiVectorConfig> {
+        self.muvera_encoder
+            .as_ref()
+            .map(|encoder| encoder.config().clone())
     }
 
     /// Insert a document with token embeddings.

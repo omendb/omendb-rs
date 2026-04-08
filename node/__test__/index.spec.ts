@@ -598,6 +598,26 @@ describe("VectorDatabase", () => {
 			expect(products.count()).toBe(2);
 		});
 
+		it("should preserve multi-vector mode in collections", async () => {
+			const db = open(dbPath, { dimensions: 8, multiVector: { dProj: null } });
+			const docs = db.collection("docs");
+
+			expect(docs.isMultiVector).toBe(true);
+
+			await docs.set([
+				{
+					id: "doc1",
+					vectors: [Array(8).fill(0.1), Array(8).fill(0.2)],
+					metadata: { kind: "multi" },
+				},
+			]);
+
+			const results = await docs.search([Array(8).fill(0.1)], 1);
+			expect(results).toHaveLength(1);
+			expect(results[0]?.id).toBe("doc1");
+			expect(results[0]?.metadata?.kind).toBe("multi");
+		});
+
 		it("should list collections", () => {
 			const db = open(dbPath, { dimensions: 64 });
 			db.collection("alpha");

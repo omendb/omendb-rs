@@ -173,6 +173,28 @@ class TestCollections:
         for i in range(1, len(results)):
             assert results[i]["distance"] >= results[i - 1]["distance"]
 
+    def test_multi_vector_collection_inherits_parent_mode(self, db_path):
+        """Collections created from a multi-vector database should stay multi-vector."""
+        db = omendb.open(db_path, dimensions=8, multi_vector={"d_proj": None})
+
+        docs = db.collection("docs")
+        assert docs.is_multi_vector is True
+
+        docs.set(
+            [
+                {
+                    "id": "doc1",
+                    "vectors": [[0.1] * 8, [0.2] * 8],
+                    "metadata": {"kind": "multi"},
+                }
+            ]
+        )
+
+        results = docs.search([[0.1] * 8], k=1)
+        assert len(results) == 1
+        assert results[0]["id"] == "doc1"
+        assert results[0]["metadata"]["kind"] == "multi"
+
     def test_collection_filtered_search(self, db_path):
         """Test filtered search within a collection."""
         db = omendb.open(db_path, dimensions=128)

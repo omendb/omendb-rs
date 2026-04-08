@@ -91,20 +91,46 @@ impl VectorDatabase {
             PyRuntimeError::new_err(format!("Failed to create collections directory: {}", e))
         })?;
 
-        // Open the collection as a separate VectorStore
-        let store = if self.dimensions == 0 {
+        let (parent_dimensions, parent_token_dimension, parent_is_multi, parent_multi_config) = {
+            let inner = self.inner.read();
+            (
+                inner.store.dimensions(),
+                inner.store.token_dimension(),
+                inner.store.is_multi_vector(),
+                inner.store.multi_vector_config(),
+            )
+        };
+
+        // Open or create the collection as a separate VectorStore while preserving modality.
+        let store = if collection_path.with_extension("omen").exists() {
+            VectorStore::open(&collection_path).map_err(convert_error)?
+        } else if parent_is_multi {
+            let token_dim = parent_token_dimension.unwrap_or(parent_dimensions).max(self.dimensions);
+            let config = parent_multi_config.expect("multi-vector parent should expose config");
+            VectorStore::multi_vector_with(token_dim, config)
+                .map_err(convert_error)?
+                .persist(&collection_path)
+                .map_err(convert_error)?
+        } else if self.dimensions == 0 {
             VectorStore::open(&collection_path).map_err(convert_error)?
         } else {
             VectorStore::open_with_dimensions(&collection_path, self.dimensions)
                 .map_err(convert_error)?
         };
+        let is_multi_vector = store.is_multi_vector();
 
         let collection_db = VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
             path: collection_path.to_string_lossy().to_string(),
-            dimensions: self.dimensions,
+            dimensions: if is_multi_vector {
+                parent_token_dimension
+                    .unwrap_or(parent_dimensions)
+                    .max(self.dimensions)
+            } else {
+                self.dimensions
+            },
             is_persistent: true,
-            is_multi_vector: false, // Collections don't support multi-vector yet
+            is_multi_vector,
             embedding_fn: embedding_fn
                 .or_else(|| self.embedding_fn.as_ref().map(|f| f.clone_ref(py))),
             collections_cache: RwLock::new(HashMap::new()),
