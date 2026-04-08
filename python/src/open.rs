@@ -103,7 +103,6 @@ fn parse_text_search_config(
 ///         - dict: Custom config {"repetitions": 10, "partition_bits": 4, "d_proj": 16}
 ///         - d_proj: Dimension projection (16 = 8x smaller FDE, None = full token dim)
 ///         - False/None: Single-vector mode (default)
-///     config (dict): Advanced config (deprecated, use top-level params instead)
 ///
 /// Returns:
 ///     VectorDatabase: Database instance
@@ -130,7 +129,7 @@ fn parse_text_search_config(
 ///     # With cosine distance metric
 ///     >>> db = omendb.open("./vectors", dimensions=768, metric="cosine")
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, text_search=None, config=None, embedding_fn=None, rescore=None, oversample=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, text_search=None, embedding_fn=None, rescore=None, oversample=None))]
 pub(crate) fn open(
     py: Python<'_>,
     path: String,
@@ -142,7 +141,6 @@ pub(crate) fn open(
     metric: Option<String>,
     multi_vector: Option<&Bound<'_, PyAny>>,
     text_search: Option<&Bound<'_, PyAny>>,
-    config: Option<&Bound<'_, PyDict>>,
     embedding_fn: Option<Py<PyAny>>,
     rescore: Option<bool>,
     oversample: Option<f32>,
@@ -344,31 +342,6 @@ pub(crate) fn open(
         )?;
         if let Some(ref config) = text_search_config {
             options = options.text_search_config(config.clone());
-        }
-
-        // Handle config dict for backward compatibility
-        if let Some(cfg) = config {
-            if let Some(hnsw_dict) = cfg.get_item("hnsw")? {
-                let hnsw = hnsw_dict
-                    .cast::<PyDict>()
-                    .map_err(|_| PyValueError::new_err("'hnsw' must be a dict"))?;
-
-                if m.is_none() {
-                    if let Some(m_item) = hnsw.get_item("m")? {
-                        options = options.m(m_item.extract()?);
-                    }
-                }
-                if ef_construction.is_none() {
-                    if let Some(ef_item) = hnsw.get_item("ef_construction")? {
-                        options = options.ef_construction(ef_item.extract()?);
-                    }
-                }
-                if ef_search.is_none() {
-                    if let Some(ef_item) = hnsw.get_item("ef_search")? {
-                        options = options.ef_search(ef_item.extract()?);
-                    }
-                }
-            }
         }
 
         // Check if enabling quantization on existing non-empty database

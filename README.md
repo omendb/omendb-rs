@@ -205,6 +205,7 @@ db = omendb.open(
     ef_search=100,           # Search quality (default: 100)
     quantization=True,       # SQ8 quantization (default: None)
     metric="cosine",         # Distance metric (default: "l2")
+    text_search={"tokenizer": "code", "buffer_mb": 64},
     embedding_fn=embed,      # Auto-embed documents and string queries
 )
 
@@ -216,6 +217,10 @@ db = omendb.open(
 # - "l2" or "euclidean": Euclidean distance (default)
 # - "cosine": Cosine distance (1 - cosine similarity)
 # - "dot" or "ip": Inner product (for MIPS)
+
+# Text search options:
+# - True: default BM25 config
+# - {"tokenizer": "default" | "code" | "raw", "buffer_mb": 64}
 
 # Context manager (auto-flush on exit)
 with omendb.open("./db", dimensions=768) as db:

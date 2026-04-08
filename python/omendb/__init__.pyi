@@ -72,6 +72,15 @@ class MultiVectorConfig(TypedDict, total=False):
     repetitions: int  # Number of MUVERA repetitions (default: 8)
     partition_bits: int  # Partition bits for MUVERA (default: 4)
     seed: int  # Random seed for reproducibility
+    d_proj: int | None  # Projected FDE dimension (default: 16, None = full token dim)
+    pool_factor: int | None  # Token pooling factor (default: None)
+
+class TextSearchConfig(TypedDict, total=False):
+    """Configuration for text search."""
+
+    buffer_mb: int  # Tantivy writer buffer in MB
+    writer_buffer_mb: int  # Alias for buffer_mb
+    tokenizer: Literal["default", "code", "raw"]
 
 class GetResult(TypedDict):
     """Result from get()."""
@@ -792,7 +801,7 @@ def open(
     quantization: bool | Literal["sq8", "scalar"] | None = None,
     metric: Literal["l2", "euclidean", "cosine", "dot", "ip"] | None = None,
     multi_vector: bool | MultiVectorConfig | None = None,
-    config: dict[str, Any] | None = None,
+    text_search: bool | TextSearchConfig | None = None,
     embedding_fn: Callable[[list[str]], list[list[float]]] | None = None,
     rescore: bool | None = None,
     oversample: float | None = None,
@@ -818,7 +827,10 @@ def open(
             - True: Enable with default config (repetitions=8, partition_bits=4)
             - MultiVectorConfig: Custom config dict
             - None/False: Disabled (default, single-vector mode)
-        config: Advanced config dict (deprecated).
+        text_search: Enable text search at open time:
+            - True: default tokenizer + buffer config
+            - TextSearchConfig: custom tokenizer/buffer config
+            - None/False: disabled (default)
         embedding_fn: Optional callable that embeds text to vectors.
             Signature: (texts: list[str]) -> list[list[float]] or 2D numpy array.
             When set, enables document-based set() and string-based search().
