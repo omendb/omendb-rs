@@ -31,7 +31,8 @@ impl DenseStore {
 
     pub fn set_owned(&self, slot: SlotId, values: Vec<f32>) -> Result<()> {
         ensure!(
-            u32::try_from(values.len()).map_err(|_| anyhow!("dense vector too large"))? == self.dim(),
+            u32::try_from(values.len()).map_err(|_| anyhow!("dense vector too large"))?
+                == self.dim(),
             "dense vector dimension mismatch"
         );
         let mut slots = self.values.write();
@@ -43,7 +44,13 @@ impl DenseStore {
         Ok(())
     }
 
-    pub fn set_mmap_ref(&self, slot: SlotId, mmap_id: u32, offset_bytes: u64, len: u32) -> Result<()> {
+    pub fn set_mmap_ref(
+        &self,
+        slot: SlotId,
+        mmap_id: u32,
+        offset_bytes: u64,
+        len: u32,
+    ) -> Result<()> {
         ensure!(len == self.dim(), "dense mmap dimension mismatch");
         let mut slots = self.values.write();
         let index = usize::try_from(slot).expect("slot fits usize");
@@ -82,13 +89,15 @@ impl DenseStore {
                 len,
             } => {
                 let mmaps = self.mmaps.read();
-                let Some(mmap) = mmaps.get(usize::try_from(*mmap_id).expect("mmap id fits usize")) else {
+                let Some(mmap) = mmaps.get(usize::try_from(*mmap_id).expect("mmap id fits usize"))
+                else {
                     return f(None);
                 };
                 let offset = usize::try_from(*offset_bytes).expect("offset fits usize");
-                let slice = unsafe {
-                    std::slice::from_raw_parts(mmap.as_ptr().add(offset).cast::<f32>(), usize::try_from(*len).expect("len fits usize"))
-                };
+                let byte_len =
+                    usize::try_from(*len).expect("len fits usize") * std::mem::size_of::<f32>();
+                let bytes = &mmap[offset..offset + byte_len];
+                let (_, slice, _) = unsafe { bytes.align_to::<f32>() };
                 f(Some(slice))
             }
         }

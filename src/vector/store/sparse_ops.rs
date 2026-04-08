@@ -68,9 +68,9 @@ impl VectorStore {
                 (slot, false)
             }
         } else {
-            let slot =
-                self.records
-                    .set_without_vector(id.to_string(), Some(metadata.clone()))?;
+            let slot = self
+                .records
+                .set_without_vector(id.to_string(), Some(metadata.clone()));
             self.records.update_sparse(slot, Some(sparse.clone()))?;
             self.metadata_index.write().index_json(slot, &metadata);
             if let Some(ref storage) = self.storage {

@@ -16,11 +16,19 @@ pub struct FrozenSearchResult {
 
 pub trait MutableDenseIndex: Send + Sync {
     fn insert(&mut self, slot: SlotId, vector: &[f32]) -> Result<()>;
-    fn search(&self, query: &[f32], limit: usize, params: DenseSearchParams)
-        -> Result<Vec<FrozenSearchResult>>;
+    fn search(
+        &self,
+        query: &[f32],
+        limit: usize,
+        params: DenseSearchParams,
+    ) -> Result<Vec<FrozenSearchResult>>;
 }
 
 pub trait FrozenDenseIndex: Send + Sync {
-    fn search(&self, query: &[f32], limit: usize, params: DenseSearchParams)
-        -> Result<Vec<FrozenSearchResult>>;
+    fn search(
+        &self,
+        query: &[f32],
+        limit: usize,
+        params: DenseSearchParams,
+    ) -> Result<Vec<FrozenSearchResult>>;
 }

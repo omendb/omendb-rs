@@ -191,7 +191,7 @@ impl VectorStore {
                     .set(id.clone(), vector.to_vec(), record.metadata.clone())?;
             } else {
                 self.records
-                    .set_without_vector(id.clone(), record.metadata.clone())?;
+                    .set_without_vector(id.clone(), record.metadata.clone());
             }
             merged_slots.push((slot, id));
             merged_count += 1;

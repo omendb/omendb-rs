@@ -515,6 +515,7 @@ impl NodeStorage {
     /// - If SQ8: scale, offset (2 * f32), norms (len * f32), sq8_sums (len * i32)
     /// - Upper neighbors count: u64
     /// - For each node with upper neighbors: node_id (u32), num_levels (u8), then for each level: count (u16), neighbors ([u32])
+    ///
     /// Get total serialized length in bytes.
     #[must_use]
     pub fn serialized_len_full(&self) -> usize {

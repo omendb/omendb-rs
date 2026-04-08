@@ -465,9 +465,7 @@ fn split_camel_case_segments(text: &str) -> Vec<(usize, usize)> {
     while let Some((idx, curr)) = chars.next() {
         let next = chars.peek().map(|(_, ch)| *ch);
         let boundary = (prev.is_lowercase() || prev.is_ascii_digit()) && curr.is_uppercase()
-            || (prev.is_uppercase()
-                && curr.is_uppercase()
-                && next.is_some_and(|n| n.is_lowercase()));
+            || (prev.is_uppercase() && curr.is_uppercase() && next.is_some_and(char::is_lowercase));
 
         if boundary {
             segments.push((start, idx));

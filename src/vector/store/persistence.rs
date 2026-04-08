@@ -151,8 +151,10 @@ impl VectorStore {
                 }
             }
             let ancillary = if let Some(ref encoder) = ancillary.muvera_encoder {
-                let rebuilt =
-                    MultiVecStorage::from_slot_tokens(encoder.token_dimension(), &records.iter_multi());
+                let rebuilt = MultiVecStorage::from_slot_tokens(
+                    encoder.token_dimension(),
+                    &records.iter_multi(),
+                );
                 AncillaryIndexes {
                     multivec_storage: Some(rebuilt),
                     ..ancillary
@@ -850,10 +852,10 @@ impl VectorStore {
                 }
                 WalEntryType::UpsertSparse => {
                     if let Ok(data) = parse_wal_sparse(&entry.data) {
-                        let metadata: Option<JsonValue> =
-                            data.metadata
-                                .as_ref()
-                                .and_then(|bytes| serde_json::from_slice(bytes).ok());
+                        let metadata: Option<JsonValue> = data
+                            .metadata
+                            .as_ref()
+                            .and_then(|bytes| serde_json::from_slice(bytes).ok());
                         let sparse =
                             crate::vector::sparse::SparseVector::new(data.indices, data.values)?;
                         let slot = if let Some(slot) = records.get_slot(&data.id) {
@@ -863,7 +865,7 @@ impl VectorStore {
                             records.update_sparse(slot, Some(sparse))?;
                             slot
                         } else {
-                            let slot = records.set_without_vector(data.id, metadata)?;
+                            let slot = records.set_without_vector(data.id, metadata);
                             records.update_sparse(slot, Some(sparse))?;
                             slot
                         };
@@ -872,10 +874,10 @@ impl VectorStore {
                 }
                 WalEntryType::UpsertMulti => {
                     if let Ok(data) = parse_wal_multi(&entry.data) {
-                        let metadata: Option<JsonValue> =
-                            data.metadata
-                                .as_ref()
-                                .and_then(|bytes| serde_json::from_slice(bytes).ok());
+                        let metadata: Option<JsonValue> = data
+                            .metadata
+                            .as_ref()
+                            .and_then(|bytes| serde_json::from_slice(bytes).ok());
                         let slot = if let Some(slot) = records.get_slot(&data.id) {
                             if let Some(metadata) = metadata.clone() {
                                 records.update_metadata(slot, metadata)?;
@@ -883,7 +885,7 @@ impl VectorStore {
                             records.update_multi(slot, Some(data.tokens))?;
                             slot
                         } else {
-                            let slot = records.set_without_vector(data.id, metadata)?;
+                            let slot = records.set_without_vector(data.id, metadata);
                             records.update_multi(slot, Some(data.tokens))?;
                             slot
                         };
@@ -975,7 +977,9 @@ impl VectorStore {
                     let delta = dense_count - loaded.len();
                     let mut inserted = 0;
                     for &slot in modified_slots {
-                        if records.deleted_bitmap().contains(slot) || records.get_vector(slot).is_none() {
+                        if records.deleted_bitmap().contains(slot)
+                            || records.get_vector(slot).is_none()
+                        {
                             continue;
                         }
                         records.with_vector_by_slot(slot, |vector| {
@@ -1132,8 +1136,9 @@ impl VectorStore {
             .sparse_index_bytes
             .as_deref()
             .map(|bytes| {
-                let (index, payloads) = crate::vector::sparse::SparseIndex::from_bytes_with_payloads(bytes)
-                    .map_err(|e| anyhow::anyhow!("Failed to deserialize SparseIndex: {e}"))?;
+                let (index, payloads) =
+                    crate::vector::sparse::SparseIndex::from_bytes_with_payloads(bytes)
+                        .map_err(|e| anyhow::anyhow!("Failed to deserialize SparseIndex: {e}"))?;
                 for (slot, sparse) in payloads {
                     records.update_sparse(slot, Some(sparse))?;
                 }
@@ -1246,22 +1251,24 @@ impl VectorStore {
         // Export multi-vector data if present
         let (multivec_bytes, multivec_offsets, multivec_config) =
             if let Some(enc) = self.muvera_encoder.as_ref() {
-            let helper =
-                MultiVecStorage::from_slot_tokens(enc.token_dimension(), &self.records.iter_multi());
-            let config = enc.config();
-            (
-                Some(helper.vectors_to_bytes()),
-                Some(helper.offsets_to_bytes()),
-                Some(PersistedMuveraConfig {
-                    repetitions: config.repetitions,
-                    partition_bits: config.partition_bits,
-                    seed: config.seed,
-                    token_dim: enc.token_dimension(),
-                    d_proj: config.d_proj,
-                    pool_factor: config.pool_factor,
-                    max_tokens: config.max_tokens,
-                }),
-            )
+                let helper = MultiVecStorage::from_slot_tokens(
+                    enc.token_dimension(),
+                    &self.records.iter_multi(),
+                );
+                let config = enc.config();
+                (
+                    Some(helper.vectors_to_bytes()),
+                    Some(helper.offsets_to_bytes()),
+                    Some(PersistedMuveraConfig {
+                        repetitions: config.repetitions,
+                        partition_bits: config.partition_bits,
+                        seed: config.seed,
+                        token_dim: enc.token_dimension(),
+                        d_proj: config.d_proj,
+                        pool_factor: config.pool_factor,
+                        max_tokens: config.max_tokens,
+                    }),
+                )
             } else {
                 (None, None, None)
             };

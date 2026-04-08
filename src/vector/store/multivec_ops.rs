@@ -215,7 +215,11 @@ impl VectorStore {
                 .update_multi(*slot as u32, Some(pooled_and_fdes[i].0.clone()))?;
             if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
-                storage.log_upsert_multi(&wal_batch[i].0, &pooled_and_fdes[i].0, &wal_batch[i].1)?;
+                storage.log_upsert_multi(
+                    &wal_batch[i].0,
+                    &pooled_and_fdes[i].0,
+                    &wal_batch[i].1,
+                )?;
                 storage.sync()?;
                 needs_checkpoint |=
                     storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize;
@@ -442,7 +446,7 @@ impl VectorStore {
 
             let mut scored: Vec<(String, JsonValue, f32)> = candidate_data
                 .into_iter()
-                .zip(maxsim_scores.into_iter())
+                .zip(maxsim_scores)
                 .map(|((_, id, metadata, _), score)| (id, metadata, score))
                 .collect();
 

@@ -237,7 +237,11 @@ impl MultiVecStorage {
             return Self::new(dim);
         }
 
-        let max_slot = payloads.iter().map(|(slot, _)| *slot as usize).max().unwrap_or(0);
+        let max_slot = payloads
+            .iter()
+            .map(|(slot, _)| *slot as usize)
+            .max()
+            .unwrap_or(0);
         let mut storage = Self {
             vectors: Vec::new(),
             offsets: vec![(0, 0); max_slot + 1],

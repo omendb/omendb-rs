@@ -3,6 +3,6 @@
 pub mod request;
 
 pub use request::{
-    DenseSearchRequest, HybridSearchRequest, MultiSearchRequest, SearchRequest, SparseSearchRequest,
-    TextSearchRequest,
+    DenseSearchRequest, HybridSearchRequest, MultiSearchRequest, SearchRequest,
+    SparseSearchRequest, TextSearchRequest,
 };

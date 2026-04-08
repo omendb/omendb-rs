@@ -50,9 +50,7 @@ impl VectorData {
     pub fn as_slice(&self) -> &[f32] {
         match self {
             Self::Owned(v) => v.as_slice(),
-            Self::Mmap(mmap, offset, len) => unsafe {
-                std::slice::from_raw_parts(mmap.as_ptr().add(*offset).cast::<f32>(), *len)
-            },
+            Self::Mmap(mmap, offset, len) => mmap_f32_slice(mmap, *offset, *len),
         }
     }
 
@@ -65,7 +63,11 @@ impl VectorData {
 #[derive(Debug, Clone)]
 enum StoredVectorData {
     Owned(Vec<f32>),
-    Mmap { mmap_id: usize, offset: usize, len: usize },
+    Mmap {
+        mmap_id: usize,
+        offset: usize,
+        len: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +94,11 @@ impl serde::Serialize for Record {
         state.serialize_field("id", &self.id)?;
         state.serialize_field(
             "vector",
-            &self.vector.as_ref().map(VectorData::as_slice).map(<[f32]>::to_vec),
+            &self
+                .vector
+                .as_ref()
+                .map(VectorData::as_slice)
+                .map(<[f32]>::to_vec),
         )?;
         state.serialize_field("metadata", &self.metadata)?;
         state.end()
@@ -217,9 +223,9 @@ impl RecordStore {
             .map(|record| {
                 record.map(|record| StoredRecord {
                     id: record.id,
-                    vector: record
-                        .vector
-                        .map(|vector| self.store_snapshot_vector(vector, &vec_mmap, &main_mmap)),
+                    vector: record.vector.map(|vector| {
+                        self.store_snapshot_vector(vector, vec_mmap.as_ref(), main_mmap.as_ref())
+                    }),
                     sparse: None,
                     multi: None,
                     metadata: record.metadata,
@@ -281,8 +287,8 @@ impl RecordStore {
                 .get(old_slot as usize)
                 .and_then(|record| record.as_ref())
             {
-                carried_sparse = record.sparse.clone();
-                carried_multi = record.multi.clone();
+                carried_sparse.clone_from(&record.sparse);
+                carried_multi.clone_from(&record.multi);
             }
             let mut deleted = self.deleted.write();
             if !deleted.contains(old_slot) {
@@ -310,7 +316,7 @@ impl RecordStore {
     }
 
     /// Insert or update a record without a dense payload.
-    pub fn set_without_vector(&self, id: String, metadata: Option<JsonValue>) -> anyhow::Result<u32> {
+    pub fn set_without_vector(&self, id: String, metadata: Option<JsonValue>) -> u32 {
         let mut carried_sparse = None;
         let mut carried_multi = None;
         if let Some(old_slot_ref) = self.id_to_slot.get(&id) {
@@ -321,8 +327,8 @@ impl RecordStore {
                 .get(old_slot as usize)
                 .and_then(|record| record.as_ref())
             {
-                carried_sparse = record.sparse.clone();
-                carried_multi = record.multi.clone();
+                carried_sparse.clone_from(&record.sparse);
+                carried_multi.clone_from(&record.multi);
             }
             let mut deleted = self.deleted.write();
             if !deleted.contains(old_slot) {
@@ -345,7 +351,7 @@ impl RecordStore {
         self.live_count.fetch_add(1, Ordering::Relaxed);
         self.dirty_slots.write().insert(slot);
 
-        Ok(slot)
+        slot
     }
 
     /// Delete a record by ID - O(1)
@@ -782,7 +788,10 @@ impl RecordStore {
 
     fn add_mmap(&self, mmap: Arc<Mmap>) -> usize {
         let mut mmaps = self.mmaps.write();
-        if let Some(idx) = mmaps.iter().position(|existing| Arc::ptr_eq(existing, &mmap)) {
+        if let Some(idx) = mmaps
+            .iter()
+            .position(|existing| Arc::ptr_eq(existing, &mmap))
+        {
             idx
         } else {
             let idx = mmaps.len();
@@ -794,8 +803,8 @@ impl RecordStore {
     fn store_snapshot_vector(
         &self,
         vector: SnapshotVectorData,
-        vec_mmap: &Option<Arc<Mmap>>,
-        main_mmap: &Option<Arc<Mmap>>,
+        vec_mmap: Option<&Arc<Mmap>>,
+        main_mmap: Option<&Arc<Mmap>>,
     ) -> StoredVectorData {
         match vector {
             SnapshotVectorData::Owned(vector) => StoredVectorData::Owned(vector),
@@ -805,14 +814,13 @@ impl RecordStore {
                 len,
             } => {
                 let mmap = match source {
-                    SnapshotMmapSource::VecFile => vec_mmap
-                        .as_ref()
-                        .unwrap_or_else(|| panic!("missing vec mmap for snapshot vector"))
-                        .clone(),
-                    SnapshotMmapSource::MainFile => main_mmap
-                        .as_ref()
-                        .unwrap_or_else(|| panic!("missing main mmap for snapshot vector"))
-                        .clone(),
+                    SnapshotMmapSource::VecFile => Arc::clone(
+                        vec_mmap.unwrap_or_else(|| panic!("missing vec mmap for snapshot vector")),
+                    ),
+                    SnapshotMmapSource::MainFile => Arc::clone(
+                        main_mmap
+                            .unwrap_or_else(|| panic!("missing main mmap for snapshot vector")),
+                    ),
                 };
                 StoredVectorData::Mmap {
                     mmap_id: self.add_mmap(mmap),
@@ -872,18 +880,30 @@ impl RecordStore {
         }
     }
 
-    fn stored_vector_as_slice<'a>(mmaps: &'a [Arc<Mmap>], vector: &'a StoredVectorData) -> &'a [f32] {
+    fn stored_vector_as_slice<'a>(
+        mmaps: &'a [Arc<Mmap>],
+        vector: &'a StoredVectorData,
+    ) -> &'a [f32] {
         match vector {
             StoredVectorData::Owned(vector) => vector.as_slice(),
             StoredVectorData::Mmap {
                 mmap_id,
                 offset,
                 len,
-            } => unsafe {
-                std::slice::from_raw_parts(mmaps[*mmap_id].as_ptr().add(*offset).cast::<f32>(), *len)
-            },
+            } => mmap_f32_slice(&mmaps[*mmap_id], *offset, *len),
         }
     }
+}
+
+fn mmap_f32_slice(mmap: &Mmap, offset: usize, len: usize) -> &[f32] {
+    let byte_len = len
+        .checked_mul(std::mem::size_of::<f32>())
+        .expect("vector byte length overflow");
+    let end = offset.checked_add(byte_len).expect("vector slice overflow");
+    let bytes = &mmap[offset..end];
+    let (prefix, values, suffix) = unsafe { bytes.align_to::<f32>() };
+    debug_assert!(prefix.is_empty() && suffix.is_empty() && values.len() == len);
+    values
 }
 
 #[cfg(test)]
@@ -1161,9 +1181,10 @@ mod tests {
     fn test_set_without_vector_creates_sparse_only_record() {
         let store = RecordStore::new(3);
 
-        let slot = store
-            .set_without_vector("doc".to_string(), Some(serde_json::json!({"kind": "sparse"})))
-            .unwrap();
+        let slot = store.set_without_vector(
+            "doc".to_string(),
+            Some(serde_json::json!({"kind": "sparse"})),
+        );
 
         assert_eq!(slot, 0);
         assert_eq!(store.len(), 1);

@@ -159,20 +159,20 @@ impl OmenFile {
 
     /// Get an Arc to the vectors memory map if available
     pub fn get_vec_mmap_arc(&self) -> Option<Arc<Mmap>> {
-        if let Some(ref file) = self.vec_file {
-            if let Ok(mmap) = unsafe { Mmap::map(file) } {
-                return Some(Arc::new(mmap));
-            }
+        if let Some(ref file) = self.vec_file
+            && let Ok(mmap) = unsafe { Mmap::map(file) }
+        {
+            return Some(Arc::new(mmap));
         }
         None
     }
 
     /// Get an Arc to the main memory map if available
     pub fn get_main_mmap_arc(&self) -> Option<Arc<Mmap>> {
-        if let Some(ref file) = self.file {
-            if let Ok(mmap) = unsafe { Mmap::map(file) } {
-                return Some(Arc::new(mmap));
-            }
+        if let Some(ref file) = self.file
+            && let Ok(mmap) = unsafe { Mmap::map(file) }
+        {
+            return Some(Arc::new(mmap));
         }
         None
     }
@@ -806,9 +806,7 @@ impl OmenSnapshot<'_> {
                     SnapshotMmapSource::VecFile => self._vec_mmap.as_ref()?,
                     SnapshotMmapSource::MainFile => self._mmap.as_ref()?,
                 };
-                unsafe {
-                    std::slice::from_raw_parts(mmap.as_ptr().add(*offset).cast::<f32>(), *len)
-                }
+                mmap_f32_slice(mmap, *offset, *len)
             }
         })
     }
@@ -886,8 +884,13 @@ impl OmenFile {
         metadata: Option<&[u8]>,
     ) -> io::Result<()> {
         let metadata_bytes = metadata.unwrap_or(b"{}");
-        self.wal
-            .append(WalEntry::upsert_sparse(0, id, metadata_bytes, indices, values))
+        self.wal.append(WalEntry::upsert_sparse(
+            0,
+            id,
+            metadata_bytes,
+            indices,
+            values,
+        ))
     }
 
     pub fn wal_append_multi(
@@ -1038,15 +1041,16 @@ impl OmenFile {
                     if end <= mmap.len() {
                         let bytes = &mmap[start..end];
                         // If properly aligned and large enough, use Mmap zero-copy
-                        if (bytes.as_ptr() as usize) % 4 == 0 && bytes.len() >= dim * 4 {
+                        if (bytes.as_ptr() as usize).is_multiple_of(4) && bytes.len() >= dim * 4 {
                             snapshot.vectors[idx] = Some(SnapshotVectorData::Mmap {
                                 source: SnapshotMmapSource::MainFile,
                                 offset: start,
                                 len: dim,
                             });
                         } else {
-                            snapshot.vectors[idx] =
-                                Some(SnapshotVectorData::Owned(read_vector_from_bytes(bytes, dim)));
+                            snapshot.vectors[idx] = Some(SnapshotVectorData::Owned(
+                                read_vector_from_bytes(bytes, dim),
+                            ));
                         }
 
                         if snapshot.dimensions == 0 {
@@ -1058,7 +1062,7 @@ impl OmenFile {
         }
 
         // Load HNSW index bytes and MultiVectors segment
-        snapshot.dense_slots = self.manifest.dense_slots.clone();
+        snapshot.dense_slots.clone_from(&self.manifest.dense_slots);
         if let Some(mmap) = main_mmap {
             for location in &self.manifest.nodes {
                 match location.segment_type {
@@ -1084,7 +1088,7 @@ impl OmenFile {
         }
 
         // Fill in the rest of the snapshot (metadata, etc.)
-        snapshot.id_to_slot = self.manifest.id_to_index.clone();
+        snapshot.id_to_slot.clone_from(&self.manifest.id_to_index);
         snapshot.deleted = self.manifest.deleted.iter().collect();
         for (&idx, bytes) in &self.manifest.metadata {
             if let Ok(json) = serde_json::from_slice(bytes) {
@@ -2167,6 +2171,17 @@ fn read_vector_from_bytes(bytes: &[u8], dimensions: usize) -> Vec<f32> {
             )
         })
         .collect()
+}
+
+fn mmap_f32_slice(mmap: &Mmap, offset: usize, len: usize) -> &[f32] {
+    let byte_len = len
+        .checked_mul(std::mem::size_of::<f32>())
+        .expect("vector byte length overflow");
+    let end = offset.checked_add(byte_len).expect("vector slice overflow");
+    let bytes = &mmap[offset..end];
+    let (prefix, values, suffix) = unsafe { bytes.align_to::<f32>() };
+    debug_assert!(prefix.is_empty() && suffix.is_empty() && values.len() == len);
+    values
 }
 
 #[cfg(test)]

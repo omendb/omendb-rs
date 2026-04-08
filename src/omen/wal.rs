@@ -258,8 +258,14 @@ impl WalEntry {
         indices: &[u32],
         values: &[f32],
     ) -> Self {
-        let capacity =
-            4 + string_id.len() + 4 + metadata.len() + 4 + (indices.len() * 4) + 4 + (values.len() * 4);
+        let capacity = 4
+            + string_id.len()
+            + 4
+            + metadata.len()
+            + 4
+            + (indices.len() * 4)
+            + 4
+            + (values.len() * 4);
         let mut data = Vec::with_capacity(capacity);
 
         data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());
@@ -295,13 +301,8 @@ impl WalEntry {
         tokens: &[Vec<f32>],
     ) -> Self {
         let token_values: usize = tokens.iter().map(Vec::len).sum();
-        let capacity = 4
-            + string_id.len()
-            + 4
-            + metadata.len()
-            + 4
-            + tokens.len() * 4
-            + token_values * 4;
+        let capacity =
+            4 + string_id.len() + 4 + metadata.len() + 4 + tokens.len() * 4 + token_values * 4;
         let mut data = Vec::with_capacity(capacity);
 
         data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());

@@ -40,6 +40,6 @@ impl SparseStore {
         let slots = self.values.read();
         slots
             .get(usize::try_from(slot).expect("slot fits usize"))
-            .and_then(|entry| entry.clone())
+            .and_then(Clone::clone)
     }
 }

@@ -1,7 +1,7 @@
 //! Collection schema types for modality-aware storage.
 
-use crate::text::TokenizerPreset;
 use crate::Metric;
+use crate::text::TokenizerPreset;
 use serde::{Deserialize, Serialize};
 
 pub type CollectionName = String;

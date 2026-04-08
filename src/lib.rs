@@ -125,7 +125,7 @@ pub use vector::{
 };
 
 // Re-export storage types
-pub use config::StorageConfig;
 pub use catalog::CollectionSchema;
 pub use collection::PutRecord;
+pub use config::StorageConfig;
 pub use query::SearchRequest;
