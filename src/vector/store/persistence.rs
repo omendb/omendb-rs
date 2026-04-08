@@ -12,7 +12,7 @@ use crate::omen::{
     parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
     parse_wal_multi, parse_wal_sparse,
 };
-use crate::text::TextIndex;
+use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::VectorEngineView;
 use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use crate::vector::metadata::MetadataIndex;
@@ -44,6 +44,42 @@ pub(super) fn segments_dir_for(path: &Path) -> PathBuf {
 
 type ReplayedWalData = (Vec<u32>, Option<EdgeStore>, Vec<(String, String, String)>);
 
+fn tokenizer_preset_to_id(tokenizer: crate::text::TokenizerPreset) -> u64 {
+    match tokenizer {
+        crate::text::TokenizerPreset::Default => 0,
+        crate::text::TokenizerPreset::Code => 1,
+        crate::text::TokenizerPreset::Raw => 2,
+    }
+}
+
+fn tokenizer_preset_from_id(id: u64) -> Result<crate::text::TokenizerPreset> {
+    match id {
+        0 => Ok(crate::text::TokenizerPreset::Default),
+        1 => Ok(crate::text::TokenizerPreset::Code),
+        2 => Ok(crate::text::TokenizerPreset::Raw),
+        other => anyhow::bail!("Unknown tokenizer preset id: {other}"),
+    }
+}
+
+fn load_text_search_config(storage: &OmenFile) -> Result<Option<crate::text::TextSearchConfig>> {
+    let tokenizer = storage.get_config("text_tokenizer")?;
+    let writer_buffer_mb = storage.get_config("text_writer_buffer_mb")?;
+    match (tokenizer, writer_buffer_mb) {
+        (Some(tokenizer), Some(writer_buffer_mb)) => Ok(Some(crate::text::TextSearchConfig {
+            writer_buffer_mb: writer_buffer_mb as usize,
+            tokenizer: tokenizer_preset_from_id(tokenizer)?,
+        })),
+        (None, None) => Ok(None),
+        _ => Ok(Some(crate::text::TextSearchConfig {
+            writer_buffer_mb: writer_buffer_mb.unwrap_or(50) as usize,
+            tokenizer: tokenizer
+                .map(tokenizer_preset_from_id)
+                .transpose()?
+                .unwrap_or_default(),
+        })),
+    }
+}
+
 impl VectorStore {
     /// Open a persistent vector store at the given path
     ///
@@ -67,6 +103,7 @@ impl VectorStore {
         } else {
             OmenFile::create(path, 0)?
         };
+        let text_search_config = load_text_search_config(&storage_local)?;
 
         // Scoped block to ensure ctx (which borrows from storage_local) is dropped
         // before we move storage_local into the Arc<RwLock>.
@@ -102,6 +139,7 @@ impl VectorStore {
                 wal_edge_store,
                 &wal_edge_deletes,
                 ctx.distance_metric,
+                text_search_config.as_ref(),
             )?;
             if let Some(ref multivec_storage) = ancillary.multivec_storage {
                 for slot in 0..multivec_storage.len() as u32 {
@@ -150,7 +188,7 @@ impl VectorStore {
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
             text_index: RwLock::new(ancillary.text_index),
-            text_search_config: RwLock::new(None),
+            text_search_config: RwLock::new(text_search_config),
             pending_quantization: quantization.into(),
             hnsw_m: (if hnsw_params.m > 0 {
                 hnsw_params.m
@@ -266,6 +304,8 @@ impl VectorStore {
         // Initialize text index if enabled
         let text_index = if let Some(ref config) = options.text_search_config {
             let text_path = path.join("text_index");
+            storage.put_config("text_writer_buffer_mb", config.writer_buffer_mb as u64)?;
+            storage.put_config("text_tokenizer", tokenizer_preset_to_id(config.tokenizer))?;
             Some(TextIndex::open_with_config(&text_path, config)?)
         } else {
             None
@@ -1007,11 +1047,16 @@ impl VectorStore {
         wal_edge_store: Option<EdgeStore>,
         wal_edge_deletes: &[(String, String, String)],
         base_distance_metric: Metric,
+        text_search_config: Option<&TextSearchConfig>,
     ) -> Result<AncillaryIndexes> {
         // Try to open existing text index
         let text_index_path = path.join("text_index");
         let text_index = if text_index_path.exists() {
-            Some(TextIndex::open(&text_index_path)?)
+            Some(if let Some(config) = text_search_config {
+                TextIndex::open_with_config(&text_index_path, config)?
+            } else {
+                TextIndex::open(&text_index_path)?
+            })
         } else {
             None
         };

@@ -1,5 +1,6 @@
 use super::super::*;
 use super::random_vector;
+use crate::text::{TextSearchConfig, TokenizerPreset};
 use crate::vector::sparse::SparseVector;
 use crate::vector::store::edge_store::EdgeDirection;
 
@@ -178,6 +179,42 @@ fn test_persistent_search() {
                 "Results should be sorted by distance"
             );
         }
+    }
+}
+
+#[test]
+fn test_text_tokenizer_config_persists_on_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("text-tokenizer-persist");
+
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .enable_text_search_with_config(Some(TextSearchConfig {
+                writer_buffer_mb: 20,
+                tokenizer: TokenizerPreset::Code,
+            }))
+            .unwrap();
+        store
+            .set_with_text(
+                "doc1",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                "getUserProfile HTTPClient",
+                serde_json::json!({"kind": "code"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+    }
+
+    {
+        let store = VectorStore::open(&db_path).unwrap();
+        let results = store.search_text("user", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "doc1");
+
+        let results = store.search_text("client", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "doc1");
     }
 }
 

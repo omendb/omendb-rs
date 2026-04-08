@@ -36,13 +36,27 @@ impl VectorStore {
         &mut self,
         config: Option<TextSearchConfig>,
     ) -> Result<()> {
-        if self.text_index.read().is_some() {
-            return Ok(());
-        }
-
         let config = config
             .or_else(|| self.text_search_config.read().clone())
             .unwrap_or_default();
+        *self.text_search_config.write() = Some(config.clone());
+
+        if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
+            storage.put_config("text_writer_buffer_mb", config.writer_buffer_mb as u64)?;
+            storage.put_config(
+                "text_tokenizer",
+                match config.tokenizer {
+                    crate::text::TokenizerPreset::Default => 0,
+                    crate::text::TokenizerPreset::Code => 1,
+                    crate::text::TokenizerPreset::Raw => 2,
+                },
+            )?;
+        }
+
+        if self.text_index.read().is_some() {
+            return Ok(());
+        }
 
         *self.text_index.write() = if let Some(ref path) = self.storage_path {
             let text_path = path.join("text_index");
