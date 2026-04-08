@@ -269,7 +269,7 @@ impl VectorStore {
             let needs_checkpoint = if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
                 if let Some(vec_data) = &existing_vector {
-                    storage.log_insert(id, vec_data, new_metadata)?;
+                    storage.log_insert(id, vec_data.as_slice(), new_metadata)?;
                     storage.sync()?;
                     storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
                 } else {
@@ -415,7 +415,7 @@ impl VectorStore {
             .metadata
             .clone()
             .unwrap_or_else(helpers::default_metadata);
-        Some((Vector::new(record.vector), metadata))
+        Some((Vector::new(record.vector.to_vec()), metadata))
     }
 
     /// Get multiple vectors by string IDs

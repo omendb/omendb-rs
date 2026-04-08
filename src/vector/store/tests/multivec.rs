@@ -397,11 +397,11 @@ mod muvera {
         let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
         // With k=5, rerank_factor=2 -> fetches 10 candidates
-        let results = store.search_multi_rerank(&query_refs, 5, 2).unwrap();
+        let results = store.search_multi_rerank(&query_refs, 5, 2, false).unwrap();
         assert_eq!(results.len(), 5);
 
         // With k=5, rerank_factor=8 -> fetches 40 candidates (but only 20 exist)
-        let results = store.search_multi_rerank(&query_refs, 5, 8).unwrap();
+        let results = store.search_multi_rerank(&query_refs, 5, 8, false).unwrap();
         assert_eq!(results.len(), 5);
     }
 
@@ -905,7 +905,9 @@ mod persistence_tests {
             let query = [vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
             let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
 
-            let results = store.search_multi_rerank(&query_refs, 2, 10).unwrap();
+            let results = store
+                .search_multi_rerank(&query_refs, 2, 10, false)
+                .unwrap();
 
             assert_eq!(results.len(), 2);
             // doc1 should rank higher (better MaxSim alignment)

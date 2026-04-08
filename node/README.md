@@ -164,13 +164,14 @@ const results = await db.searchBatch(queries, 10, 100);
 
 ### Text & Hybrid Search
 
-#### `db.enableTextSearch(bufferMb?)`
+#### `db.enableTextSearch(bufferMb?, tokenizer?)`
 
 Enable text indexing for hybrid search.
 
 ```typescript
 db.enableTextSearch(); // Default 64MB buffer
 db.enableTextSearch(128); // Custom buffer size
+db.enableTextSearch(64, "code"); // Code-aware tokenization
 ```
 
 #### `db.hasTextSearch`

@@ -181,7 +181,7 @@ impl VectorStore {
 
             // Insert into our RecordStore
             self.records
-                .set(id.clone(), record.vector.clone(), record.metadata.clone())?;
+                .set(id.clone(), record.vector.to_vec(), record.metadata.clone())?;
             merged_slots.push((slot, id));
             merged_count += 1;
         }

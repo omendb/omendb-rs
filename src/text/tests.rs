@@ -10,7 +10,7 @@ fn test_text_index_in_memory() {
 
     let results = index.search("hello", 10).unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].0, "doc1");
+    assert_eq!(results[0].id, "doc1");
 
     let results = index.search("world", 10).unwrap();
     assert_eq!(results.len(), 2);
@@ -35,7 +35,7 @@ fn test_text_index_update() {
 
     let results = index.search("updated", 10).unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].0, "doc1");
+    assert_eq!(results[0].id, "doc1");
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn test_text_index_delete() {
 
     let results = index.search("world", 10).unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].0, "doc2");
+    assert_eq!(results[0].id, "doc2");
 }
 
 #[test]
@@ -91,9 +91,9 @@ fn test_text_index_bm25_scoring() {
     assert_eq!(results.len(), 2);
 
     // doc2 should score higher due to higher term frequency
-    assert_eq!(results[0].0, "doc2");
-    assert_eq!(results[1].0, "doc1");
-    assert!(results[0].1 > results[1].1);
+    assert_eq!(results[0].id, "doc2");
+    assert_eq!(results[1].id, "doc1");
+    assert!(results[0].score > results[1].score);
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn test_text_index_persistence() {
         let index = TextIndex::open(&path).unwrap();
         let results = index.search("persistent", 10).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, "doc1");
+        assert_eq!(results[0].id, "doc1");
     }
 }
 
@@ -499,4 +499,65 @@ fn test_mixed_operations_workload() {
     let all_results = index.search("workload", 200).unwrap();
     // 5 rounds * 20 docs = 100, minus 3 rounds * 5 deletions = 85
     assert_eq!(all_results.len(), 85);
+}
+
+#[test]
+fn test_tokenizer_presets() {
+    // Test Default tokenizer
+    {
+        let config = TextSearchConfig {
+            writer_buffer_mb: 20,
+            tokenizer: TokenizerPreset::Default,
+        };
+        let mut index = TextIndex::open_in_memory_with_config(&config).unwrap();
+
+        index
+            .index_document("doc1", "getUserProfile handle_request")
+            .unwrap();
+        index.commit().unwrap();
+
+        // Should match "getuserprofile"
+        assert_eq!(index.search("getuserprofile", 10).unwrap().len(), 1);
+
+        // Should match "handle", "request" (split by SimpleTokenizer)
+        assert_eq!(index.search("handle", 10).unwrap().len(), 1);
+        assert_eq!(index.search("request", 10).unwrap().len(), 1);
+    }
+    // Test Code tokenizer (camelCase splitting)
+    {
+        let config = TextSearchConfig {
+            writer_buffer_mb: 20,
+            tokenizer: TokenizerPreset::Code,
+        };
+        let mut index = TextIndex::open_in_memory_with_config(&config).unwrap();
+
+        index
+            .index_document("doc1", "getUserProfile HTTPClient")
+            .unwrap();
+        index.commit().unwrap();
+
+        assert_eq!(index.search("get", 10).unwrap().len(), 1);
+        assert_eq!(index.search("user", 10).unwrap().len(), 1);
+        assert_eq!(index.search("profile", 10).unwrap().len(), 1);
+        assert_eq!(index.search("http", 10).unwrap().len(), 1);
+        assert_eq!(index.search("client", 10).unwrap().len(), 1);
+    }
+    // Test Raw tokenizer (no splitting, exact match only)
+    {
+        let config = TextSearchConfig {
+            writer_buffer_mb: 20,
+            tokenizer: TokenizerPreset::Raw,
+        };
+        let mut index = TextIndex::open_in_memory_with_config(&config).unwrap();
+
+        index.index_document("doc1", "ExactMatchOnly").unwrap();
+        index.commit().unwrap();
+
+        // Should NOT match partials or different case
+        assert_eq!(index.search("Exact", 10).unwrap().len(), 0);
+        assert_eq!(index.search("exactmatchonly", 10).unwrap().len(), 0);
+
+        // Should match exactly
+        assert_eq!(index.search("ExactMatchOnly", 10).unwrap().len(), 1);
+    }
 }

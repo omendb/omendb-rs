@@ -8,17 +8,66 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use roaring::RoaringBitmap;
 use rustc_hash::{FxHashMap, FxHasher};
-use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use memmap2::Mmap;
+use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub enum VectorData {
+    Owned(Vec<f32>),
+    Mmap(Arc<Mmap>, usize, usize),
+}
+
+impl VectorData {
+    #[inline]
+    pub fn as_slice(&self) -> &[f32] {
+        match self {
+            Self::Owned(v) => v.as_slice(),
+            Self::Mmap(mmap, offset, len) => unsafe {
+                std::slice::from_raw_parts(mmap.as_ptr().add(*offset).cast::<f32>(), *len)
+            },
+        }
+    }
+
+    #[inline]
+    pub fn to_vec(&self) -> Vec<f32> {
+        self.as_slice().to_vec()
+    }
+}
+
 /// A single record in the store
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Record {
     pub id: String,
-    pub vector: Vec<f32>,
+    pub vector: VectorData,
     pub metadata: Option<JsonValue>,
+}
+
+impl serde::Serialize for Record {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Record", 3)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("vector", self.vector.as_slice())?;
+        state.serialize_field("metadata", &self.metadata)?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Record {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct RecordData {
+            id: String,
+            vector: Vec<f32>,
+            metadata: Option<JsonValue>,
+        }
+        let data = RecordData::deserialize(deserializer)?;
+        Ok(Record::new(data.id, data.vector, data.metadata))
+    }
 }
 
 impl Record {
@@ -27,7 +76,23 @@ impl Record {
     pub fn new(id: String, vector: Vec<f32>, metadata: Option<JsonValue>) -> Self {
         Self {
             id,
-            vector,
+            vector: VectorData::Owned(vector),
+            metadata,
+        }
+    }
+
+    /// Create a new record from an mmap slice
+    #[inline]
+    pub fn new_mmap(
+        id: String,
+        mmap: Arc<Mmap>,
+        offset: usize,
+        len: usize,
+        metadata: Option<JsonValue>,
+    ) -> Self {
+        Self {
+            id,
+            vector: VectorData::Mmap(mmap, offset, len),
             metadata,
         }
     }
@@ -100,6 +165,30 @@ impl RecordStore {
             dimensions: AtomicU32::new(dimensions),
             dirty_slots: RwLock::new(RoaringBitmap::new()),
         }
+    }
+
+    /// Restore internal state from snapshot data (used during recovery)
+    pub(crate) fn restore_snapshot(
+        &mut self,
+        slots: Vec<Option<Record>>,
+        deleted: RoaringBitmap,
+        live_count: u32,
+    ) {
+        // Rebuild id_to_slot mapping from slots
+        self.id_to_slot.clear();
+        for (slot, record_opt) in slots.iter().enumerate() {
+            let slot = slot as u32;
+            if deleted.contains(slot) {
+                continue;
+            }
+            if let Some(record) = record_opt {
+                self.id_to_slot.insert(record.id.clone(), slot);
+            }
+        }
+
+        *self.slots.write() = slots;
+        *self.deleted.write() = deleted;
+        self.live_count.store(live_count, Ordering::SeqCst);
     }
 
     /// Set a record (insert or update)
@@ -314,7 +403,7 @@ impl RecordStore {
         self.slots
             .read()
             .iter()
-            .map(|opt| opt.as_ref().map(|r| r.vector.clone()))
+            .map(|opt| opt.as_ref().map(|r| r.vector.to_vec()))
             .collect()
     }
 
@@ -338,7 +427,7 @@ impl RecordStore {
             .read()
             .iter()
             .enumerate()
-            .filter_map(|(slot, opt)| {
+            .filter_map(|(slot, opt): (usize, &Option<Record>)| {
                 opt.as_ref()
                     .and_then(|r| r.metadata.clone())
                     .map(|m| (slot as u32, m))
@@ -357,7 +446,7 @@ impl RecordStore {
     }
 
     /// Get vector data for a slot
-    pub fn get_vector(&self, slot: u32) -> Option<Vec<f32>> {
+    pub fn get_vector(&self, slot: u32) -> Option<VectorData> {
         self.slots
             .read()
             .get(slot as usize)?
@@ -481,7 +570,7 @@ mod tests {
 
         // Check updated vector at new slot
         let record = store.get_by_slot(1).unwrap();
-        assert_eq!(record.vector, &[7.0, 8.0, 9.0]);
+        assert_eq!(record.vector.as_slice(), &[7.0, 8.0, 9.0]);
 
         // Old slot is deleted (get_by_slot respects deleted bitmap)
         assert!(store.get_by_slot(0).is_none());

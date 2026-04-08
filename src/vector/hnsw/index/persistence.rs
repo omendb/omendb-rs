@@ -87,9 +87,11 @@ impl HNSWIndex {
         writer.write_all(&self.rng_state.to_le_bytes())?;
 
         // Write storage (complete NodeStorage serialization including SQ8 state)
-        let storage_bytes = self.storage.serialize_full();
-        writer.write_all(&(storage_bytes.len() as u64).to_le_bytes())?;
-        writer.write_all(&storage_bytes)?;
+        let storage_len = self.storage.serialized_len_full();
+        writer.write_all(&(storage_len as u64).to_le_bytes())?;
+        self.storage.write_full(&mut writer)?;
+
+        writer.flush()?;
 
         let elapsed = start.elapsed();
         info!(

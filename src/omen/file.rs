@@ -16,15 +16,27 @@ pub use crate::omen::wal::{
 use crate::vector::store::record_store::RecordStore;
 use anyhow::Result;
 use fs2::FileExt;
-use memmap2::MmapMut;
+use memmap2::{Mmap, MmapMut};
 use roaring::RoaringBitmap;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+use std::sync::Arc;
 
 #[cfg(not(target_endian = "little"))]
 compile_error!("OmenFile raw vector I/O requires little-endian targets");
 use std::path::{Path, PathBuf};
+
+/// Source of HNSW index bytes
+#[derive(Debug, Clone)]
+pub enum IndexSource {
+    /// In-memory bytes (newly built or from legacy .omen)
+    Owned(Vec<u8>),
+    /// Pointer into main memory map
+    MmapRange { offset: usize, length: usize },
+}
 
 /// Configure OpenOptions for cross-platform compatibility.
 /// On Windows, enables full file sharing to avoid "Access is denied" errors.
@@ -120,7 +132,7 @@ pub struct OmenFile {
     wal: Wal,
 
     // Serialized HNSW index (persisted on checkpoint, loaded on open)
-    hnsw_index_bytes: Option<Vec<u8>>,
+    hnsw_index_source: Option<IndexSource>,
 
     // Omen Manifest
     manifest: OmenManifest,
@@ -139,6 +151,31 @@ pub struct OmenFile {
 }
 
 impl OmenFile {
+    /// Get the source of HNSW index bytes (zero-copy if in mmap)
+    pub fn get_hnsw_source(&self) -> Option<&IndexSource> {
+        self.hnsw_index_source.as_ref()
+    }
+
+    /// Get an Arc to the vectors memory map if available
+    pub fn get_vec_mmap_arc(&self) -> Option<Arc<Mmap>> {
+        if let Some(ref file) = self.vec_file {
+            if let Ok(mmap) = unsafe { Mmap::map(file) } {
+                return Some(Arc::new(mmap));
+            }
+        }
+        None
+    }
+
+    /// Get an Arc to the main memory map if available
+    pub fn get_main_mmap_arc(&self) -> Option<Arc<Mmap>> {
+        if let Some(ref file) = self.file {
+            if let Ok(mmap) = unsafe { Mmap::map(file) } {
+                return Some(Arc::new(mmap));
+            }
+        }
+        None
+    }
+
     /// Compute .omen path by appending extension (preserves full filename)
     ///
     /// Handles filenames with multiple dots (e.g., `test.db_64` → `test.db_64.omen`)
@@ -213,7 +250,7 @@ impl OmenFile {
             header,
             config: HashMap::from([("dimensions".to_string(), u64::from(dimensions))]),
             wal: Wal::open(&wal_path)?,
-            hnsw_index_bytes: None,
+            hnsw_index_source: None,
             manifest,
             vec_mmap: None,
             vec_file: None,
@@ -362,13 +399,16 @@ impl OmenFile {
         });
 
         // Load HNSW index bytes from manifest (if mmap exists)
-        let hnsw_index_bytes = mmap.as_ref().and_then(|m| {
+        let hnsw_index_source = mmap.as_ref().and_then(|m| {
             manifest.nodes.iter().find_map(|location| {
                 if location.segment_type == SegmentType::IndexMetadata {
                     let start = location.offset as usize;
                     let end = start + location.length as usize;
                     if end <= m.len() {
-                        return Some(m[start..end].to_vec());
+                        return Some(IndexSource::MmapRange {
+                            offset: start,
+                            length: location.length as usize,
+                        });
                     }
                 }
                 None
@@ -412,7 +452,7 @@ impl OmenFile {
             header,
             config,
             wal,
-            hnsw_index_bytes,
+            hnsw_index_source,
             manifest,
             vec_mmap,
             vec_file,
@@ -617,7 +657,7 @@ impl OmenFile {
     /// The bytes are persisted on the next checkpoint/flush.
     /// `VectorStore` serializes `HNSWIndex` and stores it here.
     pub fn put_hnsw_index(&mut self, bytes: Vec<u8>) {
-        self.hnsw_index_bytes = Some(bytes);
+        self.hnsw_index_source = Some(IndexSource::Owned(bytes));
     }
 
     /// Get serialized HNSW index bytes (if present)
@@ -626,13 +666,19 @@ impl OmenFile {
     /// or loaded from disk on open.
     #[must_use]
     pub fn get_hnsw_index(&self) -> Option<&[u8]> {
-        self.hnsw_index_bytes.as_deref()
+        match &self.hnsw_index_source {
+            Some(IndexSource::Owned(bytes)) => Some(bytes),
+            Some(IndexSource::MmapRange { offset, length }) => {
+                self.mmap.as_ref().map(|m| &m[*offset..*offset + *length])
+            }
+            None => None,
+        }
     }
 
     /// Check if HNSW index is stored
     #[must_use]
     pub fn has_hnsw_index(&self) -> bool {
-        self.hnsw_index_bytes.is_some()
+        self.hnsw_index_source.is_some()
     }
 
     /// Update HNSW parameters in the header
@@ -689,9 +735,14 @@ pub struct PersistedMuveraConfig {
 
 /// Snapshot data loaded from OmenFile
 #[derive(Debug, Default)]
-pub struct OmenSnapshot {
+pub struct OmenSnapshot<'a> {
+    /// Internal mmap to keep borrowed data alive (optional)
+    pub _mmap: Option<Arc<Mmap>>,
+    /// Internal vecs mmap to keep borrowed vectors alive (optional)
+    pub _vec_mmap: Option<Arc<Mmap>>,
+
     /// Vectors loaded from storage
-    pub vectors: Vec<Option<Vec<f32>>>,
+    pub vectors: Vec<Option<crate::vector::store::record_store::VectorData>>,
     /// ID to slot mappings
     pub id_to_slot: HashMap<String, u32>,
     /// Deleted slot bitmap (as Vec for compatibility)
@@ -701,19 +752,19 @@ pub struct OmenSnapshot {
     /// Vector dimensions
     pub dimensions: u32,
     /// HNSW index bytes (if persisted)
-    pub hnsw_bytes: Option<Vec<u8>>,
+    pub hnsw_bytes: Option<Cow<'a, [u8]>>,
     /// Serialized MetadataIndex (if persisted)
-    pub metadata_index_bytes: Option<Vec<u8>>,
+    pub metadata_index_bytes: Option<Cow<'a, [u8]>>,
     /// Multi-vector token data (if persisted)
-    pub multivec_bytes: Option<Vec<u8>>,
+    pub multivec_bytes: Option<Cow<'a, [u8]>>,
     /// Multi-vector offset table (if persisted)
-    pub multivec_offsets: Option<Vec<u8>>,
+    pub multivec_offsets: Option<Cow<'a, [u8]>>,
     /// MUVERA config
     pub multivec_config: Option<PersistedMuveraConfig>,
     /// Serialized SparseIndex (if persisted)
-    pub sparse_index_bytes: Option<Vec<u8>>,
+    pub sparse_index_bytes: Option<Cow<'a, [u8]>>,
     /// Serialized EdgeStore (if persisted)
-    pub edge_store_bytes: Option<Vec<u8>>,
+    pub edge_store_bytes: Option<Cow<'a, [u8]>>,
 }
 
 /// Slim records snapshot: ID mappings, deleted slots, metadata, and dirty slots since last flush.
@@ -727,7 +778,7 @@ pub struct OmenSnapshot {
 /// the WAL was truncated). On recovery, if the WAL's current epoch > this value, the WAL
 /// was truncated again after this snapshot, meaning current WAL entries are new and must be
 /// replayed. If equal, the WAL was not truncated after the snapshot — entries are stale.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SlimRecordsSnapshot {
     pub id_to_slot: HashMap<String, u32>,
     pub deleted: Vec<u32>,
@@ -821,19 +872,27 @@ impl OmenFile {
     ///
     /// Does NOT include WAL entries - caller must replay WAL separately.
     /// This is the Phase 5 API where state is managed externally by RecordStore.
-    pub fn load_persisted_snapshot(&self) -> OmenSnapshot {
-        self.load_persisted_snapshot_with_live_slots(None)
+    /// Load snapshot from persisted data only (manifest + mmap)
+    ///
+    /// Does NOT include WAL entries - caller must replay WAL separately.
+    pub fn load_persisted_snapshot(&self) -> OmenSnapshot<'static> {
+        let vec_mmap = self.get_vec_mmap_arc();
+        let main_mmap = self.get_main_mmap_arc();
+        let mut snapshot =
+            self.load_persisted_snapshot_borrowed(vec_mmap.as_ref(), main_mmap.as_ref(), None);
+        snapshot._vec_mmap = vec_mmap;
+        snapshot._mmap = main_mmap;
+        snapshot
     }
 
-    /// Load the durable snapshot, treating any hinted live slots as authoritative for `.vecs`.
-    ///
-    /// Recovery uses this when a newer slim `.records` snapshot exists: slots introduced after
-    /// the last full manifest flush may legitimately contain all-zero vectors, so the stale
-    /// manifest alone is not enough to decide whether a zero-filled slot is live.
-    pub(crate) fn load_persisted_snapshot_with_live_slots(
+    /// Load snapshot using borrowed data from provided mmaps
+    pub fn load_persisted_snapshot_borrowed(
         &self,
+        vec_mmap: Option<&Arc<Mmap>>,
+        main_mmap: Option<&Arc<Mmap>>,
         extra_live_slots: Option<&RoaringBitmap>,
-    ) -> OmenSnapshot {
+    ) -> OmenSnapshot<'static> {
+        use crate::vector::store::record_store::VectorData;
         let dim = self.header.dimensions as usize;
         let mut snapshot = OmenSnapshot {
             dimensions: self.header.dimensions,
@@ -845,14 +904,13 @@ impl OmenFile {
             known_live_slots |= extra_live_slots;
         }
 
-        // Load vectors from .vecs mmap (incremental format) or .omen manifest (legacy)
+        // Load vectors from .vecs mmap
         let has_vec_file = self.manifest.config.get("vec_file").copied().unwrap_or(0) == 1;
         if has_vec_file {
-            if let Some(ref vm) = self.vec_mmap {
-                // Fixed-slot format: slot i at offset i * dim * 4
+            if let Some(mmap) = vec_mmap {
                 let slot_bytes = dim * 4;
                 if slot_bytes > 0 {
-                    let slot_count = vm.len() / slot_bytes;
+                    let slot_count = mmap.len() / slot_bytes;
                     snapshot.vectors.resize(slot_count, None);
                     for slot in 0..slot_count {
                         if self.manifest.deleted.contains(slot as u32) {
@@ -860,127 +918,111 @@ impl OmenFile {
                         }
                         let start = slot * slot_bytes;
                         let end = start + slot_bytes;
-                        if end <= vm.len() {
-                            let vec = read_vector_from_bytes(&vm[start..end], dim);
-                            // Zero-filled slots can still be live when a newer slim `.records`
-                            // snapshot exists (for example, legitimate zero vectors or sparse
-                            // placeholders written after the last full manifest flush).
-                            if vec.iter().any(|&v| v != 0.0)
-                                || known_live_slots.contains(slot as u32)
-                            {
-                                snapshot.vectors[slot] = Some(vec);
+                        if end <= mmap.len() {
+                            let bytes = &mmap[start..end];
+                            // Quick check if all zeros (deleted/empty slot)
+                            let mut is_zero = true;
+                            for chunk in bytes.chunks_exact(4) {
+                                if chunk != [0, 0, 0, 0] {
+                                    is_zero = false;
+                                    break;
+                                }
+                            }
+
+                            if !is_zero || known_live_slots.contains(slot as u32) {
+                                snapshot.vectors[slot] =
+                                    Some(VectorData::Mmap(mmap.clone(), start, dim));
                             }
                         }
                     }
                 }
             }
-
-            // Load HNSW index bytes from .omen manifest nodes
-            if let Some(ref mmap) = self.mmap {
-                for location in &self.manifest.nodes {
-                    if location.segment_type == SegmentType::IndexMetadata {
-                        let start = location.offset as usize;
-                        let end = start + location.length as usize;
-                        if end <= mmap.len() {
-                            snapshot.hnsw_bytes = Some(mmap[start..end].to_vec());
-                            break;
-                        }
-                    }
-                }
-            }
-        } else if let Some(ref mmap) = self.mmap {
-            // Legacy format: vectors stored in .omen via NodeLocations
+        } else if let Some(mmap) = main_mmap {
+            // Legacy format: vectors stored in .omen
             for (idx, location) in self.manifest.nodes.iter().enumerate() {
                 if location.segment_type == SegmentType::Vectors {
                     while snapshot.vectors.len() <= idx {
                         snapshot.vectors.push(None);
                     }
-                    // Skip deleted sentinels (length=0 + in deleted bitmap)
                     if location.length == 0 && self.manifest.deleted.contains(idx as u32) {
                         continue;
                     }
                     let start = location.offset as usize;
                     let end = start + location.length as usize;
                     if end <= mmap.len() {
-                        let vec = read_vector_from_bytes(&mmap[start..end], dim);
-                        // Infer dimensions from first vector if header says 0
-                        if snapshot.dimensions == 0 && !vec.is_empty() {
-                            snapshot.dimensions = u32::try_from(vec.len()).unwrap_or(u32::MAX);
+                        let bytes = &mmap[start..end];
+                        // If properly aligned and large enough, use Mmap zero-copy
+                        if (bytes.as_ptr() as usize) % 4 == 0 && bytes.len() >= dim * 4 {
+                            snapshot.vectors[idx] =
+                                Some(VectorData::Mmap(mmap.clone(), start, dim));
+                        } else {
+                            snapshot.vectors[idx] =
+                                Some(VectorData::Owned(read_vector_from_bytes(bytes, dim)));
                         }
-                        snapshot.vectors[idx] = Some(vec);
-                    }
-                }
-            }
 
-            // Load HNSW index bytes
-            for location in &self.manifest.nodes {
-                if location.segment_type == SegmentType::IndexMetadata {
-                    let start = location.offset as usize;
-                    let end = start + location.length as usize;
-                    if end <= mmap.len() {
-                        snapshot.hnsw_bytes = Some(mmap[start..end].to_vec());
-                        break;
+                        if snapshot.dimensions == 0 {
+                            snapshot.dimensions = u32::try_from(dim).unwrap_or(u32::MAX);
+                        }
                     }
                 }
             }
         }
 
-        // Load ID mappings from manifest
-        snapshot.id_to_slot.clone_from(&self.manifest.id_to_index);
+        // Load HNSW index bytes and MultiVectors segment
+        if let Some(mmap) = main_mmap {
+            for location in &self.manifest.nodes {
+                match location.segment_type {
+                    SegmentType::IndexMetadata => {
+                        let start = location.offset as usize;
+                        let end = start + location.length as usize;
+                        if end <= mmap.len() {
+                            snapshot.hnsw_bytes = Some(Cow::Owned(mmap[start..end].to_vec()));
+                        }
+                    }
+                    SegmentType::MultiVectors => {
+                        let start = location.offset as usize;
+                        let end = start + location.length as usize;
+                        if end <= mmap.len() {
+                            let bytes = &mmap[start..end];
+                            let bytes_static: &'static [u8] = unsafe { std::mem::transmute(bytes) };
+                            snapshot.multivec_bytes = Some(Cow::Borrowed(bytes_static));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
 
-        // Load deleted bitmap from manifest (RoaringBitmap -> Vec<u32>)
+        // Fill in the rest of the snapshot (metadata, etc.)
+        snapshot.id_to_slot = self.manifest.id_to_index.clone();
         snapshot.deleted = self.manifest.deleted.iter().collect();
-
-        // Load metadata from manifest (bytes -> JsonValue)
         for (&idx, bytes) in &self.manifest.metadata {
-            match serde_json::from_slice(bytes) {
-                Ok(json) => {
-                    snapshot.metadata.insert(idx, json);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Corrupt metadata for slot {} during manifest load: {}",
-                        idx,
-                        e
-                    );
-                }
+            if let Ok(json) = serde_json::from_slice(bytes) {
+                snapshot.metadata.insert(idx, json);
             }
         }
 
-        // Load serialized MetadataIndex if available
-        snapshot
-            .metadata_index_bytes
-            .clone_from(&self.manifest.metadata_index);
-
-        // Load multi-vector data if present
-        if let Some(ref mmap) = self.mmap {
-            // Load MultiVectors segment (token vectors)
-            for location in &self.manifest.nodes {
-                if location.segment_type == SegmentType::MultiVectors {
-                    let start = location.offset as usize;
-                    let end = start + location.length as usize;
-                    if end <= mmap.len() {
-                        snapshot.multivec_bytes = Some(mmap[start..end].to_vec());
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Load multi-vector offsets from manifest
-        snapshot
+        // Load other segments as Cow::Owned for now
+        snapshot.metadata_index_bytes = self
+            .manifest
+            .metadata_index
+            .as_ref()
+            .map(|b| Cow::Owned(b.clone()));
+        snapshot.multivec_offsets = self
+            .manifest
             .multivec_offsets
-            .clone_from(&self.manifest.multivec_offsets);
-
-        // Load sparse index from manifest
-        snapshot
+            .as_ref()
+            .map(|b| Cow::Owned(b.clone()));
+        snapshot.sparse_index_bytes = self
+            .manifest
             .sparse_index_bytes
-            .clone_from(&self.manifest.sparse_index_bytes);
-
-        // Load edge store from manifest
-        snapshot
+            .as_ref()
+            .map(|b| Cow::Owned(b.clone()));
+        snapshot.edge_store_bytes = self
+            .manifest
             .edge_store_bytes
-            .clone_from(&self.manifest.edge_store_bytes);
+            .as_ref()
+            .map(|b| Cow::Owned(b.clone()));
 
         // Extract MUVERA config from manifest.config if present
         let reps = self.manifest.config.get("muvera_repetitions").copied();
@@ -1015,18 +1057,6 @@ impl OmenFile {
         snapshot
     }
 
-    // Note: load_snapshot() removed in Phase 5. VectorStore uses load_persisted_snapshot().
-
-    /// Returns true if the .records snapshot exists and is at least as recent as the .omen manifest.
-    ///
-    /// Used during recovery to decide whether to use the slim snapshot's ID/metadata mappings
-    /// instead of the manifest's (happens when auto-checkpoint ran but flush() hasn't been called).
-    ///
-    /// Uses `>=` (not `>`) to handle 1-second precision filesystems (HFS+, ext3, NFS): if
-    /// `.records` and `.omen` have equal mtime, the snapshot was written after or during the
-    /// same flush tick and is still valid. Using `>` would cause data loss on these filesystems
-    /// because `checkpoint_vectors_only` truncates the WAL after writing `.records`, so ignoring
-    /// an equal-mtime snapshot leaves an empty WAL and no in-between vectors.
     pub fn records_newer_than_omen(&self) -> bool {
         let records_mtime = match std::fs::metadata(&self.records_path).and_then(|m| m.modified()) {
             Ok(t) => t,
@@ -1297,11 +1327,11 @@ impl OmenFile {
                     // Zero-fill deleted slots
                     vm[offset..offset + slot_bytes].fill(0);
                 } else if let Some(vec_data) = records.get_vector(slot as u32) {
-                    if vec_data.len() == dim {
+                    if vec_data.as_slice().len() == dim {
                         let bytes = unsafe {
                             std::slice::from_raw_parts(
-                                vec_data.as_ptr() as *const u8,
-                                vec_data.len() * 4,
+                                vec_data.as_slice().as_ptr() as *const u8,
+                                vec_data.as_slice().len() * 4,
                             )
                         };
                         vm[offset..offset + slot_bytes].copy_from_slice(bytes);
@@ -1383,11 +1413,11 @@ impl OmenFile {
             if records.deleted_bitmap().contains(slot) {
                 vm[offset..end].fill(0);
             } else if let Some(vec_data) = records.get_vector(slot) {
-                if vec_data.len() == dim {
+                if vec_data.as_slice().len() == dim {
                     let bytes = unsafe {
                         std::slice::from_raw_parts(
-                            vec_data.as_ptr() as *const u8,
-                            vec_data.len() * 4,
+                            vec_data.as_slice().as_ptr() as *const u8,
+                            vec_data.as_slice().len() * 4,
                         )
                     };
                     vm[offset..end].copy_from_slice(bytes);
@@ -1500,11 +1530,11 @@ impl OmenFile {
             if records.deleted_bitmap().contains(slot) {
                 vm[offset..end].fill(0);
             } else if let Some(vec_data) = records.get_vector(slot) {
-                if vec_data.len() == dim {
+                if vec_data.as_slice().len() == dim {
                     let bytes = unsafe {
                         std::slice::from_raw_parts(
-                            vec_data.as_ptr() as *const u8,
-                            vec_data.len() * 4,
+                            vec_data.as_slice().as_ptr() as *const u8,
+                            vec_data.as_slice().len() * 4,
                         )
                     };
                     vm[offset..end].copy_from_slice(bytes);
@@ -2212,8 +2242,20 @@ mod tests {
 
             assert!(snapshot.vectors[slot0].is_some());
             assert!(snapshot.vectors[slot1].is_some());
-            assert_eq!(snapshot.vectors[slot0].as_ref().unwrap(), &[1.0, 2.0, 3.0]);
-            assert_eq!(snapshot.vectors[slot1].as_ref().unwrap(), &[4.0, 5.0, 6.0]);
+            assert_eq!(
+                snapshot.vectors[slot0]
+                    .as_ref()
+                    .map(|v| v.as_slice())
+                    .unwrap(),
+                &[1.0, 2.0, 3.0]
+            );
+            assert_eq!(
+                snapshot.vectors[slot1]
+                    .as_ref()
+                    .map(|v| v.as_slice())
+                    .unwrap(),
+                &[4.0, 5.0, 6.0]
+            );
 
             // Check deleted bitmap
             assert!(snapshot.deleted.contains(&2));
@@ -2484,14 +2526,20 @@ mod tests {
 
             // Live (even) slots have correct vectors
             for i in (0..10u32).step_by(2) {
-                let vec_data = snapshot.vectors.get(i as usize).and_then(|v| v.as_ref());
+                let vec_data = snapshot
+                    .vectors
+                    .get(i as usize)
+                    .and_then(|v| v.as_ref().map(|v| v.as_slice()));
                 assert!(vec_data.is_some(), "Live slot {i} should have a vector");
                 assert_eq!(vec_data.unwrap(), &vec![i as f32; 3]);
             }
 
             // Deleted (odd) slots have no vector data
             for i in (1..10u32).step_by(2) {
-                let vec_data = snapshot.vectors.get(i as usize).and_then(|v| v.as_ref());
+                let vec_data = snapshot
+                    .vectors
+                    .get(i as usize)
+                    .and_then(|v| v.as_ref().map(|v| v.as_slice()));
                 assert!(vec_data.is_none(), "Deleted slot {i} should be None");
             }
         }

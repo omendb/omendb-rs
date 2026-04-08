@@ -236,7 +236,7 @@ impl VectorStore {
         k: usize,
     ) -> Result<Vec<SearchResult>> {
         // Default rerank factor of 20 (fetch 20x candidates, rerank to k)
-        self.search_multi_rerank(query_tokens, k, 20)
+        self.search_multi_rerank(query_tokens, k, 20, false)
     }
 
     /// Fast approximate search without MaxSim reranking.
@@ -319,6 +319,7 @@ impl VectorStore {
         query_tokens: &[&[f32]],
         k: usize,
         rerank_factor: usize,
+        explain: bool,
     ) -> Result<Vec<SearchResult>> {
         // Validate multi-vector is enabled
         let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
@@ -390,33 +391,44 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // Step 3: Compute MaxSim scores in batch (borrow tokens directly, no clone)
-        let doc_tokens_refs: Vec<&Vec<&[f32]>> = candidate_data
-            .iter()
-            .map(|(_, _, _, tokens)| tokens)
-            .collect();
+        // Step 3: Compute MaxSim scores (and explanations if requested)
+        let results: Vec<SearchResult> = if explain {
+            let mut explained = Vec::with_capacity(candidate_data.len());
+            for (_, id, metadata, tokens) in candidate_data {
+                let explanation = crate::vector::muvera::maxsim_explain(query_tokens, &tokens);
+                let score = explanation.score;
+                let explanation_json = serde_json::to_value(explanation)?;
+                explained.push(SearchResult::with_explanation(
+                    id,
+                    -score,
+                    metadata,
+                    explanation_json,
+                ));
+            }
+            explained.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            explained.into_iter().take(k).collect()
+        } else {
+            let doc_tokens_refs: Vec<&Vec<&[f32]>> = candidate_data
+                .iter()
+                .map(|(_, _, _, tokens)| tokens)
+                .collect();
 
-        let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
+            let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
 
-        // Step 4: Sort by MaxSim score (higher = better) and take top-k
-        let mut scored: Vec<(usize, &str, &JsonValue, f32)> = candidate_data
-            .iter()
-            .zip(maxsim_scores.iter())
-            .map(|((slot, id, metadata, _), &score)| (*slot, id.as_str(), metadata, score))
-            .collect();
+            let mut scored: Vec<(String, JsonValue, f32)> = candidate_data
+                .into_iter()
+                .zip(maxsim_scores.into_iter())
+                .map(|((_, id, metadata, _), score)| (id, metadata, score))
+                .collect();
 
-        // Sort descending by MaxSim score
-        scored.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+            scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Take top-k and convert to SearchResult
-        let results: Vec<SearchResult> = scored
-            .into_iter()
-            .take(k)
-            .map(|(_, id, metadata, score)| {
-                // Store as -MaxSim to match IP distance semantics (lower = better)
-                SearchResult::new(id.to_string(), -score, metadata.clone())
-            })
-            .collect();
+            scored
+                .into_iter()
+                .take(k)
+                .map(|(id, metadata, score)| SearchResult::new(id, -score, metadata))
+                .collect()
+        };
 
         Ok(results)
     }
@@ -456,6 +468,8 @@ impl VectorStore {
                 let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
                 self.store_multi_internal(&token_refs, id, metadata)
             }
+            // Sparse vector (works for both dense and multi-vector stores)
+            (_, VectorData::Sparse(sv)) => self.set_sparse(id, sv, metadata),
             // Error: wrong type for store
             (None, VectorData::Multi(_)) => {
                 anyhow::bail!(
@@ -604,6 +618,8 @@ impl VectorStore {
             (None, QueryData::Single(vec)) => self.search_single_internal(vec, k, options),
             // Multi-vector store, multi-vector query
             (Some(_), QueryData::Multi(tokens)) => self.search_multi_internal(tokens, k, options),
+            // Sparse vector query (always available)
+            (_, QueryData::Sparse(sv)) => self.sparse_search(sv, k, options.filter.as_ref()),
             // Error: wrong query type for store
             (None, QueryData::Multi(_)) => {
                 anyhow::bail!(
@@ -681,13 +697,13 @@ impl VectorStore {
             && self.records.len() <= Self::BRUTE_FORCE_MAXSIM_THRESHOLD
             && !self.records.is_empty()
         {
-            return self.search_multi_bruteforce(query_tokens, k);
+            return self.search_multi_bruteforce(query_tokens, k, options.explain);
         }
 
         match options.rerank {
             Rerank::Off => self.search_multi_approx(query_tokens, k),
-            Rerank::On => self.search_multi_rerank(query_tokens, k, 20),
-            Rerank::Factor(f) => self.search_multi_rerank(query_tokens, k, f),
+            Rerank::On => self.search_multi_rerank(query_tokens, k, 20, options.explain),
+            Rerank::Factor(f) => self.search_multi_rerank(query_tokens, k, f, options.explain),
         }
     }
 
@@ -697,6 +713,7 @@ impl VectorStore {
         &self,
         query_tokens: &[&[f32]],
         k: usize,
+        explain: bool,
     ) -> Result<Vec<SearchResult>> {
         let multivec_storage_guard = self.multivec_storage.read();
         let multivec_storage = multivec_storage_guard
@@ -718,25 +735,50 @@ impl VectorStore {
             return Ok(Vec::new());
         }
 
-        // Compute MaxSim scores in parallel
-        let doc_tokens_refs: Vec<&Vec<&[f32]>> = candidate_tokens.iter().collect();
-        let maxsim_scores = super::super::muvera::maxsim_batch_par(query_tokens, &doc_tokens_refs);
+        let results: Vec<SearchResult> = if explain {
+            let mut explained = Vec::with_capacity(candidate_slots.len());
+            for (slot, tokens) in candidate_slots
+                .into_iter()
+                .zip(candidate_tokens.into_iter())
+            {
+                let explanation = crate::vector::muvera::maxsim_explain(query_tokens, &tokens);
+                let score = explanation.score;
+                let explanation_json = serde_json::to_value(explanation)?;
 
-        // Sort descending by MaxSim score, take top-k
-        let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+                if let Some(record) = self.records.get_by_slot(slot) {
+                    let metadata = record.metadata.clone().unwrap_or(JsonValue::Null);
+                    explained.push(SearchResult::with_explanation(
+                        record.id.clone(),
+                        -score,
+                        metadata,
+                        explanation_json,
+                    ));
+                }
+            }
+            explained.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+            explained.into_iter().take(k).collect()
+        } else {
+            // Compute MaxSim scores in parallel
+            let doc_tokens_refs: Vec<&Vec<&[f32]>> = candidate_tokens.iter().collect();
+            let maxsim_scores =
+                super::super::muvera::maxsim_batch_par(query_tokens, &doc_tokens_refs);
 
-        // Resolve id/metadata only for final top-k results
-        let results = scored
-            .into_iter()
-            .take(k)
-            .filter_map(|(idx, score)| {
-                let slot = candidate_slots[idx];
-                let record = self.records.get_by_slot(slot)?;
-                let metadata = record.metadata.clone().unwrap_or(JsonValue::Null);
-                Some(SearchResult::new(record.id.clone(), -score, metadata))
-            })
-            .collect();
+            // Sort descending by MaxSim score, take top-k
+            let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
+            scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+            // Resolve id/metadata only for final top-k results
+            scored
+                .into_iter()
+                .take(k)
+                .filter_map(|(idx, score)| {
+                    let slot = candidate_slots[idx];
+                    let record = self.records.get_by_slot(slot)?;
+                    let metadata = record.metadata.clone().unwrap_or(JsonValue::Null);
+                    Some(SearchResult::new(record.id.clone(), -score, metadata))
+                })
+                .collect()
+        };
 
         Ok(results)
     }
@@ -750,18 +792,18 @@ impl VectorStore {
     ///
     /// Requires text search to be enabled (`enable_text_search()`).
     ///
-    /// # Arguments
-    ///
     /// * `query_text` - Text query for BM25 candidate generation
     /// * `query_tokens` - Token embeddings for MaxSim reranking
     /// * `k` - Number of results to return
     /// * `num_candidates` - Number of BM25 candidates to fetch before reranking
+    /// * `explain` - If true, return token alignment metadata
     pub fn search_multi_with_text(
         &self,
         query_text: &str,
         query_tokens: &[&[f32]],
         k: usize,
         num_candidates: Option<usize>,
+        explain: bool,
     ) -> Result<Vec<SearchResult>> {
         let multivec_storage_guard = self.multivec_storage.read();
         let multivec_storage = multivec_storage_guard
@@ -807,23 +849,40 @@ impl VectorStore {
         }
 
         // MaxSim rerank
-        let doc_tokens_refs: Vec<&Vec<&[f32]>> =
-            candidate_data.iter().map(|(_, _, tokens)| tokens).collect();
+        let results: Vec<SearchResult> = if explain {
+            let mut explained = Vec::with_capacity(candidate_data.len());
+            for (id, metadata, tokens) in candidate_data {
+                let explanation = crate::vector::muvera::maxsim_explain(query_tokens, &tokens);
+                let score = explanation.score;
+                let explanation_json = serde_json::to_value(explanation)?;
+                explained.push(SearchResult::with_explanation(
+                    id,
+                    -score,
+                    metadata,
+                    explanation_json,
+                ));
+            }
+            explained.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            explained.into_iter().take(k).collect()
+        } else {
+            let doc_tokens_refs: Vec<&Vec<&[f32]>> =
+                candidate_data.iter().map(|(_, _, tokens)| tokens).collect();
 
-        let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
+            let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
 
-        // Sort descending by MaxSim score, take top-k
-        let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+            // Sort descending by MaxSim score, take top-k
+            let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
+            scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        let results = scored
-            .into_iter()
-            .take(k)
-            .map(|(idx, score)| {
-                let (ref id, ref metadata, _) = candidate_data[idx];
-                SearchResult::new(id.clone(), -score, metadata.clone())
-            })
-            .collect();
+            scored
+                .into_iter()
+                .take(k)
+                .map(|(idx, score)| {
+                    let (ref id, ref metadata, _) = candidate_data[idx];
+                    SearchResult::new(id.clone(), -score, metadata.clone())
+                })
+                .collect()
+        };
 
         Ok(results)
     }
@@ -870,7 +929,7 @@ impl VectorStore {
             .metadata
             .clone()
             .unwrap_or_else(helpers::default_metadata);
-        Some((record.vector.clone(), metadata))
+        Some((record.vector.to_vec(), metadata))
     }
 
     /// Internal: get multi-vector tokens.
@@ -987,12 +1046,14 @@ impl VectorStore {
     /// * `query_tokens` - Token embeddings for MaxSim reranking
     /// * `k` - Number of results to return
     /// * `num_candidates` - Number of sparse candidates to fetch before reranking (default: 10x k)
+    /// * `explain` - If true, return token alignment metadata
     pub fn search_multi_with_sparse(
         &self,
         sparse_query: &crate::vector::sparse::SparseVector,
         query_tokens: &[&[f32]],
         k: usize,
         num_candidates: Option<usize>,
+        explain: bool,
     ) -> Result<Vec<SearchResult>> {
         let multivec_storage_guard = self.multivec_storage.read();
         let multivec_storage = multivec_storage_guard
@@ -1039,23 +1100,40 @@ impl VectorStore {
         }
 
         // MaxSim rerank
-        let doc_tokens_refs: Vec<&Vec<&[f32]>> =
-            candidate_data.iter().map(|(_, _, tokens)| tokens).collect();
+        let results: Vec<SearchResult> = if explain {
+            let mut explained = Vec::with_capacity(candidate_data.len());
+            for (id, metadata, tokens) in candidate_data {
+                let explanation = crate::vector::muvera::maxsim_explain(query_tokens, &tokens);
+                let score = explanation.score;
+                let explanation_json = serde_json::to_value(explanation)?;
+                explained.push(SearchResult::with_explanation(
+                    id,
+                    -score,
+                    metadata,
+                    explanation_json,
+                ));
+            }
+            explained.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            explained.into_iter().take(k).collect()
+        } else {
+            let doc_tokens_refs: Vec<&Vec<&[f32]>> =
+                candidate_data.iter().map(|(_, _, tokens)| tokens).collect();
 
-        let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
+            let maxsim_scores = super::super::muvera::maxsim_batch(query_tokens, &doc_tokens_refs);
 
-        // Sort descending by MaxSim score, take top-k
-        let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+            // Sort descending by MaxSim score, take top-k
+            let mut scored: Vec<(usize, f32)> = maxsim_scores.into_iter().enumerate().collect();
+            scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        let results = scored
-            .into_iter()
-            .take(k)
-            .map(|(idx, score)| {
-                let (ref id, ref metadata, _) = candidate_data[idx];
-                SearchResult::new(id.clone(), -score, metadata.clone())
-            })
-            .collect();
+            scored
+                .into_iter()
+                .take(k)
+                .map(|(idx, score)| {
+                    let (ref id, ref metadata, _) = candidate_data[idx];
+                    SearchResult::new(id.clone(), -score, metadata.clone())
+                })
+                .collect()
+        };
 
         Ok(results)
     }

@@ -515,6 +515,60 @@ impl NodeStorage {
     /// - If SQ8: scale, offset (2 * f32), norms (len * f32), sq8_sums (len * i32)
     /// - Upper neighbors count: u64
     /// - For each node with upper neighbors: node_id (u32), num_levels (u8), then for each level: count (u16), neighbors ([u32])
+    /// Get total serialized length in bytes.
+    #[must_use]
+    pub fn serialized_len_full(&self) -> usize {
+        let mut len = 7 * 8; // Header (7 * u64)
+        len += 2; // sq8 (u8) + sq8_trained (u8)
+        len += 8; // raw_len (u64)
+        len += self.len * self.node_size; // raw node data
+
+        // Auxiliary body (SQ8 params, norms, upper neighbors)
+        // Calculating this exactly without serializing is a bit complex due to
+        // variable-length encoding of upper neighbors.
+        // For now, we just use the serialized buffer size as it's the easiest.
+        let mut aux = Vec::new();
+        self.serialize_aux_body_without_upper(&mut aux);
+        self.serialize_legacy_upper_neighbors(&mut aux);
+        len += aux.len();
+
+        len
+    }
+
+    /// Serialize complete storage state directly to a writer.
+    ///
+    /// Avoids allocating a large intermediate buffer for the entire storage.
+    pub fn write_full<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        // Header
+        writer.write_all(&(self.len as u64).to_le_bytes())?;
+        writer.write_all(&(self.node_size as u64).to_le_bytes())?;
+        writer.write_all(&(self.neighbors_offset as u64).to_le_bytes())?;
+        writer.write_all(&(self.vector_offset as u64).to_le_bytes())?;
+        writer.write_all(&(self.metadata_offset as u64).to_le_bytes())?;
+        writer.write_all(&(self.dimensions as u64).to_le_bytes())?;
+        writer.write_all(&(self.max_neighbors as u64).to_le_bytes())?;
+
+        // Mode and trained flag
+        writer.write_all(&[u8::from(self.sq8)])?;
+        writer.write_all(&[u8::from(self.sq8_trained)])?;
+
+        // Raw node data
+        let raw_data = self.as_bytes();
+        writer.write_all(&(raw_data.len() as u64).to_le_bytes())?;
+        writer.write_all(raw_data)?;
+
+        // Auxiliary body (SQ8 params, norms, upper neighbors)
+        // For now we use intermediate buffers for these smaller sections
+        // to avoid duplicating the complex logic in serialize_aux_body_without_upper
+        // and serialize_legacy_upper_neighbors.
+        let mut aux = Vec::new();
+        self.serialize_aux_body_without_upper(&mut aux);
+        self.serialize_legacy_upper_neighbors(&mut aux);
+        writer.write_all(&aux)?;
+
+        Ok(())
+    }
+
     pub fn serialize_full(&self) -> Vec<u8> {
         let mut out = Vec::new();
 

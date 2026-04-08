@@ -1,6 +1,7 @@
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
+use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::vector::{Vector, VectorStore, VectorStoreOptions};
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
@@ -202,6 +203,38 @@ impl VectorDatabase {
                 Ok(result.len() as u32)
             }
         }
+    }
+
+    /// Enable text search with optional buffer and tokenizer configuration.
+    ///
+    /// @param bufferMb - Writer buffer size in MB (default: 50)
+    /// @param tokenizer - Tokenizer preset: "default", "code", or "raw"
+    #[napi(js_name = "enableTextSearch")]
+    pub fn enable_text_search(
+        &self,
+        buffer_mb: Option<u32>,
+        tokenizer: Option<String>,
+    ) -> Result<()> {
+        let mut inner = self.inner.write();
+
+        let config = match (buffer_mb, tokenizer) {
+            (None, None) => None,
+            (buffer_mb, tokenizer) => {
+                let tokenizer = match tokenizer {
+                    Some(name) => TokenizerPreset::parse(&name).map_err(convert_error)?,
+                    None => TokenizerPreset::default(),
+                };
+                Some(TextSearchConfig {
+                    writer_buffer_mb: buffer_mb.unwrap_or(50) as usize,
+                    tokenizer,
+                })
+            }
+        };
+
+        inner
+            .store
+            .enable_text_search_with_config(config)
+            .map_err(convert_error)
     }
 
     /// Get a vector by ID.

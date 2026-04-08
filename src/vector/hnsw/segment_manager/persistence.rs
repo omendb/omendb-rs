@@ -148,14 +148,19 @@ impl SegmentManager {
             let _ = d.sync_all();
         }
 
-        // Save each frozen segment (skip if file already exists — frozen segments are immutable)
-        for segment in frozen_snapshot.segments() {
-            let segment_path = dir.join(format!("segment_{}.bin", segment.id()));
-            if !segment_path.exists() {
-                segment.save(&segment_path)?;
-                debug!(segment_id = segment.id(), path = %segment_path.display(), "Saved segment");
-            }
-        }
+        // Save each frozen segment in parallel (skip if file already exists — frozen segments are immutable)
+        use rayon::prelude::*;
+        frozen_snapshot
+            .segments()
+            .par_iter()
+            .try_for_each(|segment| -> Result<()> {
+                let segment_path = dir.join(format!("segment_{}.bin", segment.id()));
+                if !segment_path.exists() {
+                    segment.save(&segment_path)?;
+                    debug!(segment_id = segment.id(), path = %segment_path.display(), "Saved segment");
+                }
+                Ok(())
+            })?;
 
         // Clean orphan segment files and stale temp files
         if let Ok(entries) = fs::read_dir(dir) {

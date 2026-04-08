@@ -114,7 +114,7 @@ impl StorageBackend for MockStorageBackend {
     ) -> Result<()> {
         for slot in dirty_slots {
             if let Some(record) = records.get_by_slot(slot) {
-                self.vectors.insert(slot, record.vector.clone());
+                self.vectors.insert(slot, record.vector.to_vec());
             } else {
                 self.vectors.remove(&slot);
             }
@@ -138,7 +138,7 @@ impl StorageBackend for MockStorageBackend {
     ) -> Result<()> {
         self.vectors.clear();
         for (slot, record) in records.iter_live() {
-            self.vectors.insert(slot, record.vector);
+            self.vectors.insert(slot, record.vector.to_vec());
         }
         Ok(())
     }

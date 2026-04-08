@@ -146,7 +146,8 @@ impl VectorStore {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
 
-        text_index.search(query, k)
+        let results = text_index.search(query, k)?;
+        Ok(results.into_iter().map(|r| (r.id, r.score)).collect())
     }
 
     /// Hybrid search combining vector similarity and BM25 text relevance.

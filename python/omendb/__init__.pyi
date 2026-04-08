@@ -530,14 +530,17 @@ class VectorDatabase:
         ...
 
     # Hybrid search
-    def enable_text_search(self, buffer_mb: int | None = None) -> None:
+    def enable_text_search(
+        self, buffer_mb: int | None = None, tokenizer: str | None = None
+    ) -> None:
         """Enable text search for hybrid search.
 
         Note: Called automatically when using set() with items that have a `text` field.
-        Only call manually if you need custom buffer_mb config.
+        Only call manually if you need custom buffer_mb or tokenizer config.
 
         Args:
             buffer_mb: Writer buffer size in MB (default: 50).
+            tokenizer: Tokenizer preset ("default", "code", or "raw").
         """
         ...
 

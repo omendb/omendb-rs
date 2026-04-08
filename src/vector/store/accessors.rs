@@ -100,7 +100,7 @@ impl VectorStore {
             .iter_live()
             .map(|(_, record)| {
                 let metadata = record.metadata.clone().unwrap_or_default();
-                (record.id.clone(), record.vector.clone(), metadata)
+                (record.id.clone(), record.vector.to_vec(), metadata)
             })
             .collect()
     }
@@ -116,7 +116,7 @@ impl VectorStore {
     pub fn memory_usage(&self) -> usize {
         self.records
             .iter_live()
-            .map(|(_, r)| r.vector.len() * 4)
+            .map(|(_, r)| r.vector.as_slice().len() * 4)
             .sum()
     }
 
@@ -229,7 +229,7 @@ impl VectorStore {
         let vector_bytes = self
             .records
             .iter_live()
-            .map(|(_, r)| r.vector.len() * 4)
+            .map(|(_, r)| r.vector.as_slice().len() * 4)
             .sum::<usize>();
 
         let (frozen_count, mutable_vecs, graph_bytes, segment_capacity) =

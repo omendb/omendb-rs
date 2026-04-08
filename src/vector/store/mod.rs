@@ -73,6 +73,8 @@ pub struct SearchResult {
     pub distance: f32,
     /// Document metadata
     pub metadata: JsonValue,
+    /// Optional explainability data (e.g. token matches for multi-vector search)
+    pub explanation: Option<JsonValue>,
 }
 
 impl SearchResult {
@@ -83,6 +85,23 @@ impl SearchResult {
             id,
             distance,
             metadata,
+            explanation: None,
+        }
+    }
+
+    /// Create a new search result with explanation
+    #[inline]
+    pub fn with_explanation(
+        id: String,
+        distance: f32,
+        metadata: JsonValue,
+        explanation: JsonValue,
+    ) -> Self {
+        Self {
+            id,
+            distance,
+            metadata,
+            explanation: Some(explanation),
         }
     }
 }

@@ -3,7 +3,7 @@ use crate::conversions::{
 };
 use crate::database::VectorDatabase;
 use crate::filters::parse_filter;
-use omendb_lib::text::TextSearchConfig;
+use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::vector::Vector;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -19,16 +19,31 @@ impl VectorDatabase {
     ///
     /// Args:
     ///     buffer_mb (int, optional): Writer buffer size in MB (default: 50)
+    ///     tokenizer (str, optional): Tokenizer preset: "default", "code", or "raw"
     ///
     /// Examples:
     ///     >>> db.enable_text_search(buffer_mb=100)  # For high-throughput
-    #[pyo3(name = "enable_text_search", signature = (buffer_mb=None))]
-    fn enable_text_search(&self, buffer_mb: Option<usize>) -> PyResult<()> {
+    #[pyo3(name = "enable_text_search", signature = (buffer_mb=None, tokenizer=None))]
+    fn enable_text_search(
+        &self,
+        buffer_mb: Option<usize>,
+        tokenizer: Option<&str>,
+    ) -> PyResult<()> {
         let mut inner = self.inner.write();
 
-        let config = buffer_mb.map(|mb| TextSearchConfig {
-            writer_buffer_mb: mb,
-        });
+        let config = match (buffer_mb, tokenizer) {
+            (None, None) => None,
+            (buffer_mb, tokenizer) => {
+                let tokenizer = match tokenizer {
+                    Some(name) => TokenizerPreset::parse(name).map_err(convert_error)?,
+                    None => TokenizerPreset::default(),
+                };
+                Some(TextSearchConfig {
+                    writer_buffer_mb: buffer_mb.unwrap_or(50),
+                    tokenizer,
+                })
+            }
+        };
 
         inner
             .store

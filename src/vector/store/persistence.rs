@@ -67,18 +67,24 @@ impl VectorStore {
             OmenFile::create(path, 0)?
         };
 
-        // 1. Load recovery context (snapshots, WAL epochs, HNSW params)
-        let ctx = {
+        // Scoped block to ensure ctx (which borrows from storage_local) is dropped
+        // before we move storage_local into the Arc<RwLock>.
+        let (records, engine, ancillary, quantization, hnsw_params, ef_search, _dimensions) = {
             let ctx = Self::load_recovery_context(&mut storage_local)?;
 
-            // 2. Build initial RecordStore from snapshot
-            let mut records = Self::build_initial_records(&ctx.snapshot, ctx.dimensions);
+            // Build initial RecordStore from snapshot
+            let mut records = Self::build_initial_records(
+                &ctx.snapshot,
+                ctx.dimensions,
+                ctx.vec_mmap.clone(),
+                ctx.main_mmap.clone(),
+            );
 
-            // 3. Replay WAL entries into RecordStore and collect auxiliary deltas
+            // Replay WAL entries into RecordStore and collect auxiliary deltas
             let (wal_modified_slots, wal_edge_store, wal_edge_deletes) =
                 Self::replay_wal_into_records(&mut records, &mut storage_local, &ctx)?;
 
-            // 4. Initialize or rebuild segments (HNSW indexes)
+            // Initialize or rebuild segments (HNSW indexes)
             let modified_slots = if ctx.slim_snapshot_loaded && !ctx.slim_dirty_slots.is_empty() {
                 &ctx.slim_dirty_slots
             } else {
@@ -87,7 +93,7 @@ impl VectorStore {
             let engine =
                 Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
 
-            // 5. Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
+            // Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
             let ancillary = Self::initialize_ancillary_indexes(
                 path,
                 &records,
@@ -97,12 +103,21 @@ impl VectorStore {
                 ctx.distance_metric,
             )?;
 
-            (ctx, records, engine, ancillary)
+            (
+                records,
+                engine,
+                ancillary,
+                ctx.quantization,
+                ctx.hnsw_params,
+                ctx.ef_search,
+                ctx.dimensions,
+            )
         };
-        let (ctx, records, mut engine, ancillary) = ctx;
+
         let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> =
             Arc::new(RwLock::new(storage_local));
 
+        let mut engine = engine;
         if let Some(ref mut engine) = engine {
             engine.set_storage(Arc::clone(&storage));
         }
@@ -117,21 +132,21 @@ impl VectorStore {
             storage_path: Some(path.to_path_buf()),
             text_index: RwLock::new(ancillary.text_index),
             text_search_config: RwLock::new(None),
-            pending_quantization: ctx.quantization.into(),
-            hnsw_m: (if ctx.hnsw_params.m > 0 {
-                ctx.hnsw_params.m
+            pending_quantization: quantization.into(),
+            hnsw_m: (if hnsw_params.m > 0 {
+                hnsw_params.m
             } else {
                 DEFAULT_HNSW_M
             })
             .into(),
-            hnsw_ef_construction: (if ctx.hnsw_params.ef_construction > 0 {
-                ctx.hnsw_params.ef_construction
+            hnsw_ef_construction: (if hnsw_params.ef_construction > 0 {
+                hnsw_params.ef_construction
             } else {
                 DEFAULT_HNSW_EF_CONSTRUCTION
             })
             .into(),
-            hnsw_ef_search: (if ctx.ef_search > 0 {
-                ctx.ef_search
+            hnsw_ef_search: (if ef_search > 0 {
+                ef_search
             } else {
                 DEFAULT_HNSW_EF_SEARCH
             })
@@ -142,7 +157,7 @@ impl VectorStore {
             sparse_index: RwLock::new(ancillary.sparse_index),
             edge_store: RwLock::new(ancillary.edge_store),
             segment_capacity: None,
-            rescore: (ctx.quantization).into(),
+            rescore: (quantization).into(),
             oversample: (3.0f32.to_bits()).into(),
             max_memory_bytes: None,
             auto_compact_threshold: (0.25f32.to_bits()).into(),
@@ -501,7 +516,7 @@ impl VectorStore {
     }
 
     /// Load recovery context from storage, handling slim snapshots and manifest fallbacks.
-    fn load_recovery_context(storage: &mut OmenFile) -> Result<RecoveryContext> {
+    fn load_recovery_context(storage: &mut OmenFile) -> Result<RecoveryContext<'static>> {
         let mut slim_dirty_slots: Vec<u32> = Vec::new();
         let mut slim_snapshot_loaded = false;
         let mut slim_wal_epoch: u64 = 0;
@@ -517,12 +532,17 @@ impl VectorStore {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    tracing::warn!("Failed to load slim records snapshot, using manifest: {e}");
+                    println!("Failed to load slim records snapshot, using manifest: {e}");
                 }
             }
         }
 
-        let mut snapshot = storage.load_persisted_snapshot_with_live_slots(
+        // Use borrowed loading for zero-copy vectors
+        let vec_mmap = storage.get_vec_mmap_arc();
+        let main_mmap = storage.get_main_mmap_arc();
+        let mut snapshot = storage.load_persisted_snapshot_borrowed(
+            vec_mmap.as_ref(),
+            main_mmap.as_ref(),
             (!slim_live_slots.is_empty()).then_some(&slim_live_slots),
         );
 
@@ -577,12 +597,20 @@ impl VectorStore {
             distance_metric: header.metric,
             quantization,
             dimensions,
+            vec_mmap,
+            main_mmap,
         })
     }
 
     /// Build initial RecordStore from snapshot.
-    fn build_initial_records(snapshot: &OmenSnapshot, dimensions: usize) -> RecordStore {
+    fn build_initial_records(
+        snapshot: &OmenSnapshot,
+        dimensions: usize,
+        _vec_mmap: Option<Arc<Mmap>>,
+        _main_mmap: Option<Arc<Mmap>>,
+    ) -> RecordStore {
         let deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
+        let mut records = RecordStore::new(dimensions as u32);
 
         // Determine required slot count from vectors and id_to_slot
         let max_slot_from_ids = snapshot
@@ -593,6 +621,7 @@ impl VectorStore {
             .map_or(0, |m| m + 1) as usize;
         let slot_capacity = snapshot.vectors.len().max(max_slot_from_ids);
         let mut slots: Vec<Option<Record>> = Vec::with_capacity(slot_capacity);
+        let mut live_count = 0u32;
 
         // Invert mapping for O(1) slot-to-ID lookup (O(N) construction)
         let slot_to_id: FxHashMap<u32, String> = snapshot
@@ -615,18 +644,35 @@ impl VectorStore {
 
             if let Some(id) = id {
                 let metadata = snapshot.metadata.get(&slot_u32).cloned();
-                let vector = vec_data.cloned().unwrap_or_default();
-                slots.push(Some(Record::new(id, vector, metadata)));
+                let record = match vec_data {
+                    Some(v) => Record {
+                        id,
+                        vector: v.clone(),
+                        metadata,
+                    },
+                    None => {
+                        let zero_vec = vec![0.0f32; dimensions];
+                        Record::new(id, zero_vec, metadata)
+                    }
+                };
+                slots.push(Some(record));
+                live_count += 1;
             } else if let Some(vec_data) = vec_data {
                 let id = format!("__slot_{slot}");
                 let metadata = snapshot.metadata.get(&slot_u32).cloned();
-                slots.push(Some(Record::new(id, vec_data.clone(), metadata)));
+                slots.push(Some(Record {
+                    id,
+                    vector: vec_data.clone(),
+                    metadata,
+                }));
+                live_count += 1;
             } else {
                 slots.push(None);
             }
         }
 
-        RecordStore::from_snapshot(slots, deleted_bitmap, dimensions as u32)
+        records.restore_snapshot(slots, deleted_bitmap, live_count);
+        records
     }
 
     /// Replay WAL entries directly into RecordStore.
@@ -750,7 +796,7 @@ impl VectorStore {
         storage: &OmenFile,
         records: &RecordStore,
         modified_slots: &[u32],
-        ctx: &RecoveryContext,
+        ctx: &RecoveryContext<'_>,
     ) -> Result<Option<SegmentManager>> {
         let active_count = records.len() as usize;
         if active_count == 0 || ctx.dimensions == 0 {
@@ -861,7 +907,7 @@ impl VectorStore {
     fn initialize_ancillary_indexes(
         path: &Path,
         records: &RecordStore,
-        snapshot: &OmenSnapshot,
+        snapshot: &OmenSnapshot<'_>,
         wal_edge_store: Option<EdgeStore>,
         wal_edge_deletes: &[(String, String, String)],
         base_distance_metric: Metric,
@@ -1091,9 +1137,11 @@ impl VectorStore {
     }
 }
 
+use memmap2::Mmap;
+
 /// Context for database recovery during open()
-struct RecoveryContext {
-    snapshot: OmenSnapshot,
+struct RecoveryContext<'a> {
+    snapshot: OmenSnapshot<'a>,
     slim_snapshot_loaded: bool,
     slim_wal_epoch: u64,
     slim_dirty_slots: Vec<u32>,
@@ -1102,6 +1150,8 @@ struct RecoveryContext {
     distance_metric: Metric,
     quantization: bool,
     dimensions: usize,
+    vec_mmap: Option<Arc<Mmap>>,
+    main_mmap: Option<Arc<Mmap>>,
 }
 
 /// Ancillary indexes recovered during open()

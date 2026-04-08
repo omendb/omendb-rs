@@ -4,10 +4,16 @@
 //! for hybrid (vector + text) search capabilities.
 
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, Value};
+use tantivy::schema::{
+    Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
+};
+use tantivy::tokenizer::{
+    LowerCaser, RawTokenizer, SimpleTokenizer, TextAnalyzer, Token, TokenStream, Tokenizer,
+};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, doc};
 
 #[cfg(test)]
@@ -51,20 +57,53 @@ pub trait TextEngine: Send + Sync {
     }
 }
 
+/// Tokenizer presets for text indexing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TokenizerPreset {
+    /// Standard tantivy default (whitespace + lowercase + stemming).
+    #[default]
+    Default,
+    /// Code-aware tokenizer that splits camelCase and HTTPClient-style terms.
+    Code,
+    /// Raw: no tokenization, exact match only.
+    Raw,
+}
+
+impl TokenizerPreset {
+    #[must_use]
+    pub fn schema_tokenizer_name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Code => "code",
+            Self::Raw => "raw",
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "default" => Ok(Self::Default),
+            "code" => Ok(Self::Code),
+            "raw" => Ok(Self::Raw),
+            other => Err(anyhow!("Unknown tokenizer preset: {other}")),
+        }
+    }
+}
+
 /// Configuration for text search functionality.
 ///
 /// # Example
 /// ```ignore
-/// // Default: 50MB buffer (good for most use cases)
+/// // Default: 50MB buffer (good for most use cases), default tokenizer
 /// let config = TextSearchConfig::default();
 ///
-/// // Mobile/constrained: reduce buffer
-/// let config = TextSearchConfig { writer_buffer_mb: 15 };
-///
-/// // Cloud/high-throughput: increase buffer
-/// let config = TextSearchConfig { writer_buffer_mb: 200 };
+/// // Mobile/constrained: reduce buffer, code-aware tokenizer
+/// let config = TextSearchConfig {
+///     writer_buffer_mb: 15,
+///     tokenizer: TokenizerPreset::Code,
+/// };
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextSearchConfig {
     /// Writer buffer size in MB (default: 50).
     ///
@@ -73,12 +112,16 @@ pub struct TextSearchConfig {
     /// - 50MB: Default, good for laptops/servers/desktop apps
     /// - 100-200MB: High-throughput server workloads
     pub writer_buffer_mb: usize,
+
+    /// Tokenizer to use for text indexing (default: Default).
+    pub tokenizer: TokenizerPreset,
 }
 
 impl Default for TextSearchConfig {
     fn default() -> Self {
         Self {
             writer_buffer_mb: 50,
+            tokenizer: TokenizerPreset::Default,
         }
     }
 }
@@ -105,11 +148,7 @@ impl TextEngine for TextIndex {
     }
 
     fn search(&self, query_str: &str, limit: usize) -> Result<Vec<TextSearchResult>> {
-        let results = self.search(query_str, limit)?;
-        Ok(results
-            .into_iter()
-            .map(|(id, score)| TextSearchResult::new(id, score))
-            .collect())
+        self.search(query_str, limit)
     }
 
     fn commit(&mut self) -> Result<()> {
@@ -145,7 +184,7 @@ impl TextIndex {
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
 
-        let schema = Self::create_schema();
+        let schema = Self::create_schema(config.tokenizer.schema_tokenizer_name());
         let id_field = schema.get_field("id").expect("id field exists");
         let text_field = schema.get_field("text").expect("text field exists");
 
@@ -155,6 +194,9 @@ impl TextIndex {
         } else {
             Index::create_in_dir(path, schema.clone())?
         };
+
+        // Register custom tokenizers
+        Self::register_tokenizers(&index);
 
         let buffer_bytes = config.writer_buffer_mb * 1_000_000;
         let writer = index.writer(buffer_bytes)?;
@@ -180,11 +222,14 @@ impl TextIndex {
 
     /// Create an in-memory text index with custom configuration.
     pub fn open_in_memory_with_config(config: &TextSearchConfig) -> Result<Self> {
-        let schema = Self::create_schema();
+        let schema = Self::create_schema(config.tokenizer.schema_tokenizer_name());
         let id_field = schema.get_field("id").expect("id field exists");
         let text_field = schema.get_field("text").expect("text field exists");
 
         let index = Index::create_in_ram(schema);
+
+        // Register custom tokenizers
+        Self::register_tokenizers(&index);
 
         let buffer_bytes = config.writer_buffer_mb * 1_000_000;
         let writer = index.writer(buffer_bytes)?;
@@ -203,16 +248,37 @@ impl TextIndex {
         })
     }
 
-    fn create_schema() -> Schema {
+    fn create_schema(tokenizer_name: &str) -> Schema {
         let mut builder = Schema::builder();
 
         // Document ID - stored for retrieval, indexed as exact match
         builder.add_text_field("id", STRING | STORED);
 
         // Text content - indexed for full-text search with BM25
-        builder.add_text_field("text", TEXT);
+        let text_indexing = TextFieldIndexing::default()
+            .set_tokenizer(tokenizer_name)
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions);
+        let text_options = TextOptions::default()
+            .set_indexing_options(text_indexing)
+            .set_stored();
+        builder.add_text_field("text", text_options);
 
         builder.build()
+    }
+
+    fn register_tokenizers(index: &Index) {
+        // "code" tokenizer: SimpleTokenizer -> CamelCaseFilter -> LowerCaser
+        let code_tokenizer = TextAnalyzer::builder(SimpleTokenizer::default())
+            .filter(CamelCaseFilter)
+            .filter(LowerCaser)
+            .build();
+        index.tokenizers().register("code", code_tokenizer);
+
+        // "raw" tokenizer: RawTokenizer
+        index.tokenizers().register(
+            "raw",
+            TextAnalyzer::builder(RawTokenizer::default()).build(),
+        );
     }
 
     /// Index a document with the given ID and text content.
@@ -250,12 +316,12 @@ impl TextIndex {
 
     /// Search for documents matching the query.
     ///
-    /// Returns a vector of (id, score) tuples, sorted by score descending.
+    /// Returns a vector of [`TextSearchResult`], sorted by score descending.
     ///
     /// # Arguments
     /// * `query_str` - The search query (supports tantivy query syntax)
     /// * `limit` - Maximum number of results to return
-    pub fn search(&self, query_str: &str, limit: usize) -> Result<Vec<(String, f32)>> {
+    pub fn search(&self, query_str: &str, limit: usize) -> Result<Vec<TextSearchResult>> {
         if query_str.trim().is_empty() {
             return Ok(vec![]);
         }
@@ -275,7 +341,7 @@ impl TextIndex {
             .filter_map(|(score, doc_addr)| {
                 let doc: TantivyDocument = searcher.doc(doc_addr).ok()?;
                 let id = doc.get_first(self.id_field)?.as_str()?.to_string();
-                Some((id, score))
+                Some(TextSearchResult::new(id, score))
             })
             .collect();
 
@@ -299,6 +365,121 @@ impl TextIndex {
     pub fn reader(&self) -> &IndexReader {
         &self.reader
     }
+}
+
+/// Token filter that splits camelCase and HTTPClient-style identifiers.
+#[derive(Clone)]
+pub struct CamelCaseFilter;
+
+impl tantivy::tokenizer::TokenFilter for CamelCaseFilter {
+    type Tokenizer<T: Tokenizer> = CamelCaseTokenizer<T>;
+
+    fn transform<T: Tokenizer>(self, tokenizer: T) -> Self::Tokenizer<T> {
+        CamelCaseTokenizer {
+            tokenizer,
+            parts: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CamelCaseTokenizer<T> {
+    tokenizer: T,
+    parts: Vec<Token>,
+}
+
+impl<T: Tokenizer> Tokenizer for CamelCaseTokenizer<T> {
+    type TokenStream<'a> = CamelCaseTokenStream<'a, T::TokenStream<'a>>;
+
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        self.parts.clear();
+        CamelCaseTokenStream {
+            tail: self.tokenizer.token_stream(text),
+            parts: &mut self.parts,
+        }
+    }
+}
+
+pub struct CamelCaseTokenStream<'a, T> {
+    parts: &'a mut Vec<Token>,
+    tail: T,
+}
+
+impl<T: TokenStream> CamelCaseTokenStream<'_, T> {
+    fn split_current_token(&mut self) {
+        let token = self.tail.token();
+        let segments = split_camel_case_segments(&token.text);
+        if segments.len() <= 1 {
+            return;
+        }
+
+        for (start, end) in segments.into_iter().rev() {
+            self.parts.push(Token {
+                text: token.text[start..end].to_string(),
+                offset_from: token.offset_from + start,
+                offset_to: token.offset_from + end,
+                ..*token
+            });
+        }
+    }
+}
+
+impl<T: TokenStream> TokenStream for CamelCaseTokenStream<'_, T> {
+    fn advance(&mut self) -> bool {
+        self.parts.pop();
+        if !self.parts.is_empty() {
+            return true;
+        }
+        if !self.tail.advance() {
+            return false;
+        }
+        self.split_current_token();
+        true
+    }
+
+    fn token(&self) -> &Token {
+        self.parts.last().unwrap_or_else(|| self.tail.token())
+    }
+
+    fn token_mut(&mut self) -> &mut Token {
+        self.parts
+            .last_mut()
+            .unwrap_or_else(|| self.tail.token_mut())
+    }
+}
+
+fn split_camel_case_segments(text: &str) -> Vec<(usize, usize)> {
+    if text.len() <= 1 {
+        return vec![(0, text.len())];
+    }
+
+    let mut chars = text.char_indices().peekable();
+    let mut segments = Vec::new();
+    let mut start = 0usize;
+
+    let mut prev = match chars.next() {
+        Some((_, ch)) => ch,
+        None => return vec![],
+    };
+
+    while let Some((idx, curr)) = chars.next() {
+        let next = chars.peek().map(|(_, ch)| *ch);
+        let boundary = (prev.is_lowercase() || prev.is_ascii_digit()) && curr.is_uppercase()
+            || (prev.is_uppercase()
+                && curr.is_uppercase()
+                && next.is_some_and(|n| n.is_lowercase()));
+
+        if boundary {
+            segments.push((start, idx));
+            start = idx;
+        }
+
+        prev = curr;
+    }
+
+    segments.push((start, text.len()));
+    segments.retain(|(from, to)| from < to);
+    segments
 }
 
 /// Default RRF constant (k=60 per Cormack et al. 2009).
@@ -342,9 +523,9 @@ pub fn reciprocal_rank_fusion(
     weighted_reciprocal_rank_fusion(vector_results, text_results, limit, rrf_k, 0.5)
 }
 
-/// Weighted Reciprocal Rank Fusion for hybrid search with tunable balance.
+/// Weighted Reciprocal Rank Fusion for combining vector and text search results.
 ///
-/// Like [`reciprocal_rank_fusion`], but allows weighting vector vs text results.
+/// Allows biasing results towards either vector or keyword search.
 ///
 /// # Arguments
 /// * `vector_results` - Results from vector search as (id, distance)
@@ -352,12 +533,6 @@ pub fn reciprocal_rank_fusion(
 /// * `limit` - Maximum results to return
 /// * `rrf_k` - RRF constant (default: 60)
 /// * `alpha` - Weight for vector results (0.0 = text only, 1.0 = vector only, 0.5 = balanced)
-///
-/// # Example
-/// ```ignore
-/// // 70% vector, 30% text
-/// let results = weighted_reciprocal_rank_fusion(vec_results, text_results, 10, 60, 0.7);
-/// ```
 #[must_use]
 pub fn weighted_reciprocal_rank_fusion(
     vector_results: Vec<(String, f32)>,
@@ -373,7 +548,7 @@ pub fn weighted_reciprocal_rank_fusion(
     let capacity = vector_results.len() + text_results.len();
     let mut scores: HashMap<String, f32> = HashMap::with_capacity(capacity);
 
-    // Add vector search contributions — consume owned strings to avoid cloning
+    // Consume owned strings to avoid cloning
     for (rank, (id, _distance)) in vector_results.into_iter().enumerate() {
         let rrf_score = 1.0 / (rrf_k + rank + 1) as f32;
         *scores.entry(id).or_default() += alpha * rrf_score;

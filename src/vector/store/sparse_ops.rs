@@ -60,7 +60,7 @@ impl VectorStore {
                 && let Some(record) = self.records.get_by_slot(slot)
             {
                 let mut storage = storage.write();
-                storage.log_insert(id, &record.vector, &metadata)?;
+                storage.log_insert(id, record.vector.as_slice(), &metadata)?;
                 storage.sync()?;
             }
             slot

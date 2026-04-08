@@ -267,6 +267,59 @@ pub fn maxsim(query_tokens: &[&[f32]], doc_tokens: &[&[f32]]) -> f32 {
     total
 }
 
+/// Result of MaxSim calculation with token alignment details.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MaxSimExplanation {
+    /// Total MaxSim score.
+    pub score: f32,
+    /// For each query token, the index of the document token that matched most strongly.
+    pub matches: Vec<usize>,
+    /// The similarity scores for each match.
+    pub sub_scores: Vec<f32>,
+}
+
+/// Compute MaxSim score and return token alignment for explainability.
+pub fn maxsim_explain(query_tokens: &[&[f32]], doc_tokens: &[&[f32]]) -> MaxSimExplanation {
+    if query_tokens.is_empty() || doc_tokens.is_empty() {
+        return MaxSimExplanation {
+            score: 0.0,
+            matches: Vec::new(),
+            sub_scores: Vec::new(),
+        };
+    }
+
+    let mut score = 0.0;
+    let mut matches = Vec::with_capacity(query_tokens.len());
+    let mut sub_scores = Vec::with_capacity(query_tokens.len());
+
+    for q in query_tokens {
+        let mut best_idx = 0;
+        let mut best_sim = -f32::INFINITY;
+
+        for (idx, d) in doc_tokens.iter().enumerate() {
+            let sim = dot(q, d);
+            if sim > best_sim {
+                best_sim = sim;
+                best_idx = idx;
+            }
+        }
+
+        if best_sim == -f32::INFINITY {
+            best_sim = 0.0;
+        }
+
+        score += best_sim;
+        matches.push(best_idx);
+        sub_scores.push(best_sim);
+    }
+
+    MaxSimExplanation {
+        score,
+        matches,
+        sub_scores,
+    }
+}
+
 /// Compute MaxSim scores for multiple documents in batch (optimized).
 ///
 /// Uses matrix multiply pattern: Q @ D.T → row-wise max → sum.

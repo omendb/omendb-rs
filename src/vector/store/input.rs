@@ -29,6 +29,8 @@ pub struct SearchOptions {
     pub max_distance: Option<f32>,
     /// Reranking for multi-vector (ignored for regular stores).
     pub rerank: Rerank,
+    /// Request explainability data (e.g. token matches).
+    pub explain: bool,
 }
 
 impl SearchOptions {
@@ -90,6 +92,13 @@ impl SearchOptions {
         self.rerank = Rerank::Off;
         self
     }
+
+    /// Builder: enable explanation.
+    #[must_use]
+    pub fn explain(mut self) -> Self {
+        self.explain = true;
+        self
+    }
 }
 
 /// Parameters for hybrid search (vector + text).
@@ -105,6 +114,8 @@ pub struct HybridParams {
     pub subscores: bool,
     /// HNSW ef parameter override.
     pub ef: Option<usize>,
+    /// Request explainability data.
+    pub explain: bool,
 }
 
 impl Default for HybridParams {
@@ -115,6 +126,7 @@ impl Default for HybridParams {
             filter: None,
             subscores: false,
             ef: None,
+            explain: false,
         }
     }
 }
@@ -160,7 +172,16 @@ impl HybridParams {
         self.ef = Some(ef);
         self
     }
+
+    /// Builder: enable explanation.
+    #[must_use]
+    pub fn explain(mut self) -> Self {
+        self.explain = true;
+        self
+    }
 }
+
+use crate::vector::sparse::SparseVector;
 
 /// Internal representation of stored data.
 #[derive(Debug, Clone)]
@@ -169,6 +190,8 @@ pub enum VectorData {
     Single(Vec<f32>),
     /// Multi-vector tokens (multi-vector store).
     Multi(Vec<Vec<f32>>),
+    /// Sparse vector.
+    Sparse(SparseVector),
 }
 
 impl VectorData {
@@ -178,14 +201,15 @@ impl VectorData {
         match self {
             Self::Single(v) => v.len(),
             Self::Multi(tokens) => tokens.first().map_or(0, Vec::len),
+            Self::Sparse(sv) => sv.indices().last().map_or(0, |&i| i as usize + 1),
         }
     }
 
-    /// Number of items (1 for single, token count for multi).
+    /// Number of items (1 for single/sparse, token count for multi).
     #[must_use]
     pub fn count(&self) -> usize {
         match self {
-            Self::Single(_) => 1,
+            Self::Single(_) | Self::Sparse(_) => 1,
             Self::Multi(tokens) => tokens.len(),
         }
     }
@@ -202,12 +226,18 @@ impl VectorData {
         matches!(self, Self::Multi(_))
     }
 
+    /// Is this sparse vector data?
+    #[must_use]
+    pub fn is_sparse(&self) -> bool {
+        matches!(self, Self::Sparse(_))
+    }
+
     /// Get as single vector, if applicable.
     #[must_use]
     pub fn as_single(&self) -> Option<&[f32]> {
         match self {
             Self::Single(v) => Some(v),
-            Self::Multi(_) => None,
+            Self::Multi(_) | Self::Sparse(_) => None,
         }
     }
 
@@ -215,7 +245,7 @@ impl VectorData {
     #[must_use]
     pub fn as_multi(&self) -> Option<&[Vec<f32>]> {
         match self {
-            Self::Single(_) => None,
+            Self::Single(_) | Self::Sparse(_) => None,
             Self::Multi(tokens) => Some(tokens),
         }
     }
@@ -278,6 +308,18 @@ impl VectorInput for Vec<&[f32]> {
     }
 }
 
+impl VectorInput for SparseVector {
+    fn into_vector_data(self) -> VectorData {
+        VectorData::Sparse(self)
+    }
+}
+
+impl QueryInput for SparseVector {
+    fn to_query_data(&self) -> QueryData<'_> {
+        QueryData::Sparse(self)
+    }
+}
+
 /// Query representation for search operations.
 #[derive(Debug, Clone)]
 pub enum QueryData<'a> {
@@ -285,6 +327,8 @@ pub enum QueryData<'a> {
     Single(&'a [f32]),
     /// Multi-vector query tokens.
     Multi(Vec<&'a [f32]>),
+    /// Sparse vector query.
+    Sparse(&'a SparseVector),
 }
 
 impl QueryData<'_> {
@@ -294,6 +338,7 @@ impl QueryData<'_> {
         match self {
             Self::Single(v) => v.len(),
             Self::Multi(tokens) => tokens.first().map_or(0, |t| t.len()),
+            Self::Sparse(sv) => sv.indices().last().map_or(0, |&i| i as usize + 1),
         }
     }
 
@@ -307,6 +352,12 @@ impl QueryData<'_> {
     #[must_use]
     pub fn is_multi(&self) -> bool {
         matches!(self, Self::Multi(_))
+    }
+
+    /// Is this a sparse vector query?
+    #[must_use]
+    pub fn is_sparse(&self) -> bool {
+        matches!(self, Self::Sparse(_))
     }
 }
 

@@ -47,7 +47,7 @@ pub(crate) fn brute_force_search(
     let mut distances: Vec<(usize, f32)> = records
         .iter_live()
         .map(|(slot, record)| {
-            let dist = compute_distance(metric, query, &record.vector, query_norm);
+            let dist = compute_distance(metric, query, record.vector.as_slice(), query_norm);
             (slot as usize, dist)
         })
         .collect();
@@ -238,7 +238,7 @@ fn brute_force_filtered(
                 return None;
             }
 
-            let distance = compute_distance(metric, query, &record.vector, query_norm);
+            let distance = compute_distance(metric, query, record.vector.as_slice(), query_norm);
             Some((slot, distance))
         })
         .collect();
@@ -280,7 +280,7 @@ pub(crate) fn rescore_results(
         .into_iter()
         .filter_map(|(slot, _sq8_dist)| {
             let record = records.get_by_slot(slot as u32)?;
-            let dist = compute_distance(metric, query, &record.vector, query_norm);
+            let dist = compute_distance(metric, query, record.vector.as_slice(), query_norm);
             Some((slot, dist))
         })
         .collect();
