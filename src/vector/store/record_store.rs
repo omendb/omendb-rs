@@ -15,6 +15,29 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use memmap2::Mmap;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy)]
+pub enum SnapshotMmapSource {
+    VecFile,
+    MainFile,
+}
+
+#[derive(Debug, Clone)]
+pub enum SnapshotVectorData {
+    Owned(Vec<f32>),
+    Mmap {
+        source: SnapshotMmapSource,
+        offset: usize,
+        len: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SnapshotRecord {
+    pub id: String,
+    pub vector: SnapshotVectorData,
+    pub metadata: Option<JsonValue>,
+}
+
 #[derive(Debug, Clone)]
 pub enum VectorData {
     Owned(Vec<f32>),
@@ -171,16 +194,23 @@ impl RecordStore {
         store
     }
 
-    /// Restore internal state from snapshot data (used during recovery)
-    pub(crate) fn restore_snapshot(
+    pub(crate) fn restore_snapshot_records(
         &mut self,
-        slots: Vec<Option<Record>>,
+        slots: Vec<Option<SnapshotRecord>>,
         deleted: RoaringBitmap,
         live_count: u32,
+        vec_mmap: Option<Arc<Mmap>>,
+        main_mmap: Option<Arc<Mmap>>,
     ) {
         let stored_slots: Vec<Option<StoredRecord>> = slots
             .into_iter()
-            .map(|record| record.map(|record| self.store_record(record)))
+            .map(|record| {
+                record.map(|record| StoredRecord {
+                    id: record.id,
+                    vector: self.store_snapshot_vector(record.vector, &vec_mmap, &main_mmap),
+                    metadata: record.metadata,
+                })
+            })
             .collect();
         self.id_to_slot.clear();
         self.rebuild_indexes_from_slots(&stored_slots, &deleted);
@@ -580,6 +610,38 @@ impl RecordStore {
             let idx = mmaps.len();
             mmaps.push(mmap);
             idx
+        }
+    }
+
+    fn store_snapshot_vector(
+        &self,
+        vector: SnapshotVectorData,
+        vec_mmap: &Option<Arc<Mmap>>,
+        main_mmap: &Option<Arc<Mmap>>,
+    ) -> StoredVectorData {
+        match vector {
+            SnapshotVectorData::Owned(vector) => StoredVectorData::Owned(vector),
+            SnapshotVectorData::Mmap {
+                source,
+                offset,
+                len,
+            } => {
+                let mmap = match source {
+                    SnapshotMmapSource::VecFile => vec_mmap
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("missing vec mmap for snapshot vector"))
+                        .clone(),
+                    SnapshotMmapSource::MainFile => main_mmap
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("missing main mmap for snapshot vector"))
+                        .clone(),
+                };
+                StoredVectorData::Mmap {
+                    mmap_id: self.add_mmap(mmap),
+                    offset,
+                    len,
+                }
+            }
         }
     }
 

@@ -5,7 +5,7 @@
 
 use super::VectorStore;
 use super::helpers;
-use super::record_store::{Record, RecordStore};
+use super::record_store::{RecordStore, SnapshotRecord};
 use super::{DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M};
 use crate::omen::{
     CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, WalEntryType,
@@ -606,8 +606,8 @@ impl VectorStore {
     fn build_initial_records(
         snapshot: &OmenSnapshot,
         dimensions: usize,
-        _vec_mmap: Option<Arc<Mmap>>,
-        _main_mmap: Option<Arc<Mmap>>,
+        vec_mmap: Option<Arc<Mmap>>,
+        main_mmap: Option<Arc<Mmap>>,
     ) -> RecordStore {
         let deleted_bitmap: RoaringBitmap = snapshot.deleted.iter().copied().collect();
         let mut records = RecordStore::new(dimensions as u32);
@@ -620,7 +620,7 @@ impl VectorStore {
             .max()
             .map_or(0, |m| m + 1) as usize;
         let slot_capacity = snapshot.vectors.len().max(max_slot_from_ids);
-        let mut slots: Vec<Option<Record>> = Vec::with_capacity(slot_capacity);
+        let mut slots: Vec<Option<SnapshotRecord>> = Vec::with_capacity(slot_capacity);
         let mut live_count = 0u32;
 
         // Invert mapping for O(1) slot-to-ID lookup (O(N) construction)
@@ -644,15 +644,18 @@ impl VectorStore {
 
             if let Some(id) = id {
                 let metadata = snapshot.metadata.get(&slot_u32).cloned();
-                let record = match vec_data {
-                    Some(v) => Record {
+                let record = if let Some(v) = vec_data {
+                    SnapshotRecord {
                         id,
                         vector: v.clone(),
                         metadata,
-                    },
-                    None => {
-                        let zero_vec = vec![0.0f32; dimensions];
-                        Record::new(id, zero_vec, metadata)
+                    }
+                } else {
+                    let zero_vec = vec![0.0f32; dimensions];
+                    SnapshotRecord {
+                        id,
+                        vector: super::record_store::SnapshotVectorData::Owned(zero_vec),
+                        metadata,
                     }
                 };
                 slots.push(Some(record));
@@ -660,7 +663,7 @@ impl VectorStore {
             } else if let Some(vec_data) = vec_data {
                 let id = format!("__slot_{slot}");
                 let metadata = snapshot.metadata.get(&slot_u32).cloned();
-                slots.push(Some(Record {
+                slots.push(Some(SnapshotRecord {
                     id,
                     vector: vec_data.clone(),
                     metadata,
@@ -671,7 +674,7 @@ impl VectorStore {
             }
         }
 
-        records.restore_snapshot(slots, deleted_bitmap, live_count);
+        records.restore_snapshot_records(slots, deleted_bitmap, live_count, vec_mmap, main_mmap);
         records
     }
 

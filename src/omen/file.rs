@@ -13,7 +13,7 @@ pub use crate::omen::wal::{
     WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData, parse_wal_delete,
     parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
 };
-use crate::vector::store::record_store::RecordStore;
+use crate::vector::store::record_store::{RecordStore, SnapshotMmapSource, SnapshotVectorData};
 use anyhow::Result;
 use fs2::FileExt;
 use memmap2::{Mmap, MmapMut};
@@ -742,7 +742,7 @@ pub struct OmenSnapshot<'a> {
     pub _vec_mmap: Option<Arc<Mmap>>,
 
     /// Vectors loaded from storage
-    pub vectors: Vec<Option<crate::vector::store::record_store::VectorData>>,
+    pub vectors: Vec<Option<SnapshotVectorData>>,
     /// ID to slot mappings
     pub id_to_slot: HashMap<String, u32>,
     /// Deleted slot bitmap (as Vec for compatibility)
@@ -765,6 +765,28 @@ pub struct OmenSnapshot<'a> {
     pub sparse_index_bytes: Option<Cow<'a, [u8]>>,
     /// Serialized EdgeStore (if persisted)
     pub edge_store_bytes: Option<Cow<'a, [u8]>>,
+}
+
+impl OmenSnapshot<'_> {
+    pub fn vector_slice(&self, slot: usize) -> Option<&[f32]> {
+        let vector = self.vectors.get(slot)?.as_ref()?;
+        Some(match vector {
+            SnapshotVectorData::Owned(vector) => vector.as_slice(),
+            SnapshotVectorData::Mmap {
+                source,
+                offset,
+                len,
+            } => {
+                let mmap = match source {
+                    SnapshotMmapSource::VecFile => self._vec_mmap.as_ref()?,
+                    SnapshotMmapSource::MainFile => self._mmap.as_ref()?,
+                };
+                unsafe {
+                    std::slice::from_raw_parts(mmap.as_ptr().add(*offset).cast::<f32>(), *len)
+                }
+            }
+        })
+    }
 }
 
 /// Slim records snapshot: ID mappings, deleted slots, metadata, and dirty slots since last flush.
@@ -892,7 +914,6 @@ impl OmenFile {
         main_mmap: Option<&Arc<Mmap>>,
         extra_live_slots: Option<&RoaringBitmap>,
     ) -> OmenSnapshot<'static> {
-        use crate::vector::store::record_store::VectorData;
         let dim = self.header.dimensions as usize;
         let mut snapshot = OmenSnapshot {
             dimensions: self.header.dimensions,
@@ -930,8 +951,11 @@ impl OmenFile {
                             }
 
                             if !is_zero || known_live_slots.contains(slot as u32) {
-                                snapshot.vectors[slot] =
-                                    Some(VectorData::Mmap(mmap.clone(), start, dim));
+                                snapshot.vectors[slot] = Some(SnapshotVectorData::Mmap {
+                                    source: SnapshotMmapSource::VecFile,
+                                    offset: start,
+                                    len: dim,
+                                });
                             }
                         }
                     }
@@ -953,11 +977,14 @@ impl OmenFile {
                         let bytes = &mmap[start..end];
                         // If properly aligned and large enough, use Mmap zero-copy
                         if (bytes.as_ptr() as usize) % 4 == 0 && bytes.len() >= dim * 4 {
-                            snapshot.vectors[idx] =
-                                Some(VectorData::Mmap(mmap.clone(), start, dim));
+                            snapshot.vectors[idx] = Some(SnapshotVectorData::Mmap {
+                                source: SnapshotMmapSource::MainFile,
+                                offset: start,
+                                len: dim,
+                            });
                         } else {
                             snapshot.vectors[idx] =
-                                Some(VectorData::Owned(read_vector_from_bytes(bytes, dim)));
+                                Some(SnapshotVectorData::Owned(read_vector_from_bytes(bytes, dim)));
                         }
 
                         if snapshot.dimensions == 0 {
@@ -2242,20 +2269,8 @@ mod tests {
 
             assert!(snapshot.vectors[slot0].is_some());
             assert!(snapshot.vectors[slot1].is_some());
-            assert_eq!(
-                snapshot.vectors[slot0]
-                    .as_ref()
-                    .map(|v| v.as_slice())
-                    .unwrap(),
-                &[1.0, 2.0, 3.0]
-            );
-            assert_eq!(
-                snapshot.vectors[slot1]
-                    .as_ref()
-                    .map(|v| v.as_slice())
-                    .unwrap(),
-                &[4.0, 5.0, 6.0]
-            );
+            assert_eq!(snapshot.vector_slice(slot0).unwrap(), &[1.0, 2.0, 3.0]);
+            assert_eq!(snapshot.vector_slice(slot1).unwrap(), &[4.0, 5.0, 6.0]);
 
             // Check deleted bitmap
             assert!(snapshot.deleted.contains(&2));
@@ -2526,20 +2541,14 @@ mod tests {
 
             // Live (even) slots have correct vectors
             for i in (0..10u32).step_by(2) {
-                let vec_data = snapshot
-                    .vectors
-                    .get(i as usize)
-                    .and_then(|v| v.as_ref().map(|v| v.as_slice()));
+                let vec_data = snapshot.vector_slice(i as usize);
                 assert!(vec_data.is_some(), "Live slot {i} should have a vector");
                 assert_eq!(vec_data.unwrap(), &vec![i as f32; 3]);
             }
 
             // Deleted (odd) slots have no vector data
             for i in (1..10u32).step_by(2) {
-                let vec_data = snapshot
-                    .vectors
-                    .get(i as usize)
-                    .and_then(|v| v.as_ref().map(|v| v.as_slice()));
+                let vec_data = snapshot.vector_slice(i as usize);
                 assert!(vec_data.is_none(), "Deleted slot {i} should be None");
             }
         }
