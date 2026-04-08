@@ -1,5 +1,6 @@
 use crate::conversions::{convert_error, parse_multi_vector, parse_quantization};
 use crate::database::{VectorDatabase, VectorDatabaseInner};
+use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::vector::{VectorStore, VectorStoreOptions};
 use parking_lot::RwLock;
 use pyo3::exceptions::PyValueError;
@@ -46,6 +47,38 @@ pub(crate) fn build_store_options(
     }
 
     Ok(options)
+}
+
+fn parse_text_search_config(
+    text_search: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<TextSearchConfig>> {
+    let Some(value) = text_search else {
+        return Ok(None);
+    };
+
+    if let Ok(enabled) = value.extract::<bool>() {
+        return Ok(enabled.then(TextSearchConfig::default));
+    }
+
+    let dict = value
+        .cast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("text_search must be bool or dict"))?;
+
+    let mut config = TextSearchConfig::default();
+
+    if let Some(buffer_mb) = dict
+        .get_item("buffer_mb")?
+        .or_else(|| dict.get_item("writer_buffer_mb").ok().flatten())
+    {
+        config.writer_buffer_mb = buffer_mb.extract()?;
+    }
+
+    if let Some(tokenizer) = dict.get_item("tokenizer")? {
+        let tokenizer_name: String = tokenizer.extract()?;
+        config.tokenizer = TokenizerPreset::parse(&tokenizer_name).map_err(convert_error)?;
+    }
+
+    Ok(Some(config))
 }
 
 /// Open or create a vector database.
@@ -97,7 +130,7 @@ pub(crate) fn build_store_options(
 ///     # With cosine distance metric
 ///     >>> db = omendb.open("./vectors", dimensions=768, metric="cosine")
 #[pyfunction]
-#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, config=None, embedding_fn=None, rescore=None, oversample=None))]
+#[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, text_search=None, config=None, embedding_fn=None, rescore=None, oversample=None))]
 pub(crate) fn open(
     py: Python<'_>,
     path: String,
@@ -108,6 +141,7 @@ pub(crate) fn open(
     quantization: Option<&Bound<'_, PyAny>>,
     metric: Option<String>,
     multi_vector: Option<&Bound<'_, PyAny>>,
+    text_search: Option<&Bound<'_, PyAny>>,
     config: Option<&Bound<'_, PyDict>>,
     embedding_fn: Option<Py<PyAny>>,
     rescore: Option<bool>,
@@ -154,6 +188,7 @@ pub(crate) fn open(
     // Parse multi-vector config
     let mv_config = parse_multi_vector(multi_vector)?;
     let is_multi_vec = mv_config.is_some();
+    let text_search_config = parse_text_search_config(text_search)?;
 
     // Multi-vector stores don't support quantization yet
     if is_multi_vec && quant_mode {
@@ -176,8 +211,13 @@ pub(crate) fn open(
     if path == ":memory:" {
         // Multi-vector mode: use VectorStore::multi_vector() constructor
         if let Some(config) = mv_config {
-            let store =
+            let mut store =
                 VectorStore::multi_vector_with(effective_dims, config).map_err(convert_error)?;
+            if let Some(config) = text_search_config.clone() {
+                store
+                    .enable_text_search_with_config(Some(config))
+                    .map_err(convert_error)?;
+            }
 
             return Ok(VectorDatabase {
                 inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
@@ -201,6 +241,11 @@ pub(crate) fn open(
             rescore,
             oversample,
         )?;
+        let options = if let Some(ref config) = text_search_config {
+            options.text_search_config(config.clone())
+        } else {
+            options
+        };
 
         let store = options
             .build()
@@ -231,7 +276,12 @@ pub(crate) fn open(
     if db_path.is_dir() || omen_path.exists() || !db_path.exists() {
         // Check for existing database that may have multi-vector config
         if omen_path.exists() {
-            let store = VectorStore::open(&path).map_err(convert_error)?;
+            let mut store = VectorStore::open(&path).map_err(convert_error)?;
+            if let Some(config) = text_search_config.clone() {
+                store
+                    .enable_text_search_with_config(Some(config))
+                    .map_err(convert_error)?;
+            }
             let is_mv = store.is_multi_vector();
             let actual_dims = store.dimensions();
 
@@ -260,10 +310,15 @@ pub(crate) fn open(
         // Create new persistent store
         if let Some(mv_cfg) = mv_config {
             // Create new multi-vector persistent store
-            let store = VectorStore::multi_vector_with(effective_dims, mv_cfg)
+            let mut store = VectorStore::multi_vector_with(effective_dims, mv_cfg)
                 .map_err(convert_error)?
                 .persist(&path)
                 .map_err(convert_error)?;
+            if let Some(config) = text_search_config.clone() {
+                store
+                    .enable_text_search_with_config(Some(config))
+                    .map_err(convert_error)?;
+            }
 
             return Ok(VectorDatabase {
                 inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
@@ -287,6 +342,9 @@ pub(crate) fn open(
             rescore,
             oversample,
         )?;
+        if let Some(ref config) = text_search_config {
+            options = options.text_search_config(config.clone());
+        }
 
         // Handle config dict for backward compatibility
         if let Some(cfg) = config {
@@ -324,7 +382,12 @@ pub(crate) fn open(
         }
 
         // Open with options
-        let store = options.open(&path).map_err(convert_error)?;
+        let mut store = options.open(&path).map_err(convert_error)?;
+        if let Some(config) = text_search_config {
+            store
+                .enable_text_search_with_config(Some(config))
+                .map_err(convert_error)?;
+        }
 
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
@@ -348,6 +411,11 @@ pub(crate) fn open(
         rescore,
         oversample,
     )?;
+    let options = if let Some(ref config) = text_search_config {
+        options.text_search_config(config.clone())
+    } else {
+        options
+    };
 
     let store = options
         .build()

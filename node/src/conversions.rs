@@ -1,4 +1,5 @@
 use napi::bindgen_prelude::*;
+use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::omen::Metric;
 use omendb_lib::vector::muvera::MultiVectorConfig;
 
@@ -116,6 +117,43 @@ pub(crate) fn parse_quantization(value: &serde_json::Value) -> Result<bool> {
         _ => Err(Error::new(
             Status::InvalidArg,
             "quantization must be true, false, or 'sq8'",
+        )),
+    }
+}
+
+/// Parse text search option from JS value.
+pub(crate) fn parse_text_search_config(
+    value: &serde_json::Value,
+) -> Result<Option<TextSearchConfig>> {
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Bool(true) => Ok(Some(TextSearchConfig::default())),
+        serde_json::Value::Bool(false) => Ok(None),
+        serde_json::Value::Object(obj) => {
+            let mut config = TextSearchConfig::default();
+            if let Some(buffer_mb) = obj.get("bufferMb").or_else(|| obj.get("writerBufferMb")) {
+                config.writer_buffer_mb = buffer_mb.as_u64().ok_or_else(|| {
+                    Error::new(
+                        Status::InvalidArg,
+                        "textSearch.bufferMb must be a number",
+                    )
+                })? as usize;
+            }
+            if let Some(tokenizer) = obj.get("tokenizer") {
+                let tokenizer_name = tokenizer.as_str().ok_or_else(|| {
+                    Error::new(
+                        Status::InvalidArg,
+                        "textSearch.tokenizer must be a string",
+                    )
+                })?;
+                config.tokenizer =
+                    TokenizerPreset::parse(tokenizer_name).map_err(convert_error)?;
+            }
+            Ok(Some(config))
+        }
+        _ => Err(Error::new(
+            Status::InvalidArg,
+            "textSearch must be true, false, or { bufferMb?, tokenizer? }",
         )),
     }
 }

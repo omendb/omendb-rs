@@ -5,7 +5,9 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::conversions::{convert_error, parse_multi_vector, parse_quantization};
+use crate::conversions::{
+    convert_error, parse_multi_vector, parse_quantization, parse_text_search_config,
+};
 use crate::database::{EmbeddingFn, VectorDatabase, VectorDatabaseInner};
 
 /// Configuration options for opening a vector database.
@@ -47,6 +49,12 @@ pub struct OpenOptions {
     pub rescore: Option<bool>,
     /// Candidate multiplier for rescoring (default: 3.0)
     pub oversample: Option<f64>,
+    /// Enable text search at open time.
+    /// - true: default buffer/tokenizer
+    /// - { bufferMb?, tokenizer? }: custom text config
+    /// - false/null: disabled
+    #[napi(ts_type = "boolean | { bufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null | undefined")]
+    pub text_search: Option<serde_json::Value>,
 }
 
 /// Open or create a vector database.
@@ -93,6 +101,7 @@ pub fn open(
         multi_vector: None,
         rescore: None,
         oversample: None,
+        text_search: None,
     });
 
     let embedding_tsfn = embedding_fn.map(Arc::new);
@@ -113,6 +122,12 @@ pub fn open(
         .multi_vector
         .as_ref()
         .map(parse_multi_vector)
+        .transpose()?
+        .flatten();
+    let text_search_config = opts
+        .text_search
+        .as_ref()
+        .map(parse_text_search_config)
         .transpose()?
         .flatten();
 
@@ -200,9 +215,12 @@ pub fn open(
     if let Some(oversample) = opts.oversample {
         store_options = store_options.oversample(oversample as f32);
     }
+    if let Some(ref text_config) = text_search_config {
+        store_options = store_options.text_search_config(text_config.clone());
+    }
 
     if path == ":memory:" {
-        let store = if let Some(mv_config) = multi_vector_config {
+        let mut store = if let Some(mv_config) = multi_vector_config {
             VectorStore::multi_vector_with(dimensions, mv_config).map_err(|e| {
                 Error::new(
                     Status::InvalidArg,
@@ -217,6 +235,12 @@ pub fn open(
                 )
             })?
         };
+
+        if let Some(config) = text_search_config.clone() {
+            store
+                .enable_text_search_with_config(Some(config))
+                .map_err(convert_error)?;
+        }
 
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
@@ -268,7 +292,7 @@ pub fn open(
     }
 
     if let Some(mv_config) = multi_vector_config {
-        let store = VectorStore::multi_vector_with(dimensions, mv_config)
+        let mut store = VectorStore::multi_vector_with(dimensions, mv_config)
             .map_err(|e| {
                 Error::new(
                     Status::InvalidArg,
@@ -277,6 +301,12 @@ pub fn open(
             })?
             .persist(&path)
             .map_err(convert_error)?;
+
+        if let Some(config) = text_search_config.clone() {
+            store
+                .enable_text_search_with_config(Some(config))
+                .map_err(convert_error)?;
+        }
 
         return Ok(VectorDatabase {
             inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
@@ -299,7 +329,12 @@ pub fn open(
         }
     }
 
-    let store = store_options.open(&path).map_err(convert_error)?;
+    let mut store = store_options.open(&path).map_err(convert_error)?;
+    if let Some(config) = text_search_config {
+        store
+            .enable_text_search_with_config(Some(config))
+            .map_err(convert_error)?;
+    }
 
     Ok(VectorDatabase {
         inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),

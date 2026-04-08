@@ -18,6 +18,35 @@ def test_enable_text_search():
         del db  # Ensure cleanup before temp dir removal
 
 
+def test_open_with_text_search_config():
+    """Test configuring text search directly in open()."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test_db")
+        db = omendb.open(
+            db_path,
+            dimensions=4,
+            text_search={"buffer_mb": 20, "tokenizer": "code"},
+        )
+
+        assert db.has_text_search()
+
+        db.set(
+            [
+                {
+                    "id": "doc1",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "text": "HTTPClient handles user_id",
+                }
+            ]
+        )
+        db.flush()
+
+        results = db.search_text("client", k=10)
+        assert len(results) == 1
+        assert results[0]["id"] == "doc1"
+        db.close()
+
+
 def test_set_with_text_auto_enables():
     """Test that set() with text field auto-enables text search"""
     with tempfile.TemporaryDirectory() as tmpdir:

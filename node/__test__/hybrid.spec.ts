@@ -25,6 +25,30 @@ describe("Hybrid Search", () => {
 	});
 
 	describe("auto-enable text search", () => {
+		it("should allow text search config at open time", async () => {
+			const configuredPath = join(tempDir, "configured");
+			const configured = open(configuredPath, {
+				dimensions: 4,
+				textSearch: { bufferMb: 20, tokenizer: "code" },
+			});
+
+			expect(configured.hasTextSearch).toBe(true);
+
+			await configured.set([
+				{
+					id: "doc1",
+					vector: [1.0, 0.0, 0.0, 0.0],
+					text: "HTTPClient handles user_id",
+				},
+			]);
+			configured.flush();
+
+			const results = configured.searchText("client", 10);
+			expect(results).toHaveLength(1);
+			expect(results[0]?.id).toBe("doc1");
+			configured.close();
+		});
+
 		it("should auto-enable text search when using text field", async () => {
 			expect(db.hasTextSearch).toBe(false);
 
