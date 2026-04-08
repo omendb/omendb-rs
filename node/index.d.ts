@@ -30,7 +30,7 @@ export declare class VectorDatabase {
    */
   set(items: Array<SetItem>): Promise<number>
   /**
-   * Enable text search with optional writer buffer and tokenizer preset.
+   * Enable text search with optional buffer and tokenizer configuration.
    *
    * @param bufferMb - Writer buffer size in MB (default: 50)
    * @param tokenizer - Tokenizer preset: "default", "code", or "raw"
@@ -519,7 +519,7 @@ export declare function open(path: string, options?: OpenOptions | undefined | n
  * Configuration options for opening a vector database.
  *
  * All fields are optional with sensible defaults:
- * - dimensions: 128 (auto-detected on first insert if not specified)
+ * - dimensions: inferred from first insert when omitted for single-vector stores
  * - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
  * - efConstruction: 100 (build quality, higher = better graph, slower build)
  * - efSearch: 100 (search quality, higher = better recall, slower search)
@@ -527,7 +527,7 @@ export declare function open(path: string, options?: OpenOptions | undefined | n
  * - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
  */
 export interface OpenOptions {
-  /** Vector dimensions (default: 128, auto-detected on first insert) */
+  /** Vector dimensions (default: inferred on first insert for single-vector stores) */
   dimensions?: number
   /** HNSW M parameter: neighbors per node (default: 16, range: 4-64) */
   m?: number
@@ -540,7 +540,7 @@ export interface OpenOptions {
    * - true or "sq8": SQ8 4x compression, ~99% recall (RECOMMENDED)
    * - false/null: Full precision (no quantization)
    */
-  quantization?: boolean | string | number | null | undefined
+  quantization?: boolean | 'sq8' | 'scalar' | null | undefined
   /** Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip" */
   metric?: string
   /**
@@ -550,11 +550,18 @@ export interface OpenOptions {
    * - dProj: Dimension projection (16 = 8x smaller FDE, null = full token dim)
    * - false/null: Disabled (default, single-vector mode)
    */
-  multiVector?: boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null } | null | undefined
+  multiVector?: boolean | { repetitions?: number; partitionBits?: number; seed?: number; dProj?: number | null; poolFactor?: number | null } | null | undefined
   /** SQ8 refiner: rescore with full precision (default: true when quantized) */
   rescore?: boolean
   /** Candidate multiplier for rescoring (default: 3.0) */
   oversample?: number
+  /**
+   * Enable text search at open time.
+   * - true: default buffer/tokenizer
+   * - { bufferMb?, writerBufferMb?, tokenizer? }: custom text config
+   * - false/null: disabled
+   */
+  textSearch?: boolean | { bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null | undefined
 }
 
 export interface SearchResult {

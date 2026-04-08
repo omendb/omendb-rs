@@ -107,9 +107,10 @@ const results = await db.search(new Float32Array(128).fill(0.1), 5);
 
 ```python
 # Database
-db = omendb.open(path, dimensions, embedding_fn=fn)  # With auto-embedding
-db = omendb.open(path, dimensions)                    # Manual vectors
-db = omendb.open(":memory:", dimensions)              # In-memory
+db = omendb.open(path, dimensions=384, embedding_fn=fn)  # With auto-embedding
+db = omendb.open(path, dimensions=384)                   # Manual vectors
+db = omendb.open(":memory:")                             # Infer dims on first insert
+mvdb = omendb.open(":memory:", dimensions=128, multi_vector=True)
 
 # CRUD
 db.set(items)                           # Insert/update (vectors or documents)
