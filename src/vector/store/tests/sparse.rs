@@ -238,6 +238,34 @@ fn test_sparse_preserves_dense() {
 }
 
 #[test]
+fn test_dense_update_preserves_recordstore_sparse_payload() {
+    let mut store = VectorStore::new(3);
+    store.enable_sparse();
+
+    store
+        .set_hybrid_sparse(
+            "doc1",
+            Vector::new(vec![1.0, 0.0, 0.0]),
+            SparseVector::from_pairs(vec![(42, 1.0)]).unwrap(),
+            serde_json::json!({"kind": "hybrid"}),
+        )
+        .unwrap();
+
+    store
+        .set(
+            "doc1",
+            Vector::new(vec![0.0, 1.0, 0.0]),
+            serde_json::json!({"kind": "updated"}),
+        )
+        .unwrap();
+
+    let slot = store.records.get_slot("doc1").unwrap();
+    let sparse = store.records.get_sparse(slot).unwrap();
+    assert_eq!(sparse.indices(), &[42]);
+    assert_eq!(sparse.values(), &[1.0]);
+}
+
+#[test]
 fn test_sparse_persistence_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test.omen");

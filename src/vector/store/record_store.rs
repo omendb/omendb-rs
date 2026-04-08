@@ -12,6 +12,7 @@ use serde_json::Value as JsonValue;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::vector::sparse::SparseVector;
 use memmap2::Mmap;
 use std::sync::Arc;
 
@@ -71,6 +72,7 @@ enum StoredVectorData {
 struct StoredRecord {
     id: String,
     vector: StoredVectorData,
+    sparse: Option<SparseVector>,
     metadata: Option<JsonValue>,
 }
 
@@ -208,6 +210,7 @@ impl RecordStore {
                 record.map(|record| StoredRecord {
                     id: record.id,
                     vector: self.store_snapshot_vector(record.vector, &vec_mmap, &main_mmap),
+                    sparse: None,
                     metadata: record.metadata,
                 })
             })
@@ -257,8 +260,15 @@ impl RecordStore {
         }
 
         // Check for existing record (update case)
+        let mut carried_sparse = None;
         if let Some(old_slot_ref) = self.id_to_slot.get(&id) {
             let old_slot = *old_slot_ref;
+            carried_sparse = self
+                .slots
+                .read()
+                .get(old_slot as usize)
+                .and_then(|record| record.as_ref())
+                .and_then(|record| record.sparse.clone());
             let mut deleted = self.deleted.write();
             if !deleted.contains(old_slot) {
                 deleted.insert(old_slot);
@@ -273,6 +283,7 @@ impl RecordStore {
         slots.push(Some(StoredRecord {
             id: id.clone(),
             vector: StoredVectorData::Owned(vector),
+            sparse: carried_sparse,
             metadata,
         }));
         self.id_to_slot.insert(id, slot);
@@ -438,6 +449,28 @@ impl RecordStore {
         Ok(())
     }
 
+    /// Update sparse payload for a record by slot.
+    pub fn update_sparse(&self, slot: u32, sparse: Option<SparseVector>) -> anyhow::Result<()> {
+        let mut slots = self.slots.write();
+        let record = slots
+            .get_mut(slot as usize)
+            .and_then(|r| r.as_mut())
+            .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
+
+        self.dirty_slots.write().insert(slot);
+        record.sparse = sparse;
+        Ok(())
+    }
+
+    /// Get a cloned sparse payload for a slot.
+    pub fn get_sparse(&self, slot: u32) -> Option<SparseVector> {
+        self.slots
+            .read()
+            .get(slot as usize)?
+            .as_ref()
+            .and_then(|record| record.sparse.clone())
+    }
+
     /// Export vector references for checkpoint (returns owned copy for stability)
     pub fn export_vectors(&self) -> Vec<Option<Vec<f32>>> {
         let slots = self.slots.read();
@@ -587,6 +620,7 @@ impl RecordStore {
         StoredRecord {
             id: record.id,
             vector: self.store_vector(record.vector),
+            sparse: None,
             metadata: record.metadata,
         }
     }
@@ -704,6 +738,7 @@ impl RecordStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vector::sparse::SparseVector;
 
     #[test]
     fn test_new_empty() {
@@ -753,6 +788,24 @@ mod tests {
 
         // Old slot is deleted (get_by_slot respects deleted bitmap)
         assert!(store.get_by_slot(0).is_none());
+    }
+
+    #[test]
+    fn test_set_update_preserves_sparse_payload() {
+        let store = RecordStore::new(3);
+
+        let slot1 = store
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .unwrap();
+        let sparse = SparseVector::from_pairs(vec![(7, 0.5), (42, 1.5)]).unwrap();
+        store.update_sparse(slot1, Some(sparse.clone())).unwrap();
+
+        let slot2 = store
+            .set("vec1".to_string(), vec![4.0, 5.0, 6.0], None)
+            .unwrap();
+
+        assert_eq!(slot2, 1);
+        assert_eq!(store.get_sparse(slot2).as_ref(), Some(&sparse));
     }
 
     #[test]

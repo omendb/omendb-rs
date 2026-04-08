@@ -54,6 +54,7 @@ impl VectorStore {
             self.metadata_index.write().remove(slot);
             self.metadata_index.write().index_json(slot, &metadata);
             self.records.update_metadata(slot, metadata.clone())?;
+            self.records.update_sparse(slot, Some(sparse.clone()))?;
 
             // WAL write for metadata update
             if let Some(ref storage) = self.storage
@@ -71,6 +72,7 @@ impl VectorStore {
             let slot =
                 self.records
                     .set(id.to_string(), zero_vec.clone(), Some(metadata.clone()))?;
+            self.records.update_sparse(slot, Some(sparse.clone()))?;
             self.metadata_index.write().index_json(slot, &metadata);
 
             if let Some(ref storage) = self.storage {
@@ -104,6 +106,7 @@ impl VectorStore {
         // Insert dense vector via normal path
         let slot = u32::try_from(self.set(id, dense, metadata.clone())?)
             .map_err(|_| anyhow::anyhow!("slot index exceeds u32::MAX"))?;
+        self.records.update_sparse(slot, Some(sparse.clone()))?;
 
         // Index sparse vector
         self.sparse_index

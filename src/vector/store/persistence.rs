@@ -102,6 +102,11 @@ impl VectorStore {
                 &wal_edge_deletes,
                 ctx.distance_metric,
             )?;
+            if let Some(ref sparse_index) = ancillary.sparse_index {
+                for (slot, sparse) in sparse_index.iter() {
+                    records.update_sparse(slot, Some(sparse.clone()))?;
+                }
+            }
 
             (
                 records,
