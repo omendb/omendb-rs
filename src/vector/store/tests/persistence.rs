@@ -596,6 +596,39 @@ fn test_vector_only_checkpoint_preserves_sparse_state() {
 }
 
 #[test]
+fn test_sparse_wal_recovery_without_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("sparse_wal_recovery");
+
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "base",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "base"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+
+        store
+            .set_sparse(
+                "sparse_doc",
+                SparseVector::from_pairs(vec![(42, 1.5), (99, 0.5)]).unwrap(),
+                serde_json::json!({"phase": "wal"}),
+            )
+            .unwrap();
+    }
+
+    let store = VectorStore::open(&db_path).unwrap();
+    let query = SparseVector::from_pairs(vec![(42, 1.0)]).unwrap();
+    let results = store.sparse_search(&query, 10, None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "sparse_doc");
+    assert_eq!(results[0].metadata["phase"], "wal");
+}
+
+#[test]
 fn test_vector_only_checkpoint_preserves_edges() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("edge_state_recovery");

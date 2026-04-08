@@ -32,6 +32,10 @@ pub enum WalEntryType {
     InsertEdge = 3,
     /// Delete an edge: {from_id, to_id, edge_type}
     DeleteEdge = 4,
+    /// Upsert sparse payload: {id, metadata, indices, values}
+    UpsertSparse = 5,
+    /// Upsert multivector payload: {id, metadata, tokens}
+    UpsertMulti = 6,
     /// Checkpoint marker - safe truncation point
     Checkpoint = 100,
 }
@@ -47,6 +51,8 @@ impl WalEntryType {
             2 => Some(Self::DeleteNode),
             3 => Some(Self::InsertEdge),
             4 => Some(Self::DeleteEdge),
+            5 => Some(Self::UpsertSparse),
+            6 => Some(Self::UpsertMulti),
             100 => Some(Self::Checkpoint),
             _ => None,
         }
@@ -241,6 +247,84 @@ impl WalEntry {
                 checksum: 0,
             },
             data: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn upsert_sparse(
+        timestamp: u64,
+        string_id: &str,
+        metadata: &[u8],
+        indices: &[u32],
+        values: &[f32],
+    ) -> Self {
+        let capacity =
+            4 + string_id.len() + 4 + metadata.len() + 4 + (indices.len() * 4) + 4 + (values.len() * 4);
+        let mut data = Vec::with_capacity(capacity);
+
+        data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());
+        data.extend_from_slice(string_id.as_bytes());
+        data.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        data.extend_from_slice(metadata);
+        data.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+        for index in indices {
+            data.extend_from_slice(&index.to_le_bytes());
+        }
+        data.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        let value_bytes =
+            unsafe { std::slice::from_raw_parts(values.as_ptr() as *const u8, values.len() * 4) };
+        data.extend_from_slice(value_bytes);
+
+        let checksum = crc32fast::hash(&data);
+        Self {
+            header: WalEntryHeader {
+                entry_type: WalEntryType::UpsertSparse,
+                timestamp,
+                data_len: data.len() as u32,
+                checksum,
+            },
+            data,
+        }
+    }
+
+    #[must_use]
+    pub fn upsert_multi(
+        timestamp: u64,
+        string_id: &str,
+        metadata: &[u8],
+        tokens: &[Vec<f32>],
+    ) -> Self {
+        let token_values: usize = tokens.iter().map(Vec::len).sum();
+        let capacity = 4
+            + string_id.len()
+            + 4
+            + metadata.len()
+            + 4
+            + tokens.len() * 4
+            + token_values * 4;
+        let mut data = Vec::with_capacity(capacity);
+
+        data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());
+        data.extend_from_slice(string_id.as_bytes());
+        data.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        data.extend_from_slice(metadata);
+        data.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
+        for token in tokens {
+            data.extend_from_slice(&(token.len() as u32).to_le_bytes());
+            let token_bytes =
+                unsafe { std::slice::from_raw_parts(token.as_ptr() as *const u8, token.len() * 4) };
+            data.extend_from_slice(token_bytes);
+        }
+
+        let checksum = crc32fast::hash(&data);
+        Self {
+            header: WalEntryHeader {
+                entry_type: WalEntryType::UpsertMulti,
+                timestamp,
+                data_len: data.len() as u32,
+                checksum,
+            },
+            data,
         }
     }
 
@@ -666,6 +750,21 @@ pub struct WalDeleteData {
     pub id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct WalSparseData {
+    pub id: String,
+    pub metadata: Option<Vec<u8>>,
+    pub indices: Vec<u32>,
+    pub values: Vec<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WalMultiData {
+    pub id: String,
+    pub metadata: Option<Vec<u8>>,
+    pub tokens: Vec<Vec<f32>>,
+}
+
 /// Parse WAL insert entry data
 ///
 /// Returns parsed ID, vector, and optional metadata bytes.
@@ -725,6 +824,106 @@ pub fn parse_wal_delete(data: &[u8]) -> io::Result<WalDeleteData> {
     let mut cursor = std::io::Cursor::new(data);
     let id = read_string_id(&mut cursor)?;
     Ok(WalDeleteData { id })
+}
+
+pub fn parse_wal_sparse(data: &[u8]) -> io::Result<WalSparseData> {
+    let mut cursor = std::io::Cursor::new(data);
+    let id = read_string_id(&mut cursor)?;
+    let mut buf4 = [0u8; 4];
+
+    cursor.read_exact(&mut buf4)?;
+    let meta_len = u32::from_le_bytes(buf4) as usize;
+    let metadata = if meta_len > 0 {
+        if meta_len > MAX_METADATA_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Metadata length {meta_len} exceeds maximum {MAX_METADATA_LEN}"),
+            ));
+        }
+        let mut bytes = vec![0u8; meta_len];
+        cursor.read_exact(&mut bytes)?;
+        Some(bytes)
+    } else {
+        None
+    };
+
+    cursor.read_exact(&mut buf4)?;
+    let index_len = u32::from_le_bytes(buf4) as usize;
+    let mut indices = Vec::with_capacity(index_len);
+    for _ in 0..index_len {
+        cursor.read_exact(&mut buf4)?;
+        indices.push(u32::from_le_bytes(buf4));
+    }
+
+    cursor.read_exact(&mut buf4)?;
+    let value_len = u32::from_le_bytes(buf4) as usize;
+    if value_len != index_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Sparse index/value length mismatch",
+        ));
+    }
+    let byte_len = value_len
+        .checked_mul(4)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Sparse byte size overflow"))?;
+    let mut value_bytes = vec![0u8; byte_len];
+    cursor.read_exact(&mut value_bytes)?;
+    let values = read_vector_from_bytes(&value_bytes, value_len);
+
+    Ok(WalSparseData {
+        id,
+        metadata,
+        indices,
+        values,
+    })
+}
+
+pub fn parse_wal_multi(data: &[u8]) -> io::Result<WalMultiData> {
+    let mut cursor = std::io::Cursor::new(data);
+    let id = read_string_id(&mut cursor)?;
+    let mut buf4 = [0u8; 4];
+
+    cursor.read_exact(&mut buf4)?;
+    let meta_len = u32::from_le_bytes(buf4) as usize;
+    let metadata = if meta_len > 0 {
+        if meta_len > MAX_METADATA_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Metadata length {meta_len} exceeds maximum {MAX_METADATA_LEN}"),
+            ));
+        }
+        let mut bytes = vec![0u8; meta_len];
+        cursor.read_exact(&mut bytes)?;
+        Some(bytes)
+    } else {
+        None
+    };
+
+    cursor.read_exact(&mut buf4)?;
+    let token_count = u32::from_le_bytes(buf4) as usize;
+    let mut tokens = Vec::with_capacity(token_count);
+    for _ in 0..token_count {
+        cursor.read_exact(&mut buf4)?;
+        let token_len = u32::from_le_bytes(buf4) as usize;
+        if token_len > MAX_VECTOR_DIM {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Token dimension {token_len} exceeds maximum {MAX_VECTOR_DIM}"),
+            ));
+        }
+        let byte_len = token_len.checked_mul(4).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Multi token byte size overflow")
+        })?;
+        let mut token_bytes = vec![0u8; byte_len];
+        cursor.read_exact(&mut token_bytes)?;
+        tokens.push(read_vector_from_bytes(&token_bytes, token_len));
+    }
+
+    Ok(WalMultiData {
+        id,
+        metadata,
+        tokens,
+    })
 }
 
 /// Parsed insert-edge data from a WAL entry

@@ -49,29 +49,41 @@ impl VectorStore {
     ) -> Result<()> {
         self.enable_sparse();
 
-        let slot = if let Some(slot) = self.records.get_slot(id) {
+        let (slot, needs_checkpoint) = if let Some(slot) = self.records.get_slot(id) {
             // Existing ID: update in-place to preserve HNSW slot
             self.metadata_index.write().remove(slot);
             self.metadata_index.write().index_json(slot, &metadata);
             self.records.update_metadata(slot, metadata.clone())?;
             self.records.update_sparse(slot, Some(sparse.clone()))?;
 
-            // WAL write for metadata update
-            if let Some(ref storage) = self.storage
-                && let Some(vector) = self.records.get_vector(slot)
-            {
+            if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
-                storage.log_insert(id, vector.as_slice(), &metadata)?;
+                storage.log_upsert_sparse(id, &sparse, &metadata)?;
                 storage.sync()?;
+                (
+                    slot,
+                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize,
+                )
+            } else {
+                (slot, false)
             }
-            slot
         } else {
             let slot =
                 self.records
                     .set_without_vector(id.to_string(), Some(metadata.clone()))?;
             self.records.update_sparse(slot, Some(sparse.clone()))?;
             self.metadata_index.write().index_json(slot, &metadata);
-            slot
+            if let Some(ref storage) = self.storage {
+                let mut storage = storage.write();
+                storage.log_upsert_sparse(id, &sparse, &metadata)?;
+                storage.sync()?;
+                (
+                    slot,
+                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize,
+                )
+            } else {
+                (slot, false)
+            }
         };
 
         self.sparse_index
@@ -79,6 +91,10 @@ impl VectorStore {
             .as_mut()
             .expect("sparse_index enabled by enable_sparse")
             .insert(slot, &sparse);
+
+        if needs_checkpoint {
+            self.checkpoint_wal_locked()?;
+        }
         Ok(())
     }
 
@@ -105,6 +121,16 @@ impl VectorStore {
             .as_mut()
             .expect("sparse_index enabled by enable_sparse")
             .insert(slot, &sparse);
+
+        if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
+            storage.log_upsert_sparse(id, &sparse, &metadata)?;
+            storage.sync()?;
+            if storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize {
+                drop(storage);
+                self.checkpoint_wal_locked()?;
+            }
+        }
 
         Ok(())
     }

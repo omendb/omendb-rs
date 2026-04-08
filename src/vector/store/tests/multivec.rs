@@ -972,6 +972,50 @@ mod persistence_tests {
     }
 
     #[test]
+    fn test_multivec_wal_recovery_without_checkpoint() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_multivec_wal_recovery.omen");
+
+        {
+            let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
+            store = store.persist(&path).unwrap();
+
+            store
+                .store(
+                    "base",
+                    vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]],
+                    serde_json::json!({"phase": "base"}),
+                )
+                .unwrap();
+            store.flush().unwrap();
+
+            store
+                .store(
+                    "wal_doc",
+                    vec![vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]],
+                    serde_json::json!({"phase": "wal"}),
+                )
+                .unwrap();
+        }
+
+        {
+            let store = VectorStore::open(&path).unwrap();
+            assert!(store.is_multi_vector());
+
+            let query = [vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
+            let query_refs: Vec<&[f32]> = query.iter().map(std::vec::Vec::as_slice).collect();
+
+            let reranked = store.search_multi(&query_refs, 2).unwrap();
+            assert_eq!(reranked.len(), 2);
+            assert_eq!(reranked[0].id, "wal_doc");
+
+            let (tokens, metadata) = store.get_tokens("wal_doc").unwrap();
+            assert_eq!(tokens.len(), 2);
+            assert_eq!(metadata["phase"], "wal");
+        }
+    }
+
+    #[test]
     fn test_multivec_config_persisted_correctly() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test_config.omen");

@@ -192,6 +192,10 @@ impl VectorStore {
         }
 
         // Prepare batch for set_batch (maintains original batch order - set_batch reorders internally)
+        let wal_batch: Vec<(String, JsonValue)> = batch
+            .iter()
+            .map(|(id, _, metadata)| ((*id).to_string(), metadata.clone()))
+            .collect();
         let fde_batch: Vec<(String, Vector, JsonValue)> = batch
             .into_iter()
             .zip(pooled_and_fdes.iter())
@@ -202,12 +206,24 @@ impl VectorStore {
 
         // Use existing set_batch for efficient HNSW insertion
         let result_slots = self.set_batch(fde_batch)?;
+        let mut needs_checkpoint = false;
         for (slot, &i) in result_slots
             .iter()
             .zip(update_indices.iter().chain(insert_indices.iter()))
         {
             self.records
                 .update_multi(*slot as u32, Some(pooled_and_fdes[i].0.clone()))?;
+            if let Some(ref storage) = self.storage {
+                let mut storage = storage.write();
+                storage.log_upsert_multi(&wal_batch[i].0, &pooled_and_fdes[i].0, &wal_batch[i].1)?;
+                storage.sync()?;
+                needs_checkpoint |=
+                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize;
+            }
+        }
+
+        if needs_checkpoint {
+            self.checkpoint_wal_locked()?;
         }
 
         Ok(())
@@ -573,9 +589,18 @@ impl VectorStore {
         let fde = encoder.encode_document(&final_refs);
 
         // Store FDE first (can fail without corrupting multivec_storage)
-        let slot = self.set(id, Vector::new(fde), metadata)?;
+        let slot = self.set(id, Vector::new(fde), metadata.clone())?;
         self.records
             .update_multi(slot as u32, Some(pooled_tokens.clone()))?;
+
+        let needs_checkpoint = if let Some(ref storage) = self.storage {
+            let mut storage = storage.write();
+            storage.log_upsert_multi(id, &pooled_tokens, &metadata)?;
+            storage.sync()?;
+            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
+        } else {
+            false
+        };
 
         // Then add tokens - slot already committed (store pooled tokens for reranking)
         let mut multivec_storage_guard = self.multivec_storage.write();
@@ -591,6 +616,10 @@ impl VectorStore {
                 "Internal error: slot mismatch RecordStore={slot} MultiVecStorage={token_slot}. \
                  This indicates a bug - please report it."
             );
+        }
+
+        if needs_checkpoint {
+            self.checkpoint_wal_locked()?;
         }
 
         Ok(())

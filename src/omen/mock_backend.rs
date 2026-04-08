@@ -66,6 +66,26 @@ impl StorageBackend for MockStorageBackend {
         Ok(())
     }
 
+    fn log_upsert_sparse(
+        &mut self,
+        id: &str,
+        _sparse: &crate::vector::sparse::SparseVector,
+        _metadata: &serde_json::Value,
+    ) -> Result<()> {
+        self.wal.push(format!("sparse:{id}"));
+        Ok(())
+    }
+
+    fn log_upsert_multi(
+        &mut self,
+        id: &str,
+        _tokens: &[Vec<f32>],
+        _metadata: &serde_json::Value,
+    ) -> Result<()> {
+        self.wal.push(format!("multi:{id}"));
+        Ok(())
+    }
+
     fn log_insert_edge(
         &mut self,
         from_id: &str,

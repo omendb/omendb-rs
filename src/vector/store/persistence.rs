@@ -10,6 +10,7 @@ use super::{DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M
 use crate::omen::{
     CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, WalEntryType,
     parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
+    parse_wal_multi, parse_wal_sparse,
 };
 use crate::text::TextIndex;
 use crate::vector::VectorEngineView;
@@ -520,6 +521,22 @@ impl VectorStore {
             self.hnsw_ef_search
                 .load(std::sync::atomic::Ordering::Relaxed) as u16,
         );
+        if let Some(ref encoder) = self.muvera_encoder {
+            let config = encoder.config();
+            storage_local.put_config("muvera_repetitions", config.repetitions as u64)?;
+            storage_local.put_config("muvera_partition_bits", config.partition_bits as u64)?;
+            storage_local.put_config("muvera_seed", config.seed)?;
+            storage_local.put_config("muvera_token_dim", encoder.token_dimension() as u64)?;
+            if let Some(d_proj) = config.d_proj {
+                storage_local.put_config("muvera_d_proj", d_proj as u64)?;
+            }
+            if let Some(pool_factor) = config.pool_factor {
+                storage_local.put_config("muvera_pool_factor", pool_factor as u64)?;
+            }
+            if let Some(max_tokens) = config.max_tokens {
+                storage_local.put_config("muvera_max_tokens", max_tokens as u64)?;
+            }
+        }
         let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> =
             Arc::new(RwLock::new(storage_local));
 
@@ -581,6 +598,29 @@ impl VectorStore {
             snapshot.metadata = slim.metadata;
             snapshot.dense_slots = slim.dense_slots;
             slim_snapshot_loaded = true;
+        }
+
+        if snapshot.multivec_config.is_none() {
+            let reps = storage.get_config("muvera_repetitions")?;
+            let bits = storage.get_config("muvera_partition_bits")?;
+            let seed = storage.get_config("muvera_seed")?;
+            let token_dim = storage.get_config("muvera_token_dim")?;
+            let d_proj = storage.get_config("muvera_d_proj")?.map(|v| v as u8);
+            let pool_factor = storage.get_config("muvera_pool_factor")?.map(|v| v as u8);
+            let max_tokens = storage.get_config("muvera_max_tokens")?.map(|v| v as usize);
+            if let (Some(repetitions), Some(partition_bits), Some(seed), Some(token_dim)) =
+                (reps, bits, seed, token_dim)
+            {
+                snapshot.multivec_config = Some(PersistedMuveraConfig {
+                    repetitions: repetitions as u8,
+                    partition_bits: partition_bits as u8,
+                    seed,
+                    token_dim: token_dim as usize,
+                    d_proj,
+                    pool_factor,
+                    max_tokens,
+                });
+            }
         }
 
         let dimensions = snapshot.dimensions as usize;
@@ -766,6 +806,48 @@ impl VectorStore {
                 WalEntryType::DeleteNode => {
                     if let Ok(delete_data) = parse_wal_delete(&entry.data) {
                         records.delete(&delete_data.id);
+                    }
+                }
+                WalEntryType::UpsertSparse => {
+                    if let Ok(data) = parse_wal_sparse(&entry.data) {
+                        let metadata: Option<JsonValue> =
+                            data.metadata
+                                .as_ref()
+                                .and_then(|bytes| serde_json::from_slice(bytes).ok());
+                        let sparse =
+                            crate::vector::sparse::SparseVector::new(data.indices, data.values)?;
+                        let slot = if let Some(slot) = records.get_slot(&data.id) {
+                            if let Some(metadata) = metadata.clone() {
+                                records.update_metadata(slot, metadata)?;
+                            }
+                            records.update_sparse(slot, Some(sparse))?;
+                            slot
+                        } else {
+                            let slot = records.set_without_vector(data.id, metadata)?;
+                            records.update_sparse(slot, Some(sparse))?;
+                            slot
+                        };
+                        wal_modified_slots.push(slot);
+                    }
+                }
+                WalEntryType::UpsertMulti => {
+                    if let Ok(data) = parse_wal_multi(&entry.data) {
+                        let metadata: Option<JsonValue> =
+                            data.metadata
+                                .as_ref()
+                                .and_then(|bytes| serde_json::from_slice(bytes).ok());
+                        let slot = if let Some(slot) = records.get_slot(&data.id) {
+                            if let Some(metadata) = metadata.clone() {
+                                records.update_metadata(slot, metadata)?;
+                            }
+                            records.update_multi(slot, Some(data.tokens))?;
+                            slot
+                        } else {
+                            let slot = records.set_without_vector(data.id, metadata)?;
+                            records.update_multi(slot, Some(data.tokens))?;
+                            slot
+                        };
+                        wal_modified_slots.push(slot);
                     }
                 }
                 WalEntryType::Checkpoint => {}
@@ -1013,7 +1095,19 @@ impl VectorStore {
                 tracing::info!(vectors = index.len(), "Loaded SparseIndex from disk");
                 Ok::<_, anyhow::Error>(index)
             })
-            .transpose()?;
+            .transpose()?
+            .or_else(|| {
+                let payloads = records.iter_sparse();
+                if payloads.is_empty() {
+                    None
+                } else {
+                    let mut index = SparseIndex::new();
+                    for (slot, sparse) in payloads {
+                        index.insert(slot, &sparse);
+                    }
+                    Some(index)
+                }
+            });
 
         // Reconstruct edge store: start from persisted snapshot, then apply WAL delta
         let edge_store = {

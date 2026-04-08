@@ -54,6 +54,22 @@ pub trait StorageBackend: Send + Sync {
     /// Append a vector delete to the WAL.
     fn log_delete(&mut self, id: &str) -> Result<()>;
 
+    /// Append a sparse upsert to the WAL.
+    fn log_upsert_sparse(
+        &mut self,
+        id: &str,
+        sparse: &crate::vector::sparse::SparseVector,
+        metadata: &serde_json::Value,
+    ) -> Result<()>;
+
+    /// Append a multivector token upsert to the WAL.
+    fn log_upsert_multi(
+        &mut self,
+        id: &str,
+        tokens: &[Vec<f32>],
+        metadata: &serde_json::Value,
+    ) -> Result<()>;
+
     /// Append an edge insert to the WAL.
     fn log_insert_edge(
         &mut self,
@@ -107,8 +123,9 @@ pub trait StorageBackend: Send + Sync {
 
 pub use file::{
     CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, SlimRecordsSnapshot,
-    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData, parse_wal_delete,
-    parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
+    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData, WalMultiData,
+    WalSparseData, parse_wal_delete, parse_wal_delete_edge, parse_wal_insert,
+    parse_wal_insert_edge, parse_wal_multi, parse_wal_sparse,
 };
 pub use graph::GraphSection;
 pub use header::{HEADER_SIZE, MAGIC, Metric, OmenHeader, VERSION_MAJOR, VERSION_MINOR};

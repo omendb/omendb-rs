@@ -10,8 +10,9 @@ use crate::omen::{
 
 // Re-export WAL parsing functions for external use
 pub use crate::omen::wal::{
-    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData, parse_wal_delete,
-    parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
+    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData, WalMultiData,
+    WalSparseData, parse_wal_delete, parse_wal_delete_edge, parse_wal_insert,
+    parse_wal_insert_edge, parse_wal_multi, parse_wal_sparse,
 };
 use crate::vector::store::record_store::{RecordStore, SnapshotMmapSource, SnapshotVectorData};
 use anyhow::Result;
@@ -531,6 +532,28 @@ impl crate::omen::StorageBackend for OmenFile {
         self.wal_append_delete(id).map_err(Into::into)
     }
 
+    fn log_upsert_sparse(
+        &mut self,
+        id: &str,
+        sparse: &crate::vector::sparse::SparseVector,
+        metadata: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let metadata_bytes = serde_json::to_vec(metadata)?;
+        self.wal_append_sparse(id, sparse.indices(), sparse.values(), Some(&metadata_bytes))
+            .map_err(Into::into)
+    }
+
+    fn log_upsert_multi(
+        &mut self,
+        id: &str,
+        tokens: &[Vec<f32>],
+        metadata: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let metadata_bytes = serde_json::to_vec(metadata)?;
+        self.wal_append_multi(id, tokens, Some(&metadata_bytes))
+            .map_err(Into::into)
+    }
+
     fn log_insert_edge(
         &mut self,
         from_id: &str,
@@ -853,6 +876,29 @@ impl OmenFile {
     /// Note: Does not sync to disk. Call `wal_sync()` for durability.
     pub fn wal_append_delete(&mut self, id: &str) -> io::Result<()> {
         self.wal.append(WalEntry::delete_node(0, id))
+    }
+
+    pub fn wal_append_sparse(
+        &mut self,
+        id: &str,
+        indices: &[u32],
+        values: &[f32],
+        metadata: Option<&[u8]>,
+    ) -> io::Result<()> {
+        let metadata_bytes = metadata.unwrap_or(b"{}");
+        self.wal
+            .append(WalEntry::upsert_sparse(0, id, metadata_bytes, indices, values))
+    }
+
+    pub fn wal_append_multi(
+        &mut self,
+        id: &str,
+        tokens: &[Vec<f32>],
+        metadata: Option<&[u8]>,
+    ) -> io::Result<()> {
+        let metadata_bytes = metadata.unwrap_or(b"{}");
+        self.wal
+            .append(WalEntry::upsert_multi(0, id, metadata_bytes, tokens))
     }
 
     /// Append insert-edge entry to WAL.
