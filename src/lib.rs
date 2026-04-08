@@ -96,10 +96,16 @@
 //! ```
 
 // Core modules
+pub mod catalog;
+pub mod collection;
 pub mod compression;
 pub mod config;
 pub mod distance;
+pub mod index;
 pub mod omen;
+pub mod persistence;
+pub mod query;
+pub mod storage;
 pub mod text;
 pub mod types;
 pub mod vector;
@@ -120,3 +126,6 @@ pub use vector::{
 
 // Re-export storage types
 pub use config::StorageConfig;
+pub use catalog::CollectionSchema;
+pub use collection::PutRecord;
+pub use query::SearchRequest;
