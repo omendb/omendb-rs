@@ -572,6 +572,8 @@ mod unified_api {
 
         assert_eq!(store.len(), 1);
         assert!(store.contains("doc1"));
+        let slot = store.records.get_slot("doc1").unwrap();
+        assert_eq!(store.records.get_multi(slot).unwrap().len(), 2);
     }
 
     #[test]

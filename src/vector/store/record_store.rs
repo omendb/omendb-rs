@@ -73,6 +73,7 @@ struct StoredRecord {
     id: String,
     vector: StoredVectorData,
     sparse: Option<SparseVector>,
+    multi: Option<Vec<Vec<f32>>>,
     metadata: Option<JsonValue>,
 }
 
@@ -211,6 +212,7 @@ impl RecordStore {
                     id: record.id,
                     vector: self.store_snapshot_vector(record.vector, &vec_mmap, &main_mmap),
                     sparse: None,
+                    multi: None,
                     metadata: record.metadata,
                 })
             })
@@ -261,14 +263,18 @@ impl RecordStore {
 
         // Check for existing record (update case)
         let mut carried_sparse = None;
+        let mut carried_multi = None;
         if let Some(old_slot_ref) = self.id_to_slot.get(&id) {
             let old_slot = *old_slot_ref;
-            carried_sparse = self
+            if let Some(record) = self
                 .slots
                 .read()
                 .get(old_slot as usize)
                 .and_then(|record| record.as_ref())
-                .and_then(|record| record.sparse.clone());
+            {
+                carried_sparse = record.sparse.clone();
+                carried_multi = record.multi.clone();
+            }
             let mut deleted = self.deleted.write();
             if !deleted.contains(old_slot) {
                 deleted.insert(old_slot);
@@ -284,6 +290,7 @@ impl RecordStore {
             id: id.clone(),
             vector: StoredVectorData::Owned(vector),
             sparse: carried_sparse,
+            multi: carried_multi,
             metadata,
         }));
         self.id_to_slot.insert(id, slot);
@@ -471,6 +478,28 @@ impl RecordStore {
             .and_then(|record| record.sparse.clone())
     }
 
+    /// Update multi-vector token payload for a record by slot.
+    pub fn update_multi(&self, slot: u32, tokens: Option<Vec<Vec<f32>>>) -> anyhow::Result<()> {
+        let mut slots = self.slots.write();
+        let record = slots
+            .get_mut(slot as usize)
+            .and_then(|r| r.as_mut())
+            .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
+
+        self.dirty_slots.write().insert(slot);
+        record.multi = tokens;
+        Ok(())
+    }
+
+    /// Get cloned multi-vector tokens for a slot.
+    pub fn get_multi(&self, slot: u32) -> Option<Vec<Vec<f32>>> {
+        self.slots
+            .read()
+            .get(slot as usize)?
+            .as_ref()
+            .and_then(|record| record.multi.clone())
+    }
+
     /// Iterate cloned sparse payloads keyed by slot.
     pub fn iter_sparse(&self) -> Vec<(u32, SparseVector)> {
         let deleted = self.deleted.read().clone();
@@ -487,6 +516,26 @@ impl RecordStore {
                     .as_ref()
                     .and_then(|record| record.sparse.clone())
                     .map(|sparse| (slot, sparse))
+            })
+            .collect()
+    }
+
+    /// Iterate cloned multi-vector payloads keyed by slot.
+    pub fn iter_multi(&self) -> Vec<(u32, Vec<Vec<f32>>)> {
+        let deleted = self.deleted.read().clone();
+        self.slots
+            .read()
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, record)| {
+                let slot = slot as u32;
+                if deleted.contains(slot) {
+                    return None;
+                }
+                record
+                    .as_ref()
+                    .and_then(|record| record.multi.clone())
+                    .map(|multi| (slot, multi))
             })
             .collect()
     }
@@ -641,6 +690,7 @@ impl RecordStore {
             id: record.id,
             vector: self.store_vector(record.vector),
             sparse: None,
+            multi: None,
             metadata: record.metadata,
         }
     }
@@ -826,6 +876,24 @@ mod tests {
 
         assert_eq!(slot2, 1);
         assert_eq!(store.get_sparse(slot2).as_ref(), Some(&sparse));
+    }
+
+    #[test]
+    fn test_set_update_preserves_multi_payload() {
+        let store = RecordStore::new(3);
+
+        let slot1 = store
+            .set("vec1".to_string(), vec![1.0, 2.0, 3.0], None)
+            .unwrap();
+        let tokens = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        store.update_multi(slot1, Some(tokens.clone())).unwrap();
+
+        let slot2 = store
+            .set("vec1".to_string(), vec![4.0, 5.0, 6.0], None)
+            .unwrap();
+
+        assert_eq!(slot2, 1);
+        assert_eq!(store.get_multi(slot2).as_ref(), Some(&tokens));
     }
 
     #[test]

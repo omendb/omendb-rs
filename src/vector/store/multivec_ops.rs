@@ -194,12 +194,21 @@ impl VectorStore {
         // Prepare batch for set_batch (maintains original batch order - set_batch reorders internally)
         let fde_batch: Vec<(String, Vector, JsonValue)> = batch
             .into_iter()
-            .zip(pooled_and_fdes)
-            .map(|((id, _, metadata), (_, fde))| (id.to_string(), Vector::new(fde), metadata))
+            .zip(pooled_and_fdes.iter())
+            .map(|((id, _, metadata), (_, fde))| {
+                (id.to_string(), Vector::new(fde.clone()), metadata)
+            })
             .collect();
 
         // Use existing set_batch for efficient HNSW insertion
-        self.set_batch(fde_batch)?;
+        let result_slots = self.set_batch(fde_batch)?;
+        for (slot, &i) in result_slots
+            .iter()
+            .zip(update_indices.iter().chain(insert_indices.iter()))
+        {
+            self.records
+                .update_multi(*slot as u32, Some(pooled_and_fdes[i].0.clone()))?;
+        }
 
         Ok(())
     }
@@ -565,6 +574,8 @@ impl VectorStore {
 
         // Store FDE first (can fail without corrupting multivec_storage)
         let slot = self.set(id, Vector::new(fde), metadata)?;
+        self.records
+            .update_multi(slot as u32, Some(pooled_tokens.clone()))?;
 
         // Then add tokens - slot already committed (store pooled tokens for reranking)
         let mut multivec_storage_guard = self.multivec_storage.write();
@@ -935,10 +946,7 @@ impl VectorStore {
     /// Internal: get multi-vector tokens.
     fn get_tokens_internal(&self, id: &str) -> Option<(Vec<Vec<f32>>, JsonValue)> {
         let slot = self.records.get_slot(id)?;
-        let multivec_guard = self.multivec_storage.read();
-        let multivec_storage = multivec_guard.as_ref()?;
-        let token_refs = multivec_storage.get_tokens(slot)?;
-        let tokens: Vec<Vec<f32>> = token_refs.iter().map(|t| t.to_vec()).collect();
+        let tokens = self.records.get_multi(slot)?;
         let metadata = self
             .records
             .get(id)?

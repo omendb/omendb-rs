@@ -102,6 +102,15 @@ impl VectorStore {
                 &wal_edge_deletes,
                 ctx.distance_metric,
             )?;
+            if let Some(ref multivec_storage) = ancillary.multivec_storage {
+                for slot in 0..multivec_storage.len() as u32 {
+                    if let Some(tokens) = multivec_storage.get_tokens(slot) {
+                        let tokens: Vec<Vec<f32>> =
+                            tokens.into_iter().map(<[f32]>::to_vec).collect();
+                        records.update_multi(slot, Some(tokens))?;
+                    }
+                }
+            }
             (
                 records,
                 engine,
