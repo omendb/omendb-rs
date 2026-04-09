@@ -19,7 +19,7 @@ fn parse_sparse_vector(
     values: Option<Vec<f32>>,
 ) -> PyResult<SparseVector> {
     // Try dict first: {dim: weight, ...}
-    if let Ok(dict) = indices_or_dict.downcast::<PyDict>() {
+    if let Ok(dict) = indices_or_dict.cast::<PyDict>() {
         let mut pairs = Vec::with_capacity(dict.len());
         for (k, v) in dict.iter() {
             let dim: u32 = k.extract()?;
