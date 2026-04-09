@@ -4,7 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use super::{MetadataFilter, VectorStore};
+use crate::catalog::{
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
+    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, SparseSchema, TextSchema,
+};
 use crate::omen::Metric;
+use crate::text::TextSearchConfig;
 use crate::vector::VectorEngineView;
 use crate::vector::hnsw::{PublishedSegmentView, SegmentManager};
 
@@ -268,6 +273,67 @@ impl VectorStore {
             hnsw_ef_search: self.hnsw_ef_search.load(Ordering::Relaxed),
             quantization: self.pending_quantization.load(Ordering::Relaxed),
             segment_capacity,
+        }
+    }
+
+    /// Derive the current collection schema from the live runtime state.
+    ///
+    /// Standalone `VectorStore` instances are not catalog-attached yet, so the
+    /// returned schema name is best-effort: persistent stores use the backing
+    /// path's final component, in-memory stores use an empty name.
+    #[must_use]
+    pub fn schema(&self) -> CollectionSchema {
+        let name = self
+            .storage_path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let dense = (!self.is_multi_vector()).then(|| DenseSchema {
+            dim: self.dimensions() as u32,
+            quantization: if self.is_quantized() {
+                QuantizationMode::Sq8
+            } else {
+                QuantizationMode::None
+            },
+            mutable_index: MutableDenseIndexKind::Hnsw,
+            frozen_index: FrozenDenseIndexKind::Hnsw,
+        });
+
+        let sparse = self.has_sparse().then_some(SparseSchema {
+            index_kind: SparseIndexKind::InvertedExact,
+            max_nonzero: None,
+        });
+
+        let multi = self.multi_vector_config().map(|config| MultiSchema {
+            token_dim: self.token_dimension().unwrap_or(self.dimensions()) as u32,
+            encoder: MultiEncoderKind::Muvera,
+            max_tokens: config.max_tokens.map(|v| v as u32),
+            pool_factor: config.pool_factor,
+        });
+
+        let text = if self.has_text_search() {
+            let config = self
+                .text_search_config
+                .read()
+                .clone()
+                .unwrap_or_else(TextSearchConfig::default);
+            Some(TextSchema {
+                tokenizer: config.tokenizer,
+                writer_buffer_mb: config.writer_buffer_mb as u32,
+            })
+        } else {
+            None
+        };
+
+        CollectionSchema {
+            name,
+            metric: self.metric(),
+            dense,
+            sparse,
+            multi,
+            text,
         }
     }
 }

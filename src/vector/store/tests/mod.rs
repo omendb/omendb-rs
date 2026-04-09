@@ -9,6 +9,7 @@ mod multivec;
 mod persistence;
 mod proptest_tests;
 mod quantization;
+mod schema;
 mod search;
 mod sparse;
 
