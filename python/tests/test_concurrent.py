@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
 
-import omendb
+from tests.helpers import ensure_dense_db
 
 
 def generate_random_vector(dim: int, seed: int = None) -> list:
@@ -45,7 +45,7 @@ class TestConcurrentReaders:
         """Multiple threads searching the same db concurrently"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Insert test data
             vectors = generate_random_vectors(1000, 64)
@@ -92,7 +92,7 @@ class TestConcurrentReaders:
         """Multiple threads calling get() concurrently"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(1000, 64)
             db.set(vectors)
@@ -130,7 +130,7 @@ class TestConcurrentReaders:
         """Multiple threads doing filtered searches"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(1000, 64)
             db.set(vectors)
@@ -175,7 +175,7 @@ class TestConcurrentWriters:
         """Multiple threads setting to the same db"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             errors = []
             lock = threading.Lock()
@@ -225,7 +225,7 @@ class TestConcurrentWriters:
         """Multiple threads deleting simultaneously"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Insert initial data
             vectors = generate_random_vectors(1000, 64)
@@ -263,7 +263,7 @@ class TestConcurrentWriters:
         """Multiple threads updating the same vector (race condition test)"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Insert single vector
             initial = generate_random_vector(64, seed=0)
@@ -310,7 +310,7 @@ class TestMixedReadWrite:
         """Search while other threads are inserting"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Insert initial data
             vectors = generate_random_vectors(500, 64)
@@ -387,7 +387,7 @@ class TestMixedReadWrite:
         """Delete vectors while other threads are searching"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(1000, 64)
             db.set(vectors)
@@ -448,7 +448,7 @@ class TestThreadPoolExecutor:
         """Use ThreadPoolExecutor for parallel batch search"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(5000, 64)
             db.set(vectors)
@@ -474,7 +474,7 @@ class TestThreadPoolExecutor:
         """Use ThreadPoolExecutor for parallel batch sets"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Create batches
             batches = []
@@ -515,7 +515,7 @@ class TestStressConditions:
         """Many threads repeatedly updating the same key"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Insert initial vector
             db.set(
@@ -575,7 +575,7 @@ class TestStressConditions:
             db_path = os.path.join(tmpdir, "test_db")  # Persistent
 
             # Initial population
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
             db.flush()
@@ -586,7 +586,7 @@ class TestStressConditions:
             def open_close_worker(thread_id: int, num_cycles: int):
                 try:
                     for i in range(num_cycles):
-                        db_local = omendb.open(db_path, dimensions=64)
+                        db_local = ensure_dense_db(db_path, 64)
                         # Do a quick operation
                         query = generate_random_vector(64, seed=thread_id * 100 + i)
                         results = db_local.search(query, k=5)
@@ -608,7 +608,7 @@ class TestStressConditions:
             assert len(errors) == 0, f"Errors: {errors}"
 
             # Verify data integrity after all the open/close cycles
-            db_final = omendb.open(db_path, dimensions=64)
+            db_final = ensure_dense_db(db_path, 64)
             assert len(db_final) == 100
 
 
@@ -620,7 +620,7 @@ class TestWriteStress:
         """Stress test: many threads writing large batches with verification"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "stress_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             errors = []
             lock = threading.Lock()
@@ -688,7 +688,7 @@ class TestWriteStress:
         """Stress test: concurrent writes and searches, verify no corruption"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "mixed_stress_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             # Seed with initial data
             initial = generate_random_vectors(1000, 128)

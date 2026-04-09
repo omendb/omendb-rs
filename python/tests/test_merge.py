@@ -5,7 +5,6 @@ import tempfile
 
 import pytest
 
-import omendb
 from tests.helpers import create_dense_db
 
 

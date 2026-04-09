@@ -22,8 +22,6 @@ def db(temp_db_path):
     """Create a fresh database instance for each test"""
     import gc
 
-    import omendb
-
     database = create_dense_db(temp_db_path, 128)
     yield database
     # Flush to commit any pending text index changes before cleanup
@@ -38,8 +36,6 @@ def db(temp_db_path):
 def db_with_vectors(temp_db_path):
     """Create a database with sample vectors"""
     import gc
-
-    import omendb
 
     database = create_dense_db(temp_db_path, 128)
 

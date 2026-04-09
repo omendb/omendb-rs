@@ -20,7 +20,6 @@ import time
 
 import pytest
 
-import omendb
 from tests.helpers import ensure_dense_db
 
 
@@ -322,14 +321,14 @@ class TestEdgeCases:
     def test_empty_database_search(self):
         """Search on empty database should return empty results."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=64)
+            db = ensure_dense_db(f"{tmpdir}/test", 64)
             results = db.search([0.0] * 64, k=10)
             assert results == []
 
     def test_k_greater_than_n(self):
         """Requesting more results than vectors should return all vectors."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=64)
+            db = ensure_dense_db(f"{tmpdir}/test", 64)
 
             for i in range(5):
                 db.set(f"doc_{i}", [float(i)] * 64)
@@ -340,7 +339,7 @@ class TestEdgeCases:
     def test_zero_vector_query(self):
         """Zero vector query should still work."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=64)
+            db = ensure_dense_db(f"{tmpdir}/test", 64)
 
             db.set("doc_0", [1.0] * 64)
             db.set("doc_1", [0.5] * 64)
@@ -351,7 +350,7 @@ class TestEdgeCases:
     def test_dimension_mismatch_error(self):
         """Mismatched dimensions should raise error."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=64)
+            db = ensure_dense_db(f"{tmpdir}/test", 64)
             db.set("doc_0", [1.0] * 64)
 
             with pytest.raises(ValueError):

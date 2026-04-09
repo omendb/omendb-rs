@@ -27,7 +27,7 @@ from concurrent.futures import (
 
 import pytest
 
-import omendb
+from tests.helpers import ensure_dense_db
 
 
 def generate_random_vector(dim: int, seed: int = None) -> list:
@@ -52,7 +52,7 @@ class TestGILDeadlock:
         """Many threads calling OmenDB concurrently - stress GIL/lock interaction"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Pre-populate
             vectors = [
@@ -120,7 +120,7 @@ class TestGILDeadlock:
         """ThreadPoolExecutor with many workers hammering same db"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = [
                 {
@@ -157,7 +157,7 @@ class TestGILDeadlock:
         """Interleave search_batch with single operations"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = [
                 {
@@ -218,7 +218,7 @@ class TestLargeMetadata:
         """Store and retrieve 1MB string in metadata"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Create 1MB string
             large_string = "x" * (1024 * 1024)  # 1MB
@@ -251,7 +251,7 @@ class TestLargeMetadata:
         """Store and retrieve 10MB string in metadata"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Create 10MB string
             large_string = "y" * (10 * 1024 * 1024)  # 10MB
@@ -274,7 +274,7 @@ class TestLargeMetadata:
         """Store large array in metadata"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Create array with 100K elements
             large_array = list(range(100_000))
@@ -298,7 +298,7 @@ class TestLargeMetadata:
         """Deeply nested metadata structure"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Create deeply nested dict (20 levels)
             def create_nested(depth, value):
@@ -332,7 +332,7 @@ class TestLargeMetadata:
         """Multiple vectors with large metadata"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # 100 vectors with 100KB metadata each = ~10MB total
             vectors = []
@@ -369,7 +369,7 @@ class TestFileHandleLeaks:
             db_path = os.path.join(tmpdir, "test")
 
             # Initial population
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
             vectors = [
                 {
                     "id": f"v{i}",
@@ -387,7 +387,7 @@ class TestFileHandleLeaks:
             errors = []
             for cycle in range(50):
                 try:
-                    db = omendb.open(db_path, dimensions=64)
+                    db = ensure_dense_db(db_path, 64)
                     # Quick operation
                     results = db.search(generate_random_vector(64, cycle), k=5)
                     assert len(results) <= 5
@@ -411,7 +411,7 @@ class TestFileHandleLeaks:
 
             for cycle in range(30):
                 try:
-                    db = omendb.open(db_path, dimensions=64)
+                    db = ensure_dense_db(db_path, 64)
 
                     # Add some vectors
                     vectors = [
@@ -436,7 +436,7 @@ class TestFileHandleLeaks:
             assert len(errors) == 0, f"Errors: {errors}"
 
             # Final verification
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
             assert len(db) == expected_count
             print(f"\n30 open/close cycles with writes: {expected_count} vectors persisted")
 
@@ -449,7 +449,7 @@ class TestFileHandleLeaks:
             # Open multiple databases concurrently
             for i in range(num_dbs):
                 db_path = os.path.join(tmpdir, f"db{i}")
-                db = omendb.open(db_path, dimensions=64)
+                db = ensure_dense_db(db_path, 64)
                 db.set(
                     [
                         {
@@ -476,7 +476,7 @@ class TestFileHandleLeaks:
             # Verify all still accessible after reopening
             for i in range(num_dbs):
                 db_path = os.path.join(tmpdir, f"db{i}")
-                db = omendb.open(db_path, dimensions=64)
+                db = ensure_dense_db(db_path, 64)
                 assert len(db) == 1
                 del db
 
@@ -492,7 +492,7 @@ class TestSoakTest:
         """5-minute soak test with continuous operations"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "soak")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Initial population
             vectors = [
@@ -585,7 +585,7 @@ class TestSoakTest:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "mem")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Initial population
             vectors = [{"id": f"v{i}", "vector": generate_random_vector(64, i)} for i in range(500)]

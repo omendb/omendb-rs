@@ -24,7 +24,6 @@ MP_CTX = multiprocessing.get_context("spawn")
 
 def open_with_lock_retry(db_path: str, dims: int, timeout_s: float = 10.0):
     """Retry open briefly after crash until the OS releases the file lock."""
-    import omendb
 
     deadline = time.monotonic() + timeout_s
     last_error = None
@@ -57,7 +56,6 @@ def run_child_process(target, args: tuple, timeout_s: float):
 
 def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str):
     """Child process that inserts data then crashes without saving"""
-    import omendb
 
     db = ensure_dense_db(db_path, dims)
 
@@ -86,7 +84,6 @@ def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str)
 
 def child_insert_save_crash(db_path: str, dims: int, count: int):
     """Child process that inserts, saves, then crashes"""
-    import omendb
 
     db = ensure_dense_db(db_path, dims)
 
@@ -107,7 +104,6 @@ def child_insert_save_crash(db_path: str, dims: int, count: int):
 
 def child_delete_and_crash(db_path: str, dims: int, ids_to_delete: list):
     """Child process that deletes then crashes without saving"""
-    import omendb
 
     db = ensure_dense_db(db_path, dims)
     db.delete(ids_to_delete)
@@ -118,7 +114,6 @@ def child_delete_and_crash(db_path: str, dims: int, ids_to_delete: list):
 
 def child_update_and_crash(db_path: str, dims: int, update_id: str, new_embedding: list):
     """Child process that updates then crashes without saving"""
-    import omendb
 
     db = ensure_dense_db(db_path, dims)
     db.set([{"id": update_id, "vector": new_embedding, "metadata": {"updated": True}}])
@@ -182,7 +177,6 @@ class TestCrashRecoveryWithExistingData:
     def test_crash_during_append_preserves_existing(self, temp_db_path):
         """Existing saved data should survive even if new writes crash"""
         dims = 64
-        import omendb
 
         # First: create and save initial data
         db = ensure_dense_db(temp_db_path, dims)
@@ -217,7 +211,6 @@ class TestCrashRecoveryWithExistingData:
     def test_crash_during_delete_persists_with_wal(self, temp_db_path):
         """With seerdb WAL, deletes persist immediately (durable writes)"""
         dims = 64
-        import omendb
 
         # Create and save data
         db = ensure_dense_db(temp_db_path, dims)
@@ -245,7 +238,6 @@ class TestCrashRecoveryEdgeCases:
     def test_multiple_crash_cycles(self, temp_db_path):
         """Database should survive multiple crash cycles"""
         dims = 32
-        import omendb
 
         # Initial save
         db = ensure_dense_db(temp_db_path, dims)
@@ -265,7 +257,6 @@ class TestCrashRecoveryEdgeCases:
     def test_rapid_crash_recovery(self, temp_db_path):
         """Fast crash/recover cycles should not corrupt database"""
         dims = 32
-        import omendb
 
         # Initial data
         db = ensure_dense_db(temp_db_path, dims)
@@ -286,7 +277,6 @@ class TestCrashRecoveryEdgeCases:
     def test_large_batch_crash(self, temp_db_path):
         """Crash during large batch should not corrupt existing data"""
         dims = 64
-        import omendb
 
         # Save initial data
         db = ensure_dense_db(temp_db_path, dims)
@@ -323,7 +313,6 @@ class TestDatabaseIntegrity:
     def test_no_corruption_after_crash(self, temp_db_path):
         """Database files should not be corrupted after crash"""
         dims = 64
-        import omendb
 
         # Create valid database
         db = ensure_dense_db(temp_db_path, dims)
@@ -353,7 +342,6 @@ class TestDatabaseIntegrity:
     def test_search_after_crash_correct(self, temp_db_path):
         """Search results should be correct after crash recovery"""
         dims = 4
-        import omendb
 
         # Create database with known vectors
         db = ensure_dense_db(temp_db_path, dims)

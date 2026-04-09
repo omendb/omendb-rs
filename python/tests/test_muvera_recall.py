@@ -7,7 +7,7 @@ compared to brute-force MaxSim scoring.
 import numpy as np
 import pytest
 
-import omendb
+from tests.helpers import ensure_multi_db
 
 pytestmark = pytest.mark.slow
 
@@ -90,7 +90,7 @@ class TestMuveraRecall:
         """Create and populate multi-vector store."""
         docs, _, dim = synthetic_dataset
 
-        db = omendb.open(":memory:", dimensions=dim, multi_vector={"d_proj": None})
+        db = ensure_multi_db(":memory:", dim, multi_vector={"d_proj": None})
 
         items = [
             {"id": doc_id, "vectors": tokens.tolist(), "metadata": {"index": i}}
@@ -290,7 +290,7 @@ class TestMuveraScaleRecall:
             docs.append((f"doc{i}", tokens))
 
         # Create store (d_proj=None to test baseline FDE quality)
-        db = omendb.open(":memory:", dimensions=dim, multi_vector={"d_proj": None})
+        db = ensure_multi_db(":memory:", dim, multi_vector={"d_proj": None})
         items = [
             {"id": doc_id, "vectors": tokens.tolist(), "metadata": {}} for doc_id, tokens in docs
         ]
@@ -342,7 +342,7 @@ class TestMuveraScaleRecall:
             tokens /= np.linalg.norm(tokens, axis=1, keepdims=True)
             docs.append((f"doc{i}", tokens))
 
-        db = omendb.open(":memory:", dimensions=dim, multi_vector={"d_proj": None})
+        db = ensure_multi_db(":memory:", dim, multi_vector={"d_proj": None})
         items = [
             {"id": doc_id, "vectors": tokens.tolist(), "metadata": {}} for doc_id, tokens in docs
         ]

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import omendb
+from tests.helpers import ensure_multi_db
 
 
 class TestMultiVectorBasic:
@@ -36,7 +37,7 @@ class TestMultiVectorInsert:
     @pytest.fixture
     def db(self):
         """Create a multi-vector store with small dims (d_proj=None to skip projection)."""
-        return omendb.open(":memory:", dimensions=8, multi_vector={"d_proj": None})
+        return ensure_multi_db(":memory:", 8, multi_vector={"d_proj": None})
 
     def test_insert_single_document(self, db):
         """Test inserting a single multi-vector document."""
@@ -216,7 +217,7 @@ class TestMultiVectorPersistence:
             path = os.path.join(tmpdir, "test_multivec.omen")
 
             # Create and populate (d_proj=None for small dim)
-            db = omendb.open(path, dimensions=8, multi_vector={"d_proj": None})
+            db = ensure_multi_db(path, 8, multi_vector={"d_proj": None})
             db.set(
                 [
                     {
@@ -252,7 +253,7 @@ class TestMultiVectorPersistence:
             path = os.path.join(tmpdir, "test_rerank.omen")
 
             # Create store with docs (d_proj=None for small dim)
-            db = omendb.open(path, dimensions=4, multi_vector={"d_proj": None})
+            db = ensure_multi_db(path, 4, multi_vector={"d_proj": None})
             db.set(
                 [
                     {
@@ -285,7 +286,7 @@ class TestMultiVectorPersistence:
             path = os.path.join(tmpdir, "test_large.omen")
 
             # Create store with 100 docs
-            db = omendb.open(path, dimensions=32, multi_vector=True)
+            db = ensure_multi_db(path, 32, multi_vector=True)
             docs = []
             for i in range(100):
                 num_tokens = (i % 5) + 1

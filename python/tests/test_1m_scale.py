@@ -8,7 +8,6 @@ import time
 
 import pytest
 
-import omendb
 from tests.helpers import ensure_dense_db
 
 pytestmark = pytest.mark.slow  # Skip in CI

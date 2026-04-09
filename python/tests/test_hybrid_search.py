@@ -3,7 +3,6 @@
 import os
 import tempfile
 
-import omendb
 from tests.helpers import create_dense_db
 
 

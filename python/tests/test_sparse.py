@@ -4,6 +4,7 @@ import os
 import tempfile
 
 import omendb
+from tests.helpers import ensure_dense_db
 
 
 def test_enable_sparse():
@@ -125,14 +126,14 @@ def test_sparse_persistence():
         path = os.path.join(tmpdir, "sparse_test")
 
         # Create and populate
-        db = omendb.open(path, dimensions=3)
+        db = ensure_dense_db(path, 3)
         db.set_hybrid_sparse("doc1", [1.0, 0.0, 0.0], {10: 1.0, 20: 0.5})
         db.set_hybrid_sparse("doc2", [0.0, 1.0, 0.0], {10: 0.3})
         db.flush()
         db.close()
 
         # Reopen and verify sparse data
-        db2 = omendb.open(path, dimensions=3)
+        db2 = omendb.open(path)
         assert db2.has_sparse()
 
         results = db2.sparse_search({10: 1.0}, k=10)

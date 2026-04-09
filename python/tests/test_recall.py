@@ -7,7 +7,6 @@ import tempfile
 
 import pytest
 
-import omendb
 from tests.helpers import ensure_dense_db
 
 

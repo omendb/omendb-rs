@@ -322,8 +322,6 @@ def test_search_max_distance_cosine_metric(temp_db_path):
     """Test max_distance with cosine distance metric"""
     import gc
 
-    import omendb
-
     db = create_dense_db(temp_db_path, 128, metric="cosine")
 
     # For cosine, distance = 1 - cosine_similarity
@@ -349,8 +347,6 @@ def test_search_max_distance_cosine_metric(temp_db_path):
 def test_search_cosine_zero_query_rejected(temp_db_path):
     import gc
 
-    import omendb
-
     db = create_dense_db(temp_db_path, 3, metric="cosine")
     db.set([{"id": "doc", "vector": [1.0, 0.0, 0.0], "metadata": {}}])
 
@@ -363,8 +359,6 @@ def test_search_cosine_zero_query_rejected(temp_db_path):
 
 def test_search_nan_query_rejected(temp_db_path):
     import gc
-
-    import omendb
 
     db = create_dense_db(temp_db_path, 3)
     db.set([{"id": "doc", "vector": [1.0, 0.0, 0.0], "metadata": {}}])
@@ -379,8 +373,6 @@ def test_search_nan_query_rejected(temp_db_path):
 def test_search_max_distance_dot_metric(temp_db_path):
     """Test max_distance with dot product (inner product) metric"""
     import gc
-
-    import omendb
 
     db = create_dense_db(temp_db_path, 128, metric="dot")
 
@@ -419,8 +411,6 @@ def test_search_sparse_filter_acorn1(temp_db_path):
     import gc
 
     import numpy as np
-
-    import omendb
 
     # Create dataset where only 1% matches the filter
     n = 1000

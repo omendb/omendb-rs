@@ -82,6 +82,16 @@ def ensure_dense_db(
     text_search: bool | Mapping[str, object] | None = None,
     embedding_fn=None,
 ):
+    if path == ":memory:":
+        return create_dense_db(
+            path,
+            dim,
+            metric=metric,
+            quantization=quantization,
+            text_search=text_search,
+            embedding_fn=embedding_fn,
+        )
+
     try:
         return omendb.open(path)
     except ValueError as exc:
@@ -105,6 +115,15 @@ def ensure_multi_db(
     metric: str | None = None,
     embedding_fn=None,
 ):
+    if path == ":memory:":
+        return create_multi_db(
+            path,
+            token_dim,
+            multi_vector=multi_vector,
+            metric=metric,
+            embedding_fn=embedding_fn,
+        )
+
     try:
         return omendb.open(path)
     except ValueError as exc:
