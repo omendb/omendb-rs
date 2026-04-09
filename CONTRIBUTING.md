@@ -21,6 +21,9 @@ By submitting a pull request, you agree to the following:
 git clone https://github.com/omendb/omendb.git
 cd omendb
 
+# Install repo hooks
+./scripts/install-hooks.sh
+
 # Rust tests
 cargo test --lib
 
@@ -39,6 +42,7 @@ bun install && bun run build && bun test
 - Rust: `cargo fmt && cargo clippy`
 - Python: Follow existing patterns
 - TypeScript: Follow existing patterns
+- Install repo hooks to auto-run `cargo fmt` and Python `ruff format` on commit
 
 ## Submitting Changes
 
