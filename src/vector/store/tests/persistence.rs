@@ -1,5 +1,9 @@
 use super::super::*;
 use super::random_vector;
+use crate::catalog::{
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
+    MutableDenseIndexKind, QuantizationMode, TextSchema,
+};
 use crate::text::{TextSearchConfig, TokenizerPreset};
 use crate::vector::sparse::SparseVector;
 use crate::vector::store::edge_store::EdgeDirection;
@@ -35,6 +39,80 @@ fn test_open_new_database() {
 
     assert_eq!(store.len(), 2);
     assert!(store.get("doc1").is_some());
+}
+
+#[test]
+fn test_create_with_schema_persists_text_contract() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("schema-create-text");
+    let schema = CollectionSchema {
+        name: "docs".to_string(),
+        metric: Metric::L2,
+        dense: Some(DenseSchema {
+            dim: 8,
+            quantization: QuantizationMode::Sq8,
+            mutable_index: MutableDenseIndexKind::Hnsw,
+            frozen_index: FrozenDenseIndexKind::Hnsw,
+        }),
+        sparse: None,
+        multi: None,
+        text: Some(TextSchema {
+            tokenizer: TokenizerPreset::Code,
+            writer_buffer_mb: 20,
+        }),
+    };
+
+    {
+        let store = VectorStore::create(&db_path, schema.clone()).unwrap();
+        assert_eq!(store.schema(), schema);
+        assert!(store.has_text_search());
+        store.flush().unwrap();
+    }
+
+    let reopened = VectorStore::open(&db_path).unwrap();
+    assert_eq!(reopened.schema(), schema);
+    assert!(reopened.has_text_search());
+}
+
+#[test]
+fn test_create_with_schema_persists_multivector_contract() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("schema-create-multi");
+    let schema = CollectionSchema {
+        name: "colbert".to_string(),
+        metric: Metric::InnerProduct,
+        dense: None,
+        sparse: None,
+        multi: Some(MultiSchema {
+            token_dim: 96,
+            encoder: MultiEncoderKind::Muvera,
+            repetitions: 10,
+            partition_bits: 4,
+            d_proj: Some(32),
+            seed: 7,
+            max_tokens: Some(256),
+            pool_factor: Some(2),
+        }),
+        text: None,
+    };
+
+    {
+        let store = VectorStore::create(&db_path, schema.clone()).unwrap();
+        assert_eq!(store.schema(), schema);
+        store.flush().unwrap();
+    }
+
+    let reopened = VectorStore::open(&db_path).unwrap();
+    assert_eq!(reopened.schema(), schema);
+    assert!(reopened.is_multi_vector());
+    assert_eq!(
+        reopened.multi_vector_config().unwrap().repetitions,
+        schema.multi.unwrap().repetitions
+    );
 }
 
 #[test]

@@ -2,6 +2,7 @@
 //!
 //! Provides an in-memory implementation of StorageBackend for unit tests.
 
+use crate::catalog::CollectionSchema;
 use crate::omen::{CheckpointOptions, Metric, StorageBackend};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -11,6 +12,7 @@ pub struct MockStorageBackend {
     metric: Metric,
     vectors: HashMap<u32, Vec<f32>>,
     config: HashMap<String, u64>,
+    schema: Option<CollectionSchema>,
     wal: Vec<String>, // simplified WAL tracking
 }
 
@@ -21,6 +23,7 @@ impl MockStorageBackend {
             metric,
             vectors: HashMap::new(),
             config: HashMap::new(),
+            schema: None,
             wal: Vec::new(),
         }
     }
@@ -42,6 +45,15 @@ impl StorageBackend for MockStorageBackend {
 
     fn set_metric(&mut self, metric: Metric) -> Result<()> {
         self.metric = metric;
+        Ok(())
+    }
+
+    fn schema(&self) -> Option<CollectionSchema> {
+        self.schema.clone()
+    }
+
+    fn set_schema(&mut self, schema: CollectionSchema) -> Result<()> {
+        self.schema = Some(schema);
         Ok(())
     }
 

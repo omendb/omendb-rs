@@ -41,6 +41,10 @@ fn multi_schema_to_pydict(py: Python<'_>, multi: &MultiSchema) -> PyResult<Py<Py
     let dict = PyDict::new(py);
     dict.set_item("token_dim", multi.token_dim)?;
     dict.set_item("encoder", "muvera")?;
+    dict.set_item("repetitions", multi.repetitions)?;
+    dict.set_item("partition_bits", multi.partition_bits)?;
+    dict.set_item("d_proj", multi.d_proj)?;
+    dict.set_item("seed", multi.seed)?;
     dict.set_item("max_tokens", multi.max_tokens)?;
     dict.set_item("pool_factor", multi.pool_factor)?;
     Ok(dict.into())
@@ -59,7 +63,7 @@ fn text_schema_to_pydict(py: Python<'_>, text: &TextSchema) -> PyResult<Py<PyAny
 fn schema_to_pydict(py: Python<'_>, schema: &CollectionSchema) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     dict.set_item("name", &schema.name)?;
-    dict.set_item("metric", format!("{:?}", schema.metric).to_lowercase())?;
+    dict.set_item("metric", schema.metric.canonical_name())?;
     dict.set_item(
         "dense",
         schema
@@ -840,7 +844,7 @@ impl VectorDatabase {
         dict.set_item("vector_count", info.vector_count)?;
         dict.set_item("deleted_count", info.deleted_count)?;
         dict.set_item("dimensions", info.dimensions)?;
-        dict.set_item("metric", format!("{:?}", info.metric))?;
+        dict.set_item("metric", info.metric.canonical_name())?;
         dict.set_item("frozen_segment_count", info.frozen_segment_count)?;
         dict.set_item("mutable_segment_vectors", info.mutable_segment_vectors)?;
         dict.set_item("vector_bytes", info.vector_bytes)?;

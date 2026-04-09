@@ -35,6 +35,10 @@ pub struct SparseSchema {
 pub struct MultiSchema {
     pub token_dim: u32,
     pub encoder: MultiEncoderKind,
+    pub repetitions: u8,
+    pub partition_bits: u8,
+    pub d_proj: Option<u8>,
+    pub seed: u64,
     pub max_tokens: Option<u32>,
     pub pool_factor: Option<u8>,
 }

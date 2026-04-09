@@ -5,6 +5,7 @@
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use std::io;
+use crate::catalog::CollectionSchema;
 
 /// Manifest segment header (8 bytes)
 ///
@@ -244,6 +245,9 @@ pub struct OmenManifest {
     pub metadata_index: Option<Vec<u8>>,
     /// Global configuration
     pub config: std::collections::HashMap<String, u64>,
+    /// Typed collection schema. Preferred structural source of truth on reopen.
+    #[serde(default)]
+    pub schema: Option<CollectionSchema>,
     /// Multi-vector token offsets (serialized as bytes for efficiency)
     #[serde(default)]
     pub multivec_offsets: Option<Vec<u8>>,
@@ -269,6 +273,7 @@ impl OmenManifest {
             dense_slots: Vec::new(),
             metadata_index: None,
             config: std::collections::HashMap::new(),
+            schema: None,
             multivec_offsets: None,
             sparse_index_bytes: None,
             edge_store_bytes: None,

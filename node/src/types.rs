@@ -121,6 +121,10 @@ pub struct SparseSchemaResult {
 pub struct MultiSchemaResult {
     pub token_dim: u32,
     pub encoder: String,
+    pub repetitions: u8,
+    pub partition_bits: u8,
+    pub d_proj: Option<u8>,
+    pub seed: u64,
     pub max_tokens: Option<u32>,
     pub pool_factor: Option<u8>,
 }
@@ -135,7 +139,7 @@ impl From<CollectionSchema> for CollectionSchemaResult {
     fn from(value: CollectionSchema) -> Self {
         Self {
             name: value.name,
-            metric: format!("{:?}", value.metric).to_lowercase(),
+            metric: value.metric.canonical_name().to_string(),
             dense: value.dense.map(Into::into),
             sparse: value.sparse.map(Into::into),
             multi: value.multi.map(Into::into),
@@ -180,6 +184,10 @@ impl From<MultiSchema> for MultiSchemaResult {
             encoder: match value.encoder {
                 MultiEncoderKind::Muvera => "muvera".to_string(),
             },
+            repetitions: value.repetitions,
+            partition_bits: value.partition_bits,
+            d_proj: value.d_proj,
+            seed: value.seed,
             max_tokens: value.max_tokens,
             pool_factor: value.pool_factor,
         }

@@ -3,6 +3,7 @@
 //! A simpler backend than OmenFile, intended for cases where we want
 //! direct mmap access to vectors without the single-file Omen container overhead.
 
+use crate::catalog::CollectionSchema;
 use crate::omen::{Metric, StorageBackend};
 use anyhow::Result;
 use memmap2::Mmap;
@@ -12,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub struct MmapBackend {
     dimensions: usize,
     metric: Metric,
+    schema: Option<CollectionSchema>,
     _path: PathBuf,
     _mmap: Option<Mmap>,
 }
@@ -33,6 +35,7 @@ impl MmapBackend {
         Ok(Self {
             dimensions,
             metric,
+            schema: None,
             _path: path,
             _mmap: mmap,
         })
@@ -53,6 +56,15 @@ impl StorageBackend for MmapBackend {
     }
 
     fn set_metric(&mut self, _metric: Metric) -> Result<()> {
+        Ok(())
+    }
+
+    fn schema(&self) -> Option<CollectionSchema> {
+        self.schema.clone()
+    }
+
+    fn set_schema(&mut self, schema: CollectionSchema) -> Result<()> {
+        self.schema = Some(schema);
         Ok(())
     }
 

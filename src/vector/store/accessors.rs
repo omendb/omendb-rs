@@ -285,12 +285,13 @@ impl VectorStore {
     /// path's final component, in-memory stores use an empty name.
     #[must_use]
     pub fn schema(&self) -> CollectionSchema {
-        let name = self
-            .storage_path
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let name = self.schema_name.clone().unwrap_or_else(|| {
+            self.storage_path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
 
         let dense = (!self.is_multi_vector()).then(|| DenseSchema {
             dim: self.dimensions() as u32,
@@ -311,6 +312,10 @@ impl VectorStore {
         let multi = self.multi_vector_config().map(|config| MultiSchema {
             token_dim: self.token_dimension().unwrap_or(self.dimensions()) as u32,
             encoder: MultiEncoderKind::Muvera,
+            repetitions: config.repetitions,
+            partition_bits: config.partition_bits,
+            d_proj: config.d_proj,
+            seed: config.seed,
             max_tokens: config.max_tokens.map(|v| v as u32),
             pool_factor: config.pool_factor,
         });

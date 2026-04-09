@@ -34,6 +34,16 @@ impl Metric {
         }
     }
 
+    /// Canonical public API name for this metric.
+    #[must_use]
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::L2 => "l2",
+            Self::Cosine => "cosine",
+            Self::InnerProduct => "dot",
+        }
+    }
+
     /// Compute distance between two vectors
     #[must_use]
     pub fn distance(&self, a: &[f32], b: &[f32]) -> f32 {

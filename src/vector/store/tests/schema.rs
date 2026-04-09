@@ -83,6 +83,10 @@ fn test_schema_for_multi_vector_store() {
     assert!(schema.dense.is_none());
     assert_eq!(multi.token_dim, 96);
     assert_eq!(multi.encoder, MultiEncoderKind::Muvera);
+    assert_eq!(multi.repetitions, 10);
+    assert_eq!(multi.partition_bits, 4);
+    assert_eq!(multi.seed, 7);
+    assert_eq!(multi.d_proj, None);
     assert_eq!(multi.pool_factor, Some(3));
     assert_eq!(multi.max_tokens, Some(256));
 }

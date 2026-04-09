@@ -95,6 +95,10 @@ class SparseSchema(TypedDict, total=False):
 class MultiSchema(TypedDict, total=False):
     token_dim: int
     encoder: Literal["muvera"]
+    repetitions: int
+    partition_bits: int
+    d_proj: int | None
+    seed: int
     max_tokens: int | None
     pool_factor: int | None
 

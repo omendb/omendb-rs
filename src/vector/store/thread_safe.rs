@@ -23,6 +23,7 @@
 //! ```
 
 use super::{SearchResult, VectorStore, VectorStoreOptions};
+use crate::catalog::CollectionSchema;
 use crate::vector::types::Vector;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
@@ -71,6 +72,20 @@ impl ThreadSafeVectorStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             inner: Arc::new(VectorStore::open(path)?),
+        })
+    }
+
+    /// Create a new persistent store from an explicit collection schema.
+    pub fn create(path: impl AsRef<Path>, schema: CollectionSchema) -> Result<Self> {
+        Ok(Self {
+            inner: Arc::new(VectorStore::create(path, schema)?),
+        })
+    }
+
+    /// Create a new in-memory store from an explicit collection schema.
+    pub fn create_in_memory(schema: CollectionSchema) -> Result<Self> {
+        Ok(Self {
+            inner: Arc::new(VectorStore::create_in_memory(schema)?),
         })
     }
 

@@ -25,6 +25,7 @@ mod vectors;
 mod wal;
 
 use anyhow::Result;
+use crate::catalog::CollectionSchema;
 
 /// Core trait for storage backends.
 ///
@@ -44,6 +45,12 @@ pub trait StorageBackend: Send + Sync {
 
     /// Set distance metric.
     fn set_metric(&mut self, metric: Metric) -> Result<()>;
+
+    /// Get the persisted collection schema, if available.
+    fn schema(&self) -> Option<CollectionSchema>;
+
+    /// Persist the collection schema.
+    fn set_schema(&mut self, schema: CollectionSchema) -> Result<()>;
 
     /// Set HNSW parameters.
     fn set_hnsw_params(&mut self, m: u16, ef_construction: u16, ef_search: u16) -> Result<()>;

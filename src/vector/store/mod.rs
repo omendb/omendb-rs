@@ -126,6 +126,9 @@ pub struct VectorStore {
     /// Storage path (for `TextIndex` subdirectory)
     pub(crate) storage_path: Option<PathBuf>,
 
+    /// Optional schema-defined collection name.
+    pub(crate) schema_name: Option<String>,
+
     /// Optional tantivy text index for hybrid search
     pub(crate) text_index: RwLock<Option<TextIndex>>,
 
@@ -198,6 +201,7 @@ impl VectorStore {
             metadata_index: RwLock::new(MetadataIndex::new()),
             storage: None,
             storage_path: None,
+            schema_name: None,
             text_index: RwLock::new(None),
             text_search_config: RwLock::new(None),
             pending_quantization: AtomicBool::new(false),

@@ -7,6 +7,10 @@ use super::VectorStore;
 use super::helpers;
 use super::record_store::{RecordStore, SnapshotRecord};
 use super::{DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M};
+use crate::catalog::{
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
+    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, TextSchema,
+};
 use crate::omen::{
     CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, WalEntryType,
     parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
@@ -44,14 +48,6 @@ pub(super) fn segments_dir_for(path: &Path) -> PathBuf {
 
 type ReplayedWalData = (Vec<u32>, Option<EdgeStore>, Vec<(String, String, String)>);
 
-fn tokenizer_preset_to_id(tokenizer: crate::text::TokenizerPreset) -> u64 {
-    match tokenizer {
-        crate::text::TokenizerPreset::Default => 0,
-        crate::text::TokenizerPreset::Code => 1,
-        crate::text::TokenizerPreset::Raw => 2,
-    }
-}
-
 fn tokenizer_preset_from_id(id: u64) -> Result<crate::text::TokenizerPreset> {
     match id {
         0 => Ok(crate::text::TokenizerPreset::Default),
@@ -62,6 +58,13 @@ fn tokenizer_preset_from_id(id: u64) -> Result<crate::text::TokenizerPreset> {
 }
 
 fn load_text_search_config(storage: &OmenFile) -> Result<Option<crate::text::TextSearchConfig>> {
+    if let Some(text) = storage.schema().and_then(|schema| schema.text.as_ref()) {
+        return Ok(Some(crate::text::TextSearchConfig {
+            writer_buffer_mb: text.writer_buffer_mb as usize,
+            tokenizer: text.tokenizer,
+        }));
+    }
+
     let tokenizer = storage.get_config("text_tokenizer")?;
     let writer_buffer_mb = storage.get_config("text_writer_buffer_mb")?;
     match (tokenizer, writer_buffer_mb) {
@@ -80,7 +83,178 @@ fn load_text_search_config(storage: &OmenFile) -> Result<Option<crate::text::Tex
     }
 }
 
+fn runtime_dimensions_from_schema(schema: &CollectionSchema) -> usize {
+    if let Some(ref dense) = schema.dense {
+        return dense.dim as usize;
+    }
+    if let Some(ref multi) = schema.multi {
+        let token_dim = multi.token_dim as usize;
+        let proj_dim = multi.d_proj.map_or(token_dim, usize::from);
+        return usize::from(multi.repetitions) * (1usize << multi.partition_bits) * proj_dim;
+    }
+    0
+}
+
+fn multi_vector_config_from_schema(schema: &MultiSchema) -> Result<MultiVectorConfig> {
+    match schema.encoder {
+        MultiEncoderKind::Muvera => Ok(MultiVectorConfig {
+            repetitions: schema.repetitions,
+            partition_bits: schema.partition_bits,
+            d_proj: schema.d_proj,
+            seed: schema.seed,
+            pool_factor: schema.pool_factor,
+            max_tokens: schema.max_tokens.map(|v| v as usize),
+        }),
+    }
+}
+
+fn text_search_config_from_schema(schema: &CollectionSchema) -> Option<TextSearchConfig> {
+    schema.text.as_ref().map(|text| TextSearchConfig {
+        writer_buffer_mb: text.writer_buffer_mb as usize,
+        tokenizer: text.tokenizer,
+    })
+}
+
+fn validate_collection_schema(schema: &CollectionSchema) -> Result<()> {
+    if schema.dense.is_none()
+        && schema.sparse.is_none()
+        && schema.multi.is_none()
+        && schema.text.is_none()
+    {
+        anyhow::bail!("collection schema must enable at least one modality");
+    }
+
+    if schema.dense.is_some() && schema.multi.is_some() {
+        anyhow::bail!("dense and multi-vector primary schemas cannot both be enabled");
+    }
+
+    if let Some(ref dense) = schema.dense {
+        match dense.mutable_index {
+            MutableDenseIndexKind::Hnsw => {}
+        }
+        match dense.frozen_index {
+            FrozenDenseIndexKind::Hnsw => {}
+        }
+    }
+
+    if let Some(ref sparse) = schema.sparse {
+        match sparse.index_kind {
+            SparseIndexKind::InvertedExact => {}
+        }
+    }
+
+    if let Some(ref multi) = schema.multi {
+        if schema.metric != Metric::InnerProduct {
+            anyhow::bail!("multi-vector schemas require metric='dot'");
+        }
+        if schema.sparse.is_some() {
+            anyhow::bail!("multi-vector + sparse schema creation is not supported yet");
+        }
+        if multi.d_proj.is_some_and(|d| usize::from(d) > multi.token_dim as usize) {
+            anyhow::bail!("multi-vector d_proj cannot exceed token_dim");
+        }
+        let _ = multi_vector_config_from_schema(multi)?;
+    }
+
+    Ok(())
+}
+
+fn base_store_from_schema(schema: &CollectionSchema) -> Result<VectorStore> {
+    validate_collection_schema(schema)?;
+
+    let mut store = if let Some(ref multi) = schema.multi {
+        VectorStore::multi_vector_with(
+            multi.token_dim as usize,
+            multi_vector_config_from_schema(multi)?,
+        )?
+    } else if let Some(ref dense) = schema.dense {
+        match dense.quantization {
+            QuantizationMode::Sq8 => VectorStore::new_with_quantization(dense.dim as usize),
+            QuantizationMode::None => VectorStore::new_with_params(
+                dense.dim as usize,
+                DEFAULT_HNSW_M,
+                DEFAULT_HNSW_EF_CONSTRUCTION,
+                DEFAULT_HNSW_EF_SEARCH,
+                schema.metric,
+            ),
+        }
+    } else {
+        VectorStore::with_defaults(0, schema.metric)
+    };
+
+    if schema.sparse.is_some() {
+        store.enable_sparse();
+    }
+
+    Ok(store)
+}
+
+fn schema_from_options(options: &VectorStoreOptions) -> CollectionSchema {
+    CollectionSchema {
+        name: String::new(),
+        metric: options.metric.unwrap_or(Metric::L2),
+        dense: Some(DenseSchema {
+            dim: options.dimensions as u32,
+            quantization: if options.quantization {
+                QuantizationMode::Sq8
+            } else {
+                QuantizationMode::None
+            },
+            mutable_index: MutableDenseIndexKind::Hnsw,
+            frozen_index: FrozenDenseIndexKind::Hnsw,
+        }),
+        sparse: None,
+        multi: None,
+        text: options.text_search_config.as_ref().map(|config| TextSchema {
+            tokenizer: config.tokenizer,
+            writer_buffer_mb: config.writer_buffer_mb as u32,
+        }),
+    }
+}
+
 impl VectorStore {
+    /// Create a new persistent vector store from an explicit collection schema.
+    pub fn create(path: impl AsRef<Path>, schema: CollectionSchema) -> Result<Self> {
+        let path = path.as_ref();
+        let omen_path = OmenFile::compute_omen_path(path);
+        if path.exists() || omen_path.exists() {
+            anyhow::bail!("store already exists at {}", path.display());
+        }
+
+        let mut store = base_store_from_schema(&schema)?;
+        let mut storage = OmenFile::create(path, runtime_dimensions_from_schema(&schema) as u32)?;
+        storage.set_metric(schema.metric);
+        storage.set_schema(schema.clone());
+        if schema
+            .dense
+            .as_ref()
+            .is_some_and(|dense| dense.quantization == QuantizationMode::Sq8)
+        {
+            storage.put_quantization_mode(helpers::quantization_to_id(true))?;
+        }
+
+        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage));
+        store.storage = Some(storage);
+        store.storage_path = Some(path.to_path_buf());
+        store.schema_name = Some(schema.name.clone());
+
+        if let Some(config) = text_search_config_from_schema(&schema) {
+            store.enable_text_search_with_config(Some(config))?;
+        }
+
+        Ok(store)
+    }
+
+    /// Create a new in-memory vector store from an explicit collection schema.
+    pub fn create_in_memory(schema: CollectionSchema) -> Result<Self> {
+        let mut store = base_store_from_schema(&schema)?;
+        store.schema_name = Some(schema.name.clone());
+        if let Some(config) = text_search_config_from_schema(&schema) {
+            store.enable_text_search_with_config(Some(config))?;
+        }
+        Ok(store)
+    }
+
     /// Open a persistent vector store at the given path
     ///
     /// Creates a new database if it doesn't exist, or loads existing data.
@@ -173,6 +347,7 @@ impl VectorStore {
             )
         };
 
+        let schema_name = storage_local.schema().map(|schema| schema.name.clone());
         let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> =
             Arc::new(RwLock::new(storage_local));
 
@@ -189,6 +364,7 @@ impl VectorStore {
             metadata_index: RwLock::new(ancillary.metadata_index),
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
+            schema_name,
             text_index: RwLock::new(ancillary.text_index),
             text_search_config: RwLock::new(text_search_config),
             pending_quantization: quantization.into(),
@@ -228,16 +404,27 @@ impl VectorStore {
     ///
     /// Like `open()` but ensures dimensions are set for new databases.
     pub fn open_with_dimensions(path: impl AsRef<Path>, dimensions: usize) -> Result<Self> {
-        let store = Self::open(path)?;
-        if store.dimensions() == 0 {
-            store.records.set_dimensions(dimensions as u32);
-            if let Some(ref storage) = store.storage {
-                storage
-                    .write()
-                    .put_config("dimensions", dimensions as u64)?;
-            }
+        let path = path.as_ref();
+        let omen_path = OmenFile::compute_omen_path(path);
+        if path.exists() || omen_path.exists() {
+            return Self::open(path);
         }
-        Ok(store)
+        Self::create(
+            path,
+            CollectionSchema {
+                name: String::new(),
+                metric: Metric::L2,
+                dense: Some(DenseSchema {
+                    dim: dimensions as u32,
+                    quantization: QuantizationMode::None,
+                    mutable_index: MutableDenseIndexKind::Hnsw,
+                    frozen_index: FrozenDenseIndexKind::Hnsw,
+                }),
+                sparse: None,
+                multi: None,
+                text: None,
+            },
+        )
     }
 
     /// Open a persistent vector store with custom options.
@@ -251,155 +438,60 @@ impl VectorStore {
         if path.exists() || omen_path.exists() {
             let mut store = Self::open(path)?;
 
-            // Apply dimension if specified and store has none
-            if store.dimensions() == 0 {
-                store.records.set_dimensions(options.dimensions as u32);
-                if let Some(ref storage) = store.storage {
-                    storage
-                        .write()
-                        .put_config("dimensions", options.dimensions as u64)?;
-                }
-            }
+            store
+                .hnsw_m
+                .store(options.m.unwrap_or(DEFAULT_HNSW_M), std::sync::atomic::Ordering::Relaxed);
+            store.hnsw_ef_construction.store(
+                options
+                    .ef_construction
+                    .unwrap_or(DEFAULT_HNSW_EF_CONSTRUCTION),
+                std::sync::atomic::Ordering::Relaxed,
+            );
 
             // Apply ef_search if specified
-            if let Some(ef) = options.ef_search {
-                store.set_ef_search(ef);
-            }
+            store.set_ef_search(options.ef_search.unwrap_or(DEFAULT_HNSW_EF_SEARCH));
 
             // Apply rescore/oversample options
-            if let Some(rescore) = options.rescore {
-                store.set_rescore(rescore);
-            }
-            if let Some(oversample) = options.oversample {
-                store.set_oversample(oversample);
-            }
+            store.set_rescore(options.rescore.unwrap_or(options.quantization));
+            store.set_oversample(options.oversample.unwrap_or(3.0));
             store.max_memory_bytes = options.max_memory_bytes;
 
             return Ok(store);
         }
-
-        // Create new persistent store with options
-        let mut storage = OmenFile::create(path, options.dimensions as u32)?;
-        let dimensions = options.dimensions;
-
-        // Determine HNSW parameters
-        let m = options.m.unwrap_or(16);
-        let ef_construction = options.ef_construction.unwrap_or(100);
-        let ef_search = options.ef_search.unwrap_or(100);
-
-        // Get distance metric from options (default: L2)
-        let distance_metric = options.metric.unwrap_or(Metric::L2);
-
-        // Quantization is deferred until first insert
-        let pending_quantization = options.quantization;
-
-        // Save dimensions to storage if set
-        if dimensions > 0 {
-            storage.put_config("dimensions", dimensions as u64)?;
-        }
-
-        // Save quantization mode to storage if set
-        if options.quantization {
-            storage.put_quantization_mode(helpers::quantization_to_id(true))?;
-        }
-
-        // Initialize text index if enabled
-        let text_index = if let Some(ref config) = options.text_search_config {
-            let text_path = path.join("text_index");
-            storage.put_config("text_writer_buffer_mb", config.writer_buffer_mb as u64)?;
-            storage.put_config("text_tokenizer", tokenizer_preset_to_id(config.tokenizer))?;
-            Some(TextIndex::open_with_config(&text_path, config)?)
-        } else {
-            None
-        };
-
-        let rescore = if let Some(r) = options.rescore {
-            r
-        } else {
-            options.quantization
-        };
-        let oversample = options.oversample.unwrap_or(3.0);
-
-        let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> = Arc::new(RwLock::new(storage));
-        let records = RecordStore::new(dimensions as u32);
-
-        Ok(Self {
-            records,
-            engine: RwLock::new(None),
-            published_view: ArcSwap::new(Arc::new(None)),
-            metadata_index: RwLock::new(MetadataIndex::new()),
-            storage: Some(storage),
-            storage_path: Some(path.to_path_buf()),
-            text_index: RwLock::new(text_index),
-            text_search_config: RwLock::new(options.text_search_config.clone()),
-            pending_quantization: pending_quantization.into(),
-            hnsw_m: m.into(),
-            hnsw_ef_construction: ef_construction.into(),
-            hnsw_ef_search: ef_search.into(),
-            distance_metric,
-            muvera_encoder: None,
-            multivec_storage: RwLock::new(None),
-            sparse_index: RwLock::new(None),
-            edge_store: RwLock::new(None),
-            segment_capacity: None,
-            rescore: rescore.into(),
-            oversample: oversample.to_bits().into(),
-            max_memory_bytes: options.max_memory_bytes,
-            auto_compact_threshold: (0.25f32.to_bits()).into(),
-            write_lock: RwLock::new(()),
-        })
+        let mut store = Self::create(path, schema_from_options(options))?;
+        store
+            .hnsw_m
+            .store(options.m.unwrap_or(DEFAULT_HNSW_M), std::sync::atomic::Ordering::Relaxed);
+        store.hnsw_ef_construction.store(
+            options
+                .ef_construction
+                .unwrap_or(DEFAULT_HNSW_EF_CONSTRUCTION),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        store.set_ef_search(options.ef_search.unwrap_or(DEFAULT_HNSW_EF_SEARCH));
+        store.set_rescore(options.rescore.unwrap_or(options.quantization));
+        store.set_oversample(options.oversample.unwrap_or(3.0));
+        store.max_memory_bytes = options.max_memory_bytes;
+        Ok(store)
     }
 
     /// Build an in-memory vector store with custom options.
     pub fn build_with_options(options: &VectorStoreOptions) -> Result<Self> {
-        let dimensions = options.dimensions;
-
-        let m = options.m.unwrap_or(16);
-        let ef_construction = options.ef_construction.unwrap_or(100);
-        let ef_search = options.ef_search.unwrap_or(100);
-
-        let distance_metric = options.metric.unwrap_or(Metric::L2);
-
-        let pending_quantization = options.quantization;
-
-        let text_index = if let Some(ref config) = options.text_search_config {
-            Some(TextIndex::open_in_memory_with_config(config)?)
-        } else {
-            None
-        };
-
-        let rescore = if let Some(r) = options.rescore {
-            r
-        } else {
-            options.quantization
-        };
-        let oversample = options.oversample.unwrap_or(3.0);
-
-        Ok(Self {
-            records: RecordStore::new(dimensions as u32),
-            engine: RwLock::new(None),
-            published_view: ArcSwap::new(Arc::new(None)),
-            metadata_index: RwLock::new(MetadataIndex::new()),
-            storage: None,
-            storage_path: None,
-            text_index: RwLock::new(text_index),
-            text_search_config: RwLock::new(options.text_search_config.clone()),
-            pending_quantization: pending_quantization.into(),
-            hnsw_m: m.into(),
-            hnsw_ef_construction: ef_construction.into(),
-            hnsw_ef_search: ef_search.into(),
-            distance_metric,
-            muvera_encoder: None,
-            multivec_storage: RwLock::new(None),
-            sparse_index: RwLock::new(None),
-            edge_store: RwLock::new(None),
-            segment_capacity: None,
-            rescore: rescore.into(),
-            oversample: oversample.to_bits().into(),
-            max_memory_bytes: options.max_memory_bytes,
-            auto_compact_threshold: (0.25f32.to_bits()).into(),
-            write_lock: RwLock::new(()),
-        })
+        let mut store = Self::create_in_memory(schema_from_options(options))?;
+        store
+            .hnsw_m
+            .store(options.m.unwrap_or(DEFAULT_HNSW_M), std::sync::atomic::Ordering::Relaxed);
+        store.hnsw_ef_construction.store(
+            options
+                .ef_construction
+                .unwrap_or(DEFAULT_HNSW_EF_CONSTRUCTION),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        store.set_ef_search(options.ef_search.unwrap_or(DEFAULT_HNSW_EF_SEARCH));
+        store.set_rescore(options.rescore.unwrap_or(options.quantization));
+        store.set_oversample(options.oversample.unwrap_or(3.0));
+        store.max_memory_bytes = options.max_memory_bytes;
+        Ok(store)
     }
 
     /// Flush all pending changes to disk
@@ -497,6 +589,7 @@ impl VectorStore {
         if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
             self.update_storage_header_impl(&mut *storage);
+            storage.set_schema(self.schema())?;
 
             // Get dirty slots for incremental checkpoint
             let dirty = self.records.take_dirty_slots();
@@ -1241,6 +1334,12 @@ impl VectorStore {
                 .load(std::sync::atomic::Ordering::Relaxed) as u16,
         );
         let _ = storage.set_metric(self.distance_metric);
+        let _ = storage.put_config(
+            "quantization",
+            helpers::quantization_to_id(self.pending_quantization.load(
+                std::sync::atomic::Ordering::Relaxed,
+            )),
+        );
     }
 
     /// Prepare serialized data from all subsystems for the manifest checkpoint.
@@ -1291,6 +1390,7 @@ impl VectorStore {
             .transpose()?;
 
         Ok(PreparedFlush {
+            schema: self.schema(),
             metadata_index_bytes,
             multivec_bytes,
             multivec_offsets,
@@ -1331,6 +1431,7 @@ struct AncillaryIndexes {
 
 /// Data prepared for flushing to disk
 struct PreparedFlush {
+    schema: CollectionSchema,
     metadata_index_bytes: Option<Vec<u8>>,
     multivec_bytes: Option<Vec<u8>>,
     multivec_offsets: Option<Vec<u8>>,
@@ -1342,6 +1443,7 @@ struct PreparedFlush {
 impl PreparedFlush {
     fn as_options(&self) -> CheckpointOptions<'_> {
         CheckpointOptions {
+            schema: Some(&self.schema),
             hnsw_bytes: None,
             metadata_index_bytes: self.metadata_index_bytes.as_deref(),
             multivec_bytes: self.multivec_bytes.as_deref(),

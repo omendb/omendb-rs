@@ -507,7 +507,7 @@ impl VectorDatabase {
             vector_count: info.vector_count as u32,
             deleted_count: info.deleted_count as u32,
             dimensions: info.dimensions as u32,
-            metric: format!("{:?}", info.metric),
+            metric: info.metric.canonical_name().to_string(),
             frozen_segment_count: info.frozen_segment_count as u32,
             mutable_segment_vectors: info.mutable_segment_vectors as u32,
             vector_bytes: info.vector_bytes as u32,

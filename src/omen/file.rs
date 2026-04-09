@@ -2,6 +2,7 @@
 //!
 //! Storage backend for `VectorStore`. Uses postcard for efficient binary serialization.
 
+use crate::catalog::CollectionSchema;
 use crate::omen::{
     ManifestHeader, NodeLocation, OmenFooter, OmenManifest, SegmentType, align_to_page,
     header::{HEADER_SIZE, Metric, OmenHeader},
@@ -37,6 +38,19 @@ pub enum IndexSource {
     Owned(Vec<u8>),
     /// Pointer into main memory map
     MmapRange { offset: usize, length: usize },
+}
+
+fn runtime_dimensions_from_schema(schema: &CollectionSchema) -> u32 {
+    if let Some(ref dense) = schema.dense {
+        return dense.dim;
+    }
+    if let Some(ref multi) = schema.multi {
+        let token_dim = multi.token_dim as usize;
+        let proj_dim = multi.d_proj.map_or(token_dim, usize::from);
+        let encoded_dim = usize::from(multi.repetitions) * (1usize << multi.partition_bits) * proj_dim;
+        return u32::try_from(encoded_dim).unwrap_or(u32::MAX);
+    }
+    0
 }
 
 /// Configure OpenOptions for cross-platform compatibility.
@@ -371,11 +385,17 @@ impl OmenFile {
             .copied()
             .unwrap_or(manifest.id_to_index.len() as u64);
         let dimensions = manifest
-            .config
-            .get("dimensions")
-            .copied()
-            .unwrap_or(u64::from(header.dimensions));
-        let dimensions = u32::try_from(dimensions).unwrap_or(header.dimensions);
+            .schema
+            .as_ref()
+            .map(runtime_dimensions_from_schema)
+            .unwrap_or_else(|| {
+                let dimensions = manifest
+                    .config
+                    .get("dimensions")
+                    .copied()
+                    .unwrap_or(u64::from(header.dimensions));
+                u32::try_from(dimensions).unwrap_or(header.dimensions)
+            });
         let hnsw_m = manifest
             .config
             .get("hnsw_m")
@@ -395,9 +415,17 @@ impl OmenFile {
             .copied()
             .unwrap_or(u64::from(header.hnsw_ef_search));
         let hnsw_ef_search = u32::try_from(hnsw_ef_search).unwrap_or(header.hnsw_ef_search);
-        let metric = manifest.config.get("metric").map_or(header.metric, |&v| {
-            crate::omen::header::Metric::from(v as u8)
-        });
+        let metric = manifest
+            .schema
+            .as_ref()
+            .map_or_else(
+                || {
+                    manifest.config.get("metric").map_or(header.metric, |&v| {
+                        crate::omen::header::Metric::from(v as u8)
+                    })
+                },
+                |schema| schema.metric,
+            );
 
         // Load HNSW index bytes from manifest (if mmap exists)
         let hnsw_index_source = mmap.as_ref().and_then(|m| {
@@ -484,6 +512,17 @@ impl OmenFile {
         self.header.dimensions
     }
 
+    /// Get the persisted collection schema, if present.
+    #[must_use]
+    pub fn schema(&self) -> Option<&CollectionSchema> {
+        self.manifest.schema.as_ref()
+    }
+
+    /// Update the persisted collection schema.
+    pub fn set_schema(&mut self, schema: CollectionSchema) {
+        self.manifest.schema = Some(schema);
+    }
+
     // Note: checkpoint() removed in Phase 5.
     // VectorStore uses checkpoint_from_snapshot() which takes data from RecordStore.
 }
@@ -504,6 +543,15 @@ impl crate::omen::StorageBackend for OmenFile {
 
     fn set_metric(&mut self, metric: crate::omen::Metric) -> anyhow::Result<()> {
         self.set_metric(metric);
+        Ok(())
+    }
+
+    fn schema(&self) -> Option<CollectionSchema> {
+        OmenFile::schema(self).cloned()
+    }
+
+    fn set_schema(&mut self, schema: CollectionSchema) -> anyhow::Result<()> {
+        OmenFile::set_schema(self, schema);
         Ok(())
     }
 
@@ -836,6 +884,8 @@ pub struct SlimRecordsSnapshot {
 /// Options for checkpoint_from_snapshot
 #[derive(Debug, Default)]
 pub struct CheckpointOptions<'a> {
+    /// Authoritative collection schema
+    pub schema: Option<&'a CollectionSchema>,
     /// Serialized HNSW index bytes
     pub hnsw_bytes: Option<&'a [u8]>,
     /// Serialized MetadataIndex bytes
@@ -1118,34 +1168,47 @@ impl OmenFile {
             .as_ref()
             .map(|b| Cow::Owned(b.clone()));
 
-        // Extract MUVERA config from manifest.config if present
-        let reps = self.manifest.config.get("muvera_repetitions").copied();
-        let bits = self.manifest.config.get("muvera_partition_bits").copied();
-        let seed = self.manifest.config.get("muvera_seed").copied();
-        let token_dim = self.manifest.config.get("muvera_token_dim").copied();
-        let d_proj = self.manifest.config.get("muvera_d_proj").map(|&v| v as u8);
-        let pool_factor = self
-            .manifest
-            .config
-            .get("muvera_pool_factor")
-            .map(|&v| v as u8);
-        let max_tokens = self
-            .manifest
-            .config
-            .get("muvera_max_tokens")
-            .map(|&v| v as usize);
-
-        if let (Some(reps), Some(bits), Some(seed), Some(token_dim)) = (reps, bits, seed, token_dim)
-        {
+        if let Some(multi) = self.manifest.schema.as_ref().and_then(|schema| schema.multi.as_ref()) {
             snapshot.multivec_config = Some(PersistedMuveraConfig {
-                repetitions: reps as u8,
-                partition_bits: bits as u8,
-                seed,
-                token_dim: token_dim as usize,
-                d_proj,
-                pool_factor,
-                max_tokens,
+                repetitions: multi.repetitions,
+                partition_bits: multi.partition_bits,
+                seed: multi.seed,
+                token_dim: multi.token_dim as usize,
+                d_proj: multi.d_proj,
+                pool_factor: multi.pool_factor,
+                max_tokens: multi.max_tokens.map(|v| v as usize),
             });
+        } else {
+            // Legacy fallback: extract MUVERA config from manifest.config if present
+            let reps = self.manifest.config.get("muvera_repetitions").copied();
+            let bits = self.manifest.config.get("muvera_partition_bits").copied();
+            let seed = self.manifest.config.get("muvera_seed").copied();
+            let token_dim = self.manifest.config.get("muvera_token_dim").copied();
+            let d_proj = self.manifest.config.get("muvera_d_proj").map(|&v| v as u8);
+            let pool_factor = self
+                .manifest
+                .config
+                .get("muvera_pool_factor")
+                .map(|&v| v as u8);
+            let max_tokens = self
+                .manifest
+                .config
+                .get("muvera_max_tokens")
+                .map(|&v| v as usize);
+
+            if let (Some(reps), Some(bits), Some(seed), Some(token_dim)) =
+                (reps, bits, seed, token_dim)
+            {
+                snapshot.multivec_config = Some(PersistedMuveraConfig {
+                    repetitions: reps as u8,
+                    partition_bits: bits as u8,
+                    seed,
+                    token_dim: token_dim as usize,
+                    d_proj,
+                    pool_factor,
+                    max_tokens,
+                });
+            }
         }
 
         snapshot
@@ -1764,11 +1827,13 @@ impl OmenFile {
         manifest.multivec_offsets = options.multivec_offsets.map(<[u8]>::to_vec);
         manifest.sparse_index_bytes = options.sparse_index_bytes.map(<[u8]>::to_vec);
         manifest.edge_store_bytes = options.edge_store_bytes.map(<[u8]>::to_vec);
+        manifest.schema = options.schema.cloned();
 
         let live_count = records.len() as usize;
         for (key, val) in [
             ("count", live_count as u64),
             ("dimensions", u64::from(self.header.dimensions)),
+            ("quantization", self.header.quantization as u64),
             ("hnsw_m", u64::from(self.header.hnsw_m)),
             (
                 "hnsw_ef_construction",
@@ -2028,11 +2093,13 @@ impl OmenFile {
 
         // Store edge store in manifest
         manifest.edge_store_bytes = options.edge_store_bytes.map(<[u8]>::to_vec);
+        manifest.schema = options.schema.cloned();
 
         let live_count = vectors.len().saturating_sub(deleted.len());
         for (key, val) in [
             ("count", live_count as u64),
             ("dimensions", u64::from(self.header.dimensions)),
+            ("quantization", self.header.quantization as u64),
             ("hnsw_m", u64::from(self.header.hnsw_m)),
             (
                 "hnsw_ef_construction",
