@@ -21,6 +21,7 @@ import time
 import pytest
 
 import omendb
+from tests.helpers import ensure_dense_db
 
 
 def generate_embedding(dim: int, seed: int) -> list[float]:
@@ -56,7 +57,7 @@ class TestEmbeddingDimensions:
         k = 10
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             # Insert vectors
             vectors = []
@@ -86,7 +87,7 @@ class TestEmbeddingDimensions:
         n_vectors = 100  # Fewer vectors for speed
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             for i in range(n_vectors):
                 vec = generate_embedding(dim, seed=i)
@@ -109,7 +110,7 @@ class TestRecallAccuracy:
         k = 10
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             vectors = []
             for i in range(n_vectors):
@@ -139,7 +140,7 @@ class TestRecallAccuracy:
         k = 10
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             vectors = []
             for i in range(n_vectors):
@@ -170,7 +171,7 @@ class TestFilteredSearch:
         dim = 64
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             # Insert vectors with category metadata
             for i in range(100):
@@ -191,7 +192,7 @@ class TestFilteredSearch:
         dim = 64
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             for i in range(100):
                 vec = generate_embedding(dim, seed=i)
@@ -210,7 +211,7 @@ class TestFilteredSearch:
         dim = 64
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             for i in range(200):
                 vec = generate_embedding(dim, seed=i)
@@ -240,7 +241,7 @@ class TestPerformance:
         n_vectors = 1000
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             for i in range(n_vectors):
                 vec = generate_embedding(dim, seed=i)
@@ -280,7 +281,7 @@ class TestPerformance:
         n_queries = 100
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = omendb.open(f"{tmpdir}/test", dimensions=dim)
+            db = ensure_dense_db(f"{tmpdir}/test", dim)
 
             # Batch insert for speed
             vectors = [

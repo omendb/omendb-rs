@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 import omendb
+from tests.helpers import create_dense_db, create_multi_db
 
 
 class TestCollections:
@@ -20,7 +21,7 @@ class TestCollections:
 
     def test_create_collection(self, db_path):
         """Test creating a named collection."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
         users = db.collection("users")
 
         # Collection should be usable
@@ -33,7 +34,7 @@ class TestCollections:
 
     def test_multiple_collections(self, db_path):
         """Test multiple isolated collections."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
 
         users = db.collection("users")
         products = db.collection("products")
@@ -56,7 +57,7 @@ class TestCollections:
 
     def test_collections(self, db_path):
         """Test listing collections."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
 
         # Initially no collections
         assert db.collections() == []
@@ -72,7 +73,7 @@ class TestCollections:
 
     def test_delete_collection(self, db_path):
         """Test deleting a collection."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
 
         # Create and populate a collection
         users = db.collection("users")
@@ -89,14 +90,14 @@ class TestCollections:
 
     def test_delete_nonexistent_collection(self, db_path):
         """Test deleting a collection that doesn't exist."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
 
         with pytest.raises(ValueError, match="not found"):
             db.delete_collection("nonexistent")
 
     def test_collection_name_validation(self, db_path):
         """Test collection name validation."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
 
         # Empty name
         with pytest.raises(ValueError, match="cannot be empty"):
@@ -120,7 +121,7 @@ class TestCollections:
     def test_collection_persistence(self, db_path):
         """Test that collections persist after reopening."""
         # Create and populate collections
-        db1 = omendb.open(db_path, dimensions=128)
+        db1 = create_dense_db(db_path, 128)
         users1 = db1.collection("users")
         users1.set([{"id": "user1", "vector": [0.1] * 128, "metadata": {"name": "Alice"}}])
 
@@ -133,7 +134,7 @@ class TestCollections:
         del db1, users1, products1
 
         # Reopen
-        db2 = omendb.open(db_path, dimensions=128)
+        db2 = omendb.open(db_path)
         collections = db2.collections()
         assert "users" in collections
         assert "products" in collections
@@ -151,7 +152,7 @@ class TestCollections:
 
     def test_collection_search(self, db_path):
         """Test searching within a collection."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
 
         users = db.collection("users")
         for i in range(100):
@@ -175,7 +176,7 @@ class TestCollections:
 
     def test_multi_vector_collection_inherits_parent_mode(self, db_path):
         """Collections created from a multi-vector database should stay multi-vector."""
-        db = omendb.open(db_path, dimensions=8, multi_vector={"d_proj": None})
+        db = create_multi_db(db_path, 8, multi_vector={"d_proj": None})
 
         docs = db.collection("docs")
         assert docs.is_multi_vector is True
@@ -197,7 +198,7 @@ class TestCollections:
 
     def test_collection_filtered_search(self, db_path):
         """Test filtered search within a collection."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
 
         users = db.collection("users")
         for i in range(50):
@@ -222,7 +223,7 @@ class TestCollections:
         """Test that all databases support collections (seerdb is always persistent)."""
         with tempfile.TemporaryDirectory() as tmp:
             path = f"{tmp}/mydb"
-            db = omendb.open(path, dimensions=128)
+            db = create_dense_db(path, 128)
 
             # All databases now use seerdb persistent storage, so collections work
             coll = db.collection("test")
@@ -230,7 +231,7 @@ class TestCollections:
 
     def test_collection_delete_and_recreate(self, db_path):
         """Test deleting and recreating a collection."""
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
 
         # Create and populate
         users = db.collection("users")

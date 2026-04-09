@@ -5,12 +5,13 @@ import os
 import pytest
 
 import omendb
+from tests.helpers import create_dense_db
 
 
 def test_save_and_load(temp_db_path):
     """Test basic save and load"""
     # Create and populate database
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
     vectors = [
         {"id": "v1", "vector": [0.1] * 128, "metadata": {"label": "A"}},
         {"id": "v2", "vector": [0.2] * 128, "metadata": {"label": "B"}},
@@ -22,7 +23,7 @@ def test_save_and_load(temp_db_path):
 
     # Close and reopen
     del db
-    db2 = omendb.open(temp_db_path, dimensions=128)
+    db2 = omendb.open(temp_db_path)
 
     # Verify data persisted
     assert len(db2) == 2
@@ -35,7 +36,7 @@ def test_save_and_load(temp_db_path):
 
 def test_save_creates_files(temp_db_path):
     """Test that save creates expected files (.omen format)"""
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
     vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
 
@@ -54,7 +55,7 @@ def test_save_creates_files(temp_db_path):
 
 def test_load_preserves_metadata(temp_db_path):
     """Test that metadata is preserved across save/load"""
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
     vectors = [
         {
             "id": "v1",
@@ -71,7 +72,7 @@ def test_load_preserves_metadata(temp_db_path):
     db.flush()
 
     del db
-    db2 = omendb.open(temp_db_path, dimensions=128)
+    db2 = omendb.open(temp_db_path)
 
     results = db2.search([0.1] * 128, k=1)
     metadata = results[0]["metadata"]
@@ -84,7 +85,7 @@ def test_load_preserves_metadata(temp_db_path):
 
 def test_load_preserves_distances(temp_db_path):
     """Test that distances are preserved (vectors loaded correctly)"""
-    db = omendb.open(temp_db_path, dimensions=4)
+    db = create_dense_db(temp_db_path, 4)
     vectors = [
         {"id": "v1", "vector": [1.0, 0.0, 0.0, 0.0], "metadata": {}},
         {"id": "v2", "vector": [0.0, 1.0, 0.0, 0.0], "metadata": {}},
@@ -99,7 +100,7 @@ def test_load_preserves_distances(temp_db_path):
     del db
 
     # Search after load
-    db2 = omendb.open(temp_db_path, dimensions=4)
+    db2 = omendb.open(temp_db_path)
     results_after = db2.search([1.0, 0.0, 0.0, 0.0], k=2)
     distances_after = [r["distance"] for r in results_after]
 
@@ -109,7 +110,7 @@ def test_load_preserves_distances(temp_db_path):
 
 def test_save_after_delete(temp_db_path):
     """Test save/load with deleted vectors"""
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
     vectors = [
         {"id": "v1", "vector": [0.1] * 128, "metadata": {}},
         {"id": "v2", "vector": [0.2] * 128, "metadata": {}},
@@ -122,7 +123,7 @@ def test_save_after_delete(temp_db_path):
     db.flush()
 
     del db
-    db2 = omendb.open(temp_db_path, dimensions=128)
+    db2 = omendb.open(temp_db_path)
 
     # Should have 2 active vectors (v2 deleted)
     assert len(db2) == 2
@@ -136,7 +137,7 @@ def test_save_after_delete(temp_db_path):
 
 def test_save_multiple_times(temp_db_path):
     """Test saving multiple times (updates existing files)"""
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
 
     # First save
     vectors1 = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
@@ -151,40 +152,37 @@ def test_save_multiple_times(temp_db_path):
     del db
 
     # Load should have both vectors
-    db2 = omendb.open(temp_db_path, dimensions=128)
+    db2 = omendb.open(temp_db_path)
     assert len(db2) == 2
 
 
 def test_load_without_save_fails(temp_db_path):
-    """Test that loading non-existent database creates new one"""
-    # Try to open non-existent database
-    db = omendb.open(temp_db_path, dimensions=128)
-
-    # Should create empty database
-    assert len(db) == 0
+    """Test that persistent open() requires an existing store."""
+    with pytest.raises(ValueError, match="omendb.create"):
+        omendb.open(temp_db_path, dimensions=128)
 
 
 def test_save_empty_database(temp_db_path):
     """Test saving empty database"""
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
     db.flush()
 
     del db
-    db2 = omendb.open(temp_db_path, dimensions=128)
+    db2 = omendb.open(temp_db_path)
     assert len(db2) == 0
 
 
 def test_load_with_wrong_dimensions(temp_db_path):
     """Test loading database with wrong dimensions"""
     # Create with 128 dims
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
     vectors = [{"id": "v1", "vector": [0.1] * 128, "metadata": {}}]
     db.set(vectors)
     db.flush()
     del db
 
     # Try to load with 64 dims - should succeed (dimensions is just a parameter)
-    db2 = omendb.open(temp_db_path, dimensions=64)
+    db2 = omendb.open(temp_db_path)
 
     # But search with wrong dims should fail
     with pytest.raises(ValueError, match="dimension"):
@@ -193,7 +191,7 @@ def test_load_with_wrong_dimensions(temp_db_path):
 
 def test_incremental_updates(temp_db_path):
     """Test incremental updates (insert, save, insert, save)"""
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
 
     # First batch
     batch1 = [{"id": f"v{i}", "vector": [float(i)] * 128, "metadata": {}} for i in range(10)]
@@ -208,20 +206,20 @@ def test_incremental_updates(temp_db_path):
     del db
 
     # Load should have all vectors
-    db2 = omendb.open(temp_db_path, dimensions=128)
+    db2 = omendb.open(temp_db_path)
     assert len(db2) == 20
 
 
 def test_set_after_reload(temp_db_path):
     """Test that set works after reload"""
     # Initial save
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
     db.set([{"id": "v1", "vector": [0.1] * 128, "metadata": {}}])
     db.flush()
     del db
 
     # Reload and add more
-    db2 = omendb.open(temp_db_path, dimensions=128)
+    db2 = omendb.open(temp_db_path)
     db2.set([{"id": "v2", "vector": [0.2] * 128, "metadata": {}}])
 
     results = db2.search([0.1] * 128, k=10)
@@ -231,7 +229,7 @@ def test_set_after_reload(temp_db_path):
 def test_delete_after_reload(temp_db_path):
     """Test that delete works after reload"""
     # Initial save
-    db = omendb.open(temp_db_path, dimensions=128)
+    db = create_dense_db(temp_db_path, 128)
     db.set(
         [
             {"id": "v1", "vector": [0.1] * 128, "metadata": {}},
@@ -242,7 +240,7 @@ def test_delete_after_reload(temp_db_path):
     del db
 
     # Reload and delete
-    db2 = omendb.open(temp_db_path, dimensions=128)
+    db2 = omendb.open(temp_db_path)
     db2.delete(["v1"])
 
     results = db2.search([0.1] * 128, k=10)

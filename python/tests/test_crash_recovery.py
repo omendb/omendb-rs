@@ -16,6 +16,8 @@ import time
 
 import pytest
 
+from tests.helpers import ensure_dense_db
+
 pytestmark = pytest.mark.slow  # Uses multiprocessing; covered by a dedicated durability CI job
 MP_CTX = multiprocessing.get_context("spawn")
 
@@ -29,7 +31,7 @@ def open_with_lock_retry(db_path: str, dims: int, timeout_s: float = 10.0):
 
     while time.monotonic() < deadline:
         try:
-            return omendb.open(db_path, dimensions=dims)
+            return ensure_dense_db(db_path, dims)
         except RuntimeError as err:
             if "locked by another process" not in str(err):
                 raise
@@ -57,7 +59,7 @@ def child_insert_and_crash(db_path: str, dims: int, count: int, crash_type: str)
     """Child process that inserts data then crashes without saving"""
     import omendb
 
-    db = omendb.open(db_path, dimensions=dims)
+    db = ensure_dense_db(db_path, dims)
 
     # Insert vectors
     vectors = [
@@ -86,7 +88,7 @@ def child_insert_save_crash(db_path: str, dims: int, count: int):
     """Child process that inserts, saves, then crashes"""
     import omendb
 
-    db = omendb.open(db_path, dimensions=dims)
+    db = ensure_dense_db(db_path, dims)
 
     vectors = [
         {
@@ -107,7 +109,7 @@ def child_delete_and_crash(db_path: str, dims: int, ids_to_delete: list):
     """Child process that deletes then crashes without saving"""
     import omendb
 
-    db = omendb.open(db_path, dimensions=dims)
+    db = ensure_dense_db(db_path, dims)
     db.delete(ids_to_delete)
 
     # Hard crash without save
@@ -118,7 +120,7 @@ def child_update_and_crash(db_path: str, dims: int, update_id: str, new_embeddin
     """Child process that updates then crashes without saving"""
     import omendb
 
-    db = omendb.open(db_path, dimensions=dims)
+    db = ensure_dense_db(db_path, dims)
     db.set([{"id": update_id, "vector": new_embedding, "metadata": {"updated": True}}])
 
     # Hard crash without save
@@ -183,7 +185,7 @@ class TestCrashRecoveryWithExistingData:
         import omendb
 
         # First: create and save initial data
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = ensure_dense_db(temp_db_path, dims)
         initial_vectors = [
             {
                 "id": f"initial_{i}",
@@ -218,7 +220,7 @@ class TestCrashRecoveryWithExistingData:
         import omendb
 
         # Create and save data
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = ensure_dense_db(temp_db_path, dims)
         vectors = [
             {"id": f"vec_{i}", "vector": [float(i)] * dims, "metadata": {}} for i in range(100)
         ]
@@ -246,7 +248,7 @@ class TestCrashRecoveryEdgeCases:
         import omendb
 
         # Initial save
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = ensure_dense_db(temp_db_path, dims)
         db.set([{"id": "survivor", "vector": [1.0] * dims, "metadata": {"cycles": 0}}])
         db.flush()
         del db
@@ -266,7 +268,7 @@ class TestCrashRecoveryEdgeCases:
         import omendb
 
         # Initial data
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = ensure_dense_db(temp_db_path, dims)
         db.set([{"id": "anchor", "vector": [0.5] * dims, "metadata": {}}])
         db.flush()
         del db
@@ -287,7 +289,7 @@ class TestCrashRecoveryEdgeCases:
         import omendb
 
         # Save initial data
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = ensure_dense_db(temp_db_path, dims)
         db.set([{"id": f"safe_{i}", "vector": [0.1] * dims, "metadata": {}} for i in range(100)])
         db.flush()
         del db
@@ -324,7 +326,7 @@ class TestDatabaseIntegrity:
         import omendb
 
         # Create valid database
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = ensure_dense_db(temp_db_path, dims)
         db.set(
             [
                 {"id": f"v{i}", "vector": [float(i) / 100] * dims, "metadata": {"n": i}}
@@ -354,7 +356,7 @@ class TestDatabaseIntegrity:
         import omendb
 
         # Create database with known vectors
-        db = omendb.open(temp_db_path, dimensions=dims)
+        db = ensure_dense_db(temp_db_path, dims)
         db.set(
             [
                 {"id": "north", "vector": [1.0, 0.0, 0.0, 0.0], "metadata": {}},

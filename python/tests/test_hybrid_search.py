@@ -4,13 +4,14 @@ import os
 import tempfile
 
 import omendb
+from tests.helpers import create_dense_db
 
 
 def test_enable_text_search():
     """Test enabling text search on a database"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         assert not db.has_text_search()
         db.enable_text_search()
@@ -22,7 +23,7 @@ def test_enable_text_search_with_config():
     """Test enabling text search with explicit config."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.enable_text_search({"buffer_mb": 20, "tokenizer": "code"})
         assert db.has_text_search()
@@ -48,9 +49,9 @@ def test_open_with_text_search_config():
     """Test configuring text search directly in open()."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(
+        db = create_dense_db(
             db_path,
-            dimensions=4,
+            4,
             text_search={"buffer_mb": 20, "tokenizer": "code"},
         )
 
@@ -77,7 +78,7 @@ def test_set_with_text_auto_enables():
     """Test that set() with text field auto-enables text search"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         assert not db.has_text_search()
 
@@ -110,7 +111,7 @@ def test_text_search():
     """Test pure text (BM25) search"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -153,7 +154,7 @@ def test_update_text():
     """Test updating text re-indexes for BM25 search"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         # Insert with text
         db.set(
@@ -192,7 +193,7 @@ def test_hybrid_search_basic():
     """Test basic hybrid search (vector + text)"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -234,7 +235,7 @@ def test_hybrid_search_with_alpha():
     """Test hybrid search with alpha weighting"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -277,7 +278,7 @@ def test_hybrid_search_with_rrf_k():
     """Test hybrid search with custom RRF k parameter"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -305,7 +306,7 @@ def test_hybrid_search_with_filter():
     """Test hybrid search with metadata filter"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -348,7 +349,7 @@ def test_hybrid_search_metadata_in_results():
     """Test that hybrid search returns metadata"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -379,7 +380,7 @@ def test_hybrid_search_empty_results():
     """Test hybrid search with no matching results"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -400,7 +401,7 @@ def test_hybrid_search_all_params():
     """Test hybrid search with all parameters specified"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -439,7 +440,7 @@ def test_hybrid_search_with_subscores():
     """Test hybrid search with subscores=True returns keyword and semantic scores"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [
@@ -510,7 +511,7 @@ def test_hybrid_search_subscores_with_filter():
     """Test hybrid search with subscores and filter"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=4)
+        db = create_dense_db(db_path, 4)
 
         db.set(
             [

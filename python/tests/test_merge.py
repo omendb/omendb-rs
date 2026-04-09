@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 import omendb
+from tests.helpers import create_dense_db
 
 
 class TestMerge:
@@ -27,8 +28,8 @@ class TestMerge:
 
     def test_merge_basic(self, db_path1, db_path2):
         """Test basic merge operation."""
-        db1 = omendb.open(db_path1, dimensions=128)
-        db2 = omendb.open(db_path2, dimensions=128)
+        db1 = create_dense_db(db_path1, 128)
+        db2 = create_dense_db(db_path2, 128)
 
         # Populate db1
         db1.set(
@@ -62,8 +63,8 @@ class TestMerge:
 
     def test_merge_dimension_mismatch(self, db_path1, db_path2):
         """Test that merging databases with different dimensions fails."""
-        db1 = omendb.open(db_path1, dimensions=128)
-        db2 = omendb.open(db_path2, dimensions=64)  # Different dimensions
+        db1 = create_dense_db(db_path1, 128)
+        db2 = create_dense_db(db_path2, 64)  # Different dimensions
 
         # Populate both dbs
         db1.set([{"id": "vec1", "vector": [0.1] * 128, "metadata": {}}])
@@ -75,8 +76,8 @@ class TestMerge:
 
     def test_merge_into_empty(self, db_path1, db_path2):
         """Test merging into empty database."""
-        db1 = omendb.open(db_path1, dimensions=128)
-        db2 = omendb.open(db_path2, dimensions=128)
+        db1 = create_dense_db(db_path1, 128)
+        db2 = create_dense_db(db_path2, 128)
 
         # First establish dimensions in db1 by inserting and deleting
         db1.set([{"id": "temp", "vector": [0.0] * 128, "metadata": {}}])
@@ -97,8 +98,8 @@ class TestMerge:
 
     def test_merge_id_conflict(self, db_path1, db_path2):
         """Test that conflicting IDs are skipped (existing wins)."""
-        db1 = omendb.open(db_path1, dimensions=128)
-        db2 = omendb.open(db_path2, dimensions=128)
+        db1 = create_dense_db(db_path1, 128)
+        db2 = create_dense_db(db_path2, 128)
 
         # Same ID in both databases
         db1.set(
@@ -129,8 +130,8 @@ class TestMerge:
 
     def test_merge_preserves_metadata(self, db_path1, db_path2):
         """Test that metadata is preserved during merge."""
-        db1 = omendb.open(db_path1, dimensions=128)
-        db2 = omendb.open(db_path2, dimensions=128)
+        db1 = create_dense_db(db_path1, 128)
+        db2 = create_dense_db(db_path2, 128)
 
         # First establish dimensions in db1 by inserting a vector
         db1.set([{"id": "placeholder", "vector": [0.0] * 128, "metadata": {}}])
@@ -161,8 +162,8 @@ class TestMerge:
 
     def test_merge_search_works(self, db_path1, db_path2):
         """Test that search works correctly after merge."""
-        db1 = omendb.open(db_path1, dimensions=128)
-        db2 = omendb.open(db_path2, dimensions=128)
+        db1 = create_dense_db(db_path1, 128)
+        db2 = create_dense_db(db_path2, 128)
 
         # Insert distinctive vectors
         db1.set(
@@ -199,8 +200,8 @@ class TestMerge:
 
     def test_merge_larger_scale(self, db_path1, db_path2):
         """Test merge at larger scale (1K vectors)."""
-        db1 = omendb.open(db_path1, dimensions=128)
-        db2 = omendb.open(db_path2, dimensions=128)
+        db1 = create_dense_db(db_path1, 128)
+        db2 = create_dense_db(db_path2, 128)
 
         # Insert 500 vectors into each
         db1.set(

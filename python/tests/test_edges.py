@@ -6,11 +6,12 @@ import tempfile
 import pytest
 
 import omendb
+from tests.helpers import create_dense_db
 
 
 def make_db(tmpdir, dims=4):
     path = os.path.join(tmpdir, "edges_db")
-    db = omendb.open(path, dimensions=dims)
+    db = create_dense_db(path, dims)
     for doc_id in ["a", "b", "c", "d"]:
         db.set([{"id": doc_id, "vector": [1.0] * dims}])
     return db
@@ -118,14 +119,14 @@ def test_persistence_flush_and_reopen():
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "edges_db")
 
-        db = omendb.open(path, dimensions=4)
+        db = create_dense_db(path, 4)
         for doc_id in ["a", "b"]:
             db.set([{"id": doc_id, "vector": [1.0] * 4}])
         db.add_edge("a", "b", "link", weight=0.8, metadata={"w": 1})
         db.flush()
         del db
 
-        db2 = omendb.open(path, dimensions=4)
+        db2 = omendb.open(path)
         assert db2.edge_count() == 1
         edges = db2.get_edges("a", "outgoing")
         assert edges[0]["to_id"] == "b"

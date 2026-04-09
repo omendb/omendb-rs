@@ -3,6 +3,7 @@
 use serde_json::json;
 use tempfile::tempdir;
 
+use super::dense_schema;
 use crate::VectorStore;
 use crate::vector::store::edge_store::{Edge, EdgeDirection, EdgeStore};
 
@@ -379,7 +380,7 @@ fn test_vector_store_flush_and_reopen() {
     let path = dir.path().join("test.omen");
 
     {
-        let mut store = VectorStore::open(&path).unwrap();
+        let mut store = VectorStore::create(&path, dense_schema(4)).unwrap();
         store
             .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
             .unwrap();
@@ -409,7 +410,7 @@ fn test_vector_store_wal_recovery_without_flush() {
     let path = dir.path().join("test.omen");
 
     {
-        let mut store = VectorStore::open(&path).unwrap();
+        let mut store = VectorStore::create(&path, dense_schema(4)).unwrap();
         store
             .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
             .unwrap();
@@ -471,7 +472,7 @@ fn test_vector_store_cascade_delete_wal_recovery() {
     let path = dir.path().join("test.omen");
 
     {
-        let mut store = VectorStore::open(&path).unwrap();
+        let mut store = VectorStore::create(&path, dense_schema(4)).unwrap();
         store
             .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
             .unwrap();
@@ -514,7 +515,7 @@ fn test_mixed_wal_add_delete_readd_edge() {
     let path = dir.path().join("test.omen");
 
     {
-        let mut store = VectorStore::open(&path).unwrap();
+        let mut store = VectorStore::create(&path, dense_schema(4)).unwrap();
         store
             .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
             .unwrap();
@@ -559,7 +560,7 @@ fn test_delete_batch_cascade_wal_recovery() {
     let path = dir.path().join("test.omen");
 
     {
-        let mut store = VectorStore::open(&path).unwrap();
+        let mut store = VectorStore::create(&path, dense_schema(4)).unwrap();
         store
             .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
             .unwrap();
@@ -614,7 +615,7 @@ fn test_interleaved_edge_vector_wal_operations() {
     let path = dir.path().join("test.omen");
 
     {
-        let mut store = VectorStore::open(&path).unwrap();
+        let mut store = VectorStore::create(&path, dense_schema(4)).unwrap();
 
         // Initial state: 4 vectors, 3 edges
         for id in ["v1", "v2", "v3", "v4"] {
@@ -1106,7 +1107,7 @@ fn test_add_edges_wal_recovery() {
     let path = dir.path().join("test.omen");
 
     {
-        let mut store = VectorStore::open(&path).unwrap();
+        let mut store = VectorStore::create(&path, dense_schema(4)).unwrap();
         store
             .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
             .unwrap();

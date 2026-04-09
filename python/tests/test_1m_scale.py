@@ -9,6 +9,7 @@ import time
 import pytest
 
 import omendb
+from tests.helpers import ensure_dense_db
 
 pytestmark = pytest.mark.slow  # Skip in CI
 
@@ -34,7 +35,7 @@ def main():
         dims = 128
 
         print(f"\n1. Creating database with {dims} dimensions...")
-        db = omendb.open(db_path, dimensions=dims)
+        db = ensure_dense_db(db_path, dims)
 
         # Insert 1M vectors in batches
         total_vectors = 1_000_000
@@ -86,7 +87,7 @@ def main():
         del db
 
         start = time.time()
-        db2 = omendb.open(db_path, dimensions=dims)
+        db2 = ensure_dense_db(db_path, dims)
         load_time = time.time() - start
         print(f"   LOAD: {load_time:.1f}s")
 

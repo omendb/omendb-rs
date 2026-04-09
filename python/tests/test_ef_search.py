@@ -6,6 +6,7 @@ import random
 import tempfile
 
 import omendb
+from tests.helpers import create_dense_db
 
 # ef_search API now implemented
 
@@ -29,7 +30,7 @@ class TestEfSearchBasic:
         """Test get_ef_search on empty database"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
 
             # Empty db returns the default value (100)
             ef = db.ef_search
@@ -39,7 +40,7 @@ class TestEfSearchBasic:
         """Test get_ef_search after inserting vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
@@ -53,7 +54,7 @@ class TestEfSearchBasic:
         """Test setting ef_search"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
@@ -72,7 +73,7 @@ class TestEfSearchBasic:
         """Test setting ef_search before inserting vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
 
             # Setting ef_search on empty db now works
             db.ef_search = 150
@@ -97,7 +98,7 @@ class TestEfSearchConstraints:
         """Test that very small ef_search values work"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
@@ -114,7 +115,7 @@ class TestEfSearchConstraints:
         """Test that ef is auto-clamped to k when ef < k (no error)"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
@@ -131,7 +132,7 @@ class TestEfSearchConstraints:
         """Test that ef = k is allowed"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
@@ -150,7 +151,7 @@ class TestEfSearchPersistence:
             db_path = os.path.join(tmpdir, "test_db")  # Persistent db
 
             # Create db and set ef_search
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
 
@@ -161,7 +162,7 @@ class TestEfSearchPersistence:
             del db
 
             # Reopen - ef_search should be preserved
-            db2 = omendb.open(db_path, dimensions=64)
+            db2 = omendb.open(db_path)
             assert db2.ef_search == 50
 
 
@@ -172,7 +173,7 @@ class TestEfSearchWithFilters:
         """Test that ef_search affects filtered search too"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = create_dense_db(db_path, 64)
 
             # Create vectors with labels
             random.seed(42)

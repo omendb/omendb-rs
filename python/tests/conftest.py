@@ -6,6 +6,8 @@ import tempfile
 
 import pytest
 
+from tests.helpers import create_dense_db
+
 
 @pytest.fixture
 def temp_db_path():
@@ -22,7 +24,7 @@ def db(temp_db_path):
 
     import omendb
 
-    database = omendb.open(temp_db_path, dimensions=128)
+    database = create_dense_db(temp_db_path, 128)
     yield database
     # Flush to commit any pending text index changes before cleanup
     with contextlib.suppress(Exception):
@@ -39,7 +41,7 @@ def db_with_vectors(temp_db_path):
 
     import omendb
 
-    database = omendb.open(temp_db_path, dimensions=128)
+    database = create_dense_db(temp_db_path, 128)
 
     vectors = [
         {"id": "vec1", "vector": [0.1] * 128, "metadata": {"label": "A", "value": 1}},

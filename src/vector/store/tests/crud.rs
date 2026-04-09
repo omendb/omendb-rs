@@ -1,5 +1,5 @@
 use super::super::*;
-use super::random_vector;
+use super::{dense_schema, random_vector};
 
 #[test]
 fn test_vector_store_insert() {
@@ -435,7 +435,7 @@ fn test_auto_compact_triggers_on_flush() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("auto-compact-test");
 
-    let store = VectorStore::open(&db_path).unwrap();
+    let store = VectorStore::create(&db_path, dense_schema(128)).unwrap();
 
     // Insert 100 vectors
     for i in 0..100 {
@@ -474,7 +474,7 @@ fn test_auto_compact_no_trigger_below_threshold() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("no-auto-compact-test");
 
-    let store = VectorStore::open(&db_path).unwrap();
+    let store = VectorStore::create(&db_path, dense_schema(128)).unwrap();
 
     // Insert 100 vectors
     for i in 0..100 {

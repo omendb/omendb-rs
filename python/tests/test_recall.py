@@ -8,6 +8,7 @@ import tempfile
 import pytest
 
 import omendb
+from tests.helpers import ensure_dense_db
 
 
 def euclidean_distance(v1: list, v2: list) -> float:
@@ -68,7 +69,7 @@ class TestRecallSmall:
         """Test recall@10 on 100 vectors - should be 100%"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
@@ -93,7 +94,7 @@ class TestRecallSmall:
         """Test recall@1 (nearest neighbor) on 100 vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(100, 64)
             db.set(vectors)
@@ -121,7 +122,7 @@ class TestRecallMedium:
         """Test recall@10 on 1K vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(1000, 128)
             db.set(vectors)
@@ -145,7 +146,7 @@ class TestRecallMedium:
         """Test recall@50 on 1K vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(1000, 128)
             db.set(vectors)
@@ -173,7 +174,7 @@ class TestRecallWithEfSearch:
         """Test that increasing ef_search improves recall"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(1000, 128)
             db.set(vectors)
@@ -202,7 +203,7 @@ class TestRecallWithEfSearch:
         """Test that ef_search=200 achieves high recall"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(1000, 128)
             db.set(vectors)
@@ -232,7 +233,7 @@ class TestRecallFiltered:
         """Test recall on filtered search"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Create vectors with category metadata
             random.seed(42)
@@ -274,7 +275,7 @@ class TestRecallEdgeCases:
         """Test recall with single vector"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = [{"id": "only", "vector": [0.5] * 64, "metadata": {}}]
             db.set(vectors)
@@ -287,7 +288,7 @@ class TestRecallEdgeCases:
         """Test recall when vectors are identical"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Multiple vectors at same location
             vectors = [
@@ -306,7 +307,7 @@ class TestRecallEdgeCases:
         """Test recall when k equals database size"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(50, 64)
             db.set(vectors)
@@ -330,7 +331,7 @@ class TestRecallLarge:
         """Test recall@10 on 10K vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             # Use explicit seed for reproducibility
             vectors = generate_random_vectors(10000, 128, seed=12345)

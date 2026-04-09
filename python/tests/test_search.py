@@ -2,6 +2,8 @@
 
 import pytest
 
+from tests.helpers import create_dense_db
+
 
 def test_search_empty_database(db):
     """Test searching empty database returns empty list."""
@@ -322,7 +324,7 @@ def test_search_max_distance_cosine_metric(temp_db_path):
 
     import omendb
 
-    db = omendb.open(temp_db_path, dimensions=128, metric="cosine")
+    db = create_dense_db(temp_db_path, 128, metric="cosine")
 
     # For cosine, distance = 1 - cosine_similarity
     # Identical vectors have distance 0, orthogonal have distance 1, opposite have distance 2
@@ -349,7 +351,7 @@ def test_search_cosine_zero_query_rejected(temp_db_path):
 
     import omendb
 
-    db = omendb.open(temp_db_path, dimensions=3, metric="cosine")
+    db = create_dense_db(temp_db_path, 3, metric="cosine")
     db.set([{"id": "doc", "vector": [1.0, 0.0, 0.0], "metadata": {}}])
 
     with pytest.raises(ValueError, match="zero vector"):
@@ -364,7 +366,7 @@ def test_search_nan_query_rejected(temp_db_path):
 
     import omendb
 
-    db = omendb.open(temp_db_path, dimensions=3)
+    db = create_dense_db(temp_db_path, 3)
     db.set([{"id": "doc", "vector": [1.0, 0.0, 0.0], "metadata": {}}])
 
     with pytest.raises(ValueError, match="NaN or Infinity"):
@@ -380,7 +382,7 @@ def test_search_max_distance_dot_metric(temp_db_path):
 
     import omendb
 
-    db = omendb.open(temp_db_path, dimensions=128, metric="dot")
+    db = create_dense_db(temp_db_path, 128, metric="dot")
 
     # For dot/ip, we use negative dot product so lower is better
     # Normalized vectors: high similarity = low distance
@@ -426,7 +428,7 @@ def test_search_sparse_filter_acorn1(temp_db_path):
     np.random.seed(42)
     vectors = np.random.randn(n, dim).astype(np.float32)
 
-    db = omendb.open(temp_db_path, dimensions=dim, m=16, ef_construction=100)
+    db = create_dense_db(temp_db_path, dim)
 
     items = []
     for i in range(n):

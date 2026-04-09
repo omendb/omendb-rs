@@ -9,6 +9,7 @@ import time
 import pytest
 
 import omendb
+from tests.helpers import ensure_dense_db
 
 
 def generate_random_vectors(n: int, dim: int, seed: int = 42) -> list:
@@ -33,7 +34,7 @@ class TestLargeScaleInsert:
         """Test inserting 10K vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(10000, 128)
 
@@ -49,7 +50,7 @@ class TestLargeScaleInsert:
         """Test inserting 100K vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(100000, 128)
 
@@ -69,7 +70,7 @@ class TestLargeScaleSearch:
         """Test search performance at 10K scale"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(10000, 128)
             db.set(vectors)
@@ -96,7 +97,7 @@ class TestLargeScaleSearch:
         """Test search performance at 100K scale"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(100000, 128)
             db.set(vectors)
@@ -126,7 +127,7 @@ class TestBatchOperations:
         """Test many small batch inserts"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Insert in small batches
             batch_size = 100
@@ -149,7 +150,7 @@ class TestBatchOperations:
         """Test updating existing vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # Initial insert
             vectors = generate_random_vectors(1000, 64, seed=1)
@@ -178,7 +179,7 @@ class TestFilteredSearchScale:
         """Test filtered search at 10K scale"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(10000, 128)
             db.set(vectors)
@@ -211,7 +212,7 @@ class TestPersistenceScale:
         """Test save/load with 10K vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=128)
+            db = ensure_dense_db(db_path, 128)
 
             vectors = generate_random_vectors(10000, 128)
             db.set(vectors)
@@ -225,7 +226,7 @@ class TestPersistenceScale:
 
             # Load in new instance
             start = time.time()
-            db2 = omendb.open(db_path, dimensions=128)
+            db2 = ensure_dense_db(db_path, 128)
             load_time = time.time() - start
             print(f"10K load: {load_time:.2f}s")
 
@@ -246,7 +247,7 @@ class TestDeleteScale:
         """Test deleting half the vectors"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             vectors = generate_random_vectors(2000, 64)
             db.set(vectors)
@@ -277,7 +278,7 @@ class TestEdgeCasesScale:
         """Test with high-dimensional vectors (1536 - OpenAI embedding size)"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=1536)
+            db = ensure_dense_db(db_path, 1536)
 
             # Smaller count due to memory
             vectors = generate_random_vectors(1000, 1536)
@@ -293,7 +294,7 @@ class TestEdgeCasesScale:
         """Test many tiny batches (simulates real-time inserts)"""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_db")
-            db = omendb.open(db_path, dimensions=64)
+            db = ensure_dense_db(db_path, 64)
 
             # 1000 single-vector inserts
             for i in range(1000):

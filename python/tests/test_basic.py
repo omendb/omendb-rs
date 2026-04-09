@@ -4,13 +4,14 @@ import os
 import tempfile
 
 import omendb
+from tests.helpers import create_dense_db
 
 
 def test_open_database():
     """Test opening a database"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=128)
+        db = create_dense_db(db_path, 128)
         assert db is not None
 
 
@@ -18,7 +19,7 @@ def test_set_and_search():
     """Test basic set and search"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=3)
+        db = create_dense_db(db_path, 3)
 
         # Set some vectors
         db.set(
@@ -59,7 +60,7 @@ def test_search_with_filter():
     """Test search with metadata filter"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=3)
+        db = create_dense_db(db_path, 3)
 
         # Set vectors
         db.set(
@@ -95,7 +96,7 @@ def test_set_update():
     """Test that set updates existing documents"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=3)
+        db = create_dense_db(db_path, 3)
 
         # Insert initial document
         db.set([{"id": "doc1", "vector": [1.0, 0.0, 0.0], "metadata": {"title": "Original"}}])
@@ -114,7 +115,7 @@ def test_delete():
     """Test deleting documents"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test_db")
-        db = omendb.open(db_path, dimensions=3)
+        db = create_dense_db(db_path, 3)
 
         # Insert documents
         db.set(
@@ -139,7 +140,7 @@ def test_save_and_load():
         db_path = os.path.join(tmpdir, "test_db")
 
         # Create and populate database
-        db = omendb.open(db_path, dimensions=3)
+        db = create_dense_db(db_path, 3)
         db.set([{"id": "doc1", "vector": [1.0, 0.0, 0.0], "metadata": {"title": "Document 1"}}])
 
         # Save and close database
@@ -147,7 +148,7 @@ def test_save_and_load():
         del db
 
         # Load database
-        db2 = omendb.open(db_path, dimensions=3)
+        db2 = omendb.open(db_path)
 
         # Verify data was loaded
         doc = db2.get("doc1")
