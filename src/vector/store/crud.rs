@@ -198,6 +198,7 @@ impl VectorStore {
             } else {
                 let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;
                 self.records.set_dimensions(dimensions as u32);
+                self.sync_dense_schema_dimensions(dimensions);
 
                 let mut metadata_index = self.metadata_index.write();
                 let mut slots = Vec::with_capacity(inserts.len());

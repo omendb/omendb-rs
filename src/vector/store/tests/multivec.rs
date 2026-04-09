@@ -653,6 +653,21 @@ mod unified_api {
     }
 
     #[test]
+    fn test_dense_search_rejected_for_multi_vector_schema() {
+        let store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
+
+        let result = store.search(&Vector::new(vec![1.0, 0.0, 0.0, 0.0]), 1, None);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires dense vectors")
+        );
+    }
+
+    #[test]
     fn test_get_data_multi() {
         let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
         let tokens = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];

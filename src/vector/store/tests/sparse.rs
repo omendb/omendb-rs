@@ -520,4 +520,10 @@ fn test_sparse_search_without_enable() {
     let query = SparseVector::from_pairs(vec![(10, 1.0)]).unwrap();
     let result = store.sparse_search(&query, 10, None);
     assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("requires sparse vectors")
+    );
 }

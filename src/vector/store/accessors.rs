@@ -5,11 +5,9 @@ use std::sync::atomic::Ordering;
 
 use super::{MetadataFilter, VectorStore};
 use crate::catalog::{
-    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
-    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, SparseSchema, TextSchema,
+    CollectionSchema, MultiEncoderKind, MultiSchema, SparseIndexKind, SparseSchema, TextSchema,
 };
 use crate::omen::Metric;
-use crate::text::TextSearchConfig;
 use crate::vector::VectorEngineView;
 use crate::vector::hnsw::{PublishedSegmentView, SegmentManager};
 
@@ -43,6 +41,48 @@ pub struct StoreInfo {
 }
 
 impl VectorStore {
+    fn modality_error(schema: &CollectionSchema, operation: &str, required: &str) -> anyhow::Error {
+        anyhow::anyhow!(
+            "{operation} requires {required} in the collection schema (dense={}, sparse={}, multi={}, text={})",
+            schema.dense.is_some(),
+            schema.sparse.is_some(),
+            schema.multi.is_some(),
+            schema.text.is_some(),
+        )
+    }
+
+    pub(crate) fn require_dense_schema(&self, operation: &str) -> Result<()> {
+        let schema = self.schema();
+        if schema.dense.is_none() {
+            return Err(Self::modality_error(&schema, operation, "dense vectors"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn require_sparse_schema(&self, operation: &str) -> Result<()> {
+        let schema = self.schema();
+        if schema.sparse.is_none() {
+            return Err(Self::modality_error(&schema, operation, "sparse vectors"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn require_multi_schema(&self, operation: &str) -> Result<()> {
+        let schema = self.schema();
+        if schema.multi.is_none() {
+            return Err(Self::modality_error(&schema, operation, "multi-vector tokens"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn require_text_schema(&self, operation: &str) -> Result<()> {
+        let schema = self.schema();
+        if schema.text.is_none() {
+            return Err(Self::modality_error(&schema, operation, "text search"));
+        }
+        Ok(())
+    }
+
     /// Number of vectors stored (excluding deleted vectors)
     #[must_use]
     pub fn len(&self) -> usize {
@@ -293,15 +333,9 @@ impl VectorStore {
                 .unwrap_or_default()
         });
 
-        let dense = (!self.is_multi_vector()).then(|| DenseSchema {
-            dim: self.dimensions() as u32,
-            quantization: if self.is_quantized() {
-                QuantizationMode::Sq8
-            } else {
-                QuantizationMode::None
-            },
-            mutable_index: MutableDenseIndexKind::Hnsw,
-            frozen_index: FrozenDenseIndexKind::Hnsw,
+        let dense = self.dense_schema.read().clone().map(|mut dense| {
+            dense.dim = self.dimensions() as u32;
+            dense
         });
 
         let sparse = self.has_sparse().then_some(SparseSchema {
@@ -325,7 +359,7 @@ impl VectorStore {
                 .text_search_config
                 .read()
                 .clone()
-                .unwrap_or_else(TextSearchConfig::default);
+                .unwrap_or_default();
             Some(TextSchema {
                 tokenizer: config.tokenizer,
                 writer_buffer_mb: config.writer_buffer_mb as u32,

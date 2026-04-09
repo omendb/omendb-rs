@@ -40,6 +40,9 @@ use super::hnsw::{HNSWParams, PublishedSegmentView, SegmentConfig, SegmentManage
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::sparse::SparseIndex;
 use super::types::Vector;
+use crate::catalog::{
+    DenseSchema, FrozenDenseIndexKind, MutableDenseIndexKind, QuantizationMode,
+};
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
@@ -129,6 +132,9 @@ pub struct VectorStore {
     /// Optional schema-defined collection name.
     pub(crate) schema_name: Option<String>,
 
+    /// Authoritative dense schema contract for this collection.
+    pub(crate) dense_schema: RwLock<Option<DenseSchema>>,
+
     /// Optional tantivy text index for hybrid search
     pub(crate) text_index: RwLock<Option<TextIndex>>,
 
@@ -202,6 +208,12 @@ impl VectorStore {
             storage: None,
             storage_path: None,
             schema_name: None,
+            dense_schema: RwLock::new(Some(DenseSchema {
+                dim: dimensions as u32,
+                quantization: QuantizationMode::None,
+                mutable_index: MutableDenseIndexKind::Hnsw,
+                frozen_index: FrozenDenseIndexKind::Hnsw,
+            })),
             text_index: RwLock::new(None),
             text_search_config: RwLock::new(None),
             pending_quantization: AtomicBool::new(false),
@@ -285,6 +297,7 @@ impl VectorStore {
 
         let mut store = Self::with_defaults(fde_dim, Metric::InnerProduct);
         store.muvera_encoder = Some(encoder);
+        *store.dense_schema.write() = None;
         *store.multivec_storage.write() = Some(MultiVecStorage::new(token_dim));
         Ok(store)
     }
@@ -308,6 +321,9 @@ impl VectorStore {
     pub fn new_with_quantization(dimensions: usize) -> Self {
         let store = Self::with_defaults(dimensions, Metric::L2);
         store.pending_quantization.store(true, Ordering::Relaxed);
+        if let Some(ref mut dense) = *store.dense_schema.write() {
+            dense.quantization = QuantizationMode::Sq8;
+        }
         store
     }
 
@@ -366,6 +382,12 @@ impl VectorStore {
             );
         } else {
             Ok(self.dimensions())
+        }
+    }
+
+    pub(crate) fn sync_dense_schema_dimensions(&self, dimensions: usize) {
+        if let Some(ref mut dense) = *self.dense_schema.write() {
+            dense.dim = dimensions as u32;
         }
     }
 
@@ -507,6 +529,8 @@ impl VectorStore {
         ef: Option<usize>,
         max_distance: Option<f32>,
     ) -> Result<Vec<SearchResult>> {
+        self.require_dense_schema("search")?;
+
         let mut results = if let Some(f) = filter {
             self.knn_search_with_filter_ef(query, k, f, ef)?
         } else {

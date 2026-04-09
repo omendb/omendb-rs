@@ -90,6 +90,9 @@ impl VectorStore {
         text: &str,
         metadata: JsonValue,
     ) -> Result<usize> {
+        self.require_dense_schema("set_with_text")?;
+        self.require_text_schema("set_with_text")?;
+
         let mut text_index = self.text_index.write();
         let Some(text_index) = text_index.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
@@ -107,6 +110,9 @@ impl VectorStore {
         &mut self,
         batch: Vec<(S, Vector, S, JsonValue)>,
     ) -> Result<Vec<usize>> {
+        self.require_dense_schema("set_batch_with_text")?;
+        self.require_text_schema("set_batch_with_text")?;
+
         let mut text_index = self.text_index.write();
         let Some(text_index) = text_index.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
@@ -139,6 +145,8 @@ impl VectorStore {
     /// * `id` - Document identifier (must match the id used in `store()`)
     /// * `text` - Text content to index for keyword search
     pub fn index_text(&mut self, id: &str, text: &str) -> Result<()> {
+        self.require_text_schema("index_text")?;
+
         let mut text_index = self.text_index.write();
         let Some(text_index) = text_index.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
@@ -155,6 +163,8 @@ impl VectorStore {
     /// * `query` - Text query
     /// * `k` - Number of results to return
     pub fn search_text(&self, query: &str, k: usize) -> Result<Vec<(String, f32)>> {
+        self.require_text_schema("search_text")?;
+
         let text_index = self.text_index.read();
         let Some(text_index) = text_index.as_ref() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
@@ -185,6 +195,9 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(String, f32, JsonValue)>> {
+        self.require_dense_schema("search_hybrid")?;
+        self.require_text_schema("search_hybrid")?;
+
         self.validate_hybrid_search_preconditions(query_vector)?;
 
         if let Some(engine) = self.published_view.load().as_ref() {
@@ -246,6 +259,9 @@ impl VectorStore {
         alpha: Option<f32>,
         rrf_k: Option<usize>,
     ) -> Result<Vec<(HybridResult, JsonValue)>> {
+        self.require_dense_schema("search_hybrid")?;
+        self.require_text_schema("search_hybrid")?;
+
         self.validate_hybrid_search_preconditions(query_vector)?;
 
         if let Some(engine) = self.published_view.load().as_ref() {

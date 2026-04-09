@@ -1,4 +1,6 @@
 use super::super::*;
+use crate::catalog::{CollectionSchema, SparseIndexKind, SparseSchema, TextSchema};
+use crate::text::TokenizerPreset;
 
 #[test]
 fn test_enable_text_search() {
@@ -258,6 +260,34 @@ fn test_hybrid_search_alpha_weighting() {
 }
 
 #[test]
+fn test_hybrid_search_requires_dense_schema() {
+    let store = VectorStore::create_in_memory(CollectionSchema {
+        name: "sparse-text".to_string(),
+        metric: Metric::L2,
+        dense: None,
+        sparse: Some(SparseSchema {
+            index_kind: SparseIndexKind::InvertedExact,
+            max_nonzero: None,
+        }),
+        multi: None,
+        text: Some(TextSchema {
+            tokenizer: TokenizerPreset::Default,
+            writer_buffer_mb: 16,
+        }),
+    })
+    .unwrap();
+
+    let result = store.search_hybrid(&Vector::new(vec![1.0]), "test", 10, None, None, None);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("requires dense vectors")
+    );
+}
+
+#[test]
 fn test_hybrid_search_k_zero() {
     let mut store = VectorStore::new(4);
     store.enable_text_search().unwrap();
@@ -353,7 +383,7 @@ fn test_hybrid_search_without_text_enabled() {
         result
             .unwrap_err()
             .to_string()
-            .contains("Text search not enabled")
+            .contains("requires text search")
     );
 }
 
@@ -539,7 +569,7 @@ fn test_store_with_text_requires_enabled() {
         result
             .unwrap_err()
             .to_string()
-            .contains("Text search not enabled")
+            .contains("requires text search")
     );
 }
 

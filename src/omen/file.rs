@@ -387,15 +387,17 @@ impl OmenFile {
         let dimensions = manifest
             .schema
             .as_ref()
-            .map(runtime_dimensions_from_schema)
-            .unwrap_or_else(|| {
+            .map_or_else(
+                || {
                 let dimensions = manifest
                     .config
                     .get("dimensions")
                     .copied()
                     .unwrap_or(u64::from(header.dimensions));
                 u32::try_from(dimensions).unwrap_or(header.dimensions)
-            });
+                },
+                runtime_dimensions_from_schema,
+            );
         let hnsw_m = manifest
             .config
             .get("hnsw_m")

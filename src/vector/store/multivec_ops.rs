@@ -287,6 +287,8 @@ impl VectorStore {
         query_tokens: &[&[f32]],
         k: usize,
     ) -> Result<Vec<SearchResult>> {
+        self.require_multi_schema("search_multi")?;
+
         // Validate multi-vector is enabled
         let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -358,6 +360,8 @@ impl VectorStore {
         rerank_factor: usize,
         explain: bool,
     ) -> Result<Vec<SearchResult>> {
+        self.require_multi_schema("search_multi")?;
+
         // Validate multi-vector is enabled
         let encoder = self.muvera_encoder.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -536,6 +540,8 @@ impl VectorStore {
         text: &str,
         metadata: JsonValue,
     ) -> Result<()> {
+        self.require_text_schema("store_with_text")?;
+
         let mut text_index_guard = self.text_index.write();
         let Some(text_index) = text_index_guard.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
@@ -857,6 +863,9 @@ impl VectorStore {
         num_candidates: Option<usize>,
         explain: bool,
     ) -> Result<Vec<SearchResult>> {
+        self.require_multi_schema("search_multi_with_text")?;
+        self.require_text_schema("search_multi_with_text")?;
+
         let multivec_storage_guard = self.multivec_storage.read();
         let multivec_storage = multivec_storage_guard
             .as_ref()

@@ -95,16 +95,16 @@ fn runtime_dimensions_from_schema(schema: &CollectionSchema) -> usize {
     0
 }
 
-fn multi_vector_config_from_schema(schema: &MultiSchema) -> Result<MultiVectorConfig> {
+fn multi_vector_config_from_schema(schema: &MultiSchema) -> MultiVectorConfig {
     match schema.encoder {
-        MultiEncoderKind::Muvera => Ok(MultiVectorConfig {
+        MultiEncoderKind::Muvera => MultiVectorConfig {
             repetitions: schema.repetitions,
             partition_bits: schema.partition_bits,
             d_proj: schema.d_proj,
             seed: schema.seed,
             pool_factor: schema.pool_factor,
             max_tokens: schema.max_tokens.map(|v| v as usize),
-        }),
+        },
     }
 }
 
@@ -153,7 +153,7 @@ fn validate_collection_schema(schema: &CollectionSchema) -> Result<()> {
         if multi.d_proj.is_some_and(|d| usize::from(d) > multi.token_dim as usize) {
             anyhow::bail!("multi-vector d_proj cannot exceed token_dim");
         }
-        let _ = multi_vector_config_from_schema(multi)?;
+        let _ = multi_vector_config_from_schema(multi);
     }
 
     Ok(())
@@ -165,7 +165,7 @@ fn base_store_from_schema(schema: &CollectionSchema) -> Result<VectorStore> {
     let mut store = if let Some(ref multi) = schema.multi {
         VectorStore::multi_vector_with(
             multi.token_dim as usize,
-            multi_vector_config_from_schema(multi)?,
+            multi_vector_config_from_schema(multi),
         )?
     } else if let Some(ref dense) = schema.dense {
         match dense.quantization {
@@ -212,6 +212,19 @@ fn schema_from_options(options: &VectorStoreOptions) -> CollectionSchema {
     }
 }
 
+fn legacy_dense_schema(dimensions: usize, quantized: bool) -> DenseSchema {
+    DenseSchema {
+        dim: dimensions as u32,
+        quantization: if quantized {
+            QuantizationMode::Sq8
+        } else {
+            QuantizationMode::None
+        },
+        mutable_index: MutableDenseIndexKind::Hnsw,
+        frozen_index: FrozenDenseIndexKind::Hnsw,
+    }
+}
+
 impl VectorStore {
     /// Create a new persistent vector store from an explicit collection schema.
     pub fn create(path: impl AsRef<Path>, schema: CollectionSchema) -> Result<Self> {
@@ -237,6 +250,7 @@ impl VectorStore {
         store.storage = Some(storage);
         store.storage_path = Some(path.to_path_buf());
         store.schema_name = Some(schema.name.clone());
+        store.dense_schema.write().clone_from(&schema.dense);
 
         if let Some(config) = text_search_config_from_schema(&schema) {
             store.enable_text_search_with_config(Some(config))?;
@@ -249,6 +263,7 @@ impl VectorStore {
     pub fn create_in_memory(schema: CollectionSchema) -> Result<Self> {
         let mut store = base_store_from_schema(&schema)?;
         store.schema_name = Some(schema.name.clone());
+        store.dense_schema.write().clone_from(&schema.dense);
         if let Some(config) = text_search_config_from_schema(&schema) {
             store.enable_text_search_with_config(Some(config))?;
         }
@@ -347,7 +362,8 @@ impl VectorStore {
             )
         };
 
-        let schema_name = storage_local.schema().map(|schema| schema.name.clone());
+        let persisted_schema = storage_local.schema().cloned();
+        let schema_name = persisted_schema.as_ref().map(|schema| schema.name.clone());
         let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> =
             Arc::new(RwLock::new(storage_local));
 
@@ -357,6 +373,8 @@ impl VectorStore {
         }
         let published_view = engine.as_ref().map(SegmentManager::read_view);
 
+        let records_dimensions = records.dimensions() as usize;
+
         Ok(Self {
             records,
             engine: RwLock::new(engine),
@@ -365,6 +383,18 @@ impl VectorStore {
             storage: Some(storage),
             storage_path: Some(path.to_path_buf()),
             schema_name,
+            dense_schema: RwLock::new(
+                persisted_schema
+                    .as_ref()
+                    .and_then(|schema| schema.dense.clone())
+                    .or_else(|| {
+                        if ancillary.muvera_encoder.is_none() {
+                            Some(legacy_dense_schema(records_dimensions, quantization))
+                        } else {
+                            None
+                        }
+                    }),
+            ),
             text_index: RwLock::new(ancillary.text_index),
             text_search_config: RwLock::new(text_search_config),
             pending_quantization: quantization.into(),

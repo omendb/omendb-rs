@@ -124,6 +124,7 @@ impl VectorStore {
     pub(super) fn ensure_segments_initialized(&self, dimensions: usize) -> Result<()> {
         let resolved_dims = self.resolve_dimensions(dimensions)?;
         self.records.set_dimensions(resolved_dims as u32);
+        self.sync_dense_schema_dimensions(resolved_dims);
 
         self.with_engine_mut(|guard| {
             if guard.is_none() {

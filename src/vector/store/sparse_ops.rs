@@ -146,6 +146,8 @@ impl VectorStore {
         k: usize,
         filter: Option<&MetadataFilter>,
     ) -> Result<Vec<SearchResult>> {
+        self.require_sparse_schema("sparse_search")?;
+
         let sparse_guard = self.sparse_index.read();
         let sparse_index = sparse_guard.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Sparse index not enabled. Call enable_sparse() first")
@@ -212,6 +214,9 @@ impl VectorStore {
         alpha: f32,
         filter: Option<&MetadataFilter>,
     ) -> Result<Vec<SearchResult>> {
+        self.require_dense_schema("hybrid_sparse_search")?;
+        self.require_sparse_schema("hybrid_sparse_search")?;
+
         let alpha = alpha.clamp(0.0, 1.0);
         let rrf_k = 60.0f32; // standard RRF constant
 
