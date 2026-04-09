@@ -40,9 +40,7 @@ use super::hnsw::{HNSWParams, PublishedSegmentView, SegmentConfig, SegmentManage
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::sparse::SparseIndex;
 use super::types::Vector;
-use crate::catalog::{
-    DenseSchema, FrozenDenseIndexKind, MutableDenseIndexKind, QuantizationMode,
-};
+use crate::catalog::{DenseSchema, FrozenDenseIndexKind, MutableDenseIndexKind, QuantizationMode};
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;

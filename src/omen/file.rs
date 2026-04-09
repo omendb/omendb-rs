@@ -47,7 +47,8 @@ fn runtime_dimensions_from_schema(schema: &CollectionSchema) -> u32 {
     if let Some(ref multi) = schema.multi {
         let token_dim = multi.token_dim as usize;
         let proj_dim = multi.d_proj.map_or(token_dim, usize::from);
-        let encoded_dim = usize::from(multi.repetitions) * (1usize << multi.partition_bits) * proj_dim;
+        let encoded_dim =
+            usize::from(multi.repetitions) * (1usize << multi.partition_bits) * proj_dim;
         return u32::try_from(encoded_dim).unwrap_or(u32::MAX);
     }
     0
@@ -384,20 +385,17 @@ impl OmenFile {
             .get("count")
             .copied()
             .unwrap_or(manifest.id_to_index.len() as u64);
-        let dimensions = manifest
-            .schema
-            .as_ref()
-            .map_or_else(
-                || {
+        let dimensions = manifest.schema.as_ref().map_or_else(
+            || {
                 let dimensions = manifest
                     .config
                     .get("dimensions")
                     .copied()
                     .unwrap_or(u64::from(header.dimensions));
                 u32::try_from(dimensions).unwrap_or(header.dimensions)
-                },
-                runtime_dimensions_from_schema,
-            );
+            },
+            runtime_dimensions_from_schema,
+        );
         let hnsw_m = manifest
             .config
             .get("hnsw_m")
@@ -417,17 +415,14 @@ impl OmenFile {
             .copied()
             .unwrap_or(u64::from(header.hnsw_ef_search));
         let hnsw_ef_search = u32::try_from(hnsw_ef_search).unwrap_or(header.hnsw_ef_search);
-        let metric = manifest
-            .schema
-            .as_ref()
-            .map_or_else(
-                || {
-                    manifest.config.get("metric").map_or(header.metric, |&v| {
-                        crate::omen::header::Metric::from(v as u8)
-                    })
-                },
-                |schema| schema.metric,
-            );
+        let metric = manifest.schema.as_ref().map_or_else(
+            || {
+                manifest.config.get("metric").map_or(header.metric, |&v| {
+                    crate::omen::header::Metric::from(v as u8)
+                })
+            },
+            |schema| schema.metric,
+        );
 
         // Load HNSW index bytes from manifest (if mmap exists)
         let hnsw_index_source = mmap.as_ref().and_then(|m| {
@@ -1170,7 +1165,12 @@ impl OmenFile {
             .as_ref()
             .map(|b| Cow::Owned(b.clone()));
 
-        if let Some(multi) = self.manifest.schema.as_ref().and_then(|schema| schema.multi.as_ref()) {
+        if let Some(multi) = self
+            .manifest
+            .schema
+            .as_ref()
+            .and_then(|schema| schema.multi.as_ref())
+        {
             snapshot.multivec_config = Some(PersistedMuveraConfig {
                 repetitions: multi.repetitions,
                 partition_bits: multi.partition_bits,

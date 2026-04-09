@@ -24,8 +24,8 @@ pub mod mock_backend;
 mod vectors;
 mod wal;
 
-use anyhow::Result;
 use crate::catalog::CollectionSchema;
+use anyhow::Result;
 
 /// Core trait for storage backends.
 ///

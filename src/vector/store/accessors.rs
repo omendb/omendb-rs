@@ -70,7 +70,11 @@ impl VectorStore {
     pub(crate) fn require_multi_schema(&self, operation: &str) -> Result<()> {
         let schema = self.schema();
         if schema.multi.is_none() {
-            return Err(Self::modality_error(&schema, operation, "multi-vector tokens"));
+            return Err(Self::modality_error(
+                &schema,
+                operation,
+                "multi-vector tokens",
+            ));
         }
         Ok(())
     }
@@ -355,11 +359,7 @@ impl VectorStore {
         });
 
         let text = if self.has_text_search() {
-            let config = self
-                .text_search_config
-                .read()
-                .clone()
-                .unwrap_or_default();
+            let config = self.text_search_config.read().clone().unwrap_or_default();
             Some(TextSchema {
                 tokenizer: config.tokenizer,
                 writer_buffer_mb: config.writer_buffer_mb as u32,

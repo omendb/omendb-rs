@@ -2,10 +2,10 @@
 //!
 //! Implements Trailer-based persistence and Manifest-based node mapping.
 
+use crate::catalog::CollectionSchema;
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use std::io;
-use crate::catalog::CollectionSchema;
 
 /// Manifest segment header (8 bytes)
 ///

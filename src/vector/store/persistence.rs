@@ -150,7 +150,10 @@ fn validate_collection_schema(schema: &CollectionSchema) -> Result<()> {
         if schema.sparse.is_some() {
             anyhow::bail!("multi-vector + sparse schema creation is not supported yet");
         }
-        if multi.d_proj.is_some_and(|d| usize::from(d) > multi.token_dim as usize) {
+        if multi
+            .d_proj
+            .is_some_and(|d| usize::from(d) > multi.token_dim as usize)
+        {
             anyhow::bail!("multi-vector d_proj cannot exceed token_dim");
         }
         let _ = multi_vector_config_from_schema(multi);
@@ -205,10 +208,13 @@ fn schema_from_options(options: &VectorStoreOptions) -> CollectionSchema {
         }),
         sparse: None,
         multi: None,
-        text: options.text_search_config.as_ref().map(|config| TextSchema {
-            tokenizer: config.tokenizer,
-            writer_buffer_mb: config.writer_buffer_mb as u32,
-        }),
+        text: options
+            .text_search_config
+            .as_ref()
+            .map(|config| TextSchema {
+                tokenizer: config.tokenizer,
+                writer_buffer_mb: config.writer_buffer_mb as u32,
+            }),
     }
 }
 
@@ -468,9 +474,10 @@ impl VectorStore {
         if omen_path.exists() {
             let mut store = Self::open(path)?;
 
-            store
-                .hnsw_m
-                .store(options.m.unwrap_or(DEFAULT_HNSW_M), std::sync::atomic::Ordering::Relaxed);
+            store.hnsw_m.store(
+                options.m.unwrap_or(DEFAULT_HNSW_M),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             store.hnsw_ef_construction.store(
                 options
                     .ef_construction
@@ -489,9 +496,10 @@ impl VectorStore {
             return Ok(store);
         }
         let mut store = Self::create(path, schema_from_options(options))?;
-        store
-            .hnsw_m
-            .store(options.m.unwrap_or(DEFAULT_HNSW_M), std::sync::atomic::Ordering::Relaxed);
+        store.hnsw_m.store(
+            options.m.unwrap_or(DEFAULT_HNSW_M),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         store.hnsw_ef_construction.store(
             options
                 .ef_construction
@@ -508,9 +516,10 @@ impl VectorStore {
     /// Build an in-memory vector store with custom options.
     pub fn build_with_options(options: &VectorStoreOptions) -> Result<Self> {
         let mut store = Self::create_in_memory(schema_from_options(options))?;
-        store
-            .hnsw_m
-            .store(options.m.unwrap_or(DEFAULT_HNSW_M), std::sync::atomic::Ordering::Relaxed);
+        store.hnsw_m.store(
+            options.m.unwrap_or(DEFAULT_HNSW_M),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         store.hnsw_ef_construction.store(
             options
                 .ef_construction
@@ -1366,9 +1375,10 @@ impl VectorStore {
         let _ = storage.set_metric(self.distance_metric);
         let _ = storage.put_config(
             "quantization",
-            helpers::quantization_to_id(self.pending_quantization.load(
-                std::sync::atomic::Ordering::Relaxed,
-            )),
+            helpers::quantization_to_id(
+                self.pending_quantization
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
         );
     }
 
