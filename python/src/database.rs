@@ -2,6 +2,9 @@ use crate::conversions::{call_embedding_fn, convert_error, json_to_pyobject, pyo
 use crate::iterators::{VectorDatabaseIdIterator, VectorDatabaseIterator};
 use crate::parsing::parse_batch_items_with_text;
 use crate::parsing::parse_multi_vec_items;
+use omendb_lib::catalog::{
+    CollectionSchema, DenseSchema, MultiSchema, QuantizationMode, SparseSchema, TextSchema,
+};
 use omendb_lib::vector::{Vector, VectorStore};
 use parking_lot::RwLock;
 use pyo3::conversion::IntoPyObject;
@@ -11,6 +14,86 @@ use pyo3::types::{PyDict, PyList};
 use pyo3::Py;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+fn dense_schema_to_pydict(py: Python<'_>, dense: &DenseSchema) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("dim", dense.dim)?;
+    dict.set_item(
+        "quantization",
+        match dense.quantization {
+            QuantizationMode::None => "none",
+            QuantizationMode::Sq8 => "sq8",
+        },
+    )?;
+    dict.set_item("mutable_index", "hnsw")?;
+    dict.set_item("frozen_index", "hnsw")?;
+    Ok(dict.into())
+}
+
+fn sparse_schema_to_pydict(py: Python<'_>, sparse: &SparseSchema) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("index_kind", "inverted_exact")?;
+    dict.set_item("max_nonzero", sparse.max_nonzero)?;
+    Ok(dict.into())
+}
+
+fn multi_schema_to_pydict(py: Python<'_>, multi: &MultiSchema) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("token_dim", multi.token_dim)?;
+    dict.set_item("encoder", "muvera")?;
+    dict.set_item("max_tokens", multi.max_tokens)?;
+    dict.set_item("pool_factor", multi.pool_factor)?;
+    Ok(dict.into())
+}
+
+fn text_schema_to_pydict(py: Python<'_>, text: &TextSchema) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item(
+        "tokenizer",
+        format!("{:?}", text.tokenizer).to_lowercase(),
+    )?;
+    dict.set_item("writer_buffer_mb", text.writer_buffer_mb)?;
+    Ok(dict.into())
+}
+
+fn schema_to_pydict(py: Python<'_>, schema: &CollectionSchema) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("name", &schema.name)?;
+    dict.set_item("metric", format!("{:?}", schema.metric).to_lowercase())?;
+    dict.set_item(
+        "dense",
+        schema
+            .dense
+            .as_ref()
+            .map(|dense| dense_schema_to_pydict(py, dense))
+            .transpose()?,
+    )?;
+    dict.set_item(
+        "sparse",
+        schema
+            .sparse
+            .as_ref()
+            .map(|sparse| sparse_schema_to_pydict(py, sparse))
+            .transpose()?,
+    )?;
+    dict.set_item(
+        "multi",
+        schema
+            .multi
+            .as_ref()
+            .map(|multi| multi_schema_to_pydict(py, multi))
+            .transpose()?,
+    )?;
+    dict.set_item(
+        "text",
+        schema
+            .text
+            .as_ref()
+            .map(|text| text_schema_to_pydict(py, text))
+            .transpose()?,
+    )?;
+    Ok(dict.into())
+}
 
 pub(crate) struct VectorDatabaseInner {
     pub(crate) store: VectorStore,
@@ -770,8 +853,15 @@ impl VectorDatabase {
         dict.set_item("hnsw_ef_search", info.hnsw_ef_search)?;
         dict.set_item("quantization", info.quantization)?;
         dict.set_item("segment_capacity", info.segment_capacity)?;
+        dict.set_item("schema", schema_to_pydict(py, &info.schema)?)?;
 
         Ok(dict.into())
+    }
+
+    /// Get the authoritative collection schema for this database.
+    fn schema(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let inner = self.inner.read();
+        schema_to_pydict(py, &inner.store.schema())
     }
 
     /// Iterate over all vector IDs (without loading vector data).

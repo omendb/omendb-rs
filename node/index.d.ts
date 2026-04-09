@@ -135,6 +135,8 @@ export declare class VectorDatabase {
   stats(): StatsResult
   /** Get comprehensive database diagnostics. */
   info(): InfoResult
+  /** Get the authoritative collection schema for this database. */
+  schema(): CollectionSchemaResult
   /** Get current ef_search value. */
   get efSearch(): number
   /** Set ef_search value. */
@@ -433,6 +435,22 @@ export declare class VectorDatabase {
   hybridSparseSearch(queryVector: Array<number> | Float32Array, sparseQuery: { indices: number[]; values: number[] } | Record<string, number>, k: number, options?: { alpha?: number; filter?: Record<string, unknown> } | undefined): Array<SparseSearchResult>
 }
 
+export interface CollectionSchemaResult {
+  name: string
+  metric: string
+  dense?: DenseSchemaResult
+  sparse?: SparseSchemaResult
+  multi?: MultiSchemaResult
+  text?: TextSchemaResult
+}
+
+export interface DenseSchemaResult {
+  dim: number
+  quantization: string
+  mutableIndex: string
+  frozenIndex: string
+}
+
 export interface EdgeInput {
   fromId: string
   toId: string
@@ -482,6 +500,14 @@ export interface InfoResult {
   hnswEfSearch: number
   quantization: boolean
   segmentCapacity: number
+  schema: CollectionSchemaResult
+}
+
+export interface MultiSchemaResult {
+  tokenDim: number
+  encoder: string
+  maxTokens?: number
+  poolFactor?: number
 }
 
 /**
@@ -586,6 +612,11 @@ export interface SetItem {
   document?: string
 }
 
+export interface SparseSchemaResult {
+  indexKind: string
+  maxNonzero?: number
+}
+
 /** Sparse search result returned from sparseSearch / hybridSparseSearch. */
 export interface SparseSearchResult {
   id: string
@@ -603,6 +634,11 @@ export interface StatsResult {
 export interface SubgraphResult {
   nodeIds: Array<string>
   edges: Array<EdgeResult>
+}
+
+export interface TextSchemaResult {
+  tokenizer: string
+  writerBufferMb: number
 }
 
 export interface TextSearchResult {

@@ -82,6 +82,34 @@ class TextSearchConfig(TypedDict, total=False):
     writer_buffer_mb: int  # Alias for buffer_mb
     tokenizer: Literal["default", "code", "raw"]
 
+class DenseSchema(TypedDict):
+    dim: int
+    quantization: Literal["none", "sq8"]
+    mutable_index: Literal["hnsw"]
+    frozen_index: Literal["hnsw"]
+
+class SparseSchema(TypedDict, total=False):
+    index_kind: Literal["inverted_exact"]
+    max_nonzero: int | None
+
+class MultiSchema(TypedDict, total=False):
+    token_dim: int
+    encoder: Literal["muvera"]
+    max_tokens: int | None
+    pool_factor: int | None
+
+class TextSchema(TypedDict):
+    tokenizer: Literal["default", "code", "raw"]
+    writer_buffer_mb: int
+
+class CollectionSchema(TypedDict):
+    name: str
+    metric: Literal["l2", "cosine", "dot"]
+    dense: DenseSchema | None
+    sparse: SparseSchema | None
+    multi: MultiSchema | None
+    text: TextSchema | None
+
 class GetResult(TypedDict):
     """Result from get()."""
 
@@ -95,6 +123,25 @@ class StatsResult(TypedDict):
     dimensions: int
     count: int
     path: str
+
+class InfoResult(TypedDict):
+    vector_count: int
+    deleted_count: int
+    dimensions: int
+    metric: str
+    frozen_segment_count: int
+    mutable_segment_vectors: int
+    vector_bytes: int
+    graph_bytes: int
+    total_memory_bytes: int
+    wal_entries: int
+    is_persistent: bool
+    hnsw_m: int
+    hnsw_ef_construction: int
+    hnsw_ef_search: int
+    quantization: bool
+    segment_capacity: int
+    schema: CollectionSchema
 
 # Filter types for MongoDB-style queries
 FilterValue = str | int | float | bool | None | list[Any] | dict[str, Any]
@@ -481,6 +528,14 @@ class VectorDatabase:
 
     def stats(self) -> StatsResult:
         """Get database statistics."""
+        ...
+
+    def info(self) -> InfoResult:
+        """Get comprehensive diagnostics including the authoritative schema."""
+        ...
+
+    def schema(self) -> CollectionSchema:
+        """Get the authoritative collection schema derived from live runtime state."""
         ...
 
     def flush(self) -> None:

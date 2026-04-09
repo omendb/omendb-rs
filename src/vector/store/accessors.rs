@@ -39,6 +39,7 @@ pub struct StoreInfo {
     pub hnsw_ef_search: usize,
     pub quantization: bool,
     pub segment_capacity: usize,
+    pub schema: CollectionSchema,
 }
 
 impl VectorStore {
@@ -273,6 +274,7 @@ impl VectorStore {
             hnsw_ef_search: self.hnsw_ef_search.load(Ordering::Relaxed),
             quantization: self.pending_quantization.load(Ordering::Relaxed),
             segment_capacity,
+            schema: self.schema(),
         }
     }
 

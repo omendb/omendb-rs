@@ -1,5 +1,9 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use omendb_lib::catalog::{
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
+    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, SparseSchema, TextSchema,
+};
 use serde_json::Value as JsonValue;
 
 #[napi(object)]
@@ -86,4 +90,107 @@ pub struct InfoResult {
     pub hnsw_ef_search: u32,
     pub quantization: bool,
     pub segment_capacity: u32,
+    pub schema: CollectionSchemaResult,
+}
+
+#[napi(object)]
+pub struct CollectionSchemaResult {
+    pub name: String,
+    pub metric: String,
+    pub dense: Option<DenseSchemaResult>,
+    pub sparse: Option<SparseSchemaResult>,
+    pub multi: Option<MultiSchemaResult>,
+    pub text: Option<TextSchemaResult>,
+}
+
+#[napi(object)]
+pub struct DenseSchemaResult {
+    pub dim: u32,
+    pub quantization: String,
+    pub mutable_index: String,
+    pub frozen_index: String,
+}
+
+#[napi(object)]
+pub struct SparseSchemaResult {
+    pub index_kind: String,
+    pub max_nonzero: Option<u32>,
+}
+
+#[napi(object)]
+pub struct MultiSchemaResult {
+    pub token_dim: u32,
+    pub encoder: String,
+    pub max_tokens: Option<u32>,
+    pub pool_factor: Option<u8>,
+}
+
+#[napi(object)]
+pub struct TextSchemaResult {
+    pub tokenizer: String,
+    pub writer_buffer_mb: u32,
+}
+
+impl From<CollectionSchema> for CollectionSchemaResult {
+    fn from(value: CollectionSchema) -> Self {
+        Self {
+            name: value.name,
+            metric: format!("{:?}", value.metric).to_lowercase(),
+            dense: value.dense.map(Into::into),
+            sparse: value.sparse.map(Into::into),
+            multi: value.multi.map(Into::into),
+            text: value.text.map(Into::into),
+        }
+    }
+}
+
+impl From<DenseSchema> for DenseSchemaResult {
+    fn from(value: DenseSchema) -> Self {
+        Self {
+            dim: value.dim,
+            quantization: match value.quantization {
+                QuantizationMode::None => "none".to_string(),
+                QuantizationMode::Sq8 => "sq8".to_string(),
+            },
+            mutable_index: match value.mutable_index {
+                MutableDenseIndexKind::Hnsw => "hnsw".to_string(),
+            },
+            frozen_index: match value.frozen_index {
+                FrozenDenseIndexKind::Hnsw => "hnsw".to_string(),
+            },
+        }
+    }
+}
+
+impl From<SparseSchema> for SparseSchemaResult {
+    fn from(value: SparseSchema) -> Self {
+        Self {
+            index_kind: match value.index_kind {
+                SparseIndexKind::InvertedExact => "inverted_exact".to_string(),
+            },
+            max_nonzero: value.max_nonzero,
+        }
+    }
+}
+
+impl From<MultiSchema> for MultiSchemaResult {
+    fn from(value: MultiSchema) -> Self {
+        Self {
+            token_dim: value.token_dim,
+            encoder: match value.encoder {
+                MultiEncoderKind::Muvera => "muvera".to_string(),
+            },
+            max_tokens: value.max_tokens,
+            pool_factor: value.pool_factor,
+        }
+    }
+}
+
+impl From<TextSchema> for TextSchemaResult {
+    fn from(value: TextSchema) -> Self {
+        Self {
+            tokenizer: format!("{:?}", value.tokenizer).to_lowercase(),
+            writer_buffer_mb: value.writer_buffer_mb,
+        }
+    }
 }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::conversions::{convert_error, parse_text_search_config};
 use crate::filters::parse_filter;
-use crate::types::{GetResult, InfoResult, SetItem, StatsResult};
+use crate::types::{CollectionSchemaResult, GetResult, InfoResult, SetItem, StatsResult};
 
 pub(crate) struct VectorDatabaseInner {
     pub(crate) store: VectorStore,
@@ -520,7 +520,15 @@ impl VectorDatabase {
             hnsw_ef_search: info.hnsw_ef_search as u32,
             quantization: info.quantization,
             segment_capacity: info.segment_capacity as u32,
+            schema: info.schema.into(),
         }
+    }
+
+    /// Get the authoritative collection schema for this database.
+    #[napi]
+    pub fn schema(&self) -> CollectionSchemaResult {
+        let inner = self.inner.read();
+        inner.store.schema().into()
     }
 
     /// Get current ef_search value.

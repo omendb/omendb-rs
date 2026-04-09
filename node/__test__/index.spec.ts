@@ -652,6 +652,23 @@ describe("VectorDatabase", () => {
 			expect(info.isPersistent).toBe(false);
 			expect(info.hnswM).toBe(16);
 			expect(info.quantization).toBe(false);
+			expect(info.schema.metric).toBe("l2");
+			expect(info.schema.dense?.dim).toBe(4);
+			db.close();
+		});
+
+		it("should expose the authoritative schema directly", () => {
+			const db = open(":memory:", {
+				dimensions: 4,
+				textSearch: { writerBufferMb: 18, tokenizer: "code" },
+			});
+			const schema = db.schema();
+
+			expect(schema.metric).toBe("l2");
+			expect(schema.dense?.dim).toBe(4);
+			expect(schema.text?.tokenizer).toBe("code");
+			expect(schema.text?.writerBufferMb).toBe(18);
+			expect(db.info().schema).toEqual(schema);
 			db.close();
 		});
 	});

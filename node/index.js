@@ -326,6 +326,10 @@ class VectorDatabase {
 		return this._native.info();
 	}
 
+	schema() {
+		return this._native.schema();
+	}
+
 	ids() {
 		return this._native.ids();
 	}

@@ -114,3 +114,22 @@ def test_invalid_text_search_type(temp_db_path):
     """Unsupported text_search values should fail fast."""
     with pytest.raises((TypeError, ValueError)):
         omendb.open(temp_db_path, dimensions=128, text_search="invalid")
+
+
+def test_schema_and_info_report_authoritative_runtime_contract():
+    """schema() and info()['schema'] should reflect the live store contract."""
+    db = omendb.open(
+        ":memory:",
+        dimensions=4,
+        text_search={"writer_buffer_mb": 20, "tokenizer": "code"},
+    )
+
+    schema = db.schema()
+    info = db.info()
+
+    assert schema["metric"] == "l2"
+    assert schema["dense"]["dim"] == 4
+    assert schema["dense"]["quantization"] == "none"
+    assert schema["text"]["tokenizer"] == "code"
+    assert schema["text"]["writer_buffer_mb"] == 20
+    assert info["schema"] == schema

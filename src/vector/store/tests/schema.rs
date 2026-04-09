@@ -86,3 +86,28 @@ fn test_schema_for_multi_vector_store() {
     assert_eq!(multi.pool_factor, Some(3));
     assert_eq!(multi.max_tokens, Some(256));
 }
+
+#[test]
+fn test_info_includes_authoritative_schema() {
+    let mut store = VectorStore::new_with_quantization(24);
+    store.enable_sparse();
+    store
+        .enable_text_search_with_config(Some(TextSearchConfig {
+            writer_buffer_mb: 20,
+            tokenizer: TokenizerPreset::Raw,
+        }))
+        .unwrap();
+
+    let info = store.info();
+
+    assert_eq!(info.schema.metric, Metric::L2);
+    assert_eq!(
+        info.schema.dense.expect("dense schema").quantization,
+        QuantizationMode::Sq8
+    );
+    assert!(info.schema.sparse.is_some());
+    assert_eq!(
+        info.schema.text.expect("text schema").tokenizer,
+        TokenizerPreset::Raw
+    );
+}
