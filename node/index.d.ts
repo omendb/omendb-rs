@@ -507,7 +507,7 @@ export interface InfoResult {
  * // With SQ8 quantization (4x memory reduction, ~99% recall)
  * const db = omendb.open("./mydb", {
  *   dimensions: 128,
- *   quantization: true  // or "sq8"
+ *   quantization: true  // or "sq8" / "scalar"
  * });
  *
  * ```
@@ -522,7 +522,7 @@ export declare function open(path: string, options?: OpenOptions | undefined | n
  * - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
  * - efConstruction: 100 (build quality, higher = better graph, slower build)
  * - efSearch: 100 (search quality, higher = better recall, slower search)
- * - quantization: null (true/"sq8" for 4x compression)
+ * - quantization: null (true/"sq8"/"scalar" for 4x compression)
  * - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
  */
 export interface OpenOptions {
@@ -536,12 +536,12 @@ export interface OpenOptions {
   efSearch?: number
   /**
    * Quantization mode (default: null = no quantization)
-   * - true or "sq8": SQ8 4x compression, ~99% recall (RECOMMENDED)
+   * - true, "sq8", or "scalar": SQ8 4x compression, ~99% recall (RECOMMENDED)
    * - false/null: Full precision (no quantization)
    */
   quantization?: boolean | 'sq8' | 'scalar' | null | undefined
   /** Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip" */
-  metric?: string
+  metric?: 'l2' | 'euclidean' | 'cosine' | 'dot' | 'ip' | undefined
   /**
    * Enable multi-vector mode for ColBERT-style retrieval
    * - true: Enable with default config (repetitions=8, partition_bits=4, dProj=16)

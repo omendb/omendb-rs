@@ -111,13 +111,13 @@ pub(crate) fn parse_quantization(value: &serde_json::Value) -> Result<bool> {
                 "sq8" | "scalar" => Ok(true),
                 _ => Err(Error::new(
                     Status::InvalidArg,
-                    format!("Unknown quantization mode: '{}'. Valid: true, 'sq8'", s),
+                    format!("Unknown quantization mode: '{}'. Valid: true, 'sq8', 'scalar'", s),
                 )),
             }
         }
         _ => Err(Error::new(
             Status::InvalidArg,
-            "quantization must be true, false, or 'sq8'",
+            "quantization must be true, false, 'sq8', or 'scalar'",
         )),
     }
 }

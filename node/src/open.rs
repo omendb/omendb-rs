@@ -17,7 +17,7 @@ use crate::database::{EmbeddingFn, VectorDatabase, VectorDatabaseInner};
 /// - m: 16 (HNSW neighbors per node, higher = better recall, more memory)
 /// - efConstruction: 100 (build quality, higher = better graph, slower build)
 /// - efSearch: 100 (search quality, higher = better recall, slower search)
-/// - quantization: null (true/"sq8" for 4x compression)
+/// - quantization: null (true/"sq8"/"scalar" for 4x compression)
 /// - metric: "l2" (distance metric: "l2", "euclidean", "cosine", "dot", "ip")
 #[napi(object)]
 pub struct OpenOptions {
@@ -30,11 +30,12 @@ pub struct OpenOptions {
     /// HNSW ef_search: search quality/speed tradeoff (default: 100)
     pub ef_search: Option<u32>,
     /// Quantization mode (default: null = no quantization)
-    /// - true or "sq8": SQ8 4x compression, ~99% recall (RECOMMENDED)
+    /// - true, "sq8", or "scalar": SQ8 4x compression, ~99% recall (RECOMMENDED)
     /// - false/null: Full precision (no quantization)
     #[napi(ts_type = "boolean | 'sq8' | 'scalar' | null | undefined")]
     pub quantization: Option<serde_json::Value>,
     /// Distance metric: "l2"/"euclidean" (default), "cosine", "dot"/"ip"
+    #[napi(ts_type = "'l2' | 'euclidean' | 'cosine' | 'dot' | 'ip' | undefined")]
     pub metric: Option<String>,
     /// Enable multi-vector mode for ColBERT-style retrieval
     /// - true: Enable with default config (repetitions=8, partition_bits=4, dProj=16)
@@ -81,7 +82,7 @@ pub struct OpenOptions {
 /// // With SQ8 quantization (4x memory reduction, ~99% recall)
 /// const db = omendb.open("./mydb", {
 ///   dimensions: 128,
-///   quantization: true  // or "sq8"
+///   quantization: true  // or "sq8" / "scalar"
 /// });
 ///
 /// ```

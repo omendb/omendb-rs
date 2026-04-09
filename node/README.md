@@ -73,8 +73,8 @@ const db = open("./vectors", {
   m: 16, // HNSW connections per node (default: 16)
   efConstruction: 100, // Build quality (default: 100)
   efSearch: 100, // Search quality (default: 100)
-  quantization: true, // SQ8: 4x compression, ~99% recall
-  metric: "cosine", // "l2", "cosine", or "dot"
+  quantization: "sq8", // or true / "scalar": SQ8 4x compression, ~99% recall
+  metric: "cosine", // "l2", "euclidean", "cosine", "dot", or "ip"
 });
 
 // Multi-vector stores still require explicit token dimensions

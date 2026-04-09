@@ -694,6 +694,12 @@ describe("VectorDatabase", () => {
 			).toThrow(/quantization/);
 		});
 
+		it("should accept the scalar quantization alias", () => {
+			const db = open(":memory:", { dimensions: 128, quantization: "scalar" });
+			expect(db.info().quantization).toBe(true);
+			db.close();
+		});
+
 		it("should reject empty collection name", () => {
 			const db = open(":memory:", { dimensions: 128 });
 			// Collections require persistent storage
