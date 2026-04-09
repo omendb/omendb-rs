@@ -252,7 +252,7 @@ fn parse_collection_schema(value: &serde_json::Value) -> Result<CollectionSchema
     })
 }
 
-/// Open or create a vector database.
+/// Open an existing vector database.
 ///
 /// @param path - Database directory path (use ":memory:" for in-memory)
 /// @param options - Optional configuration (see OpenOptions for defaults)
@@ -260,22 +260,8 @@ fn parse_collection_schema(value: &serde_json::Value) -> Result<CollectionSchema
 ///
 /// @example
 /// ```javascript
-/// // Simple usage with defaults
+/// // Reopen an existing store
 /// const db = omendb.open("./mydb");
-///
-/// // With custom HNSW parameters
-/// const db = omendb.open("./mydb", {
-///   dimensions: 384,
-///   m: 32,
-///   efConstruction: 200,
-///   efSearch: 150
-/// });
-///
-/// // With SQ8 quantization (4x memory reduction, ~99% recall)
-/// const db = omendb.open("./mydb", {
-///   dimensions: 128,
-///   quantization: true  // or "sq8" / "scalar"
-/// });
 ///
 /// ```
 #[napi]
@@ -455,12 +441,7 @@ pub fn open(
     };
 
     if omen_path.exists() {
-        let mut store = VectorStore::open(&path).map_err(convert_error)?;
-        if let Some(config) = text_search_config.clone() {
-            store
-                .enable_text_search_with_config(Some(config))
-                .map_err(convert_error)?;
-        }
+        let store = VectorStore::open(&path).map_err(convert_error)?;
         let is_mv = store.is_multi_vector();
 
         if is_multi_vector && !is_mv {
@@ -479,54 +460,13 @@ pub fn open(
         });
     }
 
-    if let Some(mv_config) = multi_vector_config {
-        let mut store = VectorStore::multi_vector_with(dimensions, mv_config)
-            .map_err(|e| {
-                Error::new(
-                    Status::InvalidArg,
-                    format!("Invalid multi-vector config: {}", e),
-                )
-            })?
-            .persist(&path)
-            .map_err(convert_error)?;
-
-        if let Some(config) = text_search_config.clone() {
-            store
-                .enable_text_search_with_config(Some(config))
-                .map_err(convert_error)?;
-        }
-        return Ok(VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
-            path,
-            is_persistent: true,
-            embedding_fn: embedding_tsfn.clone(),
-            collections_cache: RwLock::new(HashMap::new()),
-        });
-    }
-
-    if db_path.exists() && quant_mode {
-        let existing = VectorStore::open(&path).map_err(convert_error)?;
-        if !existing.is_empty() {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "Cannot enable quantization on existing database. Create a new database with quantization.",
-            ));
-        }
-    }
-
-    let mut store = store_options.open(&path).map_err(convert_error)?;
-    if let Some(config) = text_search_config {
-        store
-            .enable_text_search_with_config(Some(config))
-            .map_err(convert_error)?;
-    }
-    Ok(VectorDatabase {
-        inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
-        path,
-        is_persistent: true,
-        embedding_fn: embedding_tsfn,
-        collections_cache: RwLock::new(HashMap::new()),
-    })
+    Err(Error::new(
+        Status::InvalidArg,
+        format!(
+            "No database found at '{}'. Use create(path, schema) to create one.",
+            path
+        ),
+    ))
 }
 
 #[napi]

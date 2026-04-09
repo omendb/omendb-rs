@@ -8,19 +8,47 @@ use crate::text::{TextSearchConfig, TokenizerPreset};
 use crate::vector::sparse::SparseVector;
 use crate::vector::store::edge_store::EdgeDirection;
 
+fn dense_schema(dim: u32) -> CollectionSchema {
+    CollectionSchema {
+        name: String::new(),
+        metric: Metric::L2,
+        dense: Some(DenseSchema {
+            dim,
+            quantization: QuantizationMode::None,
+            mutable_index: MutableDenseIndexKind::Hnsw,
+            frozen_index: FrozenDenseIndexKind::Hnsw,
+        }),
+        sparse: None,
+        multi: None,
+        text: None,
+    }
+}
+
 #[test]
-fn test_open_new_database() {
+fn test_open_missing_database_errors() {
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test-oadb");
 
-    // Open new database
-    let store = VectorStore::open(&db_path).unwrap();
+    let err = VectorStore::open(&db_path).err().unwrap();
+    assert!(
+        err.to_string()
+            .contains("use VectorStore::create(path, schema)")
+    );
+}
+
+#[test]
+fn test_create_new_database() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test-oadb");
+
+    let store = VectorStore::create(&db_path, dense_schema(128)).unwrap();
     assert!(store.is_persistent());
     assert_eq!(store.len(), 0);
 
-    // Insert some vectors
     store
         .set(
             "doc1",
@@ -124,7 +152,7 @@ fn test_persistent_roundtrip() {
 
     // Create and populate store
     {
-        let store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::create(&db_path, dense_schema(128)).unwrap();
 
         store
             .set(
@@ -185,7 +213,7 @@ fn test_persistent_delete() {
 
     // Create, populate, and delete
     {
-        let store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::create(&db_path, dense_schema(128)).unwrap();
 
         store
             .set("keep", random_vector(128, 1), serde_json::json!({}))
@@ -222,7 +250,7 @@ fn test_persistent_search() {
 
     // Create and populate
     {
-        let store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::create(&db_path, dense_schema(128)).unwrap();
 
         for i in 0..100 {
             store

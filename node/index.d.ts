@@ -517,7 +517,7 @@ export interface MultiSchemaResult {
 }
 
 /**
- * Open or create a vector database.
+ * Open an existing vector database.
  *
  * @param path - Database directory path (use ":memory:" for in-memory)
  * @param options - Optional configuration (see OpenOptions for defaults)
@@ -525,22 +525,8 @@ export interface MultiSchemaResult {
  *
  * @example
  * ```javascript
- * // Simple usage with defaults
+ * // Reopen an existing store
  * const db = omendb.open("./mydb");
- *
- * // With custom HNSW parameters
- * const db = omendb.open("./mydb", {
- *   dimensions: 384,
- *   m: 32,
- *   efConstruction: 200,
- *   efSearch: 150
- * });
- *
- * // With SQ8 quantization (4x memory reduction, ~99% recall)
- * const db = omendb.open("./mydb", {
- *   dimensions: 128,
- *   quantization: true  // or "sq8" / "scalar"
- * });
  *
  * ```
  */

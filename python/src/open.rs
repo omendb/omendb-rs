@@ -255,7 +255,7 @@ pub(crate) fn parse_text_search_config(
     Ok(Some(config))
 }
 
-/// Open or create a vector database.
+/// Open a vector database.
 ///
 /// All parameters except `path` are optional with sensible defaults.
 ///
@@ -283,25 +283,13 @@ pub(crate) fn parse_text_search_config(
 ///
 /// Raises:
 ///     ValueError: If parameters are invalid
-///     RuntimeError: If database creation fails
+///     RuntimeError: If database open fails
 ///
 /// Examples:
 ///     >>> import omendb
 ///
-///     # Simple usage with defaults
-///     >>> db = omendb.open("./my_vectors", dimensions=768)
-///
-///     # With SQ8 quantization (4x smaller, similar speed, ~99% recall)
-///     >>> db = omendb.open("./vectors", dimensions=768, quantization=True)
-///     >>> db = omendb.open("./vectors", dimensions=768, quantization="sq8")
-///
-///     # Multi-vector mode for ColBERT-style retrieval
-///     >>> db = omendb.open("./vectors", dimensions=128, multi_vector=True)
-///     >>> db.set([{"id": "doc1", "vectors": [[0.1]*128, [0.2]*128], "metadata": {}}])
-///     >>> results = db.search([[0.1]*128], k=10)
-///
-///     # With cosine distance metric
-///     >>> db = omendb.open("./vectors", dimensions=768, metric="cosine")
+///     # Reopen an existing store
+///     >>> db = omendb.open("./my_vectors")
 #[pyfunction]
 #[pyo3(signature = (path, dimensions=0, m=None, ef_construction=None, ef_search=None, quantization=None, metric=None, multi_vector=None, text_search=None, embedding_fn=None, rescore=None, oversample=None))]
 pub(crate) fn open(
@@ -445,16 +433,10 @@ pub(crate) fn open(
         PathBuf::from(omen)
     };
 
-    // Check if this is a directory (persistent storage) or .omen file exists
+    // Persistent reopen-only path
     if db_path.is_dir() || omen_path.exists() || !db_path.exists() {
-        // Check for existing database that may have multi-vector config
         if omen_path.exists() {
-            let mut store = VectorStore::open(&path).map_err(convert_error)?;
-            if let Some(config) = text_search_config.clone() {
-                store
-                    .enable_text_search_with_config(Some(config))
-                    .map_err(convert_error)?;
-            }
+            let store = VectorStore::open(&path).map_err(convert_error)?;
             let is_mv = store.is_multi_vector();
 
             // If multi_vector param conflicts with existing store, error
@@ -473,68 +455,10 @@ pub(crate) fn open(
             });
         }
 
-        // Create new persistent store
-        if let Some(mv_cfg) = mv_config {
-            // Create new multi-vector persistent store
-            let mut store = VectorStore::multi_vector_with(effective_dims, mv_cfg)
-                .map_err(convert_error)?
-                .persist(&path)
-                .map_err(convert_error)?;
-            if let Some(config) = text_search_config.clone() {
-                store
-                    .enable_text_search_with_config(Some(config))
-                    .map_err(convert_error)?;
-            }
-
-            return Ok(VectorDatabase {
-                inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
-                path,
-                is_persistent: true,
-                embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
-                collections_cache: RwLock::new(HashMap::new()),
-            });
-        }
-
-        // Single-vector persistent store
-        let mut options = build_store_options(
-            effective_dims,
-            m,
-            ef_construction,
-            ef_search,
-            quant_mode,
-            metric.as_deref(),
-            rescore,
-            oversample,
-        )?;
-        if let Some(ref config) = text_search_config {
-            options = options.text_search_config(config.clone());
-        }
-
-        // Check if enabling quantization on existing non-empty database
-        if db_path.exists() && quant_mode {
-            let existing = VectorStore::open(&path).map_err(convert_error)?;
-            if !existing.is_empty() {
-                return Err(PyValueError::new_err(
-                    "Cannot enable quantization on existing database. Create a new database with quantization.",
-                ));
-            }
-        }
-
-        // Open with options
-        let mut store = options.open(&path).map_err(convert_error)?;
-        if let Some(config) = text_search_config {
-            store
-                .enable_text_search_with_config(Some(config))
-                .map_err(convert_error)?;
-        }
-
-        return Ok(VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
-            path,
-            is_persistent: true,
-            embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
-            collections_cache: RwLock::new(HashMap::new()),
-        });
+        return Err(PyValueError::new_err(format!(
+            "No database found at '{}'. Use omendb.create(path, schema=...) to create one.",
+            path
+        )));
     }
 
     // Fallback: create new in-memory database with configuration

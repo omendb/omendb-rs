@@ -581,7 +581,7 @@ describe("VectorDatabase", () => {
 
 		it("should persist and reload data", async () => {
 			// Create and save
-			const db1 = open(dbPath, { dimensions: 64 });
+			const db1 = create(dbPath, { dense: { dim: 64 } });
 			await db1.set([
 				{
 					id: "persist1",
@@ -593,7 +593,7 @@ describe("VectorDatabase", () => {
 			db1.close(); // Release file lock
 
 			// Reopen and verify
-			const db2 = open(dbPath, { dimensions: 64 });
+			const db2 = open(dbPath);
 			expect(db2.count()).toBe(2);
 
 			const doc = db2.get("persist1");
@@ -602,7 +602,7 @@ describe("VectorDatabase", () => {
 		});
 
 		it("should support collections", async () => {
-			const db = open(dbPath, { dimensions: 64 });
+			const db = create(dbPath, { dense: { dim: 64 } });
 
 			const users = db.collection("users");
 			const products = db.collection("products");
@@ -622,7 +622,10 @@ describe("VectorDatabase", () => {
 		});
 
 		it("should preserve multi-vector mode in collections", async () => {
-			const db = open(dbPath, { dimensions: 8, multiVector: { dProj: null } });
+			const db = create(dbPath, {
+				metric: "dot",
+				multi: { tokenDim: 8, dProj: null },
+			});
 			const docs = db.collection("docs");
 
 			expect(docs.isMultiVector).toBe(true);
@@ -642,7 +645,7 @@ describe("VectorDatabase", () => {
 		});
 
 		it("should list collections", () => {
-			const db = open(dbPath, { dimensions: 64 });
+			const db = create(dbPath, { dense: { dim: 64 } });
 			db.collection("alpha");
 			db.collection("beta");
 			db.collection("gamma");
@@ -652,12 +655,16 @@ describe("VectorDatabase", () => {
 		});
 
 		it("should delete collections", async () => {
-			const db = open(dbPath, { dimensions: 64 });
+			const db = create(dbPath, { dense: { dim: 64 } });
 			const col = db.collection("todelete");
 			await col.set([{ id: "doc1", vector: Array(64).fill(0.1) }]);
 
 			db.deleteCollection("todelete");
 			expect(db.collections()).not.toContain("todelete");
+		});
+
+		it("should reject opening a missing persistent store", () => {
+			expect(() => open(dbPath, { dimensions: 64 })).toThrow(/create\(path, schema\)/i);
 		});
 	});
 

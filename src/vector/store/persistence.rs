@@ -230,7 +230,7 @@ impl VectorStore {
     pub fn create(path: impl AsRef<Path>, schema: CollectionSchema) -> Result<Self> {
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
-        if path.exists() || omen_path.exists() {
+        if omen_path.exists() {
             anyhow::bail!("store already exists at {}", path.display());
         }
 
@@ -270,28 +270,28 @@ impl VectorStore {
         Ok(store)
     }
 
-    /// Open a persistent vector store at the given path
+    /// Open an existing persistent vector store at the given path.
     ///
-    /// Creates a new database if it doesn't exist, or loads existing data.
-    /// All operations (insert, set, delete) are automatically persisted.
+    /// Structural creation uses [`VectorStore::create`]. This method only
+    /// reopens a store that has already been created on disk.
     ///
     /// # Arguments
     /// * `path` - Directory path for the database (e.g., "mydb.omen")
     ///
     /// # Example
     /// ```ignore
-    /// let mut store = VectorStore::open("mydb.omen")?;
-    /// store.set("doc1", vector, metadata)?;
-    /// // Data is automatically persisted
+    /// let store = VectorStore::open("mydb.omen")?;
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
-        let mut storage_local = if omen_path.exists() {
-            OmenFile::open(path)?
-        } else {
-            OmenFile::create(path, 0)?
-        };
+        if !omen_path.exists() {
+            anyhow::bail!(
+                "store does not exist at {}; use VectorStore::create(path, schema)",
+                path.display()
+            );
+        }
+        let mut storage_local = OmenFile::open(path)?;
         let text_search_config = load_text_search_config(&storage_local)?;
 
         // Scoped block to ensure ctx (which borrows from storage_local) is dropped
@@ -436,7 +436,7 @@ impl VectorStore {
     pub fn open_with_dimensions(path: impl AsRef<Path>, dimensions: usize) -> Result<Self> {
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
-        if path.exists() || omen_path.exists() {
+        if omen_path.exists() {
             return Self::open(path);
         }
         Self::create(
@@ -464,8 +464,8 @@ impl VectorStore {
         let path = path.as_ref();
         let omen_path = OmenFile::compute_omen_path(path);
 
-        // If path or .omen file exists, load existing data
-        if path.exists() || omen_path.exists() {
+        // If a persisted store exists, load existing data.
+        if omen_path.exists() {
             let mut store = Self::open(path)?;
 
             store

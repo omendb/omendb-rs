@@ -272,8 +272,21 @@ fn test_sparse_persistence_roundtrip() {
 
     // Create store, add sparse data, flush
     {
-        let mut store = VectorStore::open(path.to_str().unwrap()).unwrap();
-        store.enable_sparse();
+        let mut store = VectorStore::create(
+            path.to_str().unwrap(),
+            crate::catalog::CollectionSchema {
+                name: String::new(),
+                metric: crate::Metric::L2,
+                dense: None,
+                sparse: Some(crate::catalog::SparseSchema {
+                    index_kind: crate::catalog::SparseIndexKind::InvertedExact,
+                    max_nonzero: None,
+                }),
+                multi: None,
+                text: None,
+            },
+        )
+        .unwrap();
 
         store
             .set_sparse(
