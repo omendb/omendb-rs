@@ -445,5 +445,10 @@ function open(path, options, embeddingFn) {
 	return new VectorDatabase(nativeBinding.open(path, options, embeddingFn));
 }
 
+function create(path, schema, embeddingFn) {
+	return new VectorDatabase(nativeBinding.create(path, schema, embeddingFn));
+}
+
 module.exports.VectorDatabase = VectorDatabase;
+module.exports.create = create;
 module.exports.open = open;

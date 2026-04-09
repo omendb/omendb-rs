@@ -124,7 +124,7 @@ pub struct MultiSchemaResult {
     pub repetitions: u8,
     pub partition_bits: u8,
     pub d_proj: Option<u8>,
-    pub seed: u64,
+    pub seed: f64,
     pub max_tokens: Option<u32>,
     pub pool_factor: Option<u8>,
 }
@@ -187,7 +187,7 @@ impl From<MultiSchema> for MultiSchemaResult {
             repetitions: value.repetitions,
             partition_bits: value.partition_bits,
             d_proj: value.d_proj,
-            seed: value.seed,
+            seed: value.seed as f64,
             max_tokens: value.max_tokens,
             pool_factor: value.pool_factor,
         }

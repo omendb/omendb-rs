@@ -1,6 +1,11 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use omendb_lib::catalog::{
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
+    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, SparseSchema, TextSchema,
+};
 use omendb_lib::vector::{VectorStore, VectorStoreOptions};
+use omendb_lib::Metric;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,6 +63,193 @@ pub struct OpenOptions {
         ts_type = "boolean | { bufferMb?: number; writerBufferMb?: number; tokenizer?: 'default' | 'code' | 'raw' } | null | undefined"
     )]
     pub text_search: Option<serde_json::Value>,
+}
+
+fn parse_collection_schema(value: &serde_json::Value) -> Result<CollectionSchema> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| Error::new(Status::InvalidArg, "schema must be an object"))?;
+
+    let dense = obj
+        .get("dense")
+        .filter(|value| !value.is_null())
+        .map(|dense| {
+            let dense = dense.as_object().ok_or_else(|| {
+                Error::new(Status::InvalidArg, "schema.dense must be an object")
+            })?;
+            let dim = dense
+                .get("dim")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| Error::new(Status::InvalidArg, "schema.dense.dim is required"))?;
+            let quantization = match dense
+                .get("quantization")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none")
+            {
+                "none" => QuantizationMode::None,
+                "sq8" | "scalar" => QuantizationMode::Sq8,
+                other => {
+                    return Err(Error::new(
+                        Status::InvalidArg,
+                        format!("Unknown dense quantization: '{other}'"),
+                    ));
+                }
+            };
+            Ok(DenseSchema {
+                dim: dim as u32,
+                quantization,
+                mutable_index: MutableDenseIndexKind::Hnsw,
+                frozen_index: FrozenDenseIndexKind::Hnsw,
+            })
+        })
+        .transpose()?;
+
+    let sparse = obj
+        .get("sparse")
+        .filter(|value| !value.is_null())
+        .map(|sparse| {
+            let sparse = sparse.as_object().ok_or_else(|| {
+                Error::new(Status::InvalidArg, "schema.sparse must be an object")
+            })?;
+            let index_kind = match sparse
+                .get("indexKind")
+                .or_else(|| sparse.get("index_kind"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("inverted_exact")
+            {
+                "inverted_exact" => SparseIndexKind::InvertedExact,
+                other => {
+                    return Err(Error::new(
+                        Status::InvalidArg,
+                        format!("Unknown sparse index kind: '{other}'"),
+                    ));
+                }
+            };
+            Ok(SparseSchema {
+                index_kind,
+                max_nonzero: sparse
+                    .get("maxNonzero")
+                    .or_else(|| sparse.get("max_nonzero"))
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|value| value as u32),
+            })
+        })
+        .transpose()?;
+
+    let multi = obj
+        .get("multi")
+        .filter(|value| !value.is_null())
+        .map(|multi| {
+            let multi = multi.as_object().ok_or_else(|| {
+                Error::new(Status::InvalidArg, "schema.multi must be an object")
+            })?;
+            let token_dim = multi
+                .get("tokenDim")
+                .or_else(|| multi.get("token_dim"))
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| {
+                    Error::new(Status::InvalidArg, "schema.multi.tokenDim is required")
+                })?;
+            let encoder = match multi
+                .get("encoder")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("muvera")
+            {
+                "muvera" => MultiEncoderKind::Muvera,
+                other => {
+                    return Err(Error::new(
+                        Status::InvalidArg,
+                        format!("Unknown multi encoder: '{other}'"),
+                    ));
+                }
+            };
+            Ok(MultiSchema {
+                token_dim: token_dim as u32,
+                encoder,
+                repetitions: multi
+                    .get("repetitions")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(8) as u8,
+                partition_bits: multi
+                    .get("partitionBits")
+                    .or_else(|| multi.get("partition_bits"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(4) as u8,
+                d_proj: multi
+                    .get("dProj")
+                    .or_else(|| multi.get("d_proj"))
+                    .and_then(|value| {
+                        if value.is_null() {
+                            None
+                        } else {
+                            value.as_u64().map(|v| v as u8)
+                        }
+                    }),
+                seed: multi
+                    .get("seed")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(42),
+                max_tokens: multi
+                    .get("maxTokens")
+                    .or_else(|| multi.get("max_tokens"))
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|value| value as u32),
+                pool_factor: multi
+                    .get("poolFactor")
+                    .or_else(|| multi.get("pool_factor"))
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|value| value as u8),
+            })
+        })
+        .transpose()?;
+
+    let text = obj
+        .get("text")
+        .filter(|value| !value.is_null())
+        .map(|text| -> Result<TextSchema> {
+            let text = text.as_object().ok_or_else(|| {
+                Error::new(Status::InvalidArg, "schema.text must be an object")
+            })?;
+            let tokenizer = text
+                .get("tokenizer")
+                .and_then(serde_json::Value::as_str)
+                .map(|value| omendb_lib::text::TokenizerPreset::parse(value).map_err(convert_error))
+                .transpose()?
+                .unwrap_or_default();
+            let writer_buffer_mb = text
+                .get("writerBufferMb")
+                .or_else(|| text.get("writer_buffer_mb"))
+                .or_else(|| text.get("bufferMb"))
+                .or_else(|| text.get("buffer_mb"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(50);
+            Ok(TextSchema {
+                tokenizer,
+                writer_buffer_mb: writer_buffer_mb as u32,
+            })
+        })
+        .transpose()?;
+
+    let metric = if let Some(metric) = obj.get("metric").and_then(serde_json::Value::as_str) {
+        Metric::parse(metric).map_err(|e| Error::new(Status::InvalidArg, e))?
+    } else if multi.is_some() {
+        Metric::InnerProduct
+    } else {
+        Metric::L2
+    };
+
+    Ok(CollectionSchema {
+        name: obj
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        metric,
+        dense,
+        sparse,
+        multi,
+        text,
+    })
 }
 
 /// Open or create a vector database.
@@ -333,6 +525,34 @@ pub fn open(
         path,
         is_persistent: true,
         embedding_fn: embedding_tsfn,
+        collections_cache: RwLock::new(HashMap::new()),
+    })
+}
+
+#[napi]
+pub fn create(
+    path: String,
+    #[napi(
+        ts_arg_type = "{ name?: string; metric?: 'l2' | 'euclidean' | 'cosine' | 'dot' | 'ip'; dense?: { dim: number; quantization?: 'none' | 'sq8' | 'scalar' } | null; sparse?: { indexKind?: 'inverted_exact'; index_kind?: 'inverted_exact'; maxNonzero?: number | null; max_nonzero?: number | null } | null; multi?: { tokenDim?: number; token_dim?: number; encoder?: 'muvera'; repetitions?: number; partitionBits?: number; partition_bits?: number; dProj?: number | null; d_proj?: number | null; seed?: number; maxTokens?: number | null; max_tokens?: number | null; poolFactor?: number | null; pool_factor?: number | null } | null; text?: { tokenizer?: 'default' | 'code' | 'raw'; writerBufferMb?: number; writer_buffer_mb?: number; bufferMb?: number; buffer_mb?: number } | null }"
+    )]
+    schema: serde_json::Value,
+    #[napi(ts_arg_type = "((texts: string[]) => Float32Array[]) | undefined")] embedding_fn: Option<
+        EmbeddingFn,
+    >,
+) -> Result<VectorDatabase> {
+    let schema = parse_collection_schema(&schema)?;
+    let is_persistent = path != ":memory:";
+    let store = if is_persistent {
+        VectorStore::create(&path, schema).map_err(convert_error)?
+    } else {
+        VectorStore::create_in_memory(schema).map_err(convert_error)?
+    };
+
+    Ok(VectorDatabase {
+        inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+        path,
+        is_persistent,
+        embedding_fn: embedding_fn.map(Arc::new),
         collections_cache: RwLock::new(HashMap::new()),
     })
 }

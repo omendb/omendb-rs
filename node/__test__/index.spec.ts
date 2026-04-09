@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { open, VectorDatabase } from "../index.js";
+import { create, open, VectorDatabase } from "../index.js";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -71,6 +71,29 @@ describe("VectorDatabase", () => {
 				const doc = db.get("doc1");
 				expect(doc?.metadata).toEqual({ new: true });
 			});
+		});
+
+		it("should create from explicit schema", async () => {
+			const schemaDb = create(":memory:", {
+				name: "docs",
+				metric: "l2",
+				dense: { dim: 8, quantization: "sq8" },
+				text: { tokenizer: "code", writerBufferMb: 20 },
+			});
+
+			expect(schemaDb.schema()).toMatchObject({
+				name: "docs",
+				metric: "l2",
+				dense: {
+					dim: 8,
+					quantization: "sq8",
+					mutableIndex: "hnsw",
+					frozenIndex: "hnsw",
+				},
+				text: { tokenizer: "code", writerBufferMb: 20 },
+			});
+			expect(schemaDb.info().schema).toEqual(schemaDb.schema());
+			schemaDb.close();
 		});
 
 		describe("search", () => {

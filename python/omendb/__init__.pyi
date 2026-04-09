@@ -913,5 +913,13 @@ def open(
     """
     ...
 
+def create(
+    path: str,
+    schema: CollectionSchema,
+    embedding_fn: Callable[[list[str]], list[list[float]]] | None = None,
+) -> VectorDatabase:
+    """Create a vector database from an explicit collection schema."""
+    ...
+
 __version__: str
 __all__: list[str]

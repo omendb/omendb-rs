@@ -133,3 +133,22 @@ def test_schema_and_info_report_authoritative_runtime_contract():
     assert schema["text"]["tokenizer"] == "code"
     assert schema["text"]["writer_buffer_mb"] == 20
     assert info["schema"] == schema
+
+
+def test_create_uses_schema_first_contract():
+    """create() should build directly from explicit schema."""
+    db = omendb.create(
+        ":memory:",
+        {
+            "name": "docs",
+            "metric": "l2",
+            "dense": {"dim": 4, "quantization": "sq8"},
+            "text": {"tokenizer": "code", "writer_buffer_mb": 20},
+        },
+    )
+
+    schema = db.schema()
+    assert schema["name"] == "docs"
+    assert schema["dense"]["dim"] == 4
+    assert schema["dense"]["quantization"] == "sq8"
+    assert schema["text"]["tokenizer"] == "code"

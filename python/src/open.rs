@@ -1,7 +1,12 @@
 use crate::conversions::{convert_error, parse_multi_vector, parse_quantization};
 use crate::database::{VectorDatabase, VectorDatabaseInner};
+use omendb_lib::catalog::{
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
+    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, SparseSchema, TextSchema,
+};
 use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::vector::{VectorStore, VectorStoreOptions};
+use omendb_lib::Metric;
 use parking_lot::RwLock;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -10,6 +15,175 @@ use pyo3::Py;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+fn extract_dict<'py>(value: &'py Bound<'py, PyAny>, label: &str) -> PyResult<Bound<'py, PyDict>> {
+    value.cast::<PyDict>()
+        .map_err(|_| PyValueError::new_err(format!("{label} must be a dict")))
+        .map(|dict| dict.clone())
+}
+
+fn parse_collection_schema(value: &Bound<'_, PyAny>) -> PyResult<CollectionSchema> {
+    let dict = extract_dict(value, "schema")?;
+
+    let dense = if let Some(dense) = dict.get_item("dense")? {
+        if dense.is_none() {
+            None
+        } else {
+            let dense = extract_dict(&dense, "schema['dense']")?;
+            let dim: u32 = dense
+                .get_item("dim")?
+                .ok_or_else(|| PyValueError::new_err("schema['dense']['dim'] is required"))?
+                .extract()?;
+            let quantization = match dense
+                .get_item("quantization")?
+                .map(|value| value.extract::<String>())
+                .transpose()?
+                .as_deref()
+                .unwrap_or("none")
+            {
+                "none" => QuantizationMode::None,
+                "sq8" | "scalar" => QuantizationMode::Sq8,
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "Unknown dense quantization: '{other}'"
+                    )));
+                }
+            };
+            Some(DenseSchema {
+                dim,
+                quantization,
+                mutable_index: MutableDenseIndexKind::Hnsw,
+                frozen_index: FrozenDenseIndexKind::Hnsw,
+            })
+        }
+    } else {
+        None
+    };
+
+    let sparse = if let Some(sparse) = dict.get_item("sparse")? {
+        if sparse.is_none() {
+            None
+        } else {
+            let sparse = extract_dict(&sparse, "schema['sparse']")?;
+            Some(SparseSchema {
+                index_kind: match sparse
+                    .get_item("index_kind")?
+                    .map(|value| value.extract::<String>())
+                    .transpose()?
+                    .as_deref()
+                    .unwrap_or("inverted_exact")
+                {
+                    "inverted_exact" => SparseIndexKind::InvertedExact,
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "Unknown sparse index kind: '{other}'"
+                        )));
+                    }
+                },
+                max_nonzero: sparse.get_item("max_nonzero")?.map(|value| value.extract()).transpose()?,
+            })
+        }
+    } else {
+        None
+    };
+
+    let multi = if let Some(multi) = dict.get_item("multi")? {
+        if multi.is_none() {
+            None
+        } else {
+            let multi = extract_dict(&multi, "schema['multi']")?;
+            let token_dim: u32 = multi
+                .get_item("token_dim")?
+                .ok_or_else(|| PyValueError::new_err("schema['multi']['token_dim'] is required"))?
+                .extract()?;
+            Some(MultiSchema {
+                token_dim,
+                encoder: match multi
+                    .get_item("encoder")?
+                    .map(|value| value.extract::<String>())
+                    .transpose()?
+                    .as_deref()
+                    .unwrap_or("muvera")
+                {
+                    "muvera" => MultiEncoderKind::Muvera,
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "Unknown multi encoder: '{other}'"
+                        )));
+                    }
+                },
+                repetitions: multi
+                    .get_item("repetitions")?
+                    .map(|value| value.extract())
+                    .transpose()?
+                    .unwrap_or(8),
+                partition_bits: multi
+                    .get_item("partition_bits")?
+                    .map(|value| value.extract())
+                    .transpose()?
+                    .unwrap_or(4),
+                d_proj: multi.get_item("d_proj")?.map(|value| value.extract()).transpose()?,
+                seed: multi
+                    .get_item("seed")?
+                    .map(|value| value.extract())
+                    .transpose()?
+                    .unwrap_or(42),
+                max_tokens: multi.get_item("max_tokens")?.map(|value| value.extract()).transpose()?,
+                pool_factor: multi.get_item("pool_factor")?.map(|value| value.extract()).transpose()?,
+            })
+        }
+    } else {
+        None
+    };
+
+    let text = if let Some(text) = dict.get_item("text")? {
+        if text.is_none() {
+            None
+        } else {
+            let text = extract_dict(&text, "schema['text']")?;
+            let tokenizer = text
+                .get_item("tokenizer")?
+                .map(|value| value.extract::<String>())
+                .transpose()?
+                .map(|value| TokenizerPreset::parse(&value).map_err(convert_error))
+                .transpose()?
+                .unwrap_or_default();
+            let writer_buffer_mb = text
+                .get_item("writer_buffer_mb")?
+                .or_else(|| text.get_item("buffer_mb").ok().flatten())
+                .map(|value| value.extract())
+                .transpose()?
+                .unwrap_or(50usize);
+            Some(TextSchema {
+                tokenizer,
+                writer_buffer_mb: writer_buffer_mb as u32,
+            })
+        }
+    } else {
+        None
+    };
+
+    let metric = if let Some(metric) = dict.get_item("metric")? {
+        Metric::parse(&metric.extract::<String>()?).map_err(PyValueError::new_err)?
+    } else if multi.is_some() {
+        Metric::InnerProduct
+    } else {
+        Metric::L2
+    };
+
+    Ok(CollectionSchema {
+        name: dict
+            .get_item("name")?
+            .map(|value| value.extract())
+            .transpose()?
+            .unwrap_or_default(),
+        metric,
+        dense,
+        sparse,
+        multi,
+        text,
+    })
+}
 
 /// Build VectorStoreOptions from open() parameters
 pub(crate) fn build_store_options(
@@ -389,6 +563,32 @@ pub(crate) fn open(
         path,
         is_persistent: false,
         embedding_fn,
+        collections_cache: RwLock::new(HashMap::new()),
+    })
+}
+
+/// Create a database from an explicit collection schema.
+#[pyfunction]
+#[pyo3(signature = (path, schema, embedding_fn=None))]
+pub(crate) fn create(
+    py: Python<'_>,
+    path: String,
+    schema: &Bound<'_, PyAny>,
+    embedding_fn: Option<Py<PyAny>>,
+) -> PyResult<VectorDatabase> {
+    let schema = parse_collection_schema(schema)?;
+    let is_persistent = path != ":memory:";
+    let store = if is_persistent {
+        VectorStore::create(&path, schema).map_err(convert_error)?
+    } else {
+        VectorStore::create_in_memory(schema).map_err(convert_error)?
+    };
+
+    Ok(VectorDatabase {
+        inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+        path,
+        is_persistent,
+        embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
         collections_cache: RwLock::new(HashMap::new()),
     })
 }

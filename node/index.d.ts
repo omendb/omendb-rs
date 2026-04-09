@@ -444,6 +444,8 @@ export interface CollectionSchemaResult {
   text?: TextSchemaResult
 }
 
+export declare function create(path: string, schema: { name?: string; metric?: 'l2' | 'euclidean' | 'cosine' | 'dot' | 'ip'; dense?: { dim: number; quantization?: 'none' | 'sq8' | 'scalar' } | null; sparse?: { indexKind?: 'inverted_exact'; index_kind?: 'inverted_exact'; maxNonzero?: number | null; max_nonzero?: number | null } | null; multi?: { tokenDim?: number; token_dim?: number; encoder?: 'muvera'; repetitions?: number; partitionBits?: number; partition_bits?: number; dProj?: number | null; d_proj?: number | null; seed?: number; maxTokens?: number | null; max_tokens?: number | null; poolFactor?: number | null; pool_factor?: number | null } | null; text?: { tokenizer?: 'default' | 'code' | 'raw'; writerBufferMb?: number; writer_buffer_mb?: number; bufferMb?: number; buffer_mb?: number } | null }, embeddingFn?: ((texts: string[]) => Float32Array[]) | undefined): VectorDatabase
+
 export interface DenseSchemaResult {
   dim: number
   quantization: string
@@ -506,6 +508,10 @@ export interface InfoResult {
 export interface MultiSchemaResult {
   tokenDim: number
   encoder: string
+  repetitions: number
+  partitionBits: number
+  dProj?: number
+  seed: number
   maxTokens?: number
   poolFactor?: number
 }

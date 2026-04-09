@@ -19,6 +19,7 @@ use pyo3::prelude::*;
 #[pymodule(gil_used = false)]
 fn omendb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open::open, m)?)?;
+    m.add_function(wrap_pyfunction!(open::create, m)?)?;
     m.add_class::<database::VectorDatabase>()?;
     m.add_class::<iterators::VectorDatabaseIdIterator>()?;
     Ok(())
