@@ -8,6 +8,7 @@
 //!
 //! Run with: cargo test --lib stress_ --release -- --nocapture
 
+use super::tests::dense_schema;
 use super::{ThreadSafeVectorStore, VectorStore, VectorStoreOptions};
 use crate::vector::types::Vector;
 use std::sync::Arc;
@@ -1001,7 +1002,7 @@ fn stress_metadata_crash_recovery() {
     let db_path = dir.path().join("meta_crash_test");
 
     {
-        let store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::create(&db_path, dense_schema(64)).unwrap();
         store
             .set(
                 "doc1",
@@ -1039,7 +1040,7 @@ fn stress_batch_without_flush_data_lost() {
     let db_path = dir.path().join("batch_no_flush_test");
 
     {
-        let store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::create(&db_path, dense_schema(64)).unwrap();
         let batch: Vec<(String, Vector, serde_json::Value)> = (0..100)
             .map(|i| {
                 (
@@ -1073,7 +1074,7 @@ fn stress_batch_with_flush_data_survives() {
     let count = 100;
 
     {
-        let store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::create(&db_path, dense_schema(64)).unwrap();
         let batch: Vec<(String, Vector, serde_json::Value)> = (0..count)
             .map(|i| {
                 (
@@ -1113,7 +1114,7 @@ fn stress_delete_batch_single_sync() {
     let count = 500;
 
     {
-        let store = VectorStore::open(&db_path).unwrap();
+        let store = VectorStore::create(&db_path, dense_schema(64)).unwrap();
         let batch: Vec<(String, Vector, serde_json::Value)> = (0..count)
             .map(|i| {
                 (
