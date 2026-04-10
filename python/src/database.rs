@@ -100,26 +100,42 @@ fn schema_to_pydict(py: Python<'_>, schema: &CollectionSchema) -> PyResult<Py<Py
 }
 
 pub(crate) struct VectorDatabaseInner {
-    pub(crate) store: VectorStore,
+    pub(crate) store: Option<VectorStore>,
+}
+
+impl VectorDatabaseInner {
+    pub(crate) fn store(&self) -> &VectorStore {
+        self.store
+            .as_ref()
+            .expect("database is closed")
+    }
+
+    pub(crate) fn store_mut(&mut self) -> &mut VectorStore {
+        self.store
+            .as_mut()
+            .expect("database is closed")
+    }
 }
 
 impl VectorDatabase {
     pub(crate) fn live_is_multi_vector(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.is_multi_vector()
+        inner.store().is_multi_vector()
     }
 
     pub(crate) fn live_dimensions(&self) -> usize {
         let inner = self.inner.read();
-        if inner.store.is_multi_vector() {
-            inner
-                .store
+        let store = inner.store();
+
+        if store.is_multi_vector() {
+            store
                 .token_dimension()
-                .unwrap_or(inner.store.dimensions())
+                .unwrap_or(store.dimensions())
         } else {
-            inner.store.dimensions()
+            store.dimensions()
         }
     }
+
 }
 
 /// High-performance embedded vector database.
@@ -136,7 +152,7 @@ impl VectorDatabase {
 /// Supports context manager protocol for automatic cleanup:
 ///
 /// ```python
-/// with omendb.open("./db", dimensions=768) as db:
+/// with omendb.create(":memory:", {"dense": {"dim": 768}}) as db:
 ///     db.set([...])
 /// # Automatically flushed on exit
 /// ```
@@ -256,8 +272,8 @@ impl VectorDatabase {
 
             let inner_arc = Arc::clone(&self.inner);
             let result = py.detach(|| {
-                let inner = inner_arc.write();
-                inner.store.set_batch(batch).map_err(convert_error)
+                let mut inner = inner_arc.write();
+                inner.store_mut().set_batch(batch).map_err(convert_error)
             })?;
             return Ok(result.len());
         }
@@ -287,8 +303,8 @@ impl VectorDatabase {
             // Release GIL during batch insert
             let inner_arc = Arc::clone(&self.inner);
             let result = py.detach(|| {
-                let inner = inner_arc.write();
-                inner.store.set_batch(batch).map_err(convert_error)
+                let mut inner = inner_arc.write();
+                inner.store_mut().set_batch(batch).map_err(convert_error)
             })?;
             return Ok(result.len());
         }
@@ -323,9 +339,9 @@ impl VectorDatabase {
                     .transpose()?
                     .unwrap_or_else(|| serde_json::json!({}));
 
-                let inner = self.inner.write();
+                let mut inner = self.inner.write();
                 inner
-                    .store
+                    .store_mut()
                     .set(&id_str, Vector::new(vec_data), meta)
                     .map_err(convert_error)?;
                 return Ok(1);
@@ -339,9 +355,9 @@ impl VectorDatabase {
                     let inner_arc = Arc::clone(&self.inner);
                     let count = py.detach(move || -> PyResult<usize> {
                         let mut inner = inner_arc.write();
+                        let store = inner.store_mut();
                         for item in &parsed {
-                            inner
-                                .store
+                            store
                                 .store(&item.id, item.vectors.clone(), item.metadata.clone())
                                 .map_err(convert_error)?;
                         }
@@ -384,10 +400,11 @@ impl VectorDatabase {
                 let inner_arc = Arc::clone(&self.inner);
                 let count = py.detach(move || -> PyResult<usize> {
                     let mut inner = inner_arc.write();
+                    let store = inner.store_mut();
 
                     // Auto-enable text search if text field is present
-                    if has_text && !inner.store.has_text_search() {
-                        inner.store.enable_text_search().map_err(convert_error)?;
+                    if has_text && !store.has_text_search() {
+                        store.enable_text_search().map_err(convert_error)?;
                     }
 
                     // Insert items - use batch path when no text for performance
@@ -396,13 +413,11 @@ impl VectorDatabase {
                         let mut results = Vec::with_capacity(parsed.len());
                         for item in parsed {
                             let result = if let Some(text) = item.text {
-                                inner
-                                    .store
+                                store
                                     .set_with_text(&item.id, item.vector, &text, item.metadata)
                                     .map_err(convert_error)?
                             } else {
-                                inner
-                                    .store
+                                store
                                     .set(&item.id, item.vector, item.metadata)
                                     .map_err(convert_error)?
                             };
@@ -415,7 +430,7 @@ impl VectorDatabase {
                             .into_iter()
                             .map(|item| (item.id, item.vector, item.metadata))
                             .collect();
-                        inner.store.set_batch(batch).map_err(convert_error)?
+                        store.set_batch(batch).map_err(convert_error)?
                     };
 
                     Ok(results.len())
@@ -451,14 +466,14 @@ impl VectorDatabase {
         if let Ok(single_id) = ids.extract::<String>() {
             let inner = self.inner.write();
             return inner
-                .store
+                .store()
                 .delete_batch(&[single_id])
                 .map_err(convert_error);
         }
         // Fall back to list of strings
         let id_vec: Vec<String> = ids.extract()?;
         let inner = self.inner.write();
-        inner.store.delete_batch(&id_vec).map_err(convert_error)
+        inner.store().delete_batch(&id_vec).map_err(convert_error)
     }
 
     /// Delete vectors matching a metadata filter.
@@ -492,10 +507,7 @@ impl VectorDatabase {
         let parsed_filter = crate::filters::parse_filter(filter)?;
 
         let inner = self.inner.write();
-        inner
-            .store
-            .delete_by_filter(&parsed_filter)
-            .map_err(convert_error)
+        inner.store().delete_by_filter(&parsed_filter).map_err(convert_error)
     }
 
     /// Count vectors, optionally filtered by metadata.
@@ -531,9 +543,9 @@ impl VectorDatabase {
         match filter {
             Some(f) => {
                 let parsed_filter = crate::filters::parse_filter(f)?;
-                Ok(inner.store.count_by_filter(&parsed_filter))
+                Ok(inner.store().count_by_filter(&parsed_filter))
             }
-            None => Ok(inner.store.len()),
+            None => Ok(inner.store().len()),
         }
     }
 
@@ -578,11 +590,12 @@ impl VectorDatabase {
         }
 
         let mut inner = self.inner.write();
+        let store = inner.store_mut();
 
         // Handle text update - requires re-indexing
         if let Some(ref new_text) = text {
             // Get existing data
-            let (existing_vec, existing_meta) = inner.store.get(&id).ok_or_else(|| {
+            let (existing_vec, existing_meta) = store.get(&id).ok_or_else(|| {
                 PyRuntimeError::new_err(format!("Vector with ID '{}' not found", id))
             })?;
 
@@ -607,15 +620,13 @@ impl VectorDatabase {
             }
 
             // Re-index text and update vector/metadata
-            if inner.store.has_text_search() {
-                inner
-                    .store
+            if store.has_text_search() {
+                store
                     .set_with_text(&id, final_vec, new_text, final_meta)
                     .map_err(convert_error)?;
             } else {
                 // Text search not enabled, just update metadata
-                inner
-                    .store
+                store
                     .set(&id, final_vec, final_meta)
                     .map_err(convert_error)?;
             }
@@ -630,10 +641,7 @@ impl VectorDatabase {
             None
         };
 
-        inner
-            .store
-            .update(&id, vector, metadata_json)
-            .map_err(convert_error)
+        store.update(&id, vector, metadata_json).map_err(convert_error)
     }
 
     /// Get vector by ID.
@@ -653,7 +661,7 @@ impl VectorDatabase {
     fn get(&self, py: Python<'_>, id: String) -> PyResult<Option<HashMap<String, Py<PyAny>>>> {
         let inner = self.inner.read();
 
-        if let Some((vector, metadata)) = inner.store.get(&id) {
+        if let Some((vector, metadata)) = inner.store().get(&id) {
             let mut result = HashMap::new();
             result.insert(
                 "id".to_string(),
@@ -701,7 +709,7 @@ impl VectorDatabase {
             let inner = inner_arc.read();
             ids.into_iter()
                 .map(|id| {
-                    let data = inner.store.get(&id);
+                    let data = inner.store().get(&id);
                     (id, data)
                 })
                 .collect()
@@ -733,7 +741,7 @@ impl VectorDatabase {
     /// Context manager entry - returns self for `with` statement.
     ///
     /// Examples:
-    ///     >>> with omendb.open("./db", dimensions=768) as db:
+    ///     >>> with omendb.create(":memory:", {"dense": {"dim": 768}}) as db:
     ///     ...     db.set([...])
     ///     # Automatically flushed on exit
     fn __enter__(slf: Py<Self>) -> Py<Self> {
@@ -750,8 +758,8 @@ impl VectorDatabase {
         _exc_val: Option<Py<PyAny>>,
         _exc_tb: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
-        let inner = self.inner.write();
-        inner.store.flush().map_err(convert_error)?;
+        let mut inner = self.inner.write();
+        inner.store_mut().flush().map_err(convert_error)?;
         Ok(false) // Don't suppress exceptions
     }
 
@@ -766,13 +774,13 @@ impl VectorDatabase {
     #[getter]
     fn ef_search(&self) -> usize {
         let inner = self.inner.read();
-        inner.store.ef_search()
+        inner.store().ef_search()
     }
 
     #[setter]
     fn set_ef_search(&mut self, value: usize) {
         let inner = self.inner.write();
-        inner.store.set_ef_search(value);
+        inner.store().set_ef_search(value);
     }
 
     /// Number of vectors in database (Pythonic).
@@ -785,7 +793,7 @@ impl VectorDatabase {
     ///     1000
     fn __len__(&self) -> usize {
         let inner = self.inner.read();
-        inner.store.len()
+        inner.store().len()
     }
 
     /// Boolean truth value - True if database is non-empty.
@@ -795,7 +803,7 @@ impl VectorDatabase {
     ///     ...     print("has data")
     fn __bool__(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.len() > 0
+        inner.store().len() > 0
     }
 
     /// Get database dimensions.
@@ -822,7 +830,7 @@ impl VectorDatabase {
     /// Check if database is empty.
     fn is_empty(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.is_empty()
+        inner.store().is_empty()
     }
 
     /// Get comprehensive database diagnostics.
@@ -838,7 +846,7 @@ impl VectorDatabase {
     ///     5242880
     fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let inner = self.inner.read();
-        let info = inner.store.info();
+        let info = inner.store().info();
         let dict = pyo3::types::PyDict::new(py);
 
         dict.set_item("vector_count", info.vector_count)?;
@@ -865,7 +873,7 @@ impl VectorDatabase {
     /// Get the authoritative collection schema for this database.
     fn schema(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let inner = self.inner.read();
-        schema_to_pydict(py, &inner.store.schema())
+        schema_to_pydict(py, &inner.store().schema())
     }
 
     /// Iterate over all vector IDs (without loading vector data).
@@ -886,7 +894,7 @@ impl VectorDatabase {
     ///     1000
     fn ids(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<VectorDatabaseIdIterator>> {
         let borrowed = slf.borrow(py);
-        let ids = borrowed.inner.read().store.ids();
+        let ids = borrowed.inner.read().store().ids();
         Py::new(
             py,
             VectorDatabaseIdIterator {
@@ -920,7 +928,7 @@ impl VectorDatabase {
         let inner_arc = Arc::clone(&self.inner);
         let items: Vec<_> = py.detach(|| {
             let inner = inner_arc.read();
-            inner.store.items()
+            inner.store().items()
         });
 
         // Convert to Python with GIL held
@@ -957,7 +965,7 @@ impl VectorDatabase {
     ///     False
     fn exists(&self, id: String) -> bool {
         let inner = self.inner.read();
-        inner.store.contains(&id)
+        inner.store().contains(&id)
     }
 
     /// Support `in` operator for checking ID existence.
@@ -967,7 +975,7 @@ impl VectorDatabase {
     ///     True
     fn __contains__(&self, id: String) -> bool {
         let inner = self.inner.read();
-        inner.store.contains(&id)
+        inner.store().contains(&id)
     }
 
     /// Iteration support - returns list of items.
@@ -980,7 +988,7 @@ impl VectorDatabase {
     fn __iter__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<VectorDatabaseIterator>> {
         let borrowed = slf.borrow(py);
         // Get just the IDs (lightweight - ~20 bytes per ID vs ~3KB per 768D vector)
-        let ids = borrowed.inner.read().store.ids();
+        let ids = borrowed.inner.read().store().ids();
         Py::new(
             py,
             VectorDatabaseIterator {
@@ -1002,7 +1010,7 @@ impl VectorDatabase {
         let inner = self.inner.read();
         let dict = PyDict::new(py);
         dict.set_item("dimensions", self.live_dimensions())?;
-        dict.set_item("count", inner.store.len())?;
+        dict.set_item("count", inner.store().len())?;
         dict.set_item("path", &self.path)?;
         Ok(dict.into())
     }

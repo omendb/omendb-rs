@@ -1,7 +1,7 @@
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
-use omendb_lib::vector::{Vector, VectorStore, VectorStoreOptions};
+use omendb_lib::vector::{Vector, VectorStore};
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -12,7 +12,21 @@ use crate::filters::parse_filter;
 use crate::types::{CollectionSchemaResult, GetResult, InfoResult, SetItem, StatsResult};
 
 pub(crate) struct VectorDatabaseInner {
-    pub(crate) store: VectorStore,
+    pub(crate) store: Option<VectorStore>,
+}
+
+impl VectorDatabaseInner {
+    pub(crate) fn store(&self) -> &VectorStore {
+        self.store
+            .as_ref()
+            .expect("database is closed")
+    }
+
+    pub(crate) fn store_mut(&mut self) -> &mut VectorStore {
+        self.store
+            .as_mut()
+            .expect("database is closed")
+    }
 }
 
 /// Type alias for embedding function: (texts: string[]) => Float32Array[]
@@ -23,20 +37,22 @@ pub(crate) type EmbeddingFn =
 impl VectorDatabase {
     pub(crate) fn live_is_multi_vector(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.is_multi_vector()
+        inner.store().is_multi_vector()
     }
 
     pub(crate) fn live_dimensions(&self) -> u32 {
         let inner = self.inner.read();
-        if inner.store.is_multi_vector() {
-            inner
-                .store
+        let store = inner.store();
+
+        if store.is_multi_vector() {
+            store
                 .token_dimension()
-                .unwrap_or(inner.store.dimensions()) as u32
+                .unwrap_or(store.dimensions()) as u32
         } else {
-            inner.store.dimensions() as u32
+            store.dimensions() as u32
         }
     }
+
 }
 
 #[napi]
@@ -117,6 +133,7 @@ impl VectorDatabase {
 
         if self.live_is_multi_vector() {
             let mut inner = self.inner.write();
+            let store = inner.store_mut();
             let count = items.len();
 
             for item in items {
@@ -140,10 +157,7 @@ impl VectorDatabase {
                 let tokens: Vec<Vec<f32>> = vectors.into_iter().map(|v| v.to_vec()).collect();
                 let metadata = item.metadata.unwrap_or(serde_json::json!({}));
 
-                inner
-                    .store
-                    .store(&item.id, tokens, metadata)
-                    .map_err(convert_error)?;
+                store.store(&item.id, tokens, metadata).map_err(convert_error)?;
             }
 
             Ok(count as u32)
@@ -152,8 +166,11 @@ impl VectorDatabase {
 
             let mut inner = self.inner.write();
 
-            if has_text && !inner.store.has_text_search() {
-                inner.store.enable_text_search().map_err(convert_error)?;
+            if has_text && !inner.store().has_text_search() {
+                inner
+                    .store_mut()
+                    .enable_text_search()
+                    .map_err(convert_error)?;
             }
 
             if has_text {
@@ -180,16 +197,16 @@ impl VectorDatabase {
                                 )));
                             }
                         }
-                        if let Some(obj) = metadata.as_object_mut() {
-                            obj.insert("text".to_string(), serde_json::json!(text));
-                        }
-                        inner
-                            .store
-                            .set_with_text(&item.id, Vector::new(vector.to_vec()), text, metadata)
-                            .map_err(convert_error)?;
+                    if let Some(obj) = metadata.as_object_mut() {
+                        obj.insert("text".to_string(), serde_json::json!(text));
+                    }
+                    let store = inner.store_mut();
+                    store
+                        .set_with_text(&item.id, Vector::new(vector.to_vec()), text, metadata)
+                        .map_err(convert_error)?;
                     } else {
-                        inner
-                            .store
+                        let store = inner.store_mut();
+                        store
                             .set(&item.id, Vector::new(vector.to_vec()), metadata)
                             .map_err(convert_error)?;
                     }
@@ -215,7 +232,7 @@ impl VectorDatabase {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let result = inner.store.set_batch(batch).map_err(convert_error)?;
+                let result = inner.store_mut().set_batch(batch).map_err(convert_error)?;
                 Ok(result.len() as u32)
             }
         }
@@ -240,7 +257,7 @@ impl VectorDatabase {
             .flatten();
 
         inner
-            .store
+            .store_mut()
             .enable_text_search_with_config(config)
             .map_err(convert_error)
     }
@@ -250,7 +267,7 @@ impl VectorDatabase {
     pub fn get(&self, id: String) -> Option<GetResult> {
         let inner = self.inner.read();
 
-        inner.store.get(&id).map(|(vec, metadata)| GetResult {
+        inner.store().get(&id).map(|(vec, metadata)| GetResult {
             id,
             vector: Float32Array::new(vec.data),
             metadata,
@@ -278,8 +295,8 @@ impl VectorDatabase {
             Either::A(single) => vec![single],
             Either::B(multiple) => multiple,
         };
-        let inner = self.inner.write();
-        let result = inner.store.delete_batch(&id_vec).map_err(convert_error)?;
+        let mut inner = self.inner.write();
+        let result = inner.store_mut().delete_batch(&id_vec).map_err(convert_error)?;
         Ok(result as u32)
     }
 
@@ -309,9 +326,9 @@ impl VectorDatabase {
     ) -> Result<u32> {
         let parsed_filter = parse_filter(&filter)?;
 
-        let inner = self.inner.write();
+        let mut inner = self.inner.write();
         let result = inner
-            .store
+            .store_mut()
             .delete_by_filter(&parsed_filter)
             .map_err(convert_error)?;
 
@@ -346,9 +363,9 @@ impl VectorDatabase {
         match filter {
             Some(f) => {
                 let parsed_filter = parse_filter(&f)?;
-                Ok(inner.store.count_by_filter(&parsed_filter) as u32)
+                Ok(inner.store().count_by_filter(&parsed_filter) as u32)
             }
-            None => Ok(inner.store.len() as u32),
+            None => Ok(inner.store().len() as u32),
         }
     }
 
@@ -418,10 +435,10 @@ impl VectorDatabase {
         };
 
         let mut inner = self.inner.write();
+        let store = inner.store_mut();
 
         if let Some(ref new_text) = text_val {
-            let (existing_vec, existing_meta) = inner
-                .store
+            let (existing_vec, existing_meta) = store
                 .get(&id)
                 .ok_or_else(|| Error::from_reason(format!("Vector with ID '{}' not found", id)))?;
 
@@ -434,22 +451,15 @@ impl VectorDatabase {
                 final_meta = serde_json::json!({"text": new_text});
             }
 
-            if inner.store.has_text_search() {
-                inner
-                    .store
+            if store.has_text_search() {
+                store
                     .set_with_text(&id, final_vec, new_text, final_meta)
                     .map_err(convert_error)?;
             } else {
-                inner
-                    .store
-                    .set(&id, final_vec, final_meta)
-                    .map_err(convert_error)?;
+                store.set(&id, final_vec, final_meta).map_err(convert_error)?;
             }
         } else {
-            inner
-                .store
-                .update(&id, vector, metadata_val)
-                .map_err(convert_error)?;
+            store.update(&id, vector, metadata_val).map_err(convert_error)?;
         }
 
         Ok(())
@@ -459,7 +469,7 @@ impl VectorDatabase {
     #[napi(getter)]
     pub fn length(&self) -> u32 {
         let inner = self.inner.read();
-        inner.store.len() as u32
+        inner.store().len() as u32
     }
 
     /// Get vector dimensions of this database.
@@ -484,7 +494,7 @@ impl VectorDatabase {
     #[napi]
     pub fn is_empty(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.len() == 0
+        inner.store().len() == 0
     }
 
     /// Get database statistics.
@@ -493,7 +503,7 @@ impl VectorDatabase {
         let inner = self.inner.read();
         StatsResult {
             dimensions: self.live_dimensions(),
-            count: inner.store.len() as u32,
+            count: inner.store().len() as u32,
             path: self.path.clone(),
         }
     }
@@ -502,7 +512,7 @@ impl VectorDatabase {
     #[napi]
     pub fn info(&self) -> InfoResult {
         let inner = self.inner.read();
-        let info = inner.store.info();
+        let info = inner.store().info();
         InfoResult {
             vector_count: info.vector_count as u32,
             deleted_count: info.deleted_count as u32,
@@ -528,21 +538,21 @@ impl VectorDatabase {
     #[napi]
     pub fn schema(&self) -> CollectionSchemaResult {
         let inner = self.inner.read();
-        inner.store.schema().into()
+        inner.store().schema().into()
     }
 
     /// Get current ef_search value.
     #[napi(getter, js_name = "efSearch")]
     pub fn get_ef_search(&self) -> u32 {
         let inner = self.inner.read();
-        inner.store.ef_search() as u32
+        inner.store().ef_search() as u32
     }
 
     /// Set ef_search value.
     #[napi(setter, js_name = "efSearch")]
     pub fn set_ef_search(&self, ef_search: u32) {
         let inner = self.inner.write();
-        inner.store.set_ef_search(ef_search as usize);
+        inner.store().set_ef_search(ef_search as usize);
     }
 
     /// Compact the database by removing deleted records and reclaiming space.
@@ -563,7 +573,7 @@ impl VectorDatabase {
     #[napi]
     pub fn compact(&self) -> Result<u32> {
         let inner = self.inner.write();
-        let removed = inner.store.compact().map_err(convert_error)?;
+        let removed = inner.store().compact().map_err(convert_error)?;
         Ok(removed as u32)
     }
 
@@ -577,14 +587,15 @@ impl VectorDatabase {
     /// object destruction like Python's `del`.
     #[napi]
     pub fn close(&self) -> Result<()> {
-        let dimensions = self.live_dimensions() as usize;
-        let mut inner = self.inner.write();
-        inner.store.flush().map_err(convert_error)?;
-        let dummy_store = VectorStoreOptions::default()
-            .dimensions(dimensions)
-            .build()
-            .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
-        inner.store = dummy_store;
+        let store = {
+            let mut inner = self.inner.write();
+            match inner.store.take() {
+                Some(store) => store,
+                None => return Ok(()),
+            }
+        };
+
+        store.flush().map_err(convert_error)?;
         Ok(())
     }
 
@@ -597,7 +608,7 @@ impl VectorDatabase {
     #[napi]
     pub fn optimize(&self) -> Result<u32> {
         let inner = self.inner.write();
-        let stats = inner.store.optimize().map_err(convert_error)?;
+        let stats = inner.store().optimize().map_err(convert_error)?;
         Ok(stats.vectors_reordered as u32)
     }
 
@@ -623,15 +634,15 @@ impl VectorDatabase {
             let mut inner = self.inner.write();
             let other_inner = other.inner.read();
             inner
-                .store
-                .merge_from_with_prefix(&other_inner.store, key_prefix.as_deref())
+                .store_mut()
+                .merge_from_with_prefix(&other_inner.store(), key_prefix.as_deref())
                 .map_err(convert_error)?
         } else {
             let other_inner = other.inner.read();
             let mut inner = self.inner.write();
             inner
-                .store
-                .merge_from_with_prefix(&other_inner.store, key_prefix.as_deref())
+                .store_mut()
+                .merge_from_with_prefix(&other_inner.store(), key_prefix.as_deref())
                 .map_err(convert_error)?
         };
 
@@ -645,7 +656,7 @@ impl VectorDatabase {
     #[napi]
     pub fn ids(&self) -> Vec<String> {
         let inner = self.inner.read();
-        inner.store.ids()
+        inner.store().ids()
     }
 
     /// Get all items as array of {id, vector, metadata}.
@@ -656,7 +667,7 @@ impl VectorDatabase {
     pub fn items(&self) -> Vec<GetResult> {
         let inner = self.inner.read();
         inner
-            .store
+            .store()
             .items()
             .into_iter()
             .map(|(id, vector, metadata)| GetResult {
@@ -674,7 +685,7 @@ impl VectorDatabase {
     #[napi]
     pub fn exists(&self, id: String) -> bool {
         let inner = self.inner.read();
-        inner.store.contains(&id)
+        inner.store().contains(&id)
     }
 
     /// Get multiple vectors by ID.
@@ -688,7 +699,7 @@ impl VectorDatabase {
         let inner = self.inner.read();
         ids.iter()
             .map(|id| {
-                inner.store.get(id).map(|(vec, metadata)| GetResult {
+                inner.store().get(id).map(|(vec, metadata)| GetResult {
                     id: id.clone(),
                     vector: Float32Array::new(vec.data),
                     metadata,

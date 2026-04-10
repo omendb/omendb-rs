@@ -89,14 +89,14 @@ impl VectorDatabase {
     #[napi(js_name = "enableSparse")]
     pub fn enable_sparse(&self) {
         let mut inner = self.inner.write();
-        inner.store.enable_sparse();
+        inner.store_mut().enable_sparse();
     }
 
     /// Check if sparse indexing is enabled.
     #[napi(getter, js_name = "hasSparse")]
     pub fn has_sparse(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.has_sparse()
+        inner.store().has_sparse()
     }
 
     /// Insert or update a sparse vector.
@@ -123,7 +123,7 @@ impl VectorDatabase {
 
         let mut inner = self.inner.write();
         inner
-            .store
+            .store_mut()
             .set_sparse(&id, sparse_vec, meta)
             .map_err(convert_error)
     }
@@ -155,7 +155,7 @@ impl VectorDatabase {
 
         let mut inner = self.inner.write();
         inner
-            .store
+            .store_mut()
             .set_hybrid_sparse(&id, dense, sparse_vec, meta)
             .map_err(convert_error)
     }
@@ -192,7 +192,7 @@ impl VectorDatabase {
 
         let inner = self.inner.read();
         let results = inner
-            .store
+            .store()
             .sparse_search(&sparse_query, k as usize, metadata_filter.as_ref())
             .map_err(convert_error)?;
 
@@ -266,16 +266,16 @@ impl VectorDatabase {
         // Ensure index is ready
         {
             let inner = self.inner.read();
-            if inner.store.needs_index_rebuild() {
+            if inner.store().needs_index_rebuild() {
                 drop(inner);
-                let inner = self.inner.write();
-                inner.store.ensure_index_ready().map_err(convert_error)?;
+                let mut inner = self.inner.write();
+                inner.store_mut().ensure_index_ready().map_err(convert_error)?;
             }
         }
 
         let inner = self.inner.read();
         let results = inner
-            .store
+            .store()
             .hybrid_sparse_search(
                 &dense_query,
                 &sparse_q,

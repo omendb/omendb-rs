@@ -88,10 +88,10 @@ impl VectorDatabase {
         let (parent_dimensions, parent_token_dimension, parent_is_multi, parent_multi_config) = {
             let inner = self.inner.read();
             (
-                inner.store.dimensions(),
-                inner.store.token_dimension(),
-                inner.store.is_multi_vector(),
-                inner.store.multi_vector_config(),
+                inner.store().dimensions(),
+                inner.store().token_dimension(),
+                inner.store().is_multi_vector(),
+                inner.store().multi_vector_config(),
             )
         };
 
@@ -113,7 +113,9 @@ impl VectorDatabase {
             VectorStore::open_with_dimensions(&collection_path, current_dimensions as usize)
                 .map_err(crate::conversions::convert_error)?
         };
-        let inner = Arc::new(RwLock::new(VectorDatabaseInner { store }));
+        let inner = Arc::new(RwLock::new(VectorDatabaseInner {
+            store: Some(store),
+        }));
 
         cache.insert(name, Arc::clone(&inner));
 

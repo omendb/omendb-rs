@@ -74,7 +74,7 @@ impl VectorDatabase {
         let weight = weight.unwrap_or(1.0) as f32;
         self.inner
             .write()
-            .store
+            .store_mut()
             .add_edge(&from_id, &to_id, &edge_type, weight, metadata)
             .map_err(convert_error)
     }
@@ -86,7 +86,7 @@ impl VectorDatabase {
     pub fn remove_edge(&self, from_id: String, to_id: String, edge_type: String) -> Result<bool> {
         self.inner
             .write()
-            .store
+            .store_mut()
             .remove_edge(&from_id, &to_id, &edge_type)
             .map_err(convert_error)
     }
@@ -107,7 +107,7 @@ impl VectorDatabase {
         let edges = self
             .inner
             .read()
-            .store
+            .store()
             .get_edges(&id, dir, edge_type.as_deref());
         Ok(edges
             .into_iter()
@@ -141,7 +141,7 @@ impl VectorDatabase {
         Ok(self
             .inner
             .read()
-            .store
+            .store()
             .traverse(&start_id, dir, depth, edge_type.as_deref()))
     }
 
@@ -162,7 +162,7 @@ impl VectorDatabase {
         Ok(self
             .inner
             .read()
-            .store
+            .store()
             .expand(&ids, dir, edge_type.as_deref()))
     }
 
@@ -171,7 +171,7 @@ impl VectorDatabase {
     pub fn edge_count(&self) -> u32 {
         self.inner
             .read()
-            .store
+            .store()
             .edge_count()
             .try_into()
             .unwrap_or(u32::MAX)
@@ -187,7 +187,7 @@ impl VectorDatabase {
     ) -> Option<EdgeResult> {
         self.inner
             .read()
-            .store
+            .store()
             .get_edge(&from_id, &to_id, &edge_type)
             .map(edge_to_result)
     }
@@ -204,7 +204,7 @@ impl VectorDatabase {
         Ok(self
             .inner
             .read()
-            .store
+            .store()
             .neighbors(&id, dir, edge_type.as_deref()))
     }
 
@@ -220,7 +220,7 @@ impl VectorDatabase {
         Ok(self
             .inner
             .read()
-            .store
+            .store()
             .node_degree(&id, dir, edge_type.as_deref()) as u32)
     }
 
@@ -239,7 +239,7 @@ impl VectorDatabase {
         Ok(self
             .inner
             .read()
-            .store
+            .store()
             .has_path(&from_id, &to_id, dir, depth, edge_type.as_deref()))
     }
 
@@ -255,7 +255,7 @@ impl VectorDatabase {
     ) -> Result<Option<Vec<String>>> {
         let dir = parse_direction(direction.as_deref().unwrap_or("outgoing"))?;
         let depth = max_depth.unwrap_or(10) as usize;
-        Ok(self.inner.read().store.shortest_path(
+        Ok(self.inner.read().store().shortest_path(
             &from_id,
             &to_id,
             dir,
@@ -278,7 +278,7 @@ impl VectorDatabase {
         let hits =
             self.inner
                 .read()
-                .store
+                .store()
                 .traverse_edges(&start_id, dir, depth, edge_type.as_deref());
         Ok(hits
             .into_iter()
@@ -304,7 +304,7 @@ impl VectorDatabase {
         let sg = self
             .inner
             .read()
-            .store
+            .store()
             .subgraph(&id, depth, dir, edge_type.as_deref());
         Ok(SubgraphResult {
             node_ids: sg.node_ids,
@@ -327,7 +327,7 @@ impl VectorDatabase {
             .collect();
         self.inner
             .write()
-            .store
+            .store_mut()
             .add_edges(edge_vec)
             .map(|n| n as u32)
             .map_err(convert_error)
@@ -336,13 +336,13 @@ impl VectorDatabase {
     /// Get all unique edge types.
     #[napi(js_name = "edgeTypes")]
     pub fn edge_types(&self) -> Vec<String> {
-        self.inner.read().store.edge_types()
+        self.inner.read().store().edge_types()
     }
 
     /// Get all node IDs with edges.
     #[napi(js_name = "nodeIds")]
     pub fn node_ids(&self) -> Vec<String> {
-        self.inner.read().store.node_ids()
+        self.inner.read().store().node_ids()
     }
 }
 

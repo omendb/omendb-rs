@@ -35,7 +35,7 @@ impl VectorDatabaseIdIterator {
 
             // Check if ID still exists
             let inner = self.inner.read();
-            if inner.store.contains(id) {
+            if inner.store().contains(id) {
                 return Some(id.clone());
             }
             // Item was deleted during iteration, continue to next
@@ -73,7 +73,7 @@ impl VectorDatabaseIterator {
 
             // Fetch item lazily - only loads one vector at a time
             let inner = self.inner.read();
-            if let Some((vec, meta)) = inner.store.get(id) {
+            if let Some((vec, meta)) = inner.store().get(id) {
                 let mut result = HashMap::new();
                 result.insert(
                     "id".to_string(),

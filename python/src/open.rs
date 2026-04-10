@@ -385,7 +385,9 @@ pub(crate) fn open(
             }
 
             return Ok(VectorDatabase {
-                inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+                inner: Arc::new(RwLock::new(VectorDatabaseInner {
+                    store: Some(store),
+                })),
                 path,
                 is_persistent: false,
                 embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
@@ -415,7 +417,9 @@ pub(crate) fn open(
             .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
 
         return Ok(VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+            inner: Arc::new(RwLock::new(VectorDatabaseInner {
+                store: Some(store),
+            })),
             path,
             is_persistent: false,
             embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
@@ -447,7 +451,9 @@ pub(crate) fn open(
             }
 
             return Ok(VectorDatabase {
-                inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+                inner: Arc::new(RwLock::new(VectorDatabaseInner {
+                    store: Some(store),
+                })),
                 path,
                 is_persistent: true,
                 embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),
@@ -483,7 +489,9 @@ pub(crate) fn open(
         .map_err(|e| PyValueError::new_err(format!("Failed to create store: {}", e)))?;
 
     Ok(VectorDatabase {
-        inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+        inner: Arc::new(RwLock::new(VectorDatabaseInner {
+            store: Some(store),
+        })),
         path,
         is_persistent: false,
         embedding_fn,
@@ -509,7 +517,9 @@ pub(crate) fn create(
     };
 
     Ok(VectorDatabase {
-        inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+        inner: Arc::new(RwLock::new(VectorDatabaseInner {
+            store: Some(store),
+        })),
         path,
         is_persistent,
         embedding_fn: embedding_fn.as_ref().map(|f| f.clone_ref(py)),

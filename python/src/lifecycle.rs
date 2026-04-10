@@ -1,6 +1,5 @@
 use crate::conversions::convert_error;
 use crate::database::VectorDatabase;
-use omendb_lib::vector::VectorStoreOptions;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -16,16 +15,16 @@ impl VectorDatabase {
     ///     >>> db.flush()  # Text now searchable
     fn flush(&self) -> PyResult<()> {
         let inner = self.inner.write();
-        inner.store.flush().map_err(convert_error)
+        inner.store().flush().map_err(convert_error)
     }
 
     /// Close the database and release file locks.
     ///
-    /// Flushes pending changes to disk, then replaces the internal store
-    /// with an empty in-memory database to release file handles.
+    /// Flushes pending changes to disk, then drops the live store handle to
+    /// release file locks.
     ///
     /// After calling close(), the database is no longer usable.
-    /// Any subsequent operations will fail or return empty results.
+    /// Any subsequent operations will fail with a closed-database error.
     ///
     /// This is useful when you need to reopen the same database path
     /// in the same process without relying on garbage collection.
@@ -34,27 +33,27 @@ impl VectorDatabase {
     ///     For most use cases, prefer the context manager (`with` statement)
     ///     which automatically flushes on exit:
     ///
-    ///         with omendb.open("./db", dimensions=128) as db:
+    ///         with omendb.create(":memory:", {"dense": {"dim": 128}}) as db:
     ///             db.set([...])
     ///         # Flushed automatically
     ///
     /// Examples:
-    ///     >>> db = omendb.open("./mydb", dimensions=128)
+    ///     >>> db = omendb.create("./mydb", {"dense": {"dim": 128}})
     ///     >>> db.set([{"id": "1", "vector": [0.1] * 128}])
     ///     >>> db.close()  # Release file locks
     ///     >>> # Can now reopen the same path
-    ///     >>> db = omendb.open("./mydb", dimensions=128)
+    ///     >>> db = omendb.open("./mydb")
     fn close(&self) -> PyResult<()> {
-        let dimensions = self.live_dimensions();
-        let mut inner = self.inner.write();
-        // Flush first to ensure all data is persisted
-        inner.store.flush().map_err(convert_error)?;
-        // Replace with minimal in-memory store to release file lock
-        let dummy_store = VectorStoreOptions::default()
-            .dimensions(dimensions)
-            .build()
-            .map_err(convert_error)?;
-        inner.store = dummy_store;
+        let store = {
+            let mut inner = self.inner.write();
+            match inner.store.take() {
+                Some(store) => store,
+                None => return Ok(()),
+            }
+        };
+
+        // Flush after releasing the lock so close cannot self-deadlock.
+        store.flush().map_err(convert_error)?;
         Ok(())
     }
 
@@ -87,7 +86,7 @@ impl VectorDatabase {
     ///     Call periodically after bulk deletes, not after every delete.
     fn compact(&self) -> PyResult<usize> {
         let inner = self.inner.write();
-        inner.store.compact().map_err(convert_error)
+        inner.store().compact().map_err(convert_error)
     }
 
     /// Merge vectors from another database into this one.
@@ -126,15 +125,15 @@ impl VectorDatabase {
             let mut inner = self.inner.write();
             let other_inner = other.inner.read();
             inner
-                .store
-                .merge_from_with_prefix(&other_inner.store, key_prefix)
+                .store_mut()
+                .merge_from_with_prefix(&other_inner.store(), key_prefix)
                 .map_err(convert_error)
         } else {
             let other_inner = other.inner.read();
             let mut inner = self.inner.write();
             inner
-                .store
-                .merge_from_with_prefix(&other_inner.store, key_prefix)
+                .store_mut()
+                .merge_from_with_prefix(&other_inner.store(), key_prefix)
                 .map_err(convert_error)
         }
     }
@@ -156,7 +155,7 @@ impl VectorDatabase {
     ///     >>> db.search(...)  # Faster queries
     fn optimize(&mut self) -> PyResult<usize> {
         let inner = self.inner.write();
-        let stats = inner.store.optimize().map_err(convert_error)?;
+        let stats = inner.store().optimize().map_err(convert_error)?;
         Ok(stats.vectors_reordered)
     }
 }

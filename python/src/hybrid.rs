@@ -31,7 +31,7 @@ impl VectorDatabase {
         let config = parse_text_search_config(config)?;
 
         inner
-            .store
+            .store_mut()
             .enable_text_search_with_config(config)
             .map_err(convert_error)
     }
@@ -42,7 +42,7 @@ impl VectorDatabase {
     ///     bool: True if text search is enabled
     fn has_text_search(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.has_text_search()
+        inner.store().has_text_search()
     }
 
     /// Search using text only (BM25 scoring).
@@ -67,11 +67,11 @@ impl VectorDatabase {
         let inner = self.inner.write();
 
         // Auto-flush text index to ensure search sees latest inserts
-        if inner.store.has_text_search() {
-            inner.store.flush().map_err(convert_error)?;
+        if inner.store().has_text_search() {
+            inner.store().flush().map_err(convert_error)?;
         }
 
-        let results = inner.store.search_text(query, k).map_err(convert_error)?;
+        let results = inner.store().search_text(query, k).map_err(convert_error)?;
 
         let mut py_results = Vec::with_capacity(results.len());
         for (id, score) in results {
@@ -80,7 +80,7 @@ impl VectorDatabase {
             dict.set_item("score", score)?;
 
             // Include metadata for consistency with search_hybrid
-            if let Some((_, meta)) = inner.store.get(&id) {
+            if let Some((_, meta)) = inner.store().get(&id) {
                 dict.set_item("metadata", json_to_pyobject(py, &meta)?)?;
             } else {
                 dict.set_item("metadata", PyDict::new(py))?;
@@ -184,14 +184,14 @@ impl VectorDatabase {
         let inner = self.inner.write();
 
         // Auto-flush text index to ensure search sees latest inserts
-        if inner.store.has_text_search() {
-            inner.store.flush().map_err(convert_error)?;
+        if inner.store().has_text_search() {
+            inner.store().flush().map_err(convert_error)?;
         }
 
         // Use subscores path when requested
         if subscores.unwrap_or(false) {
             let results = inner
-                .store
+                .store()
                 .search_hybrid_with_subscores(
                     &query_vec,
                     &actual_query_text,
@@ -225,7 +225,7 @@ impl VectorDatabase {
 
         // Standard path without subscores
         let results = inner
-            .store
+            .store()
             .search_hybrid(
                 &query_vec,
                 &actual_query_text,

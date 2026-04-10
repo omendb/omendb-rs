@@ -15,7 +15,7 @@ impl VectorDatabase {
     #[napi(getter)]
     pub fn has_text_search(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.has_text_search()
+        inner.store().has_text_search()
     }
 
     /// Search using text only (BM25 scoring).
@@ -31,15 +31,15 @@ impl VectorDatabase {
 
         {
             let inner = self.inner.write();
-            if inner.store.has_text_search() {
-                inner.store.flush().map_err(convert_error)?;
+            if inner.store().has_text_search() {
+                inner.store().flush().map_err(convert_error)?;
             }
         }
 
         let inner = self.inner.read();
 
         let results = inner
-            .store
+            .store()
             .search_text(&query, k as usize)
             .map_err(convert_error)?;
 
@@ -47,7 +47,7 @@ impl VectorDatabase {
             .into_iter()
             .map(|(id, score)| {
                 let metadata = inner
-                    .store
+                    .store()
                     .get_metadata_by_id(&id)
                     .unwrap_or(serde_json::json!({}));
                 TextSearchResult {
@@ -162,8 +162,8 @@ impl VectorDatabase {
 
         {
             let inner = self.inner.write();
-            if inner.store.has_text_search() {
-                inner.store.flush().map_err(convert_error)?;
+            if inner.store().has_text_search() {
+                inner.store().flush().map_err(convert_error)?;
             }
         }
 
@@ -171,7 +171,7 @@ impl VectorDatabase {
 
         if subscores.unwrap_or(false) {
             let results = inner
-                .store
+                .store()
                 .search_hybrid_with_subscores(
                     &query_vec,
                     &actual_query_text,
@@ -195,7 +195,7 @@ impl VectorDatabase {
         }
 
         let results = inner
-            .store
+            .store()
             .search_hybrid(
                 &query_vec,
                 &actual_query_text,
@@ -224,6 +224,6 @@ impl VectorDatabase {
     #[napi]
     pub fn flush(&self) -> Result<()> {
         let inner = self.inner.write();
-        inner.store.flush().map_err(convert_error)
+        inner.store().flush().map_err(convert_error)
     }
 }

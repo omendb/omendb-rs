@@ -102,17 +102,17 @@ impl VectorDatabase {
 
         {
             let inner = self.inner.read();
-            if inner.store.needs_index_rebuild() {
+            if inner.store().needs_index_rebuild() {
                 drop(inner);
-                let inner = self.inner.write();
-                inner.store.ensure_index_ready().map_err(convert_error)?;
+                let mut inner = self.inner.write();
+                inner.store_mut().ensure_index_ready().map_err(convert_error)?;
             }
         }
 
         let inner = self.inner.read();
-        let metric = inner.store.metric();
+        let metric = inner.store().metric();
         let results = inner
-            .store
+            .store()
             .search_with_options(
                 &query_vec,
                 k as usize,
@@ -174,9 +174,9 @@ impl VectorDatabase {
         let options = SearchOptions::default().rerank(rerank_opt);
 
         let inner = self.inner.read();
-        let metric = inner.store.metric();
+        let metric = inner.store().metric();
         let results = inner
-            .store
+            .store()
             .query_with_options(&query_tokens, k as usize, &options)
             .map_err(convert_error)?;
 
@@ -223,8 +223,8 @@ impl VectorDatabase {
             .collect();
 
         {
-            let inner = self.inner.write();
-            inner.store.ensure_index_ready().map_err(convert_error)?;
+            let mut inner = self.inner.write();
+            inner.store_mut().ensure_index_ready().map_err(convert_error)?;
         }
 
         let inner_arc = Arc::clone(&self.inner);
@@ -233,12 +233,12 @@ impl VectorDatabase {
 
         let metric = {
             let inner = self.inner.read();
-            inner.store.metric()
+            inner.store().metric()
         };
 
         let output = tokio::task::spawn_blocking(move || {
             let inner = inner_arc.read();
-            let all_results = inner.store.search_batch(&query_vecs, k_usize, ef_usize);
+            let all_results = inner.store().search_batch(&query_vecs, k_usize, ef_usize);
 
             let mut output = Vec::with_capacity(all_results.len());
             for result in all_results {

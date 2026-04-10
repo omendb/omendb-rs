@@ -55,9 +55,9 @@ impl VectorDatabase {
         metadata: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let meta_json = metadata.map(|m| pyobject_to_json(&m)).transpose()?;
-        self.inner
-            .write()
-            .store
+        let mut inner = self.inner.write();
+        inner
+            .store_mut()
             .add_edge(from_id, to_id, edge_type, weight, meta_json)
             .map_err(convert_error)
     }
@@ -68,9 +68,9 @@ impl VectorDatabase {
     ///     bool: True if an edge was found and removed
     #[pyo3(signature = (from_id, to_id, edge_type))]
     pub fn remove_edge(&self, from_id: &str, to_id: &str, edge_type: &str) -> PyResult<bool> {
-        self.inner
-            .write()
-            .store
+        let mut inner = self.inner.write();
+        inner
+            .store_mut()
             .remove_edge(from_id, to_id, edge_type)
             .map_err(convert_error)
     }
@@ -92,7 +92,7 @@ impl VectorDatabase {
         edge_type: Option<&str>,
     ) -> PyResult<Bound<'py, PyList>> {
         let dir = parse_direction(direction)?;
-        let edges = self.inner.read().store.get_edges(id, dir, edge_type);
+        let edges = self.inner.read().store().get_edges(id, dir, edge_type);
         let list = PyList::empty(py);
         for edge in &edges {
             list.append(edge_to_dict(py, edge)?)?;
@@ -120,11 +120,7 @@ impl VectorDatabase {
         edge_type: Option<&str>,
     ) -> PyResult<Bound<'py, PyList>> {
         let dir = parse_direction(direction)?;
-        let ids = self
-            .inner
-            .read()
-            .store
-            .traverse(start_id, dir, max_depth, edge_type);
+        let ids = self.inner.read().store().traverse(start_id, dir, max_depth, edge_type);
         let list = PyList::empty(py);
         for id in &ids {
             list.append(PyString::new(py, id))?;
@@ -152,7 +148,7 @@ impl VectorDatabase {
         edge_type: Option<&str>,
     ) -> PyResult<Bound<'py, PyList>> {
         let dir = parse_direction(direction)?;
-        let expanded = self.inner.read().store.expand(&ids, dir, edge_type);
+        let expanded = self.inner.read().store().expand(&ids, dir, edge_type);
         let list = PyList::empty(py);
         for id in &expanded {
             list.append(PyString::new(py, id))?;
@@ -162,7 +158,7 @@ impl VectorDatabase {
 
     /// Number of edges in the graph.
     pub fn edge_count(&self) -> usize {
-        self.inner.read().store.edge_count()
+        self.inner.read().store().edge_count()
     }
 
     /// Look up a single edge by endpoints and type.
@@ -179,7 +175,7 @@ impl VectorDatabase {
     ) -> PyResult<Option<Py<PyDict>>> {
         self.inner
             .read()
-            .store
+            .store()
             .get_edge(from_id, to_id, edge_type)
             .map(|e| edge_to_dict(py, &e))
             .transpose()
@@ -198,7 +194,7 @@ impl VectorDatabase {
         edge_type: Option<&str>,
     ) -> PyResult<Bound<'py, PyList>> {
         let dir = parse_direction(direction)?;
-        let ids = self.inner.read().store.neighbors(id, dir, edge_type);
+        let ids = self.inner.read().store().neighbors(id, dir, edge_type);
         let list = PyList::empty(py);
         for id in &ids {
             list.append(PyString::new(py, id))?;
@@ -218,7 +214,7 @@ impl VectorDatabase {
         edge_type: Option<&str>,
     ) -> PyResult<usize> {
         let dir = parse_direction(direction)?;
-        Ok(self.inner.read().store.node_degree(id, dir, edge_type))
+        Ok(self.inner.read().store().node_degree(id, dir, edge_type))
     }
 
     /// Check if a path exists between two nodes.
@@ -238,7 +234,7 @@ impl VectorDatabase {
         Ok(self
             .inner
             .read()
-            .store
+            .store()
             .has_path(from_id, to_id, dir, max_depth, edge_type))
     }
 
@@ -260,7 +256,7 @@ impl VectorDatabase {
         match self
             .inner
             .read()
-            .store
+            .store()
             .shortest_path(from_id, to_id, dir, max_depth, edge_type)
         {
             Some(path) => {
@@ -291,7 +287,7 @@ impl VectorDatabase {
         let hits = self
             .inner
             .read()
-            .store
+            .store()
             .traverse_edges(start_id, dir, max_depth, edge_type);
         let list = PyList::empty(py);
         for hit in &hits {
@@ -321,7 +317,7 @@ impl VectorDatabase {
         let sg = self
             .inner
             .read()
-            .store
+            .store()
             .subgraph(id, max_depth, dir, edge_type);
         let dict = PyDict::new(py);
         let node_list = PyList::empty(py);
@@ -374,11 +370,8 @@ impl VectorDatabase {
                 metadata,
             });
         }
-        self.inner
-            .write()
-            .store
-            .add_edges(edge_vec)
-            .map_err(convert_error)
+        let mut inner = self.inner.write();
+        inner.store_mut().add_edges(edge_vec).map_err(convert_error)
     }
 
     /// Get all unique edge types.
@@ -386,7 +379,7 @@ impl VectorDatabase {
     /// Returns:
     ///     list[str]: Unique edge type strings
     pub fn edge_types<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
-        let types = self.inner.read().store.edge_types();
+        let types = self.inner.read().store().edge_types();
         let list = PyList::empty(py);
         for t in &types {
             list.append(PyString::new(py, t)).expect("append edge type");
@@ -399,7 +392,7 @@ impl VectorDatabase {
     /// Returns:
     ///     list[str]: Node IDs
     pub fn node_ids<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
-        let ids = self.inner.read().store.node_ids();
+        let ids = self.inner.read().store().node_ids();
         let list = PyList::empty(py);
         for id in &ids {
             list.append(PyString::new(py, id)).expect("append node id");

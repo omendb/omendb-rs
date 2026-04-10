@@ -25,7 +25,7 @@ impl VectorDatabase {
     ///     ValueError: If name is empty or contains invalid characters
     ///
     /// Examples:
-    ///     >>> db = omendb.open("./mydb", dimensions=128)
+    ///     >>> db = omendb.create("./mydb", {"dense": {"dim": 128}})
     ///     >>> users = db.collection("users")
     ///     >>> products = db.collection("products")
     ///     >>> users.set([{"id": "u1", "vector": [...]}])
@@ -94,10 +94,10 @@ impl VectorDatabase {
         let (parent_dimensions, parent_token_dimension, parent_is_multi, parent_multi_config) = {
             let inner = self.inner.read();
             (
-                inner.store.dimensions(),
-                inner.store.token_dimension(),
-                inner.store.is_multi_vector(),
-                inner.store.multi_vector_config(),
+                inner.store().dimensions(),
+                inner.store().token_dimension(),
+                inner.store().is_multi_vector(),
+                inner.store().multi_vector_config(),
             )
         };
 
@@ -122,7 +122,9 @@ impl VectorDatabase {
                 .map_err(convert_error)?
         };
         let collection_db = VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+            inner: Arc::new(RwLock::new(VectorDatabaseInner {
+                store: Some(store),
+            })),
             path: collection_path.to_string_lossy().to_string(),
             is_persistent: true,
             embedding_fn: embedding_fn
@@ -183,7 +185,7 @@ impl VectorDatabase {
     ///     RuntimeError: If deletion fails
     ///
     /// Examples:
-    ///     >>> db = omendb.open("./mydb", dimensions=128)
+    ///     >>> db = omendb.create("./mydb", {"dense": {"dim": 128}})
     ///     >>> db.delete_collection("old_data")
     fn delete_collection(&self, name: String) -> PyResult<()> {
         if !self.is_persistent {

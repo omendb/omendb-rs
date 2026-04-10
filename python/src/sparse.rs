@@ -61,7 +61,7 @@ impl VectorDatabase {
     ///     True
     fn enable_sparse(&self) -> PyResult<()> {
         let mut inner = self.inner.write();
-        inner.store.enable_sparse();
+        inner.store_mut().enable_sparse();
         Ok(())
     }
 
@@ -71,7 +71,7 @@ impl VectorDatabase {
     ///     bool: True if sparse indexing is enabled
     fn has_sparse(&self) -> bool {
         let inner = self.inner.read();
-        inner.store.has_sparse()
+        inner.store().has_sparse()
     }
 
     /// Insert or update a sparse vector.
@@ -107,7 +107,7 @@ impl VectorDatabase {
 
         let mut inner = self.inner.write();
         inner
-            .store
+            .store_mut()
             .set_sparse(id, sparse, meta)
             .map_err(convert_error)
     }
@@ -141,7 +141,7 @@ impl VectorDatabase {
 
         let mut inner = self.inner.write();
         inner
-            .store
+            .store_mut()
             .set_hybrid_sparse(id, Vector::new(vector), sparse, meta)
             .map_err(convert_error)
     }
@@ -182,7 +182,7 @@ impl VectorDatabase {
         let results = py.detach(|| {
             let inner = inner_arc.read();
             inner
-                .store
+                .store()
                 .sparse_search(&query, k, rust_filter.as_ref())
                 .map_err(convert_error)
         })?;
@@ -250,10 +250,10 @@ impl VectorDatabase {
         // Ensure index is ready
         {
             let inner = self.inner.read();
-            if inner.store.needs_index_rebuild() {
+            if inner.store().needs_index_rebuild() {
                 drop(inner);
                 let inner = self.inner.write();
-                inner.store.ensure_index_ready().map_err(convert_error)?;
+                inner.store().ensure_index_ready().map_err(convert_error)?;
             }
         }
 
@@ -261,7 +261,7 @@ impl VectorDatabase {
         let results = py.detach(|| {
             let inner = inner_arc.read();
             inner
-                .store
+                .store()
                 .hybrid_sparse_search(&dense_query, &sparse_query, k, alpha, rust_filter.as_ref())
                 .map_err(convert_error)
         })?;

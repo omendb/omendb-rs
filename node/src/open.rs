@@ -423,7 +423,9 @@ pub fn open(
                 .map_err(convert_error)?;
         }
         return Ok(VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+            inner: Arc::new(RwLock::new(VectorDatabaseInner {
+                store: Some(store),
+            })),
             path,
             is_persistent: false,
             embedding_fn: embedding_tsfn.clone(),
@@ -452,7 +454,9 @@ pub fn open(
         }
 
         return Ok(VectorDatabase {
-            inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+            inner: Arc::new(RwLock::new(VectorDatabaseInner {
+                store: Some(store),
+            })),
             path,
             is_persistent: true,
             embedding_fn: embedding_tsfn.clone(),
@@ -489,7 +493,9 @@ pub fn create(
     };
 
     Ok(VectorDatabase {
-        inner: Arc::new(RwLock::new(VectorDatabaseInner { store })),
+        inner: Arc::new(RwLock::new(VectorDatabaseInner {
+            store: Some(store),
+        })),
         path,
         is_persistent,
         embedding_fn: embedding_fn.map(Arc::new),
