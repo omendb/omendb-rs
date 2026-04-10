@@ -22,7 +22,7 @@ def main():
         db_path = Path(tmpdir) / "vectors"
 
         # Create database (3D vectors for readability)
-        db = omendb.open(str(db_path), dimensions=3)
+        db = omendb.create(str(db_path), {"dense": {"dim": 3}})
 
         # --- INSERT ---
         # Add vectors individually or in batches
@@ -74,7 +74,7 @@ def main():
         del db
 
         # Reopen to verify persistence
-        db2 = omendb.open(str(db_path), dimensions=3)
+        db2 = omendb.open(str(db_path))
         print(f"\nReopened database: {len(db2)} vectors")
 
         # --- BATCH OPERATIONS ---

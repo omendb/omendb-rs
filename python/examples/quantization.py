@@ -21,11 +21,11 @@ dim = 64
 vectors = random_vectors(100, dim)
 
 # Full precision (default)
-db_full = omendb.open(":memory:", dimensions=dim)
+db_full = omendb.create(":memory:", {"dense": {"dim": dim}})
 db_full.set([{"id": f"v{i}", "vector": v} for i, v in enumerate(vectors)])
 
 # SQ8 quantization — 4x smaller, ~99% recall
-db_sq8 = omendb.open(":memory:", dimensions=dim, quantization="sq8")
+db_sq8 = omendb.create(":memory:", {"dense": {"dim": dim, "quantization": "sq8"}})
 db_sq8.set([{"id": f"v{i}", "vector": v} for i, v in enumerate(vectors)])
 
 # Compare search results

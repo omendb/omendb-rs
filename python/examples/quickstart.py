@@ -8,8 +8,8 @@ For more features, see basic.py, filters.py, and rag.py.
 
 import omendb
 
-# Open or create database (128-dimensional vectors)
-db = omendb.open(":memory:", dimensions=128)
+# Create database (128-dimensional vectors)
+db = omendb.create(":memory:", {"dense": {"dim": 128}})
 
 # Add some vectors with metadata
 db.set(

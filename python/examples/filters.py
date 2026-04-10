@@ -85,7 +85,7 @@ PAPERS = [
 
 def main():
     # 3D vectors for simple demonstration
-    db = omendb.open(":memory:", dimensions=3)
+    db = omendb.create(":memory:", {"dense": {"dim": 3}})
     db.set(PAPERS)
 
     query = [0.3, 0.4, 0.5]

@@ -11,10 +11,10 @@ npm install @omendb/omendb
 ## Quick Start
 
 ```typescript
-import { open } from "omendb";
+import { create, open } from "omendb";
 
-// Open or create a database
-const db = open("./vectors");
+// Create a new database
+const db = create("./vectors", { dense: { dim: 3 } });
 
 // Insert vectors
 db.set([
@@ -56,32 +56,27 @@ db.close();
 ### Opening a Database
 
 ```typescript
-import { open } from "omendb";
+import { create, open } from "omendb";
 
 // Basic
-const db = open("./vectors", { dimensions: 384 });
+const db = create("./vectors", { dense: { dim: 384 } });
 
-// Single-vector dimensions can be inferred on first insert
-const inferred = open(":memory:");
+// Reopen an existing store
+const reopened = open("./vectors");
 
 // In-memory
-const memDb = open(":memory:", { dimensions: 128 });
+const memDb = create(":memory:", { dense: { dim: 128 } });
 
 // Full options
-const db = open("./vectors", {
-  dimensions: 768,
-  m: 16, // HNSW connections per node (default: 16)
-  efConstruction: 100, // Build quality (default: 100)
-  efSearch: 100, // Search quality (default: 100)
-  quantization: "sq8", // or true / "scalar": SQ8 4x compression, ~99% recall
+const db = create("./vectors", {
   metric: "cosine", // "l2", "euclidean", "cosine", "dot", or "ip"
+  dense: { dim: 768, quantization: "sq8" }, // SQ8 4x compression, ~99% recall
 });
 
-// Multi-vector stores still require explicit token dimensions
-const mvdb = open(":memory:", {
-  dimensions: 128,
-  multiVector: true,
-  textSearch: { tokenizer: "code", writerBufferMb: 64 },
+// Multi-vector stores use explicit schema
+const mvdb = create(":memory:", {
+  metric: "dot",
+  multi: { tokenDim: 128 },
 });
 ```
 

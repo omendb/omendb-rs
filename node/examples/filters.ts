@@ -9,7 +9,7 @@
  * - Logical: $and, $or
  */
 
-import { open } from "../index.js";
+import { create } from "../index.js";
 
 // Sample dataset: research papers
 const PAPERS = [
@@ -47,7 +47,7 @@ const PAPERS = [
 
 async function main() {
 	// 3D vectors for simple demonstration
-	const db = open(":memory:", { dimensions: 3 });
+	const db = create(":memory:", { dense: { dim: 3 } });
 	await db.set(PAPERS);
 
 	const query = [0.3, 0.4, 0.5];

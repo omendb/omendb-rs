@@ -59,7 +59,7 @@ DOCS = [
 
 def main():
     # Create database
-    db = omendb.open(":memory:", dimensions=128)
+    db = omendb.create(":memory:", {"dense": {"dim": 128}})
 
     # Index documents
     items = [{"id": doc["id"], "vector": embed(doc["text"]), "metadata": doc} for doc in DOCS]

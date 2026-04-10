@@ -2,7 +2,7 @@
 
 Example (standalone):
     >>> import omendb
-    >>> db = omendb.open("./my_vectors", dimensions=128)
+    >>> db = omendb.create("./my_vectors", {"dense": {"dim": 128}})
     >>> db.set([{"id": "doc1", "vector": [0.1] * 128, "metadata": {"title": "Hello"}}])
     >>> results = db.search(query=[0.1] * 128, k=5)
 

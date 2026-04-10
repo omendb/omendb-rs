@@ -32,7 +32,7 @@ def embed(texts):
     # Your embedding model here (OpenAI, sentence-transformers, etc.)
     return [[0.1] * 384 for _ in texts]
 
-db = omendb.open("./mydb", dimensions=384, embedding_fn=embed)
+db = omendb.create("./mydb", {"dense": {"dim": 384}}, embedding_fn=embed)
 
 # Add documents -- auto-embedded
 db.set([
@@ -47,7 +47,7 @@ results = db.search("capital of France", k=5)
 **With vectors** -- bring your own embeddings:
 
 ```python
-db = omendb.open("./mydb", dimensions=128)
+db = omendb.create("./mydb", {"dense": {"dim": 128}})
 
 db.set([
     {"id": "doc1", "vector": [0.1] * 128, "metadata": {"category": "science"}},
@@ -63,9 +63,9 @@ results = db.search([0.1] * 128, k=5, filter={"category": "science"})
 **With auto-embedding:**
 
 ```javascript
-const { open } = require("omendb");
+const { create } = require("omendb");
 
-const db = open("./mydb", { dimensions: 384 }, embed);
+const db = create("./mydb", { dense: { dim: 384 } }, embed);
 await db.set([{ id: "doc1", document: "Paris is the capital of France" }]);
 const results = await db.search("capital of France", 5);
 ```
@@ -73,7 +73,7 @@ const results = await db.search("capital of France", 5);
 **With vectors:**
 
 ```javascript
-const db = open("./mydb", { dimensions: 128 });
+const db = create("./mydb", { dense: { dim: 128 } });
 await db.set([{ id: "doc1", vector: new Float32Array(128).fill(0.1) }]);
 const results = await db.search(new Float32Array(128).fill(0.1), 5);
 ```
@@ -107,10 +107,10 @@ const results = await db.search(new Float32Array(128).fill(0.1), 5);
 
 ```python
 # Database
-db = omendb.open(path, dimensions=384, embedding_fn=fn)  # With auto-embedding
-db = omendb.open(path, dimensions=384)                   # Manual vectors
-db = omendb.open(":memory:")                             # Infer dims on first insert
-mvdb = omendb.open(":memory:", dimensions=128, multi_vector=True)
+db = omendb.create(path, {"dense": {"dim": 384}}, embedding_fn=fn)  # With auto-embedding
+db = omendb.create(path, {"dense": {"dim": 384}})                   # Manual vectors
+db = omendb.create(":memory:", {"dense": {"dim": 128}})             # In-memory vectors
+mvdb = omendb.create(":memory:", {"multi": {"token_dim": 128}})     # Multi-vector store
 
 # CRUD
 db.set(items)                           # Insert/update (vectors or documents)
@@ -165,8 +165,8 @@ db.stats()                              # Database statistics
 
 ```javascript
 // Database
-const db = open(path, { dimensions, embeddingFn: fn });
-const db = open(path, { dimensions });
+const db = create(path, { dense: { dim: dimensions } }, embeddingFn: fn);
+const db = create(path, { dense: { dim: dimensions } });
 
 // CRUD
 await db.set(items);
@@ -201,14 +201,16 @@ db.optimize();
 
 ```python
 db = omendb.open(
-    "./mydb",                # Creates ./mydb.omen + ./mydb.wal
-    dimensions=384,
-    m=16,                    # HNSW connections per node (default: 16)
-    ef_construction=200,     # Index build quality (default: 100)
-    ef_search=100,           # Search quality (default: 100)
-    quantization=True,       # SQ8 quantization (default: None)
-    metric="cosine",         # Distance metric (default: "l2")
-    text_search={"tokenizer": "code", "buffer_mb": 64},
+    "./mydb",                # Reopen an existing database
+)
+
+db = omendb.create(
+    "./mydb",
+    {
+        "metric": "cosine",
+        "dense": {"dim": 384, "quantization": "sq8"},
+        "text": {"tokenizer": "code", "writer_buffer_mb": 64},
+    },
     embedding_fn=embed,      # Auto-embed documents and string queries
 )
 
@@ -226,7 +228,7 @@ db = omendb.open(
 # - {"tokenizer": "default" | "code" | "raw", "buffer_mb": 64}
 
 # Context manager (auto-flush on exit)
-with omendb.open("./db", dimensions=768) as db:
+with omendb.create("./db", {"dense": {"dim": 768}}) as db:
     db.set([...])
 ```
 
@@ -273,7 +275,7 @@ Combine vector similarity with BM25 full-text search using RRF fusion:
 
 ```python
 # With embedding_fn -- pass a string for both vector and text query
-db = omendb.open("./mydb", dimensions=384, embedding_fn=embed)
+db = omendb.create("./mydb", {"dense": {"dim": 384}}, embedding_fn=embed)
 db.set([
     {"id": "doc1", "document": "Paris is the capital of France", "metadata": {"topic": "geography"}},
 ])
@@ -299,7 +301,7 @@ db.search_text("capital of France", k=10)
 MUVERA with MaxSim scoring for ColBERT-style token-level retrieval. Token pooling via k-means reduces storage by 50%.
 
 ```python
-mvdb = omendb.open(":memory:", dimensions=128, multi_vector=True)
+mvdb = omendb.create(":memory:", {"multi": {"token_dim": 128}})
 mvdb.set([{
     "id": "doc1",
     "vectors": [[0.1]*128, [0.2]*128, [0.3]*128],  # Token embeddings

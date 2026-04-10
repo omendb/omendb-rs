@@ -11,7 +11,7 @@
  * models that produce per-token embeddings.
  */
 
-import { open } from "../index.js";
+import { create, open } from "../index.js";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -33,7 +33,7 @@ async function main() {
 	console.log("=== In-Memory Multi-Vector Search ===\n");
 
 	// Create multi-vector store with default config (good balance of speed/quality)
-	const db = open(":memory:", { dimensions: 64, multiVector: true });
+	const db = create(":memory:", { multi: { tokenDim: 64 } });
 
 	// Sample documents with token embeddings
 	const documents = [
@@ -88,7 +88,7 @@ async function main() {
 
 	try {
 		// Create persistent multi-vector store
-		const persistentDb = open(dbPath, { dimensions: 32, multiVector: true });
+		const persistentDb = create(dbPath, { multi: { tokenDim: 32 } });
 
 		// Insert documents
 		await persistentDb.set([

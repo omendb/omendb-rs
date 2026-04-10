@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 from typing import Any
 
 from langchain_core.documents import Document
@@ -49,7 +50,7 @@ class OmenDBVectorStore(VectorStore):
         path: Path to database directory. Uses persistent persistent storage.
         dimensions: Vector dimensionality. Auto-detected when loading
             existing database.
-        **kwargs: Additional arguments passed to omendb.open().
+        **kwargs: Optional schema-lowering hints such as metric and quantization.
 
     Example:
         >>> from langchain_openai import OpenAIEmbeddings
@@ -76,12 +77,13 @@ class OmenDBVectorStore(VectorStore):
             embedding: LangChain Embeddings model.
             path: Path to database directory.
             dimensions: Vector dimensionality (auto-detected from embedding if None).
-            **kwargs: Additional arguments for omendb.open().
+            **kwargs: Optional schema-lowering hints such as metric and quantization.
         """
         import omendb
 
         self._embedding = embedding
         self._path = path
+        options = dict(kwargs)
 
         # Auto-detect dimensions from embedding model if not specified
         if dimensions is None:
@@ -90,7 +92,62 @@ class OmenDBVectorStore(VectorStore):
             dimensions = len(test_embedding)
 
         self._dimensions = dimensions
-        self._db = omendb.open(path, dimensions=dimensions, **kwargs)
+        schema = self._build_schema(dimensions, options)
+        self._db = self._open_or_create_database(omendb, path, schema)
+
+        ef_search = options.pop("ef_search", None)
+        if ef_search is not None:
+            self._db.ef_search = ef_search
+
+    @staticmethod
+    def _build_schema(dimensions: int, options: dict[str, Any]) -> dict[str, Any]:
+        """Lower wrapper options into the explicit schema contract."""
+        schema: dict[str, Any] = {"dense": {"dim": dimensions}}
+
+        metric = options.get("metric")
+        if metric is not None:
+            schema["metric"] = metric
+
+        quantization = options.get("quantization")
+        if quantization in (True, "sq8", "scalar"):
+            schema["dense"]["quantization"] = "sq8"
+        elif quantization not in (None, False):
+            raise ValueError(f"Unsupported quantization: {quantization!r}")
+
+        return schema
+
+    @staticmethod
+    def _open_or_create_database(omendb_module: Any, path: str, schema: dict[str, Any]) -> Any:
+        """Create new stores through schema or reopen existing persistent ones."""
+        if path == ":memory:":
+            return omendb_module.create(path, schema)
+
+        db_path = Path(path)
+        omen_path = db_path if db_path.suffix == ".omen" else Path(f"{path}.omen")
+        if omen_path.exists():
+            db = omendb_module.open(path)
+            live_schema = db.schema()
+            live_dense = live_schema.get("dense")
+            requested_dense = schema.get("dense")
+            if live_dense is None or live_dense.get("dim") != requested_dense.get("dim"):
+                raise ValueError(
+                    "Existing database schema does not match requested LangChain dimensions"
+                )
+            requested_metric = schema.get("metric", "l2")
+            live_metric = live_schema.get("metric", "l2")
+            if live_metric != requested_metric:
+                raise ValueError(
+                    "Existing database schema does not match requested LangChain metric"
+                )
+            requested_quant = requested_dense.get("quantization", "none")
+            live_quant = live_dense.get("quantization", "none")
+            if live_quant != requested_quant:
+                raise ValueError(
+                    "Existing database schema does not match requested LangChain quantization"
+                )
+            return db
+
+        return omendb_module.create(path, schema)
 
     @property
     def embeddings(self) -> Embeddings:

@@ -1,7 +1,7 @@
-const { open } = require("../index.js");
+const { create } = require("../index.js");
 
 async function main() {
-	const db = open(":memory:", { dimensions: 128 });
+	const db = create(":memory:", { dense: { dim: 128 } });
 
 	await db.set([
 		{ id: "doc1", vector: Array(128).fill(0.1), metadata: { title: "First doc" } },

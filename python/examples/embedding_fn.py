@@ -17,8 +17,8 @@ def fake_embedder(texts: list[str]) -> list[list[float]]:
     return [[float(ord(c) % 10) / 10.0 for c in text[:4].ljust(4)] for text in texts]
 
 
-# Open with embedding function
-db = omendb.open(":memory:", dimensions=4, embedding_fn=fake_embedder)
+# Create with embedding function
+db = omendb.create(":memory:", {"dense": {"dim": 4}}, embedding_fn=fake_embedder)
 
 # Add documents — vectors computed automatically
 db.set(

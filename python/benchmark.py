@@ -154,9 +154,9 @@ def benchmark_build(
     """Benchmark index build throughput."""
     n, dim = vectors.shape
     if quantize_bits > 0:
-        db = omendb.open(db_path, dimensions=dim, quantization="sq8")
+        db = omendb.create(db_path, {"dense": {"dim": dim, "quantization": "sq8"}})
     else:
-        db = omendb.open(db_path, dimensions=dim)
+        db = omendb.create(db_path, {"dense": {"dim": dim}})
 
     if with_metadata:
         batch = [
@@ -448,7 +448,7 @@ def run_hybrid_benchmark(n_vectors: int, dim: int, n_queries: int = 100):
     query_texts = ["vector database", "machine learning", "rust performance", "search query"]
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        db = omendb.open(f"{tmpdir}/db", dimensions=dim)
+        db = omendb.create(f"{tmpdir}/db", {"dense": {"dim": dim}})
         db.enable_text_search()
 
         # Build with text

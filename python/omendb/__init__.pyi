@@ -728,10 +728,10 @@ class VectorDatabase:
         which automatically flushes on exit.
 
         Examples:
-            >>> db = omendb.open("./mydb", dimensions=128)
+            >>> db = omendb.create("./mydb", {"dense": {"dim": 128}})
             >>> db.set([{"id": "1", "vector": [0.1] * 128}])
             >>> db.close()
-            >>> db = omendb.open("./mydb", dimensions=128)  # Can reopen
+            >>> db = omendb.open("./mydb")  # Can reopen an existing store
         """
         ...
 
@@ -862,7 +862,7 @@ def open(
     rescore: bool | None = None,
     oversample: float | None = None,
 ) -> VectorDatabase:
-    """Open or create a vector database.
+    """Open an existing vector database.
 
     Args:
         path: Database path, or ":memory:" for in-memory.
@@ -896,18 +896,15 @@ def open(
         VectorDatabase instance.
 
     Examples:
-        >>> # Single-vector store
-        >>> db = omendb.open("./vectors", dimensions=768)
-        >>> db = omendb.open("./vectors", dimensions=768, quantization=True)
-        >>> db = omendb.open(":memory:", dimensions=128)
+        >>> # Reopen an existing store
+        >>> db = omendb.open("./vectors")
         >>>
-        >>> # Multi-vector store
-        >>> mvdb = omendb.open(":memory:", dimensions=128, multi_vector=True)
-        >>> mvdb = omendb.open(":memory:", dimensions=128,
-        ...                    multi_vector={"repetitions": 10, "partition_bits": 4})
+        >>> # Create new stores with explicit schema
+        >>> db = omendb.create("./vectors", {"dense": {"dim": 768}})
+        >>> db = omendb.create(":memory:", {"dense": {"dim": 128, "quantization": "sq8"}})
         >>>
         >>> # With embedding function
-        >>> db = omendb.open("./vectors", dimensions=384, embedding_fn=my_embed_fn)
+        >>> db = omendb.create("./vectors", {"dense": {"dim": 384}}, embedding_fn=my_embed_fn)
         >>> db.set([{"id": "1", "document": "Hello world"}])  # Auto-embeds
         >>> results = db.search("Hello", k=5)  # Auto-embeds query
     """

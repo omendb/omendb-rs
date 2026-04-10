@@ -2,7 +2,7 @@
  * OmenDB embeddingFn example — auto-embed documents and queries.
  */
 
-const { open } = require("../index.js");
+const { create } = require("../index.js");
 
 // Mock embedding function. Replace with your model.
 function fakeEmbedder(texts) {
@@ -13,7 +13,7 @@ function fakeEmbedder(texts) {
 }
 
 async function main() {
-  const db = open(":memory:", { dimensions: 4 }, fakeEmbedder);
+  const db = create(":memory:", { dense: { dim: 4 } }, fakeEmbedder);
 
   // Add documents — vectors computed automatically
   await db.set([

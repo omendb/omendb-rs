@@ -9,7 +9,7 @@
  * - Persistence to disk
  */
 
-import { open } from "../index.js";
+import { create, open } from "../index.js";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -21,7 +21,7 @@ async function main() {
 
 	try {
 		// Create database (3D vectors for readability)
-		const db = open(dbPath, { dimensions: 3 });
+		const db = create(dbPath, { dense: { dim: 3 } });
 
 		// --- INSERT ---
 		// Add vectors individually or in batches
@@ -66,7 +66,7 @@ async function main() {
 		db.close();
 
 		// Reopen to verify persistence
-		const db2 = open(dbPath, { dimensions: 3 });
+		const db2 = open(dbPath);
 		console.log(`\nReopened database: ${db2.length} vectors`);
 
 		// --- BATCH OPERATIONS ---
