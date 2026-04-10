@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { open, VectorDatabase } from "../index.js";
+import { create, open, VectorDatabase } from "../index.js";
 
 describe("Multi-Vector (MUVERA)", () => {
 	describe("creation", () => {
@@ -228,7 +228,10 @@ describe("Multi-Vector (MUVERA)", () => {
 			const dbPath = tempPath();
 			try {
 				// Create and populate (dProj: null for small dim)
-				const db1 = open(dbPath, { dimensions: 8, multiVector: { dProj: null } });
+				const db1 = create(dbPath, {
+					metric: "dot",
+					multi: { tokenDim: 8, dProj: null },
+				});
 				await db1.set([
 					{ id: "doc1", vectors: [new Float32Array(8).fill(0.1), new Float32Array(8).fill(0.2)], metadata: { title: "first" } },
 					{ id: "doc2", vectors: [new Float32Array(8).fill(0.3)], metadata: { title: "second" } },
@@ -257,7 +260,10 @@ describe("Multi-Vector (MUVERA)", () => {
 			const dbPath = tempPath();
 			try {
 				// Create store with docs (dProj: null for small dim)
-				const db1 = open(dbPath, { dimensions: 4, multiVector: { dProj: null } });
+				const db1 = create(dbPath, {
+					metric: "dot",
+					multi: { tokenDim: 4, dProj: null },
+				});
 				await db1.set([
 					{ id: "doc1", vectors: [[1, 0, 0, 0], [0, 1, 0, 0]], metadata: {} },
 					{ id: "doc2", vectors: [[0.3, 0.3, 0.3, 0]], metadata: {} },
@@ -286,7 +292,10 @@ describe("Multi-Vector (MUVERA)", () => {
 			const dbPath = tempPath();
 			try {
 				// Create store with 100 docs
-				const db1 = open(dbPath, { dimensions: 32, multiVector: true });
+				const db1 = create(dbPath, {
+					metric: "dot",
+					multi: { tokenDim: 32, dProj: null },
+				});
 				const items = Array.from({ length: 100 }, (_, i) => ({
 					id: `doc${i}`,
 					vectors: Array.from({ length: (i % 5) + 1 }, () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { open, VectorDatabase } from "../index.js";
+import { create, open, VectorDatabase } from "../index.js";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -45,12 +45,12 @@ describe("Embedding Function", () => {
 
 	describe("open with embeddingFn", () => {
 		it("should accept embeddingFn parameter", () => {
-			const db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			const db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			expect(db.hasEmbeddingFn).toBe(true);
 		});
 
 		it("should default to no embeddingFn", () => {
-			const db = open(dbPath, { dimensions: 4 });
+			const db = create(dbPath, { dense: { dim: 4 } });
 			expect(db.hasEmbeddingFn).toBe(false);
 		});
 
@@ -62,14 +62,14 @@ describe("Embedding Function", () => {
 
 	describe("set with document", () => {
 		it("should auto-embed single document", async () => {
-			const db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			const db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			const count = await db.set([{ id: "d1", document: "hello world" }]);
 			expect(count).toBe(1);
 			expect(db.count()).toBe(1);
 		});
 
 		it("should auto-embed batch of documents", async () => {
-			const db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			const db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			const count = await db.set([
 				{ id: "d1", document: "hello" },
 				{ id: "d2", document: "world" },
@@ -80,7 +80,7 @@ describe("Embedding Function", () => {
 		});
 
 		it("should allow explicit vectors alongside documents", async () => {
-			const db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			const db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			const count = await db.set([
 				{ id: "v1", vector: new Float32Array([1, 0, 0, 0]) },
 				{ id: "d1", document: "hello world" },
@@ -89,14 +89,14 @@ describe("Embedding Function", () => {
 		});
 
 		it("should error when document provided without embeddingFn", async () => {
-			const db = open(dbPath, { dimensions: 4 });
+			const db = create(dbPath, { dense: { dim: 4 } });
 			await expect(
 				db.set([{ id: "d1", document: "hello" }]),
 			).rejects.toThrow(/embedding function/i);
 		});
 
 		it("should error when both vector and document provided", async () => {
-			const db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			const db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			await expect(
 				db.set([
 					{
@@ -113,7 +113,7 @@ describe("Embedding Function", () => {
 		let db: VectorDatabase;
 
 		beforeEach(async () => {
-			db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			await db.set([
 				{ id: "d1", document: "hello" },
 				{ id: "d2", document: "world" },
@@ -129,7 +129,7 @@ describe("Embedding Function", () => {
 		});
 
 		it("should error for string query without embeddingFn", async () => {
-			const db2 = open(":memory:", { dimensions: 4 });
+			const db2 = create(":memory:", { dense: { dim: 4 } });
 			await db2.set([
 				{ id: "v1", vector: new Float32Array([1, 0, 0, 0]) },
 			]);
@@ -153,7 +153,7 @@ describe("Embedding Function", () => {
 		let db: VectorDatabase;
 
 		beforeEach(async () => {
-			db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			await db.set([
 				{
 					id: "d1",
@@ -186,7 +186,7 @@ describe("Embedding Function", () => {
 
 	describe("collection inheritance", () => {
 		it("should inherit embeddingFn from parent", async () => {
-			const db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			const db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			const col = db.collection("test_col");
 			expect(col.hasEmbeddingFn).toBe(true);
 
@@ -195,7 +195,7 @@ describe("Embedding Function", () => {
 		});
 
 		it("should allow embeddingFn override on collection", () => {
-			const db = open(dbPath, { dimensions: 4 }, fakeEmbedder);
+			const db = create(dbPath, { dense: { dim: 4 } }, fakeEmbedder);
 			const otherEmbedder = (texts: string[]) =>
 				texts.map(() => new Float32Array([0.5, 0.5, 0.5, 0.5]));
 			const col = db.collection("test_col", otherEmbedder);
@@ -203,7 +203,7 @@ describe("Embedding Function", () => {
 		});
 
 		it("should not have embeddingFn when parent has none", () => {
-			const db = open(dbPath, { dimensions: 4 });
+			const db = create(dbPath, { dense: { dim: 4 } });
 			const col = db.collection("test_col");
 			expect(col.hasEmbeddingFn).toBe(false);
 		});

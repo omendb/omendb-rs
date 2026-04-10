@@ -45,12 +45,13 @@ impl VectorDatabase {
     ///     >>> # Can now reopen the same path
     ///     >>> db = omendb.open("./mydb", dimensions=128)
     fn close(&self) -> PyResult<()> {
+        let dimensions = self.live_dimensions();
         let mut inner = self.inner.write();
         // Flush first to ensure all data is persisted
         inner.store.flush().map_err(convert_error)?;
         // Replace with minimal in-memory store to release file lock
         let dummy_store = VectorStoreOptions::default()
-            .dimensions(self.live_dimensions())
+            .dimensions(dimensions)
             .build()
             .map_err(convert_error)?;
         inner.store = dummy_store;

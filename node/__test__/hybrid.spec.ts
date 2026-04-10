@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { open, VectorDatabase } from "../index.js";
+import { create, open, VectorDatabase } from "../index.js";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -12,7 +12,7 @@ describe("Hybrid Search", () => {
 	beforeEach(async () => {
 		tempDir = await mkdtemp(join(tmpdir(), "omendb-hybrid-"));
 		dbPath = join(tempDir, "testdb");
-		db = open(dbPath, { dimensions: 4 });
+		db = create(dbPath, { dense: { dim: 4 } });
 	});
 
 	afterEach(async () => {
@@ -46,9 +46,9 @@ describe("Hybrid Search", () => {
 
 		it("should allow text search config at open time", async () => {
 			const configuredPath = join(tempDir, "configured");
-			const configured = open(configuredPath, {
-				dimensions: 4,
-				textSearch: { bufferMb: 20, tokenizer: "code" },
+			const configured = create(configuredPath, {
+				dense: { dim: 4 },
+				text: { bufferMb: 20, tokenizer: "code" },
 			});
 
 			expect(configured.hasTextSearch).toBe(true);

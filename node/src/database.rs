@@ -577,10 +577,11 @@ impl VectorDatabase {
     /// object destruction like Python's `del`.
     #[napi]
     pub fn close(&self) -> Result<()> {
+        let dimensions = self.live_dimensions() as usize;
         let mut inner = self.inner.write();
         inner.store.flush().map_err(convert_error)?;
         let dummy_store = VectorStoreOptions::default()
-            .dimensions(self.live_dimensions() as usize)
+            .dimensions(dimensions)
             .build()
             .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
         inner.store = dummy_store;
