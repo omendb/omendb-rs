@@ -7,6 +7,7 @@
 use super::SparseVector;
 use anyhow::Result;
 use roaring::RoaringBitmap;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BinaryHeap, HashMap};
 use std::hash::BuildHasher;
@@ -50,7 +51,7 @@ impl PostingList {
 #[derive(Debug, Clone)]
 pub struct SparseIndex {
     /// dim_id -> posting list
-    postings: HashMap<u32, PostingList>,
+    postings: FxHashMap<u32, PostingList>,
     /// Indexed slots.
     slots: RoaringBitmap,
 }
@@ -60,7 +61,7 @@ impl SparseIndex {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            postings: HashMap::new(),
+            postings: FxHashMap::default(),
             slots: RoaringBitmap::new(),
         }
     }
@@ -137,7 +138,13 @@ impl SparseIndex {
         }
 
         // Accumulate scores per document
-        let mut scores: HashMap<u32, f32> = HashMap::new();
+        let estimated_candidates = query
+            .indices()
+            .iter()
+            .filter_map(|dim| self.postings.get(dim).map(|posting| posting.elements.len()))
+            .sum::<usize>();
+        let mut scores: FxHashMap<u32, f32> = FxHashMap::default();
+        scores.reserve(estimated_candidates);
 
         for (&dim, &q_weight) in query.indices().iter().zip(query.values().iter()) {
             if let Some(posting) = self.postings.get(&dim) {
@@ -162,7 +169,13 @@ impl SparseIndex {
             return Vec::new();
         }
 
-        let mut scores: HashMap<u32, f32> = HashMap::new();
+        let estimated_candidates = query
+            .indices()
+            .iter()
+            .filter_map(|dim| self.postings.get(dim).map(|posting| posting.elements.len()))
+            .sum::<usize>();
+        let mut scores: FxHashMap<u32, f32> = FxHashMap::default();
+        scores.reserve(estimated_candidates);
 
         for (&dim, &q_weight) in query.indices().iter().zip(query.values().iter()) {
             if let Some(posting) = self.postings.get(&dim) {
@@ -206,7 +219,7 @@ impl SparseIndex {
     pub fn compact<S: BuildHasher>(&mut self, old_to_new: &HashMap<u32, u32, S>) {
         // Rebuild postings with new slot IDs, consuming old data
         let old_postings = std::mem::take(&mut self.postings);
-        let mut new_postings: HashMap<u32, PostingList> = HashMap::new();
+        let mut new_postings: FxHashMap<u32, PostingList> = FxHashMap::default();
         for (dim, posting) in old_postings {
             let mut new_posting = PostingList::new();
             for entry in &posting.elements {
@@ -226,7 +239,7 @@ impl SparseIndex {
     /// Serialize to bytes (postcard format).
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let persisted = PersistedSparseIndex {
-            postings: self.postings.clone(),
+            postings: self.postings.clone().into_iter().collect(),
             payloads: HashMap::new(),
             len: self.len(),
         };
@@ -239,7 +252,7 @@ impl SparseIndex {
         payloads: impl IntoIterator<Item = (u32, SparseVector)>,
     ) -> Result<Vec<u8>> {
         let persisted = PersistedSparseIndex {
-            postings: self.postings.clone(),
+            postings: self.postings.clone().into_iter().collect(),
             payloads: payloads.into_iter().collect(),
             len: self.len(),
         };
@@ -252,7 +265,7 @@ impl SparseIndex {
             .map_err(|e| anyhow::anyhow!("SparseIndex deserialize: {e}"))?;
         Ok(Self {
             slots: derive_slots(&persisted.postings, &persisted.payloads, persisted.len),
-            postings: persisted.postings,
+            postings: persisted.postings.into_iter().collect(),
         })
     }
 
@@ -286,7 +299,7 @@ impl SparseIndex {
         let slots = derive_slots(&persisted.postings, &persisted.payloads, persisted.len);
         Ok((
             Self {
-                postings: persisted.postings,
+                postings: persisted.postings.into_iter().collect(),
                 slots,
             },
             persisted.payloads,
@@ -301,7 +314,7 @@ impl Default for SparseIndex {
 }
 
 /// Extract top-k entries by score from a HashMap using a min-heap.
-fn top_k_from_scores(scores: HashMap<u32, f32>, k: usize) -> Vec<(u32, f32)> {
+fn top_k_from_scores(scores: impl IntoIterator<Item = (u32, f32)>, k: usize) -> Vec<(u32, f32)> {
     use std::cmp::Reverse;
 
     // Use a min-heap bounded at size k
