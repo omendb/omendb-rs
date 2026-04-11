@@ -12,17 +12,23 @@ use crate::text::{
 };
 use crate::vector::metadata::MetadataIndex;
 use crate::vector::store::SearchResult;
+use crate::vector::store::edge_store::{EdgeDirection, EdgeStore, Subgraph};
 use crate::vector::store::helpers;
 use crate::vector::store::input::HybridParams;
 use crate::vector::store::record_store::RecordStore;
 use crate::vector::{EngineSearchResult, VectorEngineView};
 use anyhow::Result;
+use std::collections::HashSet;
+
+use crate::catalog::GraphSchema;
 
 pub struct QueryPlanner<'a> {
     records: &'a RecordStore,
     vector_engine: &'a dyn VectorEngineView,
     text_engine: Option<&'a dyn TextEngine>,
     metadata_index: Option<&'a MetadataIndex>,
+    graph_schema: Option<GraphSchema>,
+    edge_store: Option<&'a EdgeStore>,
 }
 
 impl<'a> QueryPlanner<'a> {
@@ -31,13 +37,75 @@ impl<'a> QueryPlanner<'a> {
         vector_engine: &'a dyn VectorEngineView,
         text_engine: Option<&'a dyn TextEngine>,
         metadata_index: Option<&'a MetadataIndex>,
+        graph_schema: Option<GraphSchema>,
+        edge_store: Option<&'a EdgeStore>,
     ) -> Self {
         Self {
             records,
             vector_engine,
             text_engine,
             metadata_index,
+            graph_schema,
+            edge_store,
         }
+    }
+
+    /// Expand one or more seed IDs through the bounded graph primitive.
+    pub fn expand_graph(
+        &self,
+        seed_ids: &[&str],
+        direction: EdgeDirection,
+        max_depth: usize,
+        edge_type: Option<&str>,
+    ) -> Result<Subgraph> {
+        let Some(graph_schema) = self.graph_schema.as_ref() else {
+            anyhow::bail!("graph expansion requires graph.enabled=true in the collection schema");
+        };
+        if !graph_schema.enabled {
+            anyhow::bail!("graph expansion requires graph.enabled=true in the collection schema");
+        }
+
+        if seed_ids.is_empty() {
+            return Ok(Subgraph {
+                node_ids: Vec::new(),
+                edges: Vec::new(),
+            });
+        }
+
+        let Some(edge_store) = self.edge_store else {
+            let mut node_ids: Vec<String> =
+                seed_ids.iter().map(|seed| (*seed).to_string()).collect();
+            node_ids.sort();
+            node_ids.dedup();
+            return Ok(Subgraph {
+                node_ids,
+                edges: Vec::new(),
+            });
+        };
+
+        let mut node_ids: HashSet<String> = HashSet::new();
+        let mut edges = Vec::new();
+        let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
+
+        for seed in seed_ids {
+            let subgraph = edge_store.subgraph(seed, max_depth, direction, edge_type);
+            node_ids.extend(subgraph.node_ids);
+            for edge in subgraph.edges {
+                let key = (
+                    edge.from_id.clone(),
+                    edge.to_id.clone(),
+                    edge.edge_type.clone(),
+                );
+                if seen_edges.insert(key) {
+                    edges.push(edge);
+                }
+            }
+        }
+
+        let mut node_ids: Vec<String> = node_ids.into_iter().collect();
+        node_ids.sort();
+
+        Ok(Subgraph { node_ids, edges })
     }
 
     /// Execute a standard dense search.

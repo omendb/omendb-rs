@@ -26,6 +26,9 @@ describe("EdgeStore", () => {
 	it("addEdge and getEdges basic", () => {
 		db.addEdge("a", "b", "link");
 		expect(db.edgeCount).toBe(1);
+		expect(db.schema()).toMatchObject({
+			graph: { enabled: true, temporal: "none", provenance: false },
+		});
 
 		const out = db.getEdges("a", "outgoing");
 		expect(out).toHaveLength(1);

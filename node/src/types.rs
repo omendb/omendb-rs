@@ -1,8 +1,9 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use omendb_lib::catalog::{
-    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
-    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, SparseSchema, TextSchema,
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, GraphSchema, GraphTemporalMode,
+    MultiEncoderKind, MultiSchema, MutableDenseIndexKind, QuantizationMode, SparseIndexKind,
+    SparseSchema, TextSchema,
 };
 use serde_json::Value as JsonValue;
 
@@ -101,6 +102,7 @@ pub struct CollectionSchemaResult {
     pub sparse: Option<SparseSchemaResult>,
     pub multi: Option<MultiSchemaResult>,
     pub text: Option<TextSchemaResult>,
+    pub graph: Option<GraphSchemaResult>,
 }
 
 #[napi(object)]
@@ -135,6 +137,13 @@ pub struct TextSchemaResult {
     pub writer_buffer_mb: u32,
 }
 
+#[napi(object)]
+pub struct GraphSchemaResult {
+    pub enabled: bool,
+    pub temporal: String,
+    pub provenance: bool,
+}
+
 impl From<CollectionSchema> for CollectionSchemaResult {
     fn from(value: CollectionSchema) -> Self {
         Self {
@@ -144,6 +153,7 @@ impl From<CollectionSchema> for CollectionSchemaResult {
             sparse: value.sparse.map(Into::into),
             multi: value.multi.map(Into::into),
             text: value.text.map(Into::into),
+            graph: value.graph.map(Into::into),
         }
     }
 }
@@ -199,6 +209,20 @@ impl From<TextSchema> for TextSchemaResult {
         Self {
             tokenizer: format!("{:?}", value.tokenizer).to_lowercase(),
             writer_buffer_mb: value.writer_buffer_mb,
+        }
+    }
+}
+
+impl From<GraphSchema> for GraphSchemaResult {
+    fn from(value: GraphSchema) -> Self {
+        Self {
+            enabled: value.enabled,
+            temporal: match value.temporal {
+                GraphTemporalMode::None => "none".to_string(),
+                GraphTemporalMode::ValidAt => "valid_at".to_string(),
+                GraphTemporalMode::BiTemporal => "bi_temporal".to_string(),
+            },
+            provenance: value.provenance,
         }
     }
 }

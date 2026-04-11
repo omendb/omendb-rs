@@ -5,7 +5,7 @@ pub mod schema;
 
 pub use collection::CollectionDefinition;
 pub use schema::{
-    CollectionName, CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind,
-    MultiSchema, MutableDenseIndexKind, QuantizationMode, SlotId, SparseIndexKind, SparseSchema,
-    TextSchema,
+    CollectionName, CollectionSchema, DenseSchema, FrozenDenseIndexKind, GraphSchema,
+    GraphTemporalMode, MultiEncoderKind, MultiSchema, MutableDenseIndexKind, QuantizationMode,
+    SlotId, SparseIndexKind, SparseSchema, TextSchema,
 };

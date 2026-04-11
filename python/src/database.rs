@@ -3,7 +3,8 @@ use crate::iterators::{VectorDatabaseIdIterator, VectorDatabaseIterator};
 use crate::parsing::parse_batch_items_with_text;
 use crate::parsing::parse_multi_vec_items;
 use omendb_lib::catalog::{
-    CollectionSchema, DenseSchema, MultiSchema, QuantizationMode, SparseSchema, TextSchema,
+    CollectionSchema, DenseSchema, GraphSchema, GraphTemporalMode, MultiSchema, QuantizationMode,
+    SparseSchema, TextSchema,
 };
 use omendb_lib::vector::{Vector, VectorStore};
 use parking_lot::RwLock;
@@ -60,6 +61,21 @@ fn text_schema_to_pydict(py: Python<'_>, text: &TextSchema) -> PyResult<Py<PyAny
     Ok(dict.into())
 }
 
+fn graph_schema_to_pydict(py: Python<'_>, graph: &GraphSchema) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("enabled", graph.enabled)?;
+    dict.set_item(
+        "temporal",
+        match graph.temporal {
+            GraphTemporalMode::None => "none",
+            GraphTemporalMode::ValidAt => "valid_at",
+            GraphTemporalMode::BiTemporal => "bi_temporal",
+        },
+    )?;
+    dict.set_item("provenance", graph.provenance)?;
+    Ok(dict.into())
+}
+
 fn schema_to_pydict(py: Python<'_>, schema: &CollectionSchema) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     dict.set_item("name", &schema.name)?;
@@ -94,6 +110,14 @@ fn schema_to_pydict(py: Python<'_>, schema: &CollectionSchema) -> PyResult<Py<Py
             .text
             .as_ref()
             .map(|text| text_schema_to_pydict(py, text))
+            .transpose()?,
+    )?;
+    dict.set_item(
+        "graph",
+        schema
+            .graph
+            .as_ref()
+            .map(|graph| graph_schema_to_pydict(py, graph))
             .transpose()?,
     )?;
     Ok(dict.into())

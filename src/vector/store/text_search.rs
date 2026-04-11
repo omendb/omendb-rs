@@ -203,11 +203,15 @@ impl VectorStore {
         if let Some(engine) = self.published_view.load().as_ref() {
             let text_index_guard = self.text_index.read();
             let metadata_index_guard = self.metadata_index.read();
+            let graph_schema = self.graph_schema.read().clone();
+            let edge_store_guard = self.edge_store.read();
             let planner = QueryPlanner::new(
                 &self.records,
                 engine.as_ref(),
                 text_index_guard.as_ref().map(|ti| ti as &dyn TextEngine),
                 Some(&metadata_index_guard),
+                graph_schema,
+                edge_store_guard.as_ref(),
             );
 
             let mut params = HybridParams::new()
@@ -267,11 +271,15 @@ impl VectorStore {
         if let Some(engine) = self.published_view.load().as_ref() {
             let text_index_guard = self.text_index.read();
             let metadata_index_guard = self.metadata_index.read();
+            let graph_schema = self.graph_schema.read().clone();
+            let edge_store_guard = self.edge_store.read();
             let planner = QueryPlanner::new(
                 &self.records,
                 engine.as_ref(),
                 text_index_guard.as_ref().map(|ti| ti as &dyn TextEngine),
                 Some(&metadata_index_guard),
+                graph_schema,
+                edge_store_guard.as_ref(),
             );
 
             let mut params = HybridParams::new()

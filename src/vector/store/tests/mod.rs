@@ -34,6 +34,7 @@ pub(super) fn dense_schema(dim: u32) -> CollectionSchema {
         sparse: None,
         multi: None,
         text: None,
+        graph: None,
     }
 }
 mod explain;

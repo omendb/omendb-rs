@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::catalog::{
-    FrozenDenseIndexKind, MultiEncoderKind, MutableDenseIndexKind, QuantizationMode,
-    SparseIndexKind,
+    FrozenDenseIndexKind, GraphTemporalMode, MultiEncoderKind, MutableDenseIndexKind,
+    QuantizationMode, SparseIndexKind,
 };
 use crate::text::{TextSearchConfig, TokenizerPreset};
 
@@ -114,4 +114,30 @@ fn test_info_includes_authoritative_schema() {
         info.schema.text.expect("text schema").tokenizer,
         TokenizerPreset::Raw
     );
+}
+
+#[test]
+fn test_schema_for_edge_store_reports_graph_contract() {
+    let mut store = VectorStore::new(16);
+    store
+        .set(
+            "a",
+            crate::Vector::new(vec![1.0; 16]),
+            serde_json::json!({}),
+        )
+        .unwrap();
+    store
+        .set(
+            "b",
+            crate::Vector::new(vec![1.0; 16]),
+            serde_json::json!({}),
+        )
+        .unwrap();
+    store.add_edge("a", "b", "rel", 1.0, None).unwrap();
+
+    let schema = store.schema();
+    let graph = schema.graph.expect("graph schema");
+    assert!(graph.enabled);
+    assert_eq!(graph.temporal, GraphTemporalMode::None);
+    assert!(!graph.provenance);
 }

@@ -375,6 +375,11 @@ impl VectorStore {
             sparse,
             multi,
             text,
+            graph: self
+                .graph_schema
+                .read()
+                .clone()
+                .or_else(|| self.has_edges().then_some(super::default_graph_schema())),
         }
     }
 }

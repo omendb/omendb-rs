@@ -15,6 +15,7 @@ pub struct CollectionSchema {
     pub sparse: Option<SparseSchema>,
     pub multi: Option<MultiSchema>,
     pub text: Option<TextSchema>,
+    pub graph: Option<GraphSchema>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,4 +74,30 @@ pub enum SparseIndexKind {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MultiEncoderKind {
     Muvera,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphTemporalMode {
+    #[default]
+    None,
+    ValidAt,
+    BiTemporal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphSchema {
+    pub enabled: bool,
+    pub temporal: GraphTemporalMode,
+    pub provenance: bool,
+}
+
+impl Default for GraphSchema {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            temporal: GraphTemporalMode::None,
+            provenance: false,
+        }
+    }
 }

@@ -40,7 +40,10 @@ use super::hnsw::{HNSWParams, PublishedSegmentView, SegmentConfig, SegmentManage
 use super::muvera::{MultiVecStorage, MultiVectorConfig, MuveraEncoder};
 use super::sparse::SparseIndex;
 use super::types::Vector;
-use crate::catalog::{DenseSchema, FrozenDenseIndexKind, MutableDenseIndexKind, QuantizationMode};
+use crate::catalog::{
+    DenseSchema, FrozenDenseIndexKind, GraphSchema, GraphTemporalMode, MutableDenseIndexKind,
+    QuantizationMode,
+};
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
@@ -59,6 +62,15 @@ const DEFAULT_HNSW_M: usize = 16;
 const DEFAULT_HNSW_EF_CONSTRUCTION: usize = 100;
 /// Default HNSW ef_search parameter (search quality)
 const DEFAULT_HNSW_EF_SEARCH: usize = 100;
+
+#[must_use]
+pub(crate) fn default_graph_schema() -> GraphSchema {
+    GraphSchema {
+        enabled: true,
+        temporal: GraphTemporalMode::None,
+        provenance: false,
+    }
+}
 
 #[cfg(test)]
 mod stress_tests;
@@ -163,6 +175,9 @@ pub struct VectorStore {
     /// Typed directed edge graph over document IDs.
     pub(crate) edge_store: RwLock<Option<EdgeStore>>,
 
+    /// Graph schema contract for relation-aware retrieval.
+    pub(crate) graph_schema: RwLock<Option<GraphSchema>>,
+
     /// Override for segment capacity (vectors per segment before freezing).
     /// None = use SegmentConfig::DEFAULT_CAPACITY (100K).
     segment_capacity: Option<usize>,
@@ -223,6 +238,7 @@ impl VectorStore {
             multivec_storage: RwLock::new(None),
             sparse_index: RwLock::new(None),
             edge_store: RwLock::new(None),
+            graph_schema: RwLock::new(None),
             segment_capacity: None,
             rescore: AtomicBool::new(false),
             oversample: AtomicU32::new(3.0f32.to_bits()),

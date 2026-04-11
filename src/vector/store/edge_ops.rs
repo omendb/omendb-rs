@@ -8,14 +8,32 @@ use anyhow::Result;
 use serde_json::Value as JsonValue;
 
 impl VectorStore {
-    /// Enable edge graph storage.
+    /// Ensure edge graph storage is enabled before mutating graph state.
     ///
-    /// Called automatically by `add_edge()`. Call explicitly if you need
-    /// `has_edges()` to return true before inserting any edges.
-    pub fn enable_edges(&mut self) {
+    /// Stores created without an explicit graph schema lazily upgrade to the
+    /// default enabled graph contract on first edge write. Stores created with
+    /// `graph.enabled = false` reject edge writes.
+    fn ensure_edges_enabled(&mut self) -> Result<()> {
+        {
+            let mut graph_schema = self.graph_schema.write();
+            match graph_schema.as_mut() {
+                Some(schema) if !schema.enabled => {
+                    anyhow::bail!(
+                        "edge operations require graph.enabled=true in the collection schema"
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    *graph_schema = Some(super::default_graph_schema());
+                }
+            }
+        }
+
         if self.edge_store.read().is_none() {
             *self.edge_store.write() = Some(super::edge_store::EdgeStore::new());
         }
+
+        Ok(())
     }
 
     /// Whether edge graph storage has been initialized.
@@ -49,7 +67,7 @@ impl VectorStore {
         weight: f32,
         metadata: Option<JsonValue>,
     ) -> Result<()> {
-        self.enable_edges();
+        self.ensure_edges_enabled()?;
 
         if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
@@ -61,7 +79,7 @@ impl VectorStore {
         self.edge_store
             .write()
             .as_mut()
-            .expect("enable_edges() was just called")
+            .expect("ensure_edges_enabled() was just called")
             .add_edge(Edge {
                 from_id: from_id.to_string(),
                 to_id: to_id.to_string(),
@@ -242,7 +260,7 @@ impl VectorStore {
         if edges.is_empty() {
             return Ok(0);
         }
-        self.enable_edges();
+        self.ensure_edges_enabled()?;
 
         if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
@@ -263,7 +281,7 @@ impl VectorStore {
             .edge_store
             .write()
             .as_mut()
-            .expect("enable_edges() was just called")
+            .expect("ensure_edges_enabled() was just called")
             .add_edges(edges);
 
         Ok(added)

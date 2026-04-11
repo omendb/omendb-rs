@@ -284,6 +284,7 @@ fn test_sparse_persistence_roundtrip() {
                 }),
                 multi: None,
                 text: None,
+                graph: None,
             },
         )
         .unwrap();

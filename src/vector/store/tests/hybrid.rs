@@ -274,6 +274,7 @@ fn test_hybrid_search_requires_dense_schema() {
             tokenizer: TokenizerPreset::Default,
             writer_buffer_mb: 16,
         }),
+        graph: None,
     })
     .unwrap();
 

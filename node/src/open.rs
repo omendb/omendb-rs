@@ -1,8 +1,9 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use omendb_lib::catalog::{
-    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
-    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, SparseSchema, TextSchema,
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, GraphSchema, GraphTemporalMode,
+    MultiEncoderKind, MultiSchema, MutableDenseIndexKind, QuantizationMode, SparseIndexKind,
+    SparseSchema, TextSchema,
 };
 use omendb_lib::vector::{VectorStore, VectorStoreOptions};
 use omendb_lib::Metric;
@@ -230,6 +231,44 @@ fn parse_collection_schema(value: &serde_json::Value) -> Result<CollectionSchema
         })
         .transpose()?;
 
+    let graph = obj
+        .get("graph")
+        .filter(|value| !value.is_null())
+        .map(|graph| -> Result<GraphSchema> {
+            let graph = graph.as_object().ok_or_else(|| {
+                Error::new(Status::InvalidArg, "schema.graph must be an object")
+            })?;
+            let enabled = graph
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            let temporal = match graph
+                .get("temporal")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none")
+            {
+                "none" => GraphTemporalMode::None,
+                "valid_at" => GraphTemporalMode::ValidAt,
+                "bi_temporal" | "bitemporal" => GraphTemporalMode::BiTemporal,
+                other => {
+                    return Err(Error::new(
+                        Status::InvalidArg,
+                        format!("Unknown graph temporal mode: '{other}'"),
+                    ));
+                }
+            };
+            let provenance = graph
+                .get("provenance")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            Ok(GraphSchema {
+                enabled,
+                temporal,
+                provenance,
+            })
+        })
+        .transpose()?;
+
     let metric = if let Some(metric) = obj.get("metric").and_then(serde_json::Value::as_str) {
         Metric::parse(metric).map_err(|e| Error::new(Status::InvalidArg, e))?
     } else if multi.is_some() {
@@ -249,6 +288,7 @@ fn parse_collection_schema(value: &serde_json::Value) -> Result<CollectionSchema
         sparse,
         multi,
         text,
+        graph,
     })
 }
 

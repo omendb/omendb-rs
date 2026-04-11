@@ -8,8 +8,9 @@ use super::helpers;
 use super::record_store::{RecordStore, SnapshotRecord};
 use super::{DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH, DEFAULT_HNSW_M};
 use crate::catalog::{
-    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
-    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, TextSchema,
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, GraphSchema, GraphTemporalMode,
+    MultiEncoderKind, MultiSchema, MutableDenseIndexKind, QuantizationMode, SparseIndexKind,
+    TextSchema,
 };
 use crate::omen::{
     CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, WalEntryType,
@@ -189,6 +190,8 @@ fn base_store_from_schema(schema: &CollectionSchema) -> Result<VectorStore> {
         store.enable_sparse();
     }
 
+    (*store.graph_schema.write()).clone_from(&schema.graph);
+
     Ok(store)
 }
 
@@ -215,6 +218,7 @@ fn schema_from_options(options: &VectorStoreOptions) -> CollectionSchema {
                 tokenizer: config.tokenizer,
                 writer_buffer_mb: config.writer_buffer_mb as u32,
             }),
+        graph: None,
     }
 }
 
@@ -369,6 +373,16 @@ impl VectorStore {
         };
 
         let persisted_schema = storage_local.schema().cloned();
+        let graph_schema = persisted_schema
+            .as_ref()
+            .and_then(|schema| schema.graph.clone())
+            .or_else(|| {
+                ancillary.edge_store.as_ref().map(|_| GraphSchema {
+                    enabled: true,
+                    temporal: GraphTemporalMode::None,
+                    provenance: false,
+                })
+            });
         let schema_name = persisted_schema.as_ref().map(|schema| schema.name.clone());
         let storage: Arc<RwLock<dyn crate::omen::StorageBackend>> =
             Arc::new(RwLock::new(storage_local));
@@ -427,6 +441,7 @@ impl VectorStore {
             multivec_storage: RwLock::new(ancillary.multivec_storage),
             sparse_index: RwLock::new(ancillary.sparse_index),
             edge_store: RwLock::new(ancillary.edge_store),
+            graph_schema: RwLock::new(graph_schema),
             segment_capacity: None,
             rescore: (quantization).into(),
             oversample: (3.0f32.to_bits()).into(),
@@ -459,6 +474,7 @@ impl VectorStore {
                 sparse: None,
                 multi: None,
                 text: None,
+                graph: None,
             },
         )
     }

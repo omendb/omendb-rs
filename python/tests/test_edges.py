@@ -22,6 +22,10 @@ def test_add_edge_and_get():
         db = make_db(tmpdir)
         db.add_edge("a", "b", "link")
         assert db.edge_count() == 1
+        schema = db.schema()
+        assert schema["graph"]["enabled"] is True
+        assert schema["graph"]["temporal"] == "none"
+        assert schema["graph"]["provenance"] is False
 
         out = db.get_edges("a", "outgoing")
         assert len(out) == 1

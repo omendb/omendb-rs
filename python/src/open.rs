@@ -1,8 +1,9 @@
 use crate::conversions::{convert_error, parse_multi_vector, parse_quantization};
 use crate::database::{VectorDatabase, VectorDatabaseInner};
 use omendb_lib::catalog::{
-    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
-    MutableDenseIndexKind, QuantizationMode, SparseIndexKind, SparseSchema, TextSchema,
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, GraphSchema, GraphTemporalMode,
+    MultiEncoderKind, MultiSchema, MutableDenseIndexKind, QuantizationMode, SparseIndexKind,
+    SparseSchema, TextSchema,
 };
 use omendb_lib::text::{TextSearchConfig, TokenizerPreset};
 use omendb_lib::vector::{VectorStore, VectorStoreOptions};
@@ -163,6 +164,47 @@ fn parse_collection_schema(value: &Bound<'_, PyAny>) -> PyResult<CollectionSchem
         None
     };
 
+    let graph = if let Some(graph) = dict.get_item("graph")? {
+        if graph.is_none() {
+            None
+        } else {
+            let graph = extract_dict(&graph, "schema['graph']")?;
+            let enabled = graph
+                .get_item("enabled")?
+                .map(|value| value.extract())
+                .transpose()?
+                .unwrap_or(true);
+            let temporal = match graph
+                .get_item("temporal")?
+                .map(|value| value.extract::<String>())
+                .transpose()?
+                .as_deref()
+                .unwrap_or("none")
+            {
+                "none" => GraphTemporalMode::None,
+                "valid_at" => GraphTemporalMode::ValidAt,
+                "bi_temporal" | "bitemporal" => GraphTemporalMode::BiTemporal,
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "Unknown graph temporal mode: '{other}'"
+                    )));
+                }
+            };
+            let provenance = graph
+                .get_item("provenance")?
+                .map(|value| value.extract())
+                .transpose()?
+                .unwrap_or(false);
+            Some(GraphSchema {
+                enabled,
+                temporal,
+                provenance,
+            })
+        }
+    } else {
+        None
+    };
+
     let metric = if let Some(metric) = dict.get_item("metric")? {
         Metric::parse(&metric.extract::<String>()?).map_err(PyValueError::new_err)?
     } else if multi.is_some() {
@@ -182,6 +224,7 @@ fn parse_collection_schema(value: &Bound<'_, PyAny>) -> PyResult<CollectionSchem
         sparse,
         multi,
         text,
+        graph,
     })
 }
 

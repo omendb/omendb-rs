@@ -1,8 +1,8 @@
 use super::super::*;
 use super::random_vector;
 use crate::catalog::{
-    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MultiEncoderKind, MultiSchema,
-    MutableDenseIndexKind, QuantizationMode, TextSchema,
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, GraphSchema, GraphTemporalMode,
+    MultiEncoderKind, MultiSchema, MutableDenseIndexKind, QuantizationMode, TextSchema,
 };
 use crate::text::{TextSearchConfig, TokenizerPreset};
 use crate::vector::sparse::SparseVector;
@@ -21,6 +21,7 @@ fn dense_schema(dim: u32) -> CollectionSchema {
         sparse: None,
         multi: None,
         text: None,
+        graph: None,
     }
 }
 
@@ -90,6 +91,7 @@ fn test_create_with_schema_persists_text_contract() {
             tokenizer: TokenizerPreset::Code,
             writer_buffer_mb: 20,
         }),
+        graph: None,
     };
 
     {
@@ -102,6 +104,41 @@ fn test_create_with_schema_persists_text_contract() {
     let reopened = VectorStore::open(&db_path).unwrap();
     assert_eq!(reopened.schema(), schema);
     assert!(reopened.has_text_search());
+}
+
+#[test]
+fn test_create_with_schema_persists_graph_contract() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("schema-create-graph");
+    let schema = CollectionSchema {
+        name: "relations".to_string(),
+        metric: Metric::L2,
+        dense: Some(DenseSchema {
+            dim: 8,
+            quantization: QuantizationMode::None,
+            mutable_index: MutableDenseIndexKind::Hnsw,
+            frozen_index: FrozenDenseIndexKind::Hnsw,
+        }),
+        sparse: None,
+        multi: None,
+        text: None,
+        graph: Some(GraphSchema {
+            enabled: true,
+            temporal: GraphTemporalMode::ValidAt,
+            provenance: true,
+        }),
+    };
+
+    {
+        let store = VectorStore::create(&db_path, schema.clone()).unwrap();
+        assert_eq!(store.schema(), schema);
+        store.flush().unwrap();
+    }
+
+    let reopened = VectorStore::open(&db_path).unwrap();
+    assert_eq!(reopened.schema(), schema);
 }
 
 #[test]
@@ -126,6 +163,7 @@ fn test_create_with_schema_persists_multivector_contract() {
             pool_factor: Some(2),
         }),
         text: None,
+        graph: None,
     };
 
     {
