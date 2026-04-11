@@ -119,6 +119,7 @@ fn test_info_includes_authoritative_schema() {
 #[test]
 fn test_schema_for_edge_store_reports_graph_contract() {
     let mut store = VectorStore::new(16);
+    store.enable_graph().unwrap();
     store
         .set(
             "a",
@@ -140,4 +141,18 @@ fn test_schema_for_edge_store_reports_graph_contract() {
     assert!(graph.enabled);
     assert_eq!(graph.temporal, GraphTemporalMode::None);
     assert!(!graph.provenance);
+}
+
+#[test]
+fn test_add_edge_requires_explicit_graph_enable() {
+    let mut store = VectorStore::new(8);
+    store
+        .set("a", crate::Vector::new(vec![1.0; 8]), serde_json::json!({}))
+        .unwrap();
+    store
+        .set("b", crate::Vector::new(vec![2.0; 8]), serde_json::json!({}))
+        .unwrap();
+
+    let err = store.add_edge("a", "b", "rel", 1.0, None).unwrap_err();
+    assert!(err.to_string().contains("enable_graph"));
 }

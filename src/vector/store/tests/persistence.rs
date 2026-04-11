@@ -816,6 +816,7 @@ fn test_vector_only_checkpoint_preserves_edges() {
 
     {
         let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store.enable_graph().unwrap();
         store
             .set(
                 "a",

@@ -217,6 +217,8 @@ export declare class VectorDatabase {
    * @returns Array of results in same order as input, null for missing IDs
    */
   getBatch(ids: Array<string>): Array<GetResult | undefined | null>
+  /** Enable graph support explicitly for edge operations. */
+  enableGraph(): void
   /**
    * Add a typed directed edge between two document IDs.
    *

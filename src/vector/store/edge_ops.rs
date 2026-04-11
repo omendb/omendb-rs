@@ -8,23 +8,47 @@ use anyhow::Result;
 use serde_json::Value as JsonValue;
 
 impl VectorStore {
-    /// Ensure edge graph storage is enabled before mutating graph state.
+    /// Enable graph support on this store.
     ///
-    /// Stores created without an explicit graph schema lazily upgrade to the
-    /// default enabled graph contract on first edge write. Stores created with
-    /// `graph.enabled = false` reject edge writes.
-    fn ensure_edges_enabled(&mut self) -> Result<()> {
+    /// This is the explicit runtime opt-in for edge operations on stores that
+    /// were created without `schema.graph`.
+    pub fn enable_graph(&mut self) -> Result<()> {
         {
             let mut graph_schema = self.graph_schema.write();
             match graph_schema.as_mut() {
-                Some(schema) if !schema.enabled => {
-                    anyhow::bail!(
-                        "edge operations require graph.enabled=true in the collection schema"
-                    );
+                Some(schema) => {
+                    schema.enabled = true;
                 }
-                Some(_) => {}
                 None => {
                     *graph_schema = Some(super::default_graph_schema());
+                }
+            }
+        }
+
+        if self.edge_store.read().is_none() {
+            *self.edge_store.write() = Some(super::edge_store::EdgeStore::new());
+        }
+
+        if let Some(ref storage) = self.storage {
+            let schema = self.schema();
+            let mut storage = storage.write();
+            storage.set_schema(schema)?;
+            storage.sync()?;
+        }
+
+        Ok(())
+    }
+
+    /// Ensure edge graph storage is enabled before mutating graph state.
+    fn ensure_edges_enabled(&mut self) -> Result<()> {
+        {
+            let graph_schema = self.graph_schema.read();
+            match graph_schema.as_ref() {
+                Some(schema) if schema.enabled => {}
+                _ => {
+                    anyhow::bail!(
+                        "edge operations require graph.enabled=true in the collection schema or an explicit enable_graph() call"
+                    );
                 }
             }
         }
@@ -54,7 +78,7 @@ impl VectorStore {
     /// Add a typed directed edge between two document IDs.
     ///
     /// Replaces an existing edge of the same type between the same nodes.
-    /// Automatically enables edge storage if not already enabled.
+    /// Requires graph support to be enabled explicitly.
     ///
     /// # Durability
     ///

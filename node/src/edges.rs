@@ -55,6 +55,16 @@ fn parse_direction(direction: &str) -> Result<EdgeDirection> {
 
 #[napi]
 impl VectorDatabase {
+    /// Enable graph support explicitly for edge operations.
+    #[napi(js_name = "enableGraph")]
+    pub fn enable_graph(&self) -> Result<()> {
+        self.inner
+            .write()
+            .store_mut()
+            .enable_graph()
+            .map_err(convert_error)
+    }
+
     /// Add a typed directed edge between two document IDs.
     ///
     /// @param fromId - Source document ID

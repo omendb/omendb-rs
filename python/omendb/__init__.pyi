@@ -106,6 +106,11 @@ class TextSchema(TypedDict):
     tokenizer: Literal["default", "code", "raw"]
     writer_buffer_mb: int
 
+class GraphSchema(TypedDict):
+    enabled: bool
+    temporal: Literal["none", "valid_at", "bi_temporal"]
+    provenance: bool
+
 class CollectionSchema(TypedDict):
     name: str
     metric: Literal["l2", "cosine", "dot"]
@@ -113,6 +118,7 @@ class CollectionSchema(TypedDict):
     sparse: SparseSchema | None
     multi: MultiSchema | None
     text: TextSchema | None
+    graph: GraphSchema | None
 
 class GetResult(TypedDict):
     """Result from get()."""
@@ -607,6 +613,10 @@ class VectorDatabase:
         Args:
             config: Optional text search config with writer buffer and tokenizer.
         """
+        ...
+
+    def enable_graph(self) -> None:
+        """Enable graph support for edge operations."""
         ...
 
     def has_text_search(self) -> bool:

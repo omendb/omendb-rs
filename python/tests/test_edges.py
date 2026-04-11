@@ -12,6 +12,7 @@ from tests.helpers import create_dense_db
 def make_db(tmpdir, dims=4):
     path = os.path.join(tmpdir, "edges_db")
     db = create_dense_db(path, dims)
+    db.enable_graph()
     for doc_id in ["a", "b", "c", "d"]:
         db.set([{"id": doc_id, "vector": [1.0] * dims}])
     return db
@@ -37,6 +38,17 @@ def test_add_edge_and_get():
         inc = db.get_edges("b", "incoming")
         assert len(inc) == 1
         assert inc[0]["from_id"] == "a"
+
+
+def test_add_edge_requires_explicit_enable():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "edges_db")
+        db = create_dense_db(path, 4)
+        for doc_id in ["a", "b"]:
+            db.set([{"id": doc_id, "vector": [1.0] * 4}])
+
+        with pytest.raises(RuntimeError, match="enable_graph"):
+            db.add_edge("a", "b", "link")
 
 
 def test_add_edge_with_weight_and_metadata():
@@ -124,6 +136,7 @@ def test_persistence_flush_and_reopen():
         path = os.path.join(tmpdir, "edges_db")
 
         db = create_dense_db(path, 4)
+        db.enable_graph()
         for doc_id in ["a", "b"]:
             db.set([{"id": doc_id, "vector": [1.0] * 4}])
         db.add_edge("a", "b", "link", weight=0.8, metadata={"w": 1})

@@ -3,6 +3,7 @@ import { open, VectorDatabase } from "../index.js";
 
 function makeDb(): VectorDatabase {
 	const db = open(":memory:", { dimensions: 4 });
+	db.enableGraph();
 	return db;
 }
 
@@ -40,6 +41,15 @@ describe("EdgeStore", () => {
 		const inc = db.getEdges("b", "incoming");
 		expect(inc).toHaveLength(1);
 		expect(inc[0].fromId).toBe("a");
+	});
+
+	it("addEdge requires explicit graph enable", async () => {
+		const plain = open(":memory:", { dimensions: 4 });
+		await plain.set([
+			{ id: "a", vector: [1, 0, 0, 0] },
+			{ id: "b", vector: [0, 1, 0, 0] },
+		]);
+		expect(() => plain.addEdge("a", "b", "link")).toThrow(/enable_graph|enableGraph/);
 	});
 
 	it("addEdge with weight and metadata", () => {

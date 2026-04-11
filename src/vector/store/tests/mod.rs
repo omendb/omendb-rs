@@ -1,6 +1,7 @@
 use super::*;
 use crate::catalog::{
-    CollectionSchema, DenseSchema, FrozenDenseIndexKind, MutableDenseIndexKind, QuantizationMode,
+    CollectionSchema, DenseSchema, FrozenDenseIndexKind, GraphSchema, GraphTemporalMode,
+    MutableDenseIndexKind, QuantizationMode,
 };
 
 mod crud;
@@ -36,5 +37,15 @@ pub(super) fn dense_schema(dim: u32) -> CollectionSchema {
         text: None,
         graph: None,
     }
+}
+
+pub(super) fn dense_graph_schema(dim: u32) -> CollectionSchema {
+    let mut schema = dense_schema(dim);
+    schema.graph = Some(GraphSchema {
+        enabled: true,
+        temporal: GraphTemporalMode::None,
+        provenance: false,
+    });
+    schema
 }
 mod explain;

@@ -34,6 +34,12 @@ fn edge_to_dict(py: Python<'_>, edge: &Edge) -> PyResult<Py<PyDict>> {
 
 #[pymethods]
 impl VectorDatabase {
+    /// Enable graph support explicitly for edge operations.
+    pub fn enable_graph(&self) -> PyResult<()> {
+        let mut inner = self.inner.write();
+        inner.store_mut().enable_graph().map_err(convert_error)
+    }
+
     /// Add a typed directed edge between two document IDs.
     ///
     /// Args:

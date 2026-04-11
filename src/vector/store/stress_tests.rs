@@ -1172,6 +1172,7 @@ fn stress_crash_recovery_edges_at_scale() {
             .dimensions(dim)
             .open(&path)
             .unwrap();
+        store.enable_graph().unwrap();
 
         // Insert vectors
         for i in 0..num_vectors {
@@ -1271,6 +1272,7 @@ fn stress_large_edge_metadata() {
             .dimensions(16)
             .open(&path)
             .unwrap();
+        store.enable_graph().unwrap();
 
         store
             .set(
@@ -1348,6 +1350,7 @@ fn stress_repeated_crash_recovery_with_edges() {
             } else {
                 VectorStore::open(&path).unwrap()
             };
+            store.enable_graph().unwrap();
 
             // Verify previous data
             let expected_vecs = cycle * vectors_per_cycle;

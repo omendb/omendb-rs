@@ -245,6 +245,7 @@ mod edges {
             // Insert vectors, add edges, flush, delete some vectors, crash
             {
                 let mut store = VectorStore::open_with_dimensions(&path, dim).unwrap();
+                store.enable_graph().unwrap();
 
                 // Insert vectors
                 for i in 0..num_vectors {

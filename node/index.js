@@ -208,6 +208,10 @@ class VectorDatabase {
 		return this._native.enableTextSearch(config ?? null);
 	}
 
+	enableGraph() {
+		return this._native.enableGraph();
+	}
+
 	get(id) {
 		return this._native.get(id);
 	}
