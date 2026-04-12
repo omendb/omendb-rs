@@ -236,6 +236,12 @@ class TestPerformance:
     @pytest.mark.slow
     def test_search_latency_1536d(self):
         """Test search latency at OpenAI embedding dimensions."""
+        if os.getenv("OMENDB_RUN_PERF_ASSERTS") != "1":
+            pytest.skip(
+                "Latency thresholds are enforced only in dedicated perf runs; "
+                "default test runs use the publish benchmark path instead."
+            )
+
         dim = 1536
         n_vectors = 1000
 
