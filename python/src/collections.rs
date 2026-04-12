@@ -94,15 +94,15 @@ impl VectorDatabase {
         let (parent_dimensions, parent_token_dimension, parent_is_multi, parent_multi_config) = {
             let inner = self.inner.read();
             (
-                inner.store().dimensions(),
-                inner.store().token_dimension(),
-                inner.store().is_multi_vector(),
-                inner.store().multi_vector_config(),
+                inner.store()?.dimensions(),
+                inner.store()?.token_dimension(),
+                inner.store()?.is_multi_vector(),
+                inner.store()?.multi_vector_config(),
             )
         };
 
         // Open or create the collection as a separate VectorStore while preserving modality.
-        let current_dimensions = self.live_dimensions();
+        let current_dimensions = self.live_dimensions()?;
 
         let store = if collection_path.with_extension("omen").exists() {
             VectorStore::open(&collection_path).map_err(convert_error)?

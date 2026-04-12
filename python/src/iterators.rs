@@ -27,7 +27,7 @@ impl VectorDatabaseIdIterator {
         slf
     }
 
-    fn __next__(&mut self) -> Option<String> {
+    fn __next__(&mut self) -> PyResult<Option<String>> {
         // Loop to skip items deleted during iteration
         while self.index < self.ids.len() {
             let id = &self.ids[self.index];
@@ -35,12 +35,12 @@ impl VectorDatabaseIdIterator {
 
             // Check if ID still exists
             let inner = self.inner.read();
-            if inner.store().contains(id) {
-                return Some(id.clone());
+            if inner.store()?.contains(id) {
+                return Ok(Some(id.clone()));
             }
             // Item was deleted during iteration, continue to next
         }
-        None
+        Ok(None)
     }
 }
 
@@ -73,7 +73,7 @@ impl VectorDatabaseIterator {
 
             // Fetch item lazily - only loads one vector at a time
             let inner = self.inner.read();
-            if let Some((vec, meta)) = inner.store().get(id) {
+            if let Some((vec, meta)) = inner.store()?.get(id) {
                 let mut result = HashMap::new();
                 result.insert(
                     "id".to_string(),

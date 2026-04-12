@@ -16,6 +16,10 @@ use pyo3::Py;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn closed_database_error() -> pyo3::PyErr {
+    PyRuntimeError::new_err("database is closed")
+}
+
 fn dense_schema_to_pydict(py: Python<'_>, dense: &DenseSchema) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     dict.set_item("dim", dense.dim)?;
@@ -128,36 +132,36 @@ pub(crate) struct VectorDatabaseInner {
 }
 
 impl VectorDatabaseInner {
-    pub(crate) fn store(&self) -> &VectorStore {
+    pub(crate) fn store(&self) -> PyResult<&VectorStore> {
         self.store
             .as_ref()
-            .expect("database is closed")
+            .ok_or_else(closed_database_error)
     }
 
-    pub(crate) fn store_mut(&mut self) -> &mut VectorStore {
+    pub(crate) fn store_mut(&mut self) -> PyResult<&mut VectorStore> {
         self.store
             .as_mut()
-            .expect("database is closed")
+            .ok_or_else(closed_database_error)
     }
 }
 
 impl VectorDatabase {
-    pub(crate) fn live_is_multi_vector(&self) -> bool {
+    pub(crate) fn live_is_multi_vector(&self) -> PyResult<bool> {
         let inner = self.inner.read();
-        inner.store().is_multi_vector()
+        Ok(inner.store()?.is_multi_vector())
     }
 
-    pub(crate) fn live_dimensions(&self) -> usize {
+    pub(crate) fn live_dimensions(&self) -> PyResult<usize> {
         let inner = self.inner.read();
-        let store = inner.store();
+        let store = inner.store()?;
 
-        if store.is_multi_vector() {
+        Ok(if store.is_multi_vector() {
             store
                 .token_dimension()
                 .unwrap_or(store.dimensions())
         } else {
             store.dimensions()
-        }
+        })
     }
 
 }
@@ -297,7 +301,7 @@ impl VectorDatabase {
             let inner_arc = Arc::clone(&self.inner);
             let result = py.detach(|| {
                 let mut inner = inner_arc.write();
-                inner.store_mut().set_batch(batch).map_err(convert_error)
+                inner.store_mut()?.set_batch(batch).map_err(convert_error)
             })?;
             return Ok(result.len());
         }
@@ -328,7 +332,7 @@ impl VectorDatabase {
             let inner_arc = Arc::clone(&self.inner);
             let result = py.detach(|| {
                 let mut inner = inner_arc.write();
-                inner.store_mut().set_batch(batch).map_err(convert_error)
+                inner.store_mut()?.set_batch(batch).map_err(convert_error)
             })?;
             return Ok(result.len());
         }
@@ -365,7 +369,7 @@ impl VectorDatabase {
 
                 let mut inner = self.inner.write();
                 inner
-                    .store_mut()
+                    .store_mut()?
                     .set(&id_str, Vector::new(vec_data), meta)
                     .map_err(convert_error)?;
                 return Ok(1);
@@ -374,12 +378,12 @@ impl VectorDatabase {
             // Handle batch: set([{...}, {...}])
             if let Ok(items) = id_or_items.cast::<PyList>() {
                 // Multi-vector store: use "vectors" key
-                if self.live_is_multi_vector() {
+        if self.live_is_multi_vector()? {
                     let parsed = parse_multi_vec_items(items)?;
                     let inner_arc = Arc::clone(&self.inner);
                     let count = py.detach(move || -> PyResult<usize> {
                         let mut inner = inner_arc.write();
-                        let store = inner.store_mut();
+                        let store = inner.store_mut()?;
                         for item in &parsed {
                             store
                                 .store(&item.id, item.vectors.clone(), item.metadata.clone())
@@ -424,7 +428,7 @@ impl VectorDatabase {
                 let inner_arc = Arc::clone(&self.inner);
                 let count = py.detach(move || -> PyResult<usize> {
                     let mut inner = inner_arc.write();
-                    let store = inner.store_mut();
+                    let store = inner.store_mut()?;
 
                     // Auto-enable text search if text field is present
                     if has_text && !store.has_text_search() {
@@ -490,14 +494,14 @@ impl VectorDatabase {
         if let Ok(single_id) = ids.extract::<String>() {
             let inner = self.inner.write();
             return inner
-                .store()
+                .store()?
                 .delete_batch(&[single_id])
                 .map_err(convert_error);
         }
         // Fall back to list of strings
         let id_vec: Vec<String> = ids.extract()?;
         let inner = self.inner.write();
-        inner.store().delete_batch(&id_vec).map_err(convert_error)
+        inner.store()?.delete_batch(&id_vec).map_err(convert_error)
     }
 
     /// Delete vectors matching a metadata filter.
@@ -531,7 +535,7 @@ impl VectorDatabase {
         let parsed_filter = crate::filters::parse_filter(filter)?;
 
         let inner = self.inner.write();
-        inner.store().delete_by_filter(&parsed_filter).map_err(convert_error)
+        inner.store()?.delete_by_filter(&parsed_filter).map_err(convert_error)
     }
 
     /// Count vectors, optionally filtered by metadata.
@@ -567,9 +571,9 @@ impl VectorDatabase {
         match filter {
             Some(f) => {
                 let parsed_filter = crate::filters::parse_filter(f)?;
-                Ok(inner.store().count_by_filter(&parsed_filter))
+                Ok(inner.store()?.count_by_filter(&parsed_filter))
             }
-            None => Ok(inner.store().len()),
+            None => Ok(inner.store()?.len()),
         }
     }
 
@@ -614,7 +618,7 @@ impl VectorDatabase {
         }
 
         let mut inner = self.inner.write();
-        let store = inner.store_mut();
+        let store = inner.store_mut()?;
 
         // Handle text update - requires re-indexing
         if let Some(ref new_text) = text {
@@ -685,7 +689,7 @@ impl VectorDatabase {
     fn get(&self, py: Python<'_>, id: String) -> PyResult<Option<HashMap<String, Py<PyAny>>>> {
         let inner = self.inner.read();
 
-        if let Some((vector, metadata)) = inner.store().get(&id) {
+        if let Some((vector, metadata)) = inner.store()?.get(&id) {
             let mut result = HashMap::new();
             result.insert(
                 "id".to_string(),
@@ -729,15 +733,17 @@ impl VectorDatabase {
     ) -> PyResult<Vec<Option<HashMap<String, Py<PyAny>>>>> {
         // Release GIL during data loading
         let inner_arc = Arc::clone(&self.inner);
-        let fetched: Vec<_> = py.detach(|| {
+        let fetched: Vec<_> = py.detach(|| -> PyResult<Vec<_>> {
             let inner = inner_arc.read();
-            ids.into_iter()
+            let store = inner.store()?;
+            Ok(ids
+                .into_iter()
                 .map(|id| {
-                    let data = inner.store().get(&id);
+                    let data = store.get(&id);
                     (id, data)
                 })
-                .collect()
-        });
+                .collect())
+        })?;
 
         // Convert to Python with GIL held
         fetched
@@ -783,7 +789,7 @@ impl VectorDatabase {
         _exc_tb: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
         let mut inner = self.inner.write();
-        inner.store_mut().flush().map_err(convert_error)?;
+        inner.store_mut()?.flush().map_err(convert_error)?;
         Ok(false) // Don't suppress exceptions
     }
 
@@ -796,15 +802,16 @@ impl VectorDatabase {
     ///     >>> print(db.ef_search)
     ///     200
     #[getter]
-    fn ef_search(&self) -> usize {
+    fn ef_search(&self) -> PyResult<usize> {
         let inner = self.inner.read();
-        inner.store().ef_search()
+        Ok(inner.store()?.ef_search())
     }
 
     #[setter]
-    fn set_ef_search(&mut self, value: usize) {
+    fn set_ef_search(&mut self, value: usize) -> PyResult<()> {
         let inner = self.inner.write();
-        inner.store().set_ef_search(value);
+        inner.store()?.set_ef_search(value);
+        Ok(())
     }
 
     /// Number of vectors in database (Pythonic).
@@ -815,9 +822,9 @@ impl VectorDatabase {
     /// Examples:
     ///     >>> len(db)
     ///     1000
-    fn __len__(&self) -> usize {
+    fn __len__(&self) -> PyResult<usize> {
         let inner = self.inner.read();
-        inner.store().len()
+        Ok(inner.store()?.len())
     }
 
     /// Boolean truth value - True if database is non-empty.
@@ -825,9 +832,9 @@ impl VectorDatabase {
     /// Examples:
     ///     >>> if db:
     ///     ...     print("has data")
-    fn __bool__(&self) -> bool {
+    fn __bool__(&self) -> PyResult<bool> {
         let inner = self.inner.read();
-        inner.store().len() > 0
+        Ok(inner.store()?.len() > 0)
     }
 
     /// Get database dimensions.
@@ -835,14 +842,14 @@ impl VectorDatabase {
     /// Returns:
     ///     int: Dimensionality of vectors in this database
     #[getter]
-    fn dimensions(&self) -> usize {
-        self.live_dimensions()
+    fn dimensions(&self) -> PyResult<usize> {
+        Ok(self.live_dimensions()?)
     }
 
     /// Whether this is a multi-vector store (for ColBERT-style retrieval).
     #[getter]
-    fn is_multi_vector(&self) -> bool {
-        self.live_is_multi_vector()
+    fn is_multi_vector(&self) -> PyResult<bool> {
+        Ok(self.live_is_multi_vector()?)
     }
 
     /// The embedding function, if configured.
@@ -852,9 +859,9 @@ impl VectorDatabase {
     }
 
     /// Check if database is empty.
-    fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> PyResult<bool> {
         let inner = self.inner.read();
-        inner.store().is_empty()
+        Ok(inner.store()?.is_empty())
     }
 
     /// Get comprehensive database diagnostics.
@@ -870,7 +877,7 @@ impl VectorDatabase {
     ///     5242880
     fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let inner = self.inner.read();
-        let info = inner.store().info();
+        let info = inner.store()?.info();
         let dict = pyo3::types::PyDict::new(py);
 
         dict.set_item("vector_count", info.vector_count)?;
@@ -897,7 +904,7 @@ impl VectorDatabase {
     /// Get the authoritative collection schema for this database.
     fn schema(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let inner = self.inner.read();
-        schema_to_pydict(py, &inner.store().schema())
+        schema_to_pydict(py, &inner.store()?.schema())
     }
 
     /// Iterate over all vector IDs (without loading vector data).
@@ -918,7 +925,7 @@ impl VectorDatabase {
     ///     1000
     fn ids(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<VectorDatabaseIdIterator>> {
         let borrowed = slf.borrow(py);
-        let ids = borrowed.inner.read().store().ids();
+        let ids = borrowed.inner.read().store()?.ids();
         Py::new(
             py,
             VectorDatabaseIdIterator {
@@ -950,10 +957,10 @@ impl VectorDatabase {
     fn items(&self, py: Python<'_>) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
         // Release GIL during data loading
         let inner_arc = Arc::clone(&self.inner);
-        let items: Vec<_> = py.detach(|| {
+        let items: Vec<_> = py.detach(|| -> PyResult<Vec<_>> {
             let inner = inner_arc.read();
-            inner.store().items()
-        });
+            Ok(inner.store()?.items())
+        })?;
 
         // Convert to Python with GIL held
         items
@@ -987,9 +994,9 @@ impl VectorDatabase {
     ///     True
     ///     >>> db.exists("nonexistent")
     ///     False
-    fn exists(&self, id: String) -> bool {
+    fn exists(&self, id: String) -> PyResult<bool> {
         let inner = self.inner.read();
-        inner.store().contains(&id)
+        Ok(inner.store()?.contains(&id))
     }
 
     /// Support `in` operator for checking ID existence.
@@ -997,9 +1004,9 @@ impl VectorDatabase {
     /// Examples:
     ///     >>> "doc1" in db
     ///     True
-    fn __contains__(&self, id: String) -> bool {
+    fn __contains__(&self, id: String) -> PyResult<bool> {
         let inner = self.inner.read();
-        inner.store().contains(&id)
+        Ok(inner.store()?.contains(&id))
     }
 
     /// Iteration support - returns list of items.
@@ -1012,7 +1019,7 @@ impl VectorDatabase {
     fn __iter__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<VectorDatabaseIterator>> {
         let borrowed = slf.borrow(py);
         // Get just the IDs (lightweight - ~20 bytes per ID vs ~3KB per 768D vector)
-        let ids = borrowed.inner.read().store().ids();
+        let ids = borrowed.inner.read().store()?.ids();
         Py::new(
             py,
             VectorDatabaseIterator {
@@ -1033,8 +1040,8 @@ impl VectorDatabase {
     fn stats(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let inner = self.inner.read();
         let dict = PyDict::new(py);
-        dict.set_item("dimensions", self.live_dimensions())?;
-        dict.set_item("count", inner.store().len())?;
+        dict.set_item("dimensions", self.live_dimensions()?)?;
+        dict.set_item("count", inner.store()?.len())?;
         dict.set_item("path", &self.path)?;
         Ok(dict.into())
     }

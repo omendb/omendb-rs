@@ -43,7 +43,7 @@ impl VectorDatabase {
         let col_embedding_fn = embedding_fn
             .map(Arc::new)
             .or_else(|| self.embedding_fn.clone());
-        let current_dimensions = self.live_dimensions();
+        let current_dimensions = self.live_dimensions()?;
 
         {
             let cache = self.collections_cache.read();
@@ -88,10 +88,10 @@ impl VectorDatabase {
         let (parent_dimensions, parent_token_dimension, parent_is_multi, parent_multi_config) = {
             let inner = self.inner.read();
             (
-                inner.store().dimensions(),
-                inner.store().token_dimension(),
-                inner.store().is_multi_vector(),
-                inner.store().multi_vector_config(),
+                inner.store()?.dimensions(),
+                inner.store()?.token_dimension(),
+                inner.store()?.is_multi_vector(),
+                inner.store()?.multi_vector_config(),
             )
         };
 

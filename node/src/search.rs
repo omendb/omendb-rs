@@ -87,7 +87,7 @@ impl VectorDatabase {
             Either3::B(typed) => Vector::new(typed.to_vec()),
         };
 
-        let expected_dims = self.live_dimensions();
+        let expected_dims = self.live_dimensions()?;
         if expected_dims > 0 && query_vec.dim() != expected_dims as usize {
             return Err(Error::from_reason(format!(
                 "Query vector dimension ({}) does not match database dimension ({})",
@@ -102,17 +102,17 @@ impl VectorDatabase {
 
         {
             let inner = self.inner.read();
-            if inner.store().needs_index_rebuild() {
+            if inner.store()?.needs_index_rebuild() {
                 drop(inner);
                 let mut inner = self.inner.write();
-                inner.store_mut().ensure_index_ready().map_err(convert_error)?;
+                inner.store_mut()?.ensure_index_ready().map_err(convert_error)?;
             }
         }
 
         let inner = self.inner.read();
-        let metric = inner.store().metric();
+        let metric = inner.store()?.metric();
         let results = inner
-            .store()
+            .store()?
             .search_with_options(
                 &query_vec,
                 k as usize,
@@ -153,7 +153,7 @@ impl VectorDatabase {
         rerank: Option<bool>,
         rerank_factor: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
-        if !self.live_is_multi_vector() {
+        if !self.live_is_multi_vector()? {
             return Err(Error::new(
                 Status::InvalidArg,
                 "searchMulti requires a multi-vector store. Use open() with multiVector: true",
@@ -174,9 +174,9 @@ impl VectorDatabase {
         let options = SearchOptions::default().rerank(rerank_opt);
 
         let inner = self.inner.read();
-        let metric = inner.store().metric();
+        let metric = inner.store()?.metric();
         let results = inner
-            .store()
+            .store()?
             .query_with_options(&query_tokens, k as usize, &options)
             .map_err(convert_error)?;
 
@@ -224,7 +224,7 @@ impl VectorDatabase {
 
         {
             let mut inner = self.inner.write();
-            inner.store_mut().ensure_index_ready().map_err(convert_error)?;
+            inner.store_mut()?.ensure_index_ready().map_err(convert_error)?;
         }
 
         let inner_arc = Arc::clone(&self.inner);
@@ -233,12 +233,12 @@ impl VectorDatabase {
 
         let metric = {
             let inner = self.inner.read();
-            inner.store().metric()
+            inner.store()?.metric()
         };
 
         let output = tokio::task::spawn_blocking(move || {
             let inner = inner_arc.read();
-            let all_results = inner.store().search_batch(&query_vecs, k_usize, ef_usize);
+            let all_results = inner.store()?.search_batch(&query_vecs, k_usize, ef_usize);
 
             let mut output = Vec::with_capacity(all_results.len());
             for result in all_results {

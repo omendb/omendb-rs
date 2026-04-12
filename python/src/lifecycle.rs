@@ -15,7 +15,7 @@ impl VectorDatabase {
     ///     >>> db.flush()  # Text now searchable
     fn flush(&self) -> PyResult<()> {
         let inner = self.inner.write();
-        inner.store().flush().map_err(convert_error)
+        inner.store()?.flush().map_err(convert_error)
     }
 
     /// Close the database and release file locks.
@@ -86,7 +86,7 @@ impl VectorDatabase {
     ///     Call periodically after bulk deletes, not after every delete.
     fn compact(&self) -> PyResult<usize> {
         let inner = self.inner.write();
-        inner.store().compact().map_err(convert_error)
+        inner.store()?.compact().map_err(convert_error)
     }
 
     /// Merge vectors from another database into this one.
@@ -124,16 +124,18 @@ impl VectorDatabase {
         if self_addr < other_addr {
             let mut inner = self.inner.write();
             let other_inner = other.inner.read();
+            let other_store = other_inner.store()?;
             inner
-                .store_mut()
-                .merge_from_with_prefix(&other_inner.store(), key_prefix)
+                .store_mut()?
+                .merge_from_with_prefix(&other_store, key_prefix)
                 .map_err(convert_error)
         } else {
             let other_inner = other.inner.read();
+            let other_store = other_inner.store()?;
             let mut inner = self.inner.write();
             inner
-                .store_mut()
-                .merge_from_with_prefix(&other_inner.store(), key_prefix)
+                .store_mut()?
+                .merge_from_with_prefix(&other_store, key_prefix)
                 .map_err(convert_error)
         }
     }
@@ -155,7 +157,7 @@ impl VectorDatabase {
     ///     >>> db.search(...)  # Faster queries
     fn optimize(&mut self) -> PyResult<usize> {
         let inner = self.inner.write();
-        let stats = inner.store().optimize().map_err(convert_error)?;
+        let stats = inner.store()?.optimize().map_err(convert_error)?;
         Ok(stats.vectors_reordered)
     }
 }

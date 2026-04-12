@@ -31,7 +31,7 @@ impl VectorDatabase {
         let config = parse_text_search_config(config)?;
 
         inner
-            .store_mut()
+            .store_mut()?
             .enable_text_search_with_config(config)
             .map_err(convert_error)
     }
@@ -40,9 +40,9 @@ impl VectorDatabase {
     ///
     /// Returns:
     ///     bool: True if text search is enabled
-    fn has_text_search(&self) -> bool {
+    fn has_text_search(&self) -> PyResult<bool> {
         let inner = self.inner.read();
-        inner.store().has_text_search()
+        Ok(inner.store()?.has_text_search())
     }
 
     /// Search using text only (BM25 scoring).
@@ -65,13 +65,14 @@ impl VectorDatabase {
         }
 
         let inner = self.inner.write();
+        let store = inner.store()?;
 
         // Auto-flush text index to ensure search sees latest inserts
-        if inner.store().has_text_search() {
-            inner.store().flush().map_err(convert_error)?;
+        if store.has_text_search() {
+            store.flush().map_err(convert_error)?;
         }
 
-        let results = inner.store().search_text(query, k).map_err(convert_error)?;
+        let results = store.search_text(query, k).map_err(convert_error)?;
 
         let mut py_results = Vec::with_capacity(results.len());
         for (id, score) in results {
@@ -80,7 +81,7 @@ impl VectorDatabase {
             dict.set_item("score", score)?;
 
             // Include metadata for consistency with search_hybrid
-            if let Some((_, meta)) = inner.store().get(&id) {
+            if let Some((_, meta)) = store.get(&id) {
                 dict.set_item("metadata", json_to_pyobject(py, &meta)?)?;
             } else {
                 dict.set_item("metadata", PyDict::new(py))?;
@@ -182,16 +183,16 @@ impl VectorDatabase {
         let rust_filter = filter.map(parse_filter).transpose()?;
 
         let inner = self.inner.write();
+        let store = inner.store()?;
 
         // Auto-flush text index to ensure search sees latest inserts
-        if inner.store().has_text_search() {
-            inner.store().flush().map_err(convert_error)?;
+        if store.has_text_search() {
+            store.flush().map_err(convert_error)?;
         }
 
         // Use subscores path when requested
         if subscores.unwrap_or(false) {
-            let results = inner
-                .store()
+            let results = store
                 .search_hybrid_with_subscores(
                     &query_vec,
                     &actual_query_text,
@@ -224,8 +225,7 @@ impl VectorDatabase {
         }
 
         // Standard path without subscores
-        let results = inner
-            .store()
+        let results = store
             .search_hybrid(
                 &query_vec,
                 &actual_query_text,

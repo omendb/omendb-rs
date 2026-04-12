@@ -87,16 +87,17 @@ impl VectorDatabase {
     /// Called automatically by setSparse() and setHybridSparse().
     /// Call explicitly before sparseSearch() on an empty index.
     #[napi(js_name = "enableSparse")]
-    pub fn enable_sparse(&self) {
+    pub fn enable_sparse(&self) -> Result<()> {
         let mut inner = self.inner.write();
-        inner.store_mut().enable_sparse();
+        inner.store_mut()?.enable_sparse();
+        Ok(())
     }
 
     /// Check if sparse indexing is enabled.
     #[napi(getter, js_name = "hasSparse")]
-    pub fn has_sparse(&self) -> bool {
+    pub fn has_sparse(&self) -> Result<bool> {
         let inner = self.inner.read();
-        inner.store().has_sparse()
+        Ok(inner.store()?.has_sparse())
     }
 
     /// Insert or update a sparse vector.
@@ -123,7 +124,7 @@ impl VectorDatabase {
 
         let mut inner = self.inner.write();
         inner
-            .store_mut()
+            .store_mut()?
             .set_sparse(&id, sparse_vec, meta)
             .map_err(convert_error)
     }
@@ -155,7 +156,7 @@ impl VectorDatabase {
 
         let mut inner = self.inner.write();
         inner
-            .store_mut()
+            .store_mut()?
             .set_hybrid_sparse(&id, dense, sparse_vec, meta)
             .map_err(convert_error)
     }
@@ -191,8 +192,8 @@ impl VectorDatabase {
         let metadata_filter = filter.as_ref().map(parse_filter).transpose()?;
 
         let inner = self.inner.read();
-        let results = inner
-            .store()
+        let store = inner.store()?;
+        let results = store
             .sparse_search(&sparse_query, k as usize, metadata_filter.as_ref())
             .map_err(convert_error)?;
 
@@ -266,16 +267,16 @@ impl VectorDatabase {
         // Ensure index is ready
         {
             let inner = self.inner.read();
-            if inner.store().needs_index_rebuild() {
+            if inner.store()?.needs_index_rebuild() {
                 drop(inner);
                 let mut inner = self.inner.write();
-                inner.store_mut().ensure_index_ready().map_err(convert_error)?;
+                inner.store_mut()?.ensure_index_ready().map_err(convert_error)?;
             }
         }
 
         let inner = self.inner.read();
-        let results = inner
-            .store()
+        let store = inner.store()?;
+        let results = store
             .hybrid_sparse_search(
                 &dense_query,
                 &sparse_q,

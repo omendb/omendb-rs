@@ -96,6 +96,12 @@ describe("VectorDatabase", () => {
 			schemaDb.close();
 		});
 
+		it("should raise a regular error after close", async () => {
+			const closedDb = create(":memory:", { dense: { dim: 4 } });
+			closedDb.close();
+			expect(() => closedDb.length).toThrow(/database is closed/);
+		});
+
 		describe("search", () => {
 			beforeEach(async () => {
 				await db.set([

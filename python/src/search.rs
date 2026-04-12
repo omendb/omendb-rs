@@ -91,31 +91,27 @@ impl VectorDatabase {
             // Ensure index is ready before releasing GIL
             {
                 let inner = self.inner.read();
-                if inner.store().needs_index_rebuild() {
+                if inner.store()?.needs_index_rebuild() {
                     drop(inner);
                     let inner = self.inner.write();
-                    inner.store().ensure_index_ready().map_err(convert_error)?;
+                    inner.store()?.ensure_index_ready().map_err(convert_error)?;
                 }
             }
 
             let inner_arc = Arc::clone(&self.inner);
-            let metric = self.inner.read().store().metric();
+            let metric = self.inner.read().store()?.metric();
             let results = py.detach(|| {
                 let inner = inner_arc.read();
-                inner.store().search_with_options(
-                    &query_vec,
-                    k,
-                    rust_filter.as_ref(),
-                    ef,
-                    max_distance,
-                )
-            });
-            let results = results.map_err(convert_error)?;
+                let store = inner.store()?;
+                store
+                    .search_with_options(&query_vec, k, rust_filter.as_ref(), ef, max_distance)
+                    .map_err(convert_error)
+            })?;
             return results_to_py(py, &results, metric);
         }
 
         // Multi-vector store: use query() with SearchOptions
-        if self.live_is_multi_vector() {
+        if self.live_is_multi_vector()? {
             let query_tokens = extract_multi_vector_query(query)?;
 
             // Build rerank mode
@@ -140,19 +136,19 @@ impl VectorDatabase {
             // Ensure index is ready
             {
                 let inner = self.inner.read();
-                if inner.store().needs_index_rebuild() {
+                if inner.store()?.needs_index_rebuild() {
                     drop(inner);
                     let inner = self.inner.write();
-                    inner.store().ensure_index_ready().map_err(convert_error)?;
+                    inner.store()?.ensure_index_ready().map_err(convert_error)?;
                 }
             }
 
             let inner_arc = Arc::clone(&self.inner);
-            let metric = self.inner.read().store().metric();
+            let metric = self.inner.read().store()?.metric();
             let results = py.detach(move || {
                 let inner = inner_arc.read();
-                inner
-                    .store()
+                let store = inner.store()?;
+                store
                     .query_with_options(&query_tokens, k, &options)
                     .map_err(convert_error)
             })?;
@@ -164,7 +160,7 @@ impl VectorDatabase {
         let query_vec = Vector::new(extract_query_vector(query)?);
 
         // Validate query dimensions match the database
-        let expected_dims = self.live_dimensions();
+        let expected_dims = self.live_dimensions()?;
         if expected_dims > 0 && query_vec.dim() != expected_dims {
             return Err(PyValueError::new_err(format!(
                 "Query vector dimension ({}) does not match database dimension ({})",
@@ -176,26 +172,25 @@ impl VectorDatabase {
         // Ensure index is ready before releasing GIL
         {
             let inner = self.inner.read();
-            if inner.store().needs_index_rebuild() {
+            if inner.store()?.needs_index_rebuild() {
                 drop(inner);
                 let inner = self.inner.write();
-                inner.store().ensure_index_ready().map_err(convert_error)?;
+                inner.store()?.ensure_index_ready().map_err(convert_error)?;
             }
         }
 
         // Clone Arc for use inside detach
         let inner_arc = Arc::clone(&self.inner);
-        let metric = self.inner.read().store().metric();
+        let metric = self.inner.read().store()?.metric();
 
         // Release GIL during compute-intensive search
         let results = py.detach(|| {
             let inner = inner_arc.read();
-            inner
-                .store()
+            let store = inner.store()?;
+            store
                 .search_with_options(&query_vec, k, rust_filter.as_ref(), ef, max_distance)
-        });
-
-        let results = results.map_err(convert_error)?;
+                .map_err(convert_error)
+        })?;
 
         // Convert to Python (needs GIL)
         results_to_py(py, &results, metric)
@@ -215,7 +210,7 @@ impl VectorDatabase {
         // Ensure index ready (not timed - one-time cost)
         {
             let inner = self.inner.write();
-            inner.store().ensure_index_ready().map_err(convert_error)?;
+            inner.store()?.ensure_index_ready().map_err(convert_error)?;
         }
 
         let inner_arc = Arc::clone(&self.inner);
@@ -223,41 +218,45 @@ impl VectorDatabase {
         // Time just the Rust search (no result conversion)
         let t0 = Instant::now();
         for _ in 0..n_iterations {
-            py.detach(|| {
+            py.detach(|| -> PyResult<()> {
                 let inner = inner_arc.read();
-                let _ = inner
-                    .store()
-                    .search_with_options(&query_vec, k, None, None, None);
-            });
+                let store = inner.store()?;
+                let _ = store.search_with_options(&query_vec, k, None, None, None);
+                Ok(())
+            })?;
         }
         let t_search_total = t0.elapsed().as_micros() as f64;
 
         // Time segments search directly (bypass VectorStore wrapper)
         let t0 = Instant::now();
         for _ in 0..n_iterations {
-            py.detach(|| {
+            py.detach(|| -> PyResult<()> {
                 let inner = inner_arc.read();
-                inner.store().with_segment_view(|segments| {
+                let store = inner.store()?;
+                store.with_segment_view(|segments| {
                     if let Some(segments) = segments {
                         let _ = segments.search(&query_vec.data, k, 100);
                     }
                 });
-            });
+                Ok(())
+            })?;
         }
         let t_hnsw_total = t0.elapsed().as_micros() as f64;
 
         // Time segments search in tight Rust loop (no GIL release per iteration)
         let t0 = Instant::now();
-        py.detach(|| {
+        py.detach(|| -> PyResult<()> {
             let inner = inner_arc.read();
-            inner.store().with_segment_view(|segments| {
+            let store = inner.store()?;
+            store.with_segment_view(|segments| {
                 if let Some(segments) = segments {
                     for _ in 0..n_iterations {
                         let _ = segments.search(&query_vec.data, k, 100);
                     }
                 }
             });
-        });
+            Ok(())
+        })?;
         let t_hnsw_tight_total = t0.elapsed().as_micros() as f64;
 
         let mut result = HashMap::new();
@@ -338,21 +337,22 @@ impl VectorDatabase {
         // Ensure index and cache are ready
         {
             let inner = self.inner.write();
-            inner.store().ensure_index_ready().map_err(convert_error)?;
+            inner.store()?.ensure_index_ready().map_err(convert_error)?;
         }
 
         // Release GIL and search in parallel
-        let metric = self.inner.read().store().metric();
+        let metric = self.inner.read().store()?.metric();
         let all_results: Vec<Result<Vec<SearchResult>, _>> = py.detach(|| {
             let inner = self.inner.read();
-            inner.store().search_batch_with_filter(
+            let store = inner.store()?;
+            Ok::<_, PyErr>(store.search_batch_with_filter(
                 &query_vecs,
                 k,
                 rust_filter.as_ref(),
                 ef,
                 max_distance,
-            )
-        });
+            ))
+        })?;
 
         // Convert to Python
         let mut py_all_results = Vec::with_capacity(all_results.len());

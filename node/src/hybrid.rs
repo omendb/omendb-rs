@@ -13,9 +13,9 @@ impl VectorDatabase {
     ///
     /// Text search is automatically enabled when using set() with text field.
     #[napi(getter)]
-    pub fn has_text_search(&self) -> bool {
+    pub fn has_text_search(&self) -> Result<bool> {
         let inner = self.inner.read();
-        inner.store().has_text_search()
+        Ok(inner.store()?.has_text_search())
     }
 
     /// Search using text only (BM25 scoring).
@@ -31,25 +31,20 @@ impl VectorDatabase {
 
         {
             let inner = self.inner.write();
-            if inner.store().has_text_search() {
-                inner.store().flush().map_err(convert_error)?;
+            if inner.store()?.has_text_search() {
+                inner.store()?.flush().map_err(convert_error)?;
             }
         }
 
         let inner = self.inner.read();
+        let store = inner.store()?;
 
-        let results = inner
-            .store()
-            .search_text(&query, k as usize)
-            .map_err(convert_error)?;
+        let results = store.search_text(&query, k as usize).map_err(convert_error)?;
 
         Ok(results
             .into_iter()
             .map(|(id, score)| {
-                let metadata = inner
-                    .store()
-                    .get_metadata_by_id(&id)
-                    .unwrap_or(serde_json::json!({}));
+                let metadata = store.get_metadata_by_id(&id).unwrap_or(serde_json::json!({}));
                 TextSearchResult {
                     id,
                     score: score as f64,
@@ -162,16 +157,16 @@ impl VectorDatabase {
 
         {
             let inner = self.inner.write();
-            if inner.store().has_text_search() {
-                inner.store().flush().map_err(convert_error)?;
+            if inner.store()?.has_text_search() {
+                inner.store()?.flush().map_err(convert_error)?;
             }
         }
 
         let inner = self.inner.read();
+        let store = inner.store()?;
 
         if subscores.unwrap_or(false) {
-            let results = inner
-                .store()
+            let results = store
                 .search_hybrid_with_subscores(
                     &query_vec,
                     &actual_query_text,
@@ -194,8 +189,7 @@ impl VectorDatabase {
                 .collect());
         }
 
-        let results = inner
-            .store()
+        let results = store
             .search_hybrid(
                 &query_vec,
                 &actual_query_text,
@@ -224,6 +218,6 @@ impl VectorDatabase {
     #[napi]
     pub fn flush(&self) -> Result<()> {
         let inner = self.inner.write();
-        inner.store().flush().map_err(convert_error)
+        inner.store()?.flush().map_err(convert_error)
     }
 }

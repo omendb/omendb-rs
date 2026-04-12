@@ -106,6 +106,15 @@ def test_open_missing_database_requires_create(temp_db_path):
     assert "omendb.create" in str(excinfo.value)
 
 
+def test_close_raises_clean_error_on_closed_handle():
+    """Closed handles should raise a regular error instead of panicking."""
+    db = omendb.create(":memory:", {"dense": {"dim": 4}})
+    db.close()
+
+    with pytest.raises(RuntimeError, match="database is closed"):
+        len(db)
+
+
 def test_invalid_text_search_type(temp_db_path):
     """Unsupported text_search values should fail fast."""
     with pytest.raises((TypeError, ValueError)):
