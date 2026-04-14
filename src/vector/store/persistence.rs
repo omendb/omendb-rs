@@ -969,8 +969,9 @@ impl VectorStore {
             }
 
             match entry.header.entry_type {
-                WalEntryType::UpsertRecord => {
-                    if let Ok(upsert_data) = parse_wal_upsert_record(&entry.data) {
+                WalEntryType::UpsertRecord => match parse_wal_upsert_record(&entry.data) {
+                    Ok(upsert_data) => {
+                        println!("DEBUG: Replaying WAL upsert for ID: {}", upsert_data.id);
                         let metadata: Option<JsonValue> = upsert_data
                             .metadata
                             .as_ref()
@@ -999,7 +1000,10 @@ impl VectorStore {
                         let slot = records.upsert(record)?;
                         wal_modified_slots.push(slot);
                     }
-                }
+                    Err(e) => {
+                        println!("DEBUG: Failed to parse WAL upsert record: {}", e);
+                    }
+                },
                 WalEntryType::DeleteNode => {
                     if let Ok(delete_data) = parse_wal_delete(&entry.data) {
                         records.delete(&delete_data.id);
@@ -1271,6 +1275,12 @@ impl VectorStore {
                     Some(index)
                 }
             });
+
+        if sparse_index.is_some() {
+            println!("DEBUG: Recovery initialized sparse index");
+        } else {
+            println!("DEBUG: Recovery did NOT initialize sparse index");
+        }
 
         // Reconstruct edge store: start from persisted snapshot, then apply WAL delta
         let edge_store = {

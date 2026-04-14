@@ -120,11 +120,11 @@ impl WalEntry {
             capacity += v.len() * 4;
         }
         if let Some((idx, val)) = sparse {
-            capacity += idx.len() * 4 + val.len() * 4;
+            capacity += 4 + idx.len() * 4 + 4 + val.len() * 4;
         }
         if let Some(tokens) = multi {
             let token_values: usize = tokens.iter().map(Vec::len).sum();
-            capacity += 4 + token_values * 4; // 4 for token_dim
+            capacity += 4 + 4 + token_values * 4; // 4 for token_count, 4 for token_dim
         }
 
         let mut data = Vec::with_capacity(capacity);
@@ -152,6 +152,7 @@ impl WalEntry {
             let idx_bytes =
                 unsafe { std::slice::from_raw_parts(idx.as_ptr() as *const u8, idx.len() * 4) };
             data.extend_from_slice(idx_bytes);
+            data.extend_from_slice(&(val.len() as u32).to_le_bytes());
             let val_bytes =
                 unsafe { std::slice::from_raw_parts(val.as_ptr() as *const u8, val.len() * 4) };
             data.extend_from_slice(val_bytes);
