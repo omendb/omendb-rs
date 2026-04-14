@@ -1254,8 +1254,10 @@ impl VectorStore {
             .as_deref()
             .map(|bytes| {
                 let (index, payloads) =
-                    crate::vector::sparse::SparseIndex::from_bytes_with_payloads(bytes)
-                        .map_err(|e| anyhow::anyhow!("Failed to deserialize SparseIndex: {e}"))?;
+                    crate::vector::sparse::SparseIndex::from_bytes_with_reconstructed_payloads(
+                        bytes,
+                    )
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize SparseIndex: {e}"))?;
                 for (slot, sparse) in payloads {
                     records.update_sparse(slot, Some(sparse))?;
                 }

@@ -253,7 +253,7 @@ impl SparseIndex {
     ) -> Result<Vec<u8>> {
         let persisted = PersistedSparseIndex {
             postings: self.postings.clone().into_iter().collect(),
-            payloads: payloads.into_iter().collect(),
+
             len: self.len(),
         };
         postcard::to_allocvec(&persisted).map_err(|e| anyhow::anyhow!("SparseIndex serialize: {e}"))
@@ -264,13 +264,15 @@ impl SparseIndex {
         let persisted: PersistedSparseIndex = postcard::from_bytes(bytes)
             .map_err(|e| anyhow::anyhow!("SparseIndex deserialize: {e}"))?;
         Ok(Self {
-            slots: derive_slots(&persisted.postings, &persisted.payloads, persisted.len),
+            slots: derive_slots(&persisted.postings, persisted.len),
             postings: persisted.postings.into_iter().collect(),
         })
     }
 
     /// Deserialize from bytes and return sparse payloads for RecordStore recovery.
-    pub fn from_bytes_with_payloads(bytes: &[u8]) -> Result<(Self, HashMap<u32, SparseVector>)> {
+    pub fn from_bytes_with_reconstructed_payloads(
+        bytes: &[u8],
+    ) -> Result<(Self, HashMap<u32, SparseVector>)> {
         let persisted: PersistedSparseIndex = postcard::from_bytes(bytes)
             .map_err(|e| anyhow::anyhow!("SparseIndex deserialize: {e}"))?;
 
@@ -341,20 +343,11 @@ fn top_k_from_scores(scores: impl IntoIterator<Item = (u32, f32)>, k: usize) -> 
 struct PersistedSparseIndex {
     postings: HashMap<u32, PostingList>,
     #[serde(default)]
-    payloads: HashMap<u32, SparseVector>,
     #[serde(default)]
     len: usize,
 }
 
-fn derive_slots(
-    postings: &HashMap<u32, PostingList>,
-    payloads: &HashMap<u32, SparseVector>,
-    legacy_len: usize,
-) -> RoaringBitmap {
-    if !payloads.is_empty() {
-        return payloads.keys().copied().collect();
-    }
-
+fn derive_slots(postings: &HashMap<u32, PostingList>, legacy_len: usize) -> RoaringBitmap {
     let mut slots = RoaringBitmap::new();
     for posting in postings.values() {
         for entry in &posting.elements {
