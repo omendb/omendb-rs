@@ -24,18 +24,14 @@ fn configure_open_options(_opts: &mut OpenOptions) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum WalEntryType {
-    /// Insert a new node: {id, level, vector, metadata}
-    InsertNode = 1,
+    /// Upsert a record with dense, sparse, and/or multi payloads
+    UpsertRecord = 1,
     /// Delete a node: {id}
     DeleteNode = 2,
     /// Insert an edge: {from_id, to_id, edge_type, weight, metadata}
     InsertEdge = 3,
     /// Delete an edge: {from_id, to_id, edge_type}
     DeleteEdge = 4,
-    /// Upsert sparse payload: {id, metadata, indices, values}
-    UpsertSparse = 5,
-    /// Upsert multivector payload: {id, metadata, tokens}
-    UpsertMulti = 6,
     /// Checkpoint marker - safe truncation point
     Checkpoint = 100,
 }
@@ -47,12 +43,10 @@ impl WalEntryType {
     #[must_use]
     pub fn from_byte(v: u8) -> Option<Self> {
         match v {
-            1 => Some(Self::InsertNode),
+            1 => Some(Self::UpsertRecord),
             2 => Some(Self::DeleteNode),
             3 => Some(Self::InsertEdge),
             4 => Some(Self::DeleteEdge),
-            5 => Some(Self::UpsertSparse),
-            6 => Some(Self::UpsertMulti),
             100 => Some(Self::Checkpoint),
             _ => None,
         }
@@ -108,18 +102,31 @@ pub struct WalEntry {
 }
 
 impl WalEntry {
-    /// Create insert node entry
+    /// Create unified upsert record entry
     #[must_use]
-    pub fn insert_node(
+    pub fn upsert_record(
         timestamp: u64,
         string_id: &str,
         level: u8,
-        vector: &[f32],
-        metadata: &[u8],
+        dense: Option<&[f32]>,
+        sparse: Option<(&[u32], &[f32])>,
+        multi: Option<&[Vec<f32>]>,
+        metadata: Option<&[u8]>,
     ) -> Self {
-        // Pre-calculate exact capacity: 4 (id len) + id bytes + 1 (level) +
-        // 4 (vec len) + vec f32s * 4 + 4 (meta len) + meta bytes
-        let capacity = 4 + string_id.len() + 1 + 4 + (vector.len() * 4) + 4 + metadata.len();
+        let meta_bytes = metadata.unwrap_or(&[]);
+        let mut capacity = 4 + string_id.len() + 1 + 4 + 4 + 4 + 4 + meta_bytes.len();
+
+        if let Some(v) = dense {
+            capacity += v.len() * 4;
+        }
+        if let Some((idx, val)) = sparse {
+            capacity += idx.len() * 4 + val.len() * 4;
+        }
+        if let Some(tokens) = multi {
+            let token_values: usize = tokens.iter().map(Vec::len).sum();
+            capacity += 4 + token_values * 4; // 4 for token_dim
+        }
+
         let mut data = Vec::with_capacity(capacity);
 
         // String ID (length-prefixed)
@@ -129,22 +136,57 @@ impl WalEntry {
         // Level
         data.push(level);
 
-        // Vector (length-prefixed f32 array)
-        // SAFETY: little-endian required crate-wide (compile_error! in file.rs); f32 alignment ≥ u8
-        data.extend_from_slice(&(vector.len() as u32).to_le_bytes());
-        let byte_slice =
-            unsafe { std::slice::from_raw_parts(vector.as_ptr() as *const u8, vector.len() * 4) };
-        data.extend_from_slice(byte_slice);
+        // Dense (Option)
+        if let Some(v) = dense {
+            data.extend_from_slice(&(v.len() as u32).to_le_bytes());
+            let byte_slice =
+                unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) };
+            data.extend_from_slice(byte_slice);
+        } else {
+            data.extend_from_slice(&0u32.to_le_bytes());
+        }
+
+        // Sparse (Option)
+        if let Some((idx, val)) = sparse {
+            data.extend_from_slice(&(idx.len() as u32).to_le_bytes());
+            let idx_bytes =
+                unsafe { std::slice::from_raw_parts(idx.as_ptr() as *const u8, idx.len() * 4) };
+            data.extend_from_slice(idx_bytes);
+            let val_bytes =
+                unsafe { std::slice::from_raw_parts(val.as_ptr() as *const u8, val.len() * 4) };
+            data.extend_from_slice(val_bytes);
+        } else {
+            data.extend_from_slice(&0u32.to_le_bytes());
+        }
+
+        // Multi (Option)
+        if let Some(tokens) = multi {
+            data.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
+            if !tokens.is_empty() {
+                let token_dim = tokens[0].len();
+                data.extend_from_slice(&(token_dim as u32).to_le_bytes());
+                for t in tokens {
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(t.as_ptr() as *const u8, token_dim * 4)
+                    };
+                    data.extend_from_slice(bytes);
+                }
+            } else {
+                data.extend_from_slice(&0u32.to_le_bytes());
+            }
+        } else {
+            data.extend_from_slice(&0u32.to_le_bytes());
+        }
 
         // Metadata (length-prefixed)
-        data.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
-        data.extend_from_slice(metadata);
+        data.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());
+        data.extend_from_slice(meta_bytes);
 
         let checksum = crc32fast::hash(&data);
 
         Self {
             header: WalEntryHeader {
-                entry_type: WalEntryType::InsertNode,
+                entry_type: WalEntryType::UpsertRecord,
                 timestamp,
                 data_len: data.len() as u32,
                 checksum,
@@ -247,85 +289,6 @@ impl WalEntry {
                 checksum: 0,
             },
             data: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn upsert_sparse(
-        timestamp: u64,
-        string_id: &str,
-        metadata: &[u8],
-        indices: &[u32],
-        values: &[f32],
-    ) -> Self {
-        let capacity = 4
-            + string_id.len()
-            + 4
-            + metadata.len()
-            + 4
-            + (indices.len() * 4)
-            + 4
-            + (values.len() * 4);
-        let mut data = Vec::with_capacity(capacity);
-
-        data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());
-        data.extend_from_slice(string_id.as_bytes());
-        data.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
-        data.extend_from_slice(metadata);
-        data.extend_from_slice(&(indices.len() as u32).to_le_bytes());
-        for index in indices {
-            data.extend_from_slice(&index.to_le_bytes());
-        }
-        data.extend_from_slice(&(values.len() as u32).to_le_bytes());
-        let value_bytes =
-            unsafe { std::slice::from_raw_parts(values.as_ptr() as *const u8, values.len() * 4) };
-        data.extend_from_slice(value_bytes);
-
-        let checksum = crc32fast::hash(&data);
-        Self {
-            header: WalEntryHeader {
-                entry_type: WalEntryType::UpsertSparse,
-                timestamp,
-                data_len: data.len() as u32,
-                checksum,
-            },
-            data,
-        }
-    }
-
-    #[must_use]
-    pub fn upsert_multi(
-        timestamp: u64,
-        string_id: &str,
-        metadata: &[u8],
-        tokens: &[Vec<f32>],
-    ) -> Self {
-        let token_values: usize = tokens.iter().map(Vec::len).sum();
-        let capacity =
-            4 + string_id.len() + 4 + metadata.len() + 4 + tokens.len() * 4 + token_values * 4;
-        let mut data = Vec::with_capacity(capacity);
-
-        data.extend_from_slice(&(string_id.len() as u32).to_le_bytes());
-        data.extend_from_slice(string_id.as_bytes());
-        data.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
-        data.extend_from_slice(metadata);
-        data.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
-        for token in tokens {
-            data.extend_from_slice(&(token.len() as u32).to_le_bytes());
-            let token_bytes =
-                unsafe { std::slice::from_raw_parts(token.as_ptr() as *const u8, token.len() * 4) };
-            data.extend_from_slice(token_bytes);
-        }
-
-        let checksum = crc32fast::hash(&data);
-        Self {
-            header: WalEntryHeader {
-                entry_type: WalEntryType::UpsertMulti,
-                timestamp,
-                data_len: data.len() as u32,
-                checksum,
-            },
-            data,
         }
     }
 
@@ -739,191 +702,142 @@ fn read_vector_from_bytes(bytes: &[u8], dimensions: usize) -> Vec<f32> {
 
 /// Parsed insert data from a WAL entry
 #[derive(Debug, Clone)]
-pub struct WalInsertData {
-    pub id: String,
-    pub vector: Vec<f32>,
-    pub metadata: Option<Vec<u8>>,
-}
-
-/// Parsed delete data from a WAL entry
-#[derive(Debug, Clone)]
 pub struct WalDeleteData {
     pub id: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct WalSparseData {
+pub struct WalUpsertData {
     pub id: String,
+    pub level: u8,
+    pub dense: Option<Vec<f32>>,
+    pub sparse: Option<(Vec<u32>, Vec<f32>)>,
+    pub multi: Option<Vec<Vec<f32>>>,
     pub metadata: Option<Vec<u8>>,
-    pub indices: Vec<u32>,
-    pub values: Vec<f32>,
 }
 
-#[derive(Debug, Clone)]
-pub struct WalMultiData {
-    pub id: String,
-    pub metadata: Option<Vec<u8>>,
-    pub tokens: Vec<Vec<f32>>,
-}
-
-/// Parse WAL insert entry data
-///
-/// Returns parsed ID, vector, and optional metadata bytes.
-pub fn parse_wal_insert(data: &[u8]) -> io::Result<WalInsertData> {
-    let mut cursor = std::io::Cursor::new(data);
-    let string_id = read_string_id(&mut cursor)?;
-
-    let mut buf = [0u8; 4];
-
-    // Skip level byte (HNSW graph managed by HNSWIndex)
-    cursor.read_exact(&mut buf[..1])?;
-
-    // Read vector
-    cursor.read_exact(&mut buf)?;
-    let vec_len = u32::from_le_bytes(buf) as usize;
-    if vec_len > MAX_VECTOR_DIM {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Vector dimension {vec_len} exceeds maximum {MAX_VECTOR_DIM}"),
-        ));
-    }
-    let byte_len = vec_len
-        .checked_mul(4)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Vector byte size overflow"))?;
-    let mut vec_bytes = vec![0u8; byte_len];
-    cursor.read_exact(&mut vec_bytes)?;
-    let vector = read_vector_from_bytes(&vec_bytes, vec_len);
-
-    // Read metadata
-    cursor.read_exact(&mut buf)?;
-    let meta_len = u32::from_le_bytes(buf) as usize;
-    let metadata = if meta_len > 0 {
-        if meta_len > MAX_METADATA_LEN {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Metadata length {meta_len} exceeds maximum {MAX_METADATA_LEN}"),
-            ));
-        }
-        let mut meta_bytes = vec![0u8; meta_len];
-        cursor.read_exact(&mut meta_bytes)?;
-        Some(meta_bytes)
-    } else {
-        None
-    };
-
-    Ok(WalInsertData {
-        id: string_id,
-        vector,
-        metadata,
-    })
-}
-
+/// Parse WAL upsert record entry data
 /// Parse WAL delete entry data
 ///
 /// Returns parsed ID.
-pub fn parse_wal_delete(data: &[u8]) -> io::Result<WalDeleteData> {
+pub fn parse_wal_delete(data: &[u8]) -> std::io::Result<WalDeleteData> {
     let mut cursor = std::io::Cursor::new(data);
-    let id = read_string_id(&mut cursor)?;
+    let id = crate::omen::wal::read_string_id(&mut cursor)?;
     Ok(WalDeleteData { id })
 }
 
-pub fn parse_wal_sparse(data: &[u8]) -> io::Result<WalSparseData> {
+pub fn parse_wal_upsert_record(data: &[u8]) -> io::Result<WalUpsertData> {
     let mut cursor = std::io::Cursor::new(data);
-    let id = read_string_id(&mut cursor)?;
+    let string_id = read_string_id(&mut cursor)?;
+
+    let mut buf1 = [0u8; 1];
     let mut buf4 = [0u8; 4];
 
+    // Read level
+    cursor.read_exact(&mut buf1)?;
+    let level = buf1[0];
+
+    // Read dense
     cursor.read_exact(&mut buf4)?;
-    let meta_len = u32::from_le_bytes(buf4) as usize;
-    let metadata = if meta_len > 0 {
-        if meta_len > MAX_METADATA_LEN {
+    let vec_len = u32::from_le_bytes(buf4) as usize;
+    let dense = if vec_len > 0 {
+        if vec_len > MAX_VECTOR_DIM {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Metadata length {meta_len} exceeds maximum {MAX_METADATA_LEN}"),
+                format!(
+                    "Vector dimension {} exceeds maximum {}",
+                    vec_len, MAX_VECTOR_DIM
+                ),
             ));
         }
-        let mut bytes = vec![0u8; meta_len];
-        cursor.read_exact(&mut bytes)?;
-        Some(bytes)
+        let byte_len = vec_len.checked_mul(4).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Vector byte size overflow")
+        })?;
+        let mut vec_bytes = vec![0u8; byte_len];
+        cursor.read_exact(&mut vec_bytes)?;
+        Some(read_vector_from_bytes(&vec_bytes, vec_len))
     } else {
         None
     };
 
+    // Read sparse
     cursor.read_exact(&mut buf4)?;
-    let index_len = u32::from_le_bytes(buf4) as usize;
-    let mut indices = Vec::with_capacity(index_len);
-    for _ in 0..index_len {
+    let sparse_len = u32::from_le_bytes(buf4) as usize;
+    let sparse = if sparse_len > 0 {
+        if sparse_len > MAX_VECTOR_DIM {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Sparse length exceeds maximum",
+            ));
+        }
+        let mut indices = Vec::with_capacity(sparse_len);
+        for _ in 0..sparse_len {
+            cursor.read_exact(&mut buf4)?;
+            indices.push(u32::from_le_bytes(buf4));
+        }
         cursor.read_exact(&mut buf4)?;
-        indices.push(u32::from_le_bytes(buf4));
-    }
-
-    cursor.read_exact(&mut buf4)?;
-    let value_len = u32::from_le_bytes(buf4) as usize;
-    if value_len != index_len {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Sparse index/value length mismatch",
-        ));
-    }
-    let byte_len = value_len
-        .checked_mul(4)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Sparse byte size overflow"))?;
-    let mut value_bytes = vec![0u8; byte_len];
-    cursor.read_exact(&mut value_bytes)?;
-    let values = read_vector_from_bytes(&value_bytes, value_len);
-
-    Ok(WalSparseData {
-        id,
-        metadata,
-        indices,
-        values,
-    })
-}
-
-pub fn parse_wal_multi(data: &[u8]) -> io::Result<WalMultiData> {
-    let mut cursor = std::io::Cursor::new(data);
-    let id = read_string_id(&mut cursor)?;
-    let mut buf4 = [0u8; 4];
-
-    cursor.read_exact(&mut buf4)?;
-    let meta_len = u32::from_le_bytes(buf4) as usize;
-    let metadata = if meta_len > 0 {
-        if meta_len > MAX_METADATA_LEN {
+        let values_len = u32::from_le_bytes(buf4) as usize;
+        if values_len != sparse_len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Metadata length {meta_len} exceeds maximum {MAX_METADATA_LEN}"),
+                "Sparse indices/values mismatch",
             ));
         }
-        let mut bytes = vec![0u8; meta_len];
-        cursor.read_exact(&mut bytes)?;
-        Some(bytes)
+        let byte_len = values_len.checked_mul(4).unwrap();
+        let mut value_bytes = vec![0u8; byte_len];
+        cursor.read_exact(&mut value_bytes)?;
+        Some((indices, read_vector_from_bytes(&value_bytes, values_len)))
     } else {
         None
     };
 
+    // Read multi
     cursor.read_exact(&mut buf4)?;
     let token_count = u32::from_le_bytes(buf4) as usize;
-    let mut tokens = Vec::with_capacity(token_count);
-    for _ in 0..token_count {
+    let multi = if token_count > 0 {
         cursor.read_exact(&mut buf4)?;
-        let token_len = u32::from_le_bytes(buf4) as usize;
-        if token_len > MAX_VECTOR_DIM {
+        let token_dim = u32::from_le_bytes(buf4) as usize;
+        if token_dim > MAX_VECTOR_DIM {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Token dimension {token_len} exceeds maximum {MAX_VECTOR_DIM}"),
+                "Token dimension exceeds maximum",
             ));
         }
-        let byte_len = token_len.checked_mul(4).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "Multi token byte size overflow")
-        })?;
-        let mut token_bytes = vec![0u8; byte_len];
-        cursor.read_exact(&mut token_bytes)?;
-        tokens.push(read_vector_from_bytes(&token_bytes, token_len));
-    }
+        let mut tokens = Vec::with_capacity(token_count);
+        let byte_len = token_dim.checked_mul(4).unwrap();
+        for _ in 0..token_count {
+            let mut token_bytes = vec![0u8; byte_len];
+            cursor.read_exact(&mut token_bytes)?;
+            tokens.push(read_vector_from_bytes(&token_bytes, token_dim));
+        }
+        Some(tokens)
+    } else {
+        None
+    };
 
-    Ok(WalMultiData {
-        id,
+    // Read metadata
+    cursor.read_exact(&mut buf4)?;
+    let meta_len = u32::from_le_bytes(buf4) as usize;
+    let metadata = if meta_len > 0 {
+        if meta_len > MAX_METADATA_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Metadata length exceeds maximum",
+            ));
+        }
+        let mut bytes = vec![0u8; meta_len];
+        cursor.read_exact(&mut bytes)?;
+        Some(bytes)
+    } else {
+        None
+    };
+
+    Ok(WalUpsertData {
+        id: string_id,
+        level,
+        dense,
+        sparse,
+        multi,
         metadata,
-        tokens,
     })
 }
 
@@ -1006,12 +920,28 @@ mod tests {
 
         {
             let mut wal = Wal::open(&wal_path).unwrap();
-            wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
-                .unwrap();
+            wal.append(WalEntry::upsert_record(
+                0,
+                "vec1",
+                0,
+                Some(&[1.0, 2.0, 3.0]),
+                None,
+                None,
+                Some(b"{}"),
+            ))
+            .unwrap();
             wal.append(WalEntry::delete_node(0, "vec2")).unwrap();
             wal.append(WalEntry::checkpoint(0)).unwrap();
-            wal.append(WalEntry::insert_node(0, "vec3", 1, &[4.0, 5.0, 6.0], b"{}"))
-                .unwrap();
+            wal.append(WalEntry::upsert_record(
+                0,
+                "vec3",
+                1,
+                Some(&[4.0, 5.0, 6.0]),
+                None,
+                None,
+                Some(b"{}"),
+            ))
+            .unwrap();
             wal.sync().unwrap();
         }
 
@@ -1021,19 +951,35 @@ mod tests {
 
             // Should only have entries after checkpoint
             assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].header.entry_type, WalEntryType::InsertNode);
+            assert_eq!(entries[0].header.entry_type, WalEntryType::UpsertRecord);
         }
     }
 
     #[test]
     fn test_entry_checksum() {
-        let entry = WalEntry::insert_node(1, "test", 0, &[1.0, 2.0], b"metadata");
+        let entry = WalEntry::upsert_record(
+            1,
+            "test",
+            0,
+            Some(&[1.0, 2.0]),
+            None,
+            None,
+            Some(b"metadata"),
+        );
         assert!(entry.verify());
     }
 
     #[test]
     fn test_corrupted_entry_data_detected() {
-        let mut entry = WalEntry::insert_node(1, "test", 0, &[1.0, 2.0], b"metadata");
+        let mut entry = WalEntry::upsert_record(
+            1,
+            "test",
+            0,
+            Some(&[1.0, 2.0]),
+            None,
+            None,
+            Some(b"metadata"),
+        );
         assert!(entry.verify());
 
         // Corrupt the data
@@ -1047,7 +993,15 @@ mod tests {
 
     #[test]
     fn test_corrupted_entry_checksum_detected() {
-        let mut entry = WalEntry::insert_node(1, "test", 0, &[1.0, 2.0], b"metadata");
+        let mut entry = WalEntry::upsert_record(
+            1,
+            "test",
+            0,
+            Some(&[1.0, 2.0]),
+            None,
+            None,
+            Some(b"metadata"),
+        );
         assert!(entry.verify());
 
         // Corrupt the checksum
@@ -1070,10 +1024,26 @@ mod tests {
         // Write valid entries
         {
             let mut wal = Wal::open(&wal_path).unwrap();
-            wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
-                .unwrap();
-            wal.append(WalEntry::insert_node(0, "vec2", 0, &[4.0, 5.0, 6.0], b"{}"))
-                .unwrap();
+            wal.append(WalEntry::upsert_record(
+                0,
+                "vec1",
+                0,
+                Some(&[1.0, 2.0, 3.0]),
+                None,
+                None,
+                Some(b"{}"),
+            ))
+            .unwrap();
+            wal.append(WalEntry::upsert_record(
+                0,
+                "vec2",
+                0,
+                Some(&[4.0, 5.0, 6.0]),
+                None,
+                None,
+                Some(b"{}"),
+            ))
+            .unwrap();
             wal.sync().unwrap();
         }
 
@@ -1118,8 +1088,16 @@ mod tests {
 
         {
             let mut wal = Wal::open(&wal_path).unwrap();
-            wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
-                .unwrap();
+            wal.append(WalEntry::upsert_record(
+                0,
+                "vec1",
+                0,
+                Some(&[1.0, 2.0, 3.0]),
+                None,
+                None,
+                Some(b"{}"),
+            ))
+            .unwrap();
             wal.append(WalEntry::delete_node(0, "vec1")).unwrap();
             wal.sync().unwrap();
             assert_eq!(wal.len(), 2);
@@ -1131,8 +1109,16 @@ mod tests {
             assert_eq!(wal.len(), 2);
             assert_eq!(wal.max_timestamp(), Some(1));
 
-            wal.append(WalEntry::insert_node(0, "vec2", 1, &[4.0, 5.0, 6.0], b"{}"))
-                .unwrap();
+            wal.append(WalEntry::upsert_record(
+                0,
+                "vec2",
+                1,
+                Some(&[4.0, 5.0, 6.0]),
+                None,
+                None,
+                Some(b"{}"),
+            ))
+            .unwrap();
             assert_eq!(wal.len(), 3);
             assert_eq!(wal.max_timestamp(), Some(2));
         }
@@ -1147,8 +1133,16 @@ mod tests {
 
         {
             let mut wal = Wal::open(&wal_path).unwrap();
-            wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
-                .unwrap();
+            wal.append(WalEntry::upsert_record(
+                0,
+                "vec1",
+                0,
+                Some(&[1.0, 2.0, 3.0]),
+                None,
+                None,
+                Some(b"{}"),
+            ))
+            .unwrap();
             wal.sync().unwrap();
         }
 
@@ -1182,8 +1176,16 @@ mod tests {
         let wal_path = dir.path().join("test_truncate_epoch_rollback.wal");
 
         let mut wal = Wal::open(&wal_path).unwrap();
-        wal.append(WalEntry::insert_node(0, "vec1", 0, &[1.0, 2.0, 3.0], b"{}"))
-            .unwrap();
+        wal.append(WalEntry::upsert_record(
+            0,
+            "vec1",
+            0,
+            Some(&[1.0, 2.0, 3.0]),
+            None,
+            None,
+            Some(b"{}"),
+        ))
+        .unwrap();
         wal.sync().unwrap();
 
         let original_epoch = wal.truncation_epoch();

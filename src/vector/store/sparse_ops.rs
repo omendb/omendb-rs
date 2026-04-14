@@ -58,7 +58,14 @@ impl VectorStore {
 
             if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
-                storage.log_upsert_sparse(id, &sparse, &metadata)?;
+                let vec_data = self.records.get_vector(slot as u32);
+                storage.log_upsert_record(
+                    id,
+                    vec_data.as_ref().map(|v| v.as_slice()),
+                    Some(&sparse),
+                    self.records.get_multi(slot as u32).as_deref(),
+                    &metadata,
+                )?;
                 storage.sync()?;
                 (
                     slot,
@@ -75,7 +82,14 @@ impl VectorStore {
             self.metadata_index.write().index_json(slot, &metadata);
             if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
-                storage.log_upsert_sparse(id, &sparse, &metadata)?;
+                let vec_data = self.records.get_vector(slot as u32);
+                storage.log_upsert_record(
+                    id,
+                    vec_data.as_ref().map(|v| v.as_slice()),
+                    Some(&sparse),
+                    self.records.get_multi(slot as u32).as_deref(),
+                    &metadata,
+                )?;
                 storage.sync()?;
                 (
                     slot,
@@ -124,7 +138,14 @@ impl VectorStore {
 
         if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
-            storage.log_upsert_sparse(id, &sparse, &metadata)?;
+            let vec_data = self.records.get_vector(slot as u32);
+            storage.log_upsert_record(
+                id,
+                vec_data.as_ref().map(|v| v.as_slice()),
+                Some(&sparse),
+                self.records.get_multi(slot as u32).as_deref(),
+                &metadata,
+            )?;
             storage.sync()?;
             if storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize {
                 drop(storage);

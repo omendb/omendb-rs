@@ -61,40 +61,20 @@ impl StorageBackend for MockStorageBackend {
         Ok(())
     }
 
-    fn log_insert(
+    fn log_upsert_record(
         &mut self,
-        id: &str,
-        _vector: &[f32],
+        _id: &str,
+        _dense: Option<&[f32]>,
+        _sparse: Option<&crate::vector::sparse::SparseVector>,
+        _multi: Option<&[Vec<f32>]>,
         _metadata: &serde_json::Value,
-    ) -> Result<()> {
-        self.wal.push(format!("insert:{id}"));
-        // In a real mock, we might want to store the vector here too if we want to
-        // simulate recovery.
+    ) -> anyhow::Result<()> {
+        self.wal.push(format!("upsert_record:{_id}"));
         Ok(())
     }
 
-    fn log_delete(&mut self, id: &str) -> Result<()> {
-        self.wal.push(format!("delete:{id}"));
-        Ok(())
-    }
-
-    fn log_upsert_sparse(
-        &mut self,
-        id: &str,
-        _sparse: &crate::vector::sparse::SparseVector,
-        _metadata: &serde_json::Value,
-    ) -> Result<()> {
-        self.wal.push(format!("sparse:{id}"));
-        Ok(())
-    }
-
-    fn log_upsert_multi(
-        &mut self,
-        id: &str,
-        _tokens: &[Vec<f32>],
-        _metadata: &serde_json::Value,
-    ) -> Result<()> {
-        self.wal.push(format!("multi:{id}"));
+    fn log_delete(&mut self, _id: &str) -> anyhow::Result<()> {
+        self.wal.push(format!("delete_node:{_id}"));
         Ok(())
     }
 
@@ -191,7 +171,7 @@ mod tests {
 
         let v1 = vec![1.0, 0.0, 0.0, 0.0];
         backend
-            .log_insert("doc1", &v1, &serde_json::json!({}))
+            .log_upsert_record("doc1", Some(&v1), None, None, &serde_json::json!({}))
             .unwrap();
         assert_eq!(backend.wal_len(), 1);
 

@@ -11,9 +11,8 @@ use crate::omen::{
 
 // Re-export WAL parsing functions for external use
 pub use crate::omen::wal::{
-    WalDeleteData, WalDeleteEdgeData, WalInsertData, WalInsertEdgeData, WalMultiData,
-    WalSparseData, parse_wal_delete, parse_wal_delete_edge, parse_wal_insert,
-    parse_wal_insert_edge, parse_wal_multi, parse_wal_sparse,
+    WalDeleteData, WalDeleteEdgeData, WalInsertEdgeData, WalUpsertData, parse_wal_delete,
+    parse_wal_delete_edge, parse_wal_insert_edge, parse_wal_upsert_record,
 };
 use crate::vector::store::record_store::{RecordStore, SnapshotMmapSource, SnapshotVectorData};
 use anyhow::Result;
@@ -562,41 +561,32 @@ impl crate::omen::StorageBackend for OmenFile {
         Ok(())
     }
 
-    fn log_insert(
+    fn log_upsert_record(
         &mut self,
         id: &str,
-        vector: &[f32],
+        dense: Option<&[f32]>,
+        sparse: Option<&crate::vector::sparse::SparseVector>,
+        multi: Option<&[Vec<f32>]>,
         metadata: &serde_json::Value,
     ) -> anyhow::Result<()> {
         let metadata_bytes = serde_json::to_vec(metadata)?;
-        self.wal_append_insert(id, vector, Some(&metadata_bytes))
-            .map_err(Into::into)
+        let sparse_tuple = sparse.map(|s| (s.indices(), s.values()));
+        let multi_ref = multi;
+
+        self.wal.append(crate::omen::wal::WalEntry::upsert_record(
+            0, // timestamp will be set in append
+            id,
+            0, // level not directly used here or handled inside Wal
+            dense,
+            sparse_tuple,
+            multi_ref,
+            Some(&metadata_bytes),
+        ))?;
+        Ok(())
     }
 
     fn log_delete(&mut self, id: &str) -> anyhow::Result<()> {
         self.wal_append_delete(id).map_err(Into::into)
-    }
-
-    fn log_upsert_sparse(
-        &mut self,
-        id: &str,
-        sparse: &crate::vector::sparse::SparseVector,
-        metadata: &serde_json::Value,
-    ) -> anyhow::Result<()> {
-        let metadata_bytes = serde_json::to_vec(metadata)?;
-        self.wal_append_sparse(id, sparse.indices(), sparse.values(), Some(&metadata_bytes))
-            .map_err(Into::into)
-    }
-
-    fn log_upsert_multi(
-        &mut self,
-        id: &str,
-        tokens: &[Vec<f32>],
-        metadata: &serde_json::Value,
-    ) -> anyhow::Result<()> {
-        let metadata_bytes = serde_json::to_vec(metadata)?;
-        self.wal_append_multi(id, tokens, Some(&metadata_bytes))
-            .map_err(Into::into)
     }
 
     fn log_insert_edge(
@@ -904,54 +894,6 @@ impl OmenFile {
     ///
     /// WAL-only, no state mutation. State is managed by RecordStore.
     /// Note: Does not sync to disk. Call `wal_sync()` for durability.
-    pub fn wal_append_insert(
-        &mut self,
-        id: &str,
-        vector: &[f32],
-        metadata: Option<&[u8]>,
-    ) -> io::Result<()> {
-        let metadata_bytes = metadata.unwrap_or(b"{}");
-        let entry = WalEntry::insert_node(0, id, 0, vector, metadata_bytes);
-        self.wal.append(entry)
-    }
-
-    /// Append delete entry to WAL without updating internal state
-    ///
-    /// WAL-only, no state mutation. State is managed by RecordStore.
-    /// Note: Does not sync to disk. Call `wal_sync()` for durability.
-    pub fn wal_append_delete(&mut self, id: &str) -> io::Result<()> {
-        self.wal.append(WalEntry::delete_node(0, id))
-    }
-
-    pub fn wal_append_sparse(
-        &mut self,
-        id: &str,
-        indices: &[u32],
-        values: &[f32],
-        metadata: Option<&[u8]>,
-    ) -> io::Result<()> {
-        let metadata_bytes = metadata.unwrap_or(b"{}");
-        self.wal.append(WalEntry::upsert_sparse(
-            0,
-            id,
-            metadata_bytes,
-            indices,
-            values,
-        ))
-    }
-
-    pub fn wal_append_multi(
-        &mut self,
-        id: &str,
-        tokens: &[Vec<f32>],
-        metadata: Option<&[u8]>,
-    ) -> io::Result<()> {
-        let metadata_bytes = metadata.unwrap_or(b"{}");
-        self.wal
-            .append(WalEntry::upsert_multi(0, id, metadata_bytes, tokens))
-    }
-
-    /// Append insert-edge entry to WAL.
     pub fn wal_append_insert_edge(
         &mut self,
         from_id: &str,
@@ -976,7 +918,12 @@ impl OmenFile {
             .append(WalEntry::delete_edge(0, from_id, to_id, edge_type))
     }
 
-    /// Sync WAL to disk for durability
+    /// Append delete entry to WAL without updating internal state
+    pub fn wal_append_delete(&mut self, id: &str) -> io::Result<()> {
+        self.wal.append(WalEntry::delete_node(0, id))
+    }
+
+    /// Checkpoint WAL to disk
     pub fn wal_sync(&mut self) -> io::Result<()> {
         self.wal.sync()
     }
@@ -2256,6 +2203,7 @@ fn mmap_f32_slice(mmap: &Mmap, offset: usize, len: usize) -> &[f32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::omen::StorageBackend;
     use tempfile::tempdir;
 
     #[test]
@@ -2286,10 +2234,22 @@ mod tests {
         let mut db = OmenFile::create(&db_path, 3).unwrap();
 
         // WAL only, no state mutation
-        db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
-            .unwrap();
-        db.wal_append_insert("vec2", &[4.0, 5.0, 6.0], Some(br#"{"key":"value"}"#))
-            .unwrap();
+        db.log_upsert_record(
+            "vec1",
+            Some(&[1.0, 2.0, 3.0]),
+            None,
+            None,
+            &serde_json::json!({}),
+        )
+        .unwrap();
+        db.log_upsert_record(
+            "vec2",
+            Some(&[4.0, 5.0, 6.0]),
+            None,
+            None,
+            &serde_json::json!({"key":"value"}),
+        )
+        .unwrap();
 
         // WAL should have entries
         assert!(db.wal_len() > 0);
@@ -2306,8 +2266,14 @@ mod tests {
 
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
-            db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
-                .unwrap();
+            db.log_upsert_record(
+                "vec1",
+                Some(&[1.0, 2.0, 3.0]),
+                None,
+                None,
+                &serde_json::json!({}),
+            )
+            .unwrap();
             // Don't checkpoint - data is only in WAL
         }
 
@@ -2318,9 +2284,9 @@ mod tests {
             assert_eq!(entries.len(), 1);
 
             // Parse and verify the entry
-            let insert_data = parse_wal_insert(&entries[0].data).unwrap();
+            let insert_data = parse_wal_upsert_record(&entries[0].data).unwrap();
             assert_eq!(insert_data.id, "vec1");
-            assert_eq!(insert_data.vector, vec![1.0, 2.0, 3.0]);
+            assert_eq!(insert_data.dense.unwrap(), vec![1.0, 2.0, 3.0]);
         }
     }
 
@@ -2331,8 +2297,14 @@ mod tests {
 
         {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
-            db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
-                .unwrap();
+            db.log_upsert_record(
+                "vec1",
+                Some(&[1.0, 2.0, 3.0]),
+                None,
+                None,
+                &serde_json::json!({}),
+            )
+            .unwrap();
             db.wal_append_delete("vec1").unwrap();
         }
 
@@ -2342,7 +2314,7 @@ mod tests {
             assert_eq!(entries.len(), 2);
 
             // First entry is insert
-            let insert_data = parse_wal_insert(&entries[0].data).unwrap();
+            let insert_data = parse_wal_upsert_record(&entries[0].data).unwrap();
             assert_eq!(insert_data.id, "vec1");
 
             // Second entry is delete
@@ -2470,8 +2442,14 @@ mod tests {
             let mut db = OmenFile::create(&db_path, 3).unwrap();
 
             // Write to WAL
-            db.wal_append_insert("vec1", &[1.0, 2.0, 3.0], None)
-                .unwrap();
+            db.log_upsert_record(
+                "vec1",
+                Some(&[1.0, 2.0, 3.0]),
+                None,
+                None,
+                &serde_json::json!({}),
+            )
+            .unwrap();
             assert!(db.wal_len() > 0);
 
             // Checkpoint should clear WAL completely

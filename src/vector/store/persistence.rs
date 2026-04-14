@@ -14,8 +14,7 @@ use crate::catalog::{
 };
 use crate::omen::{
     CheckpointOptions, OmenFile, OmenSnapshot, PersistedMuveraConfig, WalEntryType,
-    parse_wal_delete, parse_wal_delete_edge, parse_wal_insert, parse_wal_insert_edge,
-    parse_wal_multi, parse_wal_sparse,
+    parse_wal_delete, parse_wal_delete_edge, parse_wal_insert_edge, parse_wal_upsert_record,
 };
 use crate::text::{TextIndex, TextSearchConfig};
 use crate::vector::VectorEngineView;
@@ -970,74 +969,40 @@ impl VectorStore {
             }
 
             match entry.header.entry_type {
-                WalEntryType::InsertNode => {
-                    if let Ok(insert_data) = parse_wal_insert(&entry.data) {
-                        // Infer dimensions from first WAL vector if needed (RecordStore::set handles this)
-                        let metadata: Option<JsonValue> =
-                            insert_data.metadata.as_ref().and_then(|bytes| {
-                                match serde_json::from_slice(bytes) {
-                                    Ok(json) => Some(json),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Corrupt metadata for '{}' during WAL replay: {}",
-                                            insert_data.id,
-                                            e
-                                        );
-                                        None
-                                    }
-                                }
-                            });
+                WalEntryType::UpsertRecord => {
+                    if let Ok(upsert_data) = parse_wal_upsert_record(&entry.data) {
+                        let metadata: Option<JsonValue> = upsert_data
+                            .metadata
+                            .as_ref()
+                            .and_then(|bytes| serde_json::from_slice(bytes).ok());
 
-                        // Upsert into RecordStore
-                        let slot = records.set(insert_data.id, insert_data.vector, metadata)?;
+                        let sparse = upsert_data
+                            .sparse
+                            .clone()
+                            .map(|(indices, values)| {
+                                crate::vector::sparse::SparseVector::new(indices, values)
+                            })
+                            .transpose()
+                            .unwrap_or(None);
+
+                        let record = crate::vector::store::record_store::Record {
+                            id: upsert_data.id.clone(),
+                            vector: upsert_data
+                                .dense
+                                .clone()
+                                .map(crate::vector::store::record_store::VectorData::Owned),
+                            sparse,
+                            multi: upsert_data.multi.clone(),
+                            metadata: metadata.clone(),
+                        };
+
+                        let slot = records.upsert(record)?;
                         wal_modified_slots.push(slot);
                     }
                 }
                 WalEntryType::DeleteNode => {
                     if let Ok(delete_data) = parse_wal_delete(&entry.data) {
                         records.delete(&delete_data.id);
-                    }
-                }
-                WalEntryType::UpsertSparse => {
-                    if let Ok(data) = parse_wal_sparse(&entry.data) {
-                        let metadata: Option<JsonValue> = data
-                            .metadata
-                            .as_ref()
-                            .and_then(|bytes| serde_json::from_slice(bytes).ok());
-                        let sparse =
-                            crate::vector::sparse::SparseVector::new(data.indices, data.values)?;
-                        let slot = if let Some(slot) = records.get_slot(&data.id) {
-                            if let Some(metadata) = metadata.clone() {
-                                records.update_metadata(slot, metadata)?;
-                            }
-                            records.update_sparse(slot, Some(sparse))?;
-                            slot
-                        } else {
-                            let slot = records.set_without_vector(data.id, metadata);
-                            records.update_sparse(slot, Some(sparse))?;
-                            slot
-                        };
-                        wal_modified_slots.push(slot);
-                    }
-                }
-                WalEntryType::UpsertMulti => {
-                    if let Ok(data) = parse_wal_multi(&entry.data) {
-                        let metadata: Option<JsonValue> = data
-                            .metadata
-                            .as_ref()
-                            .and_then(|bytes| serde_json::from_slice(bytes).ok());
-                        let slot = if let Some(slot) = records.get_slot(&data.id) {
-                            if let Some(metadata) = metadata.clone() {
-                                records.update_metadata(slot, metadata)?;
-                            }
-                            records.update_multi(slot, Some(data.tokens))?;
-                            slot
-                        } else {
-                            let slot = records.set_without_vector(data.id, metadata);
-                            records.update_multi(slot, Some(data.tokens))?;
-                            slot
-                        };
-                        wal_modified_slots.push(slot);
                     }
                 }
                 WalEntryType::Checkpoint => {}

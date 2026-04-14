@@ -84,13 +84,15 @@ struct StoredRecord {
 pub struct Record {
     pub id: String,
     pub vector: Option<VectorData>,
+    pub sparse: Option<SparseVector>,
+    pub multi: Option<Vec<Vec<f32>>>,
     pub metadata: Option<JsonValue>,
 }
 
 impl serde::Serialize for Record {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("Record", 3)?;
+        let mut state = serializer.serialize_struct("Record", 5)?;
         state.serialize_field("id", &self.id)?;
         state.serialize_field(
             "vector",
@@ -100,6 +102,8 @@ impl serde::Serialize for Record {
                 .map(VectorData::as_slice)
                 .map(<[f32]>::to_vec),
         )?;
+        state.serialize_field("sparse", &self.sparse)?;
+        state.serialize_field("multi", &self.multi)?;
         state.serialize_field("metadata", &self.metadata)?;
         state.end()
     }
@@ -111,12 +115,16 @@ impl<'de> serde::Deserialize<'de> for Record {
         struct RecordData {
             id: String,
             vector: Option<Vec<f32>>,
+            sparse: Option<SparseVector>,
+            multi: Option<Vec<Vec<f32>>>,
             metadata: Option<JsonValue>,
         }
         let data = RecordData::deserialize(deserializer)?;
         Ok(Self {
             id: data.id,
             vector: data.vector.map(VectorData::Owned),
+            sparse: data.sparse,
+            multi: data.multi,
             metadata: data.metadata,
         })
     }
@@ -129,6 +137,8 @@ impl Record {
         Self {
             id,
             vector: Some(VectorData::Owned(vector)),
+            sparse: None,
+            multi: None,
             metadata,
         }
     }
@@ -145,6 +155,8 @@ impl Record {
         Self {
             id,
             vector: Some(VectorData::Mmap(mmap, offset, len)),
+            sparse: None,
+            multi: None,
             metadata,
         }
     }
@@ -239,58 +251,44 @@ impl RecordStore {
         self.live_count.store(live_count, Ordering::SeqCst);
     }
 
-    /// Set a record (insert or update)
+    /// Unified upsert: atomically replaces the entire record at a slot.
     ///
-    /// Returns the slot index where the record was stored.
-    /// For updates, returns existing slot. For inserts, returns new slot.
-    pub fn set(
-        &self,
-        id: String,
-        vector: Vec<f32>,
-        metadata: Option<JsonValue>,
-    ) -> anyhow::Result<u32> {
-        // Validate dimensions
-        let current_dims = self.dimensions.load(Ordering::Relaxed);
-        if current_dims == 0 {
-            let new_dims = vector.len() as u32;
-            if self
-                .dimensions
-                .compare_exchange(0, new_dims, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
-                // Someone else set it, check if it matches
-                let final_dims = self.dimensions.load(Ordering::SeqCst);
-                if vector.len() as u32 != final_dims {
-                    anyhow::bail!(
-                        "Vector dimension mismatch: expected {}, got {}",
-                        final_dims,
-                        vector.len()
-                    );
+    /// This is the new source of truth for updates. Any fields not present in `record`
+    /// will be cleared if a previous record existed. Use `set` or `set_without_vector`
+    /// if you need partial updates (legacy behavior).
+    pub fn upsert(&self, record: Record) -> anyhow::Result<u32> {
+        // Validate dimensions if dense vector is present
+        if let Some(ref vector) = record.vector {
+            let vec_len = vector.as_slice().len() as u32;
+            let current_dims = self.dimensions.load(Ordering::Relaxed);
+            if current_dims == 0 {
+                if self
+                    .dimensions
+                    .compare_exchange(0, vec_len, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_err()
+                {
+                    // Someone else set it, check if it matches
+                    let final_dims = self.dimensions.load(Ordering::SeqCst);
+                    if vec_len != final_dims {
+                        anyhow::bail!(
+                            "Vector dimension mismatch: expected {}, got {}",
+                            final_dims,
+                            vec_len
+                        );
+                    }
                 }
+            } else if vec_len != current_dims {
+                anyhow::bail!(
+                    "Vector dimension mismatch: expected {}, got {}",
+                    current_dims,
+                    vec_len
+                );
             }
-        } else if vector.len() as u32 != current_dims {
-            anyhow::bail!(
-                "Vector dimension mismatch: expected {}, got {}",
-                current_dims,
-                vector.len()
-            );
         }
 
-        // Check for existing record (update case)
-        let mut carried_sparse = None;
-        let mut carried_multi = None;
-        if let Some(old_slot_ref) = self.id_to_slot.get(&id) {
+        let mut deleted = self.deleted.write();
+        if let Some(old_slot_ref) = self.id_to_slot.get(&record.id) {
             let old_slot = *old_slot_ref;
-            if let Some(record) = self
-                .slots
-                .read()
-                .get(old_slot as usize)
-                .and_then(|record| record.as_ref())
-            {
-                carried_sparse.clone_from(&record.sparse);
-                carried_multi.clone_from(&record.multi);
-            }
-            let mut deleted = self.deleted.write();
             if !deleted.contains(old_slot) {
                 deleted.insert(old_slot);
                 self.dirty_slots.write().insert(old_slot);
@@ -298,60 +296,60 @@ impl RecordStore {
             }
         }
 
-        // Insert at new slot
         let mut slots = self.slots.write();
         let slot = slots.len() as u32;
-        slots.push(Some(StoredRecord {
-            id: id.clone(),
-            vector: Some(StoredVectorData::Owned(vector)),
-            sparse: carried_sparse,
-            multi: carried_multi,
-            metadata,
-        }));
-        self.id_to_slot.insert(id, slot);
+        slots.push(Some(self.store_record(record.clone())));
+        self.id_to_slot.insert(record.id, slot);
         self.live_count.fetch_add(1, Ordering::Relaxed);
         self.dirty_slots.write().insert(slot);
 
         Ok(slot)
     }
 
-    /// Insert or update a record without a dense payload.
-    pub fn set_without_vector(&self, id: String, metadata: Option<JsonValue>) -> u32 {
+    /// Set a record (insert or update) - Legacy partial update
+    ///
+    /// Returns the slot index where the record was stored.
+    pub fn set(
+        &self,
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<JsonValue>,
+    ) -> anyhow::Result<u32> {
         let mut carried_sparse = None;
         let mut carried_multi = None;
-        if let Some(old_slot_ref) = self.id_to_slot.get(&id) {
-            let old_slot = *old_slot_ref;
-            if let Some(record) = self
-                .slots
-                .read()
-                .get(old_slot as usize)
-                .and_then(|record| record.as_ref())
-            {
-                carried_sparse.clone_from(&record.sparse);
-                carried_multi.clone_from(&record.multi);
-            }
-            let mut deleted = self.deleted.write();
-            if !deleted.contains(old_slot) {
-                deleted.insert(old_slot);
-                self.dirty_slots.write().insert(old_slot);
-                self.live_count.fetch_sub(1, Ordering::Relaxed);
-            }
+        if let Some(old_slot) = self.get_slot(&id) {
+            carried_sparse = self.get_sparse(old_slot);
+            carried_multi = self.get_multi(old_slot);
         }
 
-        let mut slots = self.slots.write();
-        let slot = slots.len() as u32;
-        slots.push(Some(StoredRecord {
-            id: id.clone(),
-            vector: None,
+        self.upsert(Record {
+            id,
+            vector: Some(VectorData::Owned(vector)),
             sparse: carried_sparse,
             multi: carried_multi,
             metadata,
-        }));
-        self.id_to_slot.insert(id, slot);
-        self.live_count.fetch_add(1, Ordering::Relaxed);
-        self.dirty_slots.write().insert(slot);
+        })
+    }
 
-        slot
+    /// Insert or update a record without a dense payload - Legacy partial update
+    pub fn set_without_vector(&self, id: String, metadata: Option<JsonValue>) -> u32 {
+        let mut carried_sparse = None;
+        let mut carried_multi = None;
+        let mut carried_vector = None;
+        if let Some(old_slot) = self.get_slot(&id) {
+            carried_sparse = self.get_sparse(old_slot);
+            carried_multi = self.get_multi(old_slot);
+            carried_vector = self.get_vector(old_slot);
+        }
+
+        self.upsert(Record {
+            id,
+            vector: carried_vector,
+            sparse: carried_sparse,
+            multi: carried_multi,
+            metadata,
+        })
+        .expect("set_without_vector dimension check should not fail")
     }
 
     /// Delete a record by ID - O(1)
@@ -769,8 +767,8 @@ impl RecordStore {
         StoredRecord {
             id: record.id,
             vector: record.vector.map(|vector| self.store_vector(vector)),
-            sparse: None,
-            multi: None,
+            sparse: record.sparse,
+            multi: record.multi,
             metadata: record.metadata,
         }
     }
@@ -843,6 +841,8 @@ impl RecordStore {
                 .vector
                 .as_ref()
                 .map(|vector| Self::materialize_vector_from_parts(mmaps, vector)),
+            sparse: record.sparse.clone(),
+            multi: record.multi.clone(),
             metadata: record.metadata.clone(),
         }
     }

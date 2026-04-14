@@ -223,9 +223,12 @@ impl VectorStore {
                 .update_multi(*slot as u32, Some(pooled_and_fdes[i].0.clone()))?;
             if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
-                storage.log_upsert_multi(
+                let vec_data = self.records.get_vector(*slot as u32);
+                storage.log_upsert_record(
                     &wal_batch[i].0,
-                    &pooled_and_fdes[i].0,
+                    vec_data.as_ref().map(|v| v.as_slice()),
+                    self.records.get_sparse(*slot as u32).as_ref(),
+                    Some(&pooled_and_fdes[i].0),
                     &wal_batch[i].1,
                 )?;
                 storage.sync()?;
@@ -613,7 +616,14 @@ impl VectorStore {
 
         let needs_checkpoint = if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
-            storage.log_upsert_multi(id, &pooled_tokens, &metadata)?;
+            let vec_data = self.records.get_vector(slot as u32);
+            storage.log_upsert_record(
+                id,
+                vec_data.as_ref().map(|v| v.as_slice()),
+                self.records.get_sparse(slot as u32).as_ref(),
+                Some(&pooled_tokens),
+                &metadata,
+            )?;
             storage.sync()?;
             storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
         } else {
@@ -997,7 +1007,7 @@ impl VectorStore {
     /// Internal: get multi-vector tokens.
     fn get_tokens_internal(&self, id: &str) -> Option<(Vec<Vec<f32>>, JsonValue)> {
         let slot = self.records.get_slot(id)?;
-        let tokens = self.records.get_multi(slot)?;
+        let tokens = self.records.get_multi(slot as u32)?;
         let metadata = self
             .records
             .get(id)?

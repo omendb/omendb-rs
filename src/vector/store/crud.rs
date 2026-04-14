@@ -84,7 +84,13 @@ impl VectorStore {
             if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
                 let vector = vector.ok_or_else(|| anyhow::anyhow!("Record vector missing"))?;
-                storage.log_insert(id, vector, &metadata)?;
+                storage.log_upsert_record(
+                    id,
+                    Some(vector),
+                    self.records.get_sparse(slot as u32).as_ref(),
+                    self.records.get_multi(slot as u32).as_deref(),
+                    &metadata,
+                )?;
                 storage.sync()?;
                 Ok::<bool, anyhow::Error>(
                     storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize,
@@ -270,7 +276,13 @@ impl VectorStore {
             let needs_checkpoint = if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
                 if let Some(vec_data) = &existing_vector {
-                    storage.log_insert(id, vec_data.as_slice(), new_metadata)?;
+                    storage.log_upsert_record(
+                        id,
+                        Some(vec_data.as_slice()),
+                        self.records.get_sparse(slot).as_ref(),
+                        self.records.get_multi(slot).as_deref(),
+                        new_metadata,
+                    )?;
                     storage.sync()?;
                     storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
                 } else {
