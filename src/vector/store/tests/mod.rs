@@ -10,12 +10,14 @@ mod golden_data;
 mod hybrid;
 mod metadata;
 mod multivec;
+mod negative;
 mod persistence;
 mod proptest_tests;
 mod quantization;
 mod schema;
 mod search;
 mod sparse;
+mod stress;
 
 pub(super) fn random_vector(dim: usize, seed: usize) -> Vector {
     let data: Vec<f32> = (0..dim).map(|i| ((seed + i) as f32) * 0.1).collect();

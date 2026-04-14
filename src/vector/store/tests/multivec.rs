@@ -1383,4 +1383,51 @@ mod persistence_tests {
             "Error should mention dimension: {err_msg}"
         );
     }
+
+    #[test]
+    fn test_store_with_text_integration() {
+        use crate::text::TextSearchConfig;
+
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config()).unwrap();
+
+        // Fails if text search not enabled
+        let tokens = random_tokens(5, 4, 0);
+        let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
+        let result = store.store_with_text(
+            "doc1",
+            token_refs.clone(),
+            "the quick brown fox",
+            serde_json::json!({}),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("text search"));
+
+        // Enable text search
+        store
+            .enable_text_search_with_config(Some(TextSearchConfig::default()))
+            .unwrap();
+
+        // Success
+        store
+            .store_with_text(
+                "doc1",
+                token_refs.clone(),
+                "the quick brown fox",
+                serde_json::json!({"extra": 123}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+
+        assert_eq!(store.len() as u64, 1);
+
+        // Verify multi-vector search works
+        let results = store.search_multi_approx(&token_refs, 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "doc1");
+
+        // Verify text search works
+        let text_results = store.search_text("quick fox", 10).unwrap();
+        assert_eq!(text_results.len(), 1);
+        assert_eq!(text_results[0].0, "doc1");
+    }
 }

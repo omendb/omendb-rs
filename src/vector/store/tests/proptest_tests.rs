@@ -1,4 +1,4 @@
-use super::super::*;
+use super::*;
 use proptest::prelude::*;
 
 mod general {
@@ -579,6 +579,51 @@ mod persistence {
                         let id = format!("b{batch_idx}_i{i}");
                         prop_assert!(store.contains(&id), "Missing ID");
                     }
+                }
+            }
+        }
+
+        #[test]
+        fn filtered_search_consistency(
+            num_docs in 50usize..200,
+            dim in 8usize..32,
+            target_year in 2020.0..2025.0
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("filtered_search.omen");
+            let categories = vec!["A", "B", "C"];
+
+            // 1. Setup store and insert docs with varied metadata
+            {
+                let store = VectorStore::create(&path, dense_schema(dim as u32)).unwrap();
+                for i in 0..num_docs {
+                    let id = format!("doc_{i}");
+                    let vec = random_vector(dim, i);
+                    let category = categories[i % categories.len()];
+                    let year = 2018.0 + (i as f64 % 10.0); // 2018.0 to 2027.0
+                    store.set(&id, vec, serde_json::json!({"cat": category, "year": year})).unwrap();
+                }
+                store.flush().unwrap();
+            }
+
+            // 2. Perform filtered search and verify consistency
+            {
+                let store = VectorStore::open(&path).unwrap();
+                let query = random_vector(dim, 42);
+
+                // Filter: category "A" AND year >= target_year
+                let filter = MetadataFilter::And(vec![
+                    MetadataFilter::Eq("cat".to_string(), serde_json::json!("A")),
+                    MetadataFilter::Gte("year".to_string(), target_year),
+                ]);
+
+                let k = 10;
+                let results = store.search(&query, k, Some(&filter)).unwrap();
+
+                for result in results {
+                    let meta = &result.metadata;
+                    prop_assert_eq!(meta["cat"].as_str().unwrap(), "A");
+                    prop_assert!(meta["year"].as_f64().unwrap() >= target_year);
                 }
             }
         }

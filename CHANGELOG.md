@@ -1,6 +1,25 @@
 # Changelog
 
-## v0.0.34
+## v0.0.35
+
+### Schema-Driven Architecture
+
+- Introduce `CollectionSchema` as the primary runtime contract, persisted in the core and shared across all bindings
+- Validate all operations (insert, search, graph) against the active schema to ensure data consistency
+- Expose schema-driven diagnostics and metadata via `db.schema()` and `db.info()`
+
+### Storage and Core Engine
+
+- **Persistence Overhaul**: Refactor `src/omen/file.rs` and `src/vector/store/persistence.rs` for more robust snapshot and WAL reconciliation
+- **Explicit Recovery**: Corrupted `.records` slim snapshots now correctly fall back to the main manifest; orphaned vectors in `.vecs` are recovered with synthetic `__slot_N` IDs
+- **Mmap Ownership**: Centralize record and vector mmap ownership to eliminate race conditions during concurrent segment merges and checkpoints
+- **WAL Improvements**: Log sparse and multi-vector upserts explicitly; eliminate "fake dense slots" for sparse-only records
+
+### Search and Indexing
+
+- **Sparse Performance**: Significant speedup for exact sparse search via postings-only index and optimized FxHashMap scoring (~2x QPS improvement)
+- **Hybrid Fusion**: Align `QueryPlanner` to use schema-aware retrieval; improve RRF stability for mixed vector and text results
+- **Graph Integration**: Make graph a first-class retrieval primitive; require explicit `enable_graph()` and validate traversal against the graph schema
 
 ### Security and Robustness
 
@@ -8,9 +27,16 @@
 - Remove all remaining `.unwrap()` calls across the core library to ensure panic-free operation
 - Migrate entire workspace to **Rust Edition 2024** and resolve 143 pedantic `clippy` warnings for better code hygiene and safety
 
+### Bindings and API
+
+- **Python**: Add schema-first `create()` entry point; release GIL during compute-intensive batch operations
+- **Node.js**: Align with schema-first API; fix close-deadlocks and improve type safety for open options
+- **FFI**: Expand FFI surface to support schema-driven collection management
+
 ### Testing and CI
 
 - Add a deterministic golden dataset testing suite for hybrid ranking stability and FTS regression
+- Add stress and negative tests for concurrent write-lock contention and recovery durability
 - Optimize CI workflows to run PR checks exclusively on `ubuntu-latest` (saving resources), keeping the full matrix for `main`
 
 ## v0.0.33
