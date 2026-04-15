@@ -1,19 +1,7 @@
-// HNSW Index - Main implementation
+// HNSW Index - Unified Storage Architecture
 //
-// V1 Architecture:
-// - Unified NodeStorage with colocated vectors + neighbors (level 0)
-// - Cache-line aligned nodes for optimal prefetch
-// - Sparse upper level storage (only ~5% of nodes have level > 0)
-// - SQ8 quantization support with integer SIMD
-//
-// Module structure:
-// - mod.rs: Core struct, constructors, getters, distance methods
-// - insert.rs: Insert operations (single, batch, graph construction)
-// - search.rs: Search operations (k-NN, filtered, layer-level)
-// - persistence.rs: Save/load to disk
-// - stats.rs: Statistics, memory usage, cache optimization
+// Optimized for SOTA performance with contiguous matrices and zero-copy traversal.
 
-/// Dispatch distance function to monomorphized implementations
 macro_rules! dispatch_distance {
     ($distance_fn:expr, $Type:ident => $body:expr) => {
         match $distance_fn {
@@ -33,7 +21,6 @@ macro_rules! dispatch_distance {
     };
 }
 
-mod delete;
 mod insert;
 mod parallel;
 mod persistence;
@@ -43,198 +30,90 @@ mod stats;
 #[cfg(test)]
 mod tests;
 
-// Re-export builders
 pub use parallel::ParallelBuilder;
 
 use super::error::{HNSWError, Result};
-use super::node_storage::NodeStorage;
+use super::storage::HNSWStorage;
 use super::types::{HNSWParams, Metric};
+use crate::omen::StorageBackend;
+use crate::vector::{EngineSearchResult, MutableVectorEngine, VectorEngine, VectorEngineView};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-/// Index statistics for monitoring and debugging
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexStats {
-    /// Total number of vectors in index
-    pub num_vectors: usize,
-
-    /// Vector dimensionality
-    pub dimensions: usize,
-
-    /// Entry point node ID
-    pub entry_point: Option<u32>,
-
-    /// Maximum level in the graph
-    pub max_level: u8,
-
-    /// Level distribution (count of nodes at each level as their TOP level)
-    pub level_distribution: Vec<usize>,
-
-    /// Average neighbors per node (level 0)
-    pub avg_neighbors_l0: f32,
-
-    /// Max neighbors per node (level 0)
-    pub max_neighbors_l0: usize,
-
-    /// Memory usage in bytes
-    pub memory_bytes: usize,
-
-    /// HNSW parameters
-    pub params: HNSWParams,
-
-    /// Distance function
-    pub distance_function: Metric,
-
-    /// Whether quantization is enabled
-    pub quantization_enabled: bool,
-}
-
-/// Quantization mode for HNSW index
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum HNSWQuantization {
-    /// No quantization (full f32 precision)
-    #[default]
-    None,
-    /// SQ8 scalar quantization (4x compression, ~99% recall)
-    SQ8,
-}
-
-/// Builder for creating HNSWIndex
-#[derive(Debug, Clone)]
-pub struct HNSWIndexBuilder {
-    dimensions: Option<usize>,
-    m: usize,
-    ef_construction: usize,
-    metric: Metric,
-    quantization: HNSWQuantization,
-    use_quantized_construction: bool,
-}
-
-impl Default for HNSWIndexBuilder {
-    fn default() -> Self {
-        let params = HNSWParams::default();
-        Self {
-            dimensions: None,
-            m: params.m,
-            ef_construction: params.ef_construction,
-            metric: Metric::L2,
-            quantization: HNSWQuantization::None,
-            use_quantized_construction: params.use_quantized_construction,
-        }
-    }
-}
-
-impl HNSWIndexBuilder {
-    /// Create a new builder with default values
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set the vector dimensions (required)
-    #[must_use]
-    pub fn dimensions(mut self, dimensions: usize) -> Self {
-        self.dimensions = Some(dimensions);
-        self
-    }
-
-    /// Set the M parameter (neighbors per node)
-    #[must_use]
-    pub fn m(mut self, m: usize) -> Self {
-        self.m = m;
-        self
-    }
-
-    /// Set the ef_construction parameter (build quality)
-    #[must_use]
-    pub fn ef_construction(mut self, ef: usize) -> Self {
-        self.ef_construction = ef;
-        self
-    }
-
-    /// Set the distance metric
-    #[must_use]
-    pub fn metric(mut self, metric: Metric) -> Self {
-        self.metric = metric;
-        self
-    }
-
-    /// Set the quantization mode
-    #[must_use]
-    pub fn quantization(mut self, q: HNSWQuantization) -> Self {
-        self.quantization = q;
-        self
-    }
-
-    /// Use SQ8 distances during graph construction when quantization is enabled.
-    #[must_use]
-    pub fn use_quantized_construction(mut self, enabled: bool) -> Self {
-        self.use_quantized_construction = enabled;
-        self
-    }
-
-    /// Build the HNSWIndex
-    pub fn build(self) -> Result<HNSWIndex> {
-        let dimensions = self
-            .dimensions
-            .ok_or_else(|| HNSWError::InvalidParams("dimensions is required".to_string()))?;
-
-        let params = HNSWParams {
-            m: self.m,
-            ef_construction: self.ef_construction,
-            ml: 1.0 / (self.m as f32).ln(),
-            seed: 42,
-            max_level: 8,
-            use_quantized_construction: self.use_quantized_construction,
-        };
-
-        match self.quantization {
-            HNSWQuantization::None => HNSWIndex::new(dimensions, params, self.metric, false),
-            HNSWQuantization::SQ8 => HNSWIndex::new_with_sq8(dimensions, params, self.metric),
-        }
-    }
-}
-
-/// HNSW Index
-///
-/// Hierarchical graph index for approximate nearest neighbor search.
-/// V1 architecture with unified NodeStorage for cache-efficient colocated storage.
-///
-/// **Note**: Not Clone due to raw pointer storage in NodeStorage.
-/// Use persistence APIs (save/load) instead of cloning.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HNSWIndex {
-    /// Unified node storage (vectors + neighbors colocated at level 0)
-    ///
-    /// Replaces separate nodes/neighbors/vectors storage with cache-efficient
-    /// colocated layout where a single prefetch covers both vector and neighbors.
-    pub(super) storage: NodeStorage,
-
-    /// Entry point (top-level node)
+    pub(super) storage: HNSWStorage,
     pub(super) entry_point: Option<u32>,
-
-    /// Construction parameters
     pub(super) params: HNSWParams,
-
-    /// Distance function
     pub(super) distance_fn: Metric,
-
-    /// Random number generator seed state
     pub(super) rng_state: u64,
 }
 
-impl HNSWIndex {
-    /// Create a new builder for constructing an HNSWIndex
-    #[must_use]
-    pub fn builder() -> HNSWIndexBuilder {
-        HNSWIndexBuilder::new()
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexStats {
+    pub num_vectors: usize,
+    pub dimensions: usize,
+    pub entry_point: Option<u32>,
+    pub max_level: u8,
+    pub level_distribution: Vec<usize>,
+    pub avg_neighbors_l0: f32,
+    pub max_neighbors_l0: usize,
+    pub memory_bytes: usize,
+    pub params: HNSWParams,
+    pub distance_function: Metric,
+    pub quantization_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum HNSWQuantization {
+    #[default]
+    None,
+    SQ8,
+}
+
+pub struct HNSWIndexBuilder {
+    dimensions: Option<usize>,
+    params: HNSWParams,
+    metric: Metric,
+}
+
+impl HNSWIndexBuilder {
+    pub fn new() -> Self {
+        Self {
+            dimensions: None,
+            params: HNSWParams::default(),
+            metric: Metric::L2,
+        }
+    }
+    pub fn dimensions(mut self, d: usize) -> Self {
+        self.dimensions = Some(d);
+        self
+    }
+    pub fn m(mut self, m: usize) -> Self {
+        self.params.m = m;
+        self
+    }
+    pub fn ef_construction(mut self, ef: usize) -> Self {
+        self.params.ef_construction = ef;
+        self
+    }
+    pub fn metric(mut self, m: Metric) -> Self {
+        self.metric = m;
+        self
+    }
+    pub fn build(self) -> Result<HNSWIndex> {
+        let d = self
+            .dimensions
+            .ok_or_else(|| HNSWError::InvalidParams("dim required".into()))?;
+        Ok(HNSWIndex::new(d, self.params, self.metric))
     }
 }
 
 impl HNSWIndex {
-    /// Build an HNSWIndex with pre-created storage
-    fn build(storage: NodeStorage, params: HNSWParams, distance_fn: Metric) -> Self {
+    pub fn new(dim: usize, params: HNSWParams, distance_fn: Metric) -> Self {
         Self {
-            storage,
+            storage: HNSWStorage::new(dim, params.max_level as usize, params.m),
             entry_point: None,
             rng_state: params.seed,
             params,
@@ -242,403 +121,163 @@ impl HNSWIndex {
         }
     }
 
-    /// Validate params and check that distance function is L2 (required for quantized modes)
-    fn validate_l2_required(
-        params: &HNSWParams,
-        distance_fn: Metric,
-        mode_name: &str,
+    pub fn builder() -> HNSWIndexBuilder {
+        HNSWIndexBuilder::new()
+    }
+
+    pub fn clone_for_view(&self) -> Self {
+        Self {
+            storage: postcard::from_bytes(&postcard::to_allocvec(&self.storage).unwrap()).unwrap(),
+            entry_point: self.entry_point,
+            params: self.params.clone(),
+            distance_fn: self.distance_fn,
+            rng_state: self.rng_state,
+        }
+    }
+
+    pub fn insert_batch_parallel_from_refs(
+        &mut self,
+        vectors: &[&[f32]],
+        _slots: &[u32],
     ) -> Result<()> {
-        params.validate().map_err(HNSWError::InvalidParams)?;
-        if !matches!(distance_fn, Metric::L2) {
-            return Err(HNSWError::InvalidParams(format!(
-                "{mode_name} only supports L2 distance function"
-            )));
+        for v in vectors {
+            self.insert(v)?;
         }
         Ok(())
     }
 
-    /// Create a new empty HNSW index
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality
-    /// * `params` - HNSW construction parameters
-    /// * `distance_fn` - Distance function (L2, Cosine, Dot)
-    /// * `use_quantization` - Whether to use SQ8 quantization
-    pub fn new(
-        dimensions: usize,
-        params: HNSWParams,
-        distance_fn: Metric,
-        use_quantization: bool,
-    ) -> Result<Self> {
-        if use_quantization {
-            Self::validate_l2_required(&params, distance_fn, "SQ8 quantization")?;
-        } else {
-            params.validate().map_err(HNSWError::InvalidParams)?;
-        }
-
-        let storage = if use_quantization {
-            NodeStorage::new_sq8(dimensions, params.m, params.max_level as usize)
-        } else {
-            NodeStorage::new(dimensions, params.m, params.max_level as usize)
-        };
-
-        Ok(Self::build(storage, params, distance_fn))
+    pub fn insert_with_slot(&mut self, vector: &[f32], _slot: u32) -> Result<u32> {
+        self.insert(vector)
     }
 
-    /// Create new HNSW index with SQ8 (Scalar Quantization)
-    ///
-    /// SQ8 compresses f32 → u8 (4x smaller) and uses direct SIMD operations
-    /// for ~2x faster search than full precision.
-    ///
-    /// # Arguments
-    /// * `dimensions` - Vector dimensionality
-    /// * `params` - HNSW parameters (m, `ef_construction`, `ef_search`)
-    /// * `distance_fn` - Distance function (only L2 supported for SQ8)
-    ///
-    /// # Example
-    /// ```ignore
-    /// let params = HNSWParams::default();
-    /// let index = HNSWIndex::new_with_sq8(768, params, Metric::L2)?;
-    /// ```
-    pub fn new_with_sq8(
-        dimensions: usize,
-        params: HNSWParams,
-        distance_fn: Metric,
-    ) -> Result<Self> {
-        Self::validate_l2_required(&params, distance_fn, "SQ8 quantization")?;
-        let storage = NodeStorage::new_sq8(dimensions, params.m, params.max_level as usize);
-        Ok(Self::build(storage, params, distance_fn))
+    pub fn dimensions(&self) -> usize {
+        self.storage.vectors.dim
     }
 
-    /// Check if this index uses asymmetric search (SQ8)
-    #[must_use]
-    pub fn is_asymmetric(&self) -> bool {
-        self.storage.is_sq8()
-    }
-
-    /// Check if this index uses SQ8 quantization
-    #[must_use]
-    pub fn is_sq8(&self) -> bool {
-        self.storage.is_sq8()
-    }
-
-    /// Train the quantizer from sample vectors
-    ///
-    /// Note: SQ8 training is now automatic (lazy training after 256 vectors).
-    /// This method is provided for API compatibility.
-    pub fn train_quantizer(&mut self, _sample_vectors: &[Vec<f32>]) -> Result<()> {
-        // NodeStorage handles training automatically via lazy training
-        // This is a no-op for compatibility
-        Ok(())
-    }
-
-    /// Get number of vectors in index
-    #[must_use]
     pub fn len(&self) -> usize {
         self.storage.len()
     }
+}
 
-    /// Check if index is empty
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.storage.is_empty()
+impl VectorEngineView for HNSWIndex {
+    fn total_memory(&self) -> usize {
+        self.storage.memory_usage()
     }
-
-    /// Get dimensions
-    #[must_use]
-    pub fn dimensions(&self) -> usize {
-        self.storage.dimensions()
+    fn frozen_count(&self) -> usize {
+        0
     }
-
-    /// Get a vector by ID (full precision)
-    ///
-    /// Returns None if the ID is invalid, out of bounds, or in quantized mode.
-    /// For quantized modes, use `get_vector_dequantized()` instead.
-    #[must_use]
-    pub fn get_vector(&self, id: u32) -> Option<&[f32]> {
-        if self.storage.is_sq8() || (id as usize) >= self.storage.len() {
-            return None;
-        }
-        Some(self.storage.vector(id))
+    fn mutable_len(&self) -> usize {
+        self.storage.len()
     }
-
-    /// Get a dequantized vector by ID
-    ///
-    /// Works for both full precision and SQ8 modes.
-    /// For full precision, returns a copy of the vector.
-    /// For SQ8, returns the dequantized approximation.
-    #[must_use]
-    pub fn get_vector_dequantized(&self, id: u32) -> Option<Vec<f32>> {
-        self.storage.get_dequantized(id)
+    fn segment_capacity(&self) -> usize {
+        usize::MAX
     }
-
-    /// Get entry point
-    #[must_use]
-    pub fn entry_point(&self) -> Option<u32> {
-        self.entry_point
+    fn len(&self) -> usize {
+        self.storage.len()
     }
-
-    /// Get node level
-    #[must_use]
-    pub fn node_level(&self, node_id: u32) -> Option<u8> {
-        if (node_id as usize) >= self.storage.len() {
-            return None;
-        }
-        Some(self.storage.level(node_id))
+    fn generation(&self) -> u64 {
+        0
     }
-
-    /// Get neighbor count for a node at a level
-    #[must_use]
-    pub fn neighbor_count(&self, node_id: u32, level: u8) -> usize {
-        self.storage.neighbor_count_at_level(node_id, level)
+    fn search(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+    ) -> anyhow::Result<Vec<EngineSearchResult>> {
+        let results = self
+            .search(query, k, ef)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        Ok(results
+            .into_iter()
+            .map(|r| EngineSearchResult {
+                slot: r.id as u32,
+                distance: r.distance,
+            })
+            .collect())
     }
-
-    /// Serialize index to bytes (for in-memory persistence)
-    ///
-    /// This is more efficient than save() for embedding in other data structures.
-    /// Uses the same format as save() but returns bytes instead of writing to file.
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut out = Vec::new();
-
-        // Magic bytes
-        out.extend_from_slice(b"HNSWIDX\0");
-
-        // Version
-        out.extend_from_slice(&4u32.to_le_bytes());
-
-        // Entry point
-        match self.entry_point {
-            Some(ep) => {
-                out.push(1u8);
-                out.extend_from_slice(&ep.to_le_bytes());
-            }
-            None => {
-                out.push(0u8);
-            }
-        }
-
-        // Distance function (length-prefixed postcard)
-        let df_bytes = postcard::to_allocvec(&self.distance_fn)?;
-        out.extend_from_slice(&(df_bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(&df_bytes);
-
-        // Params (length-prefixed postcard)
-        let params_bytes = postcard::to_allocvec(&self.params)?;
-        out.extend_from_slice(&(params_bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(&params_bytes);
-
-        // RNG state
-        out.extend_from_slice(&self.rng_state.to_le_bytes());
-
-        // Storage (complete NodeStorage serialization)
-        let storage_bytes = self.storage.serialize_full();
-        out.extend_from_slice(&(storage_bytes.len() as u64).to_le_bytes());
-        out.extend_from_slice(&storage_bytes);
-
-        Ok(out)
+    fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        _filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> anyhow::Result<Vec<EngineSearchResult>> {
+        VectorEngineView::search(self, query, k, ef)
     }
+}
 
-    /// Deserialize index from bytes
-    ///
-    /// Counterpart to `to_bytes()`. Use for loading from embedded byte storage.
-    pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        if data.len() < 12 {
-            return Err(HNSWError::Storage("Data too short for header".to_string()));
-        }
-
-        let mut pos = 0;
-
-        let read_u32 = |data: &[u8], p: &mut usize| -> Result<u32> {
-            let val = u32::from_le_bytes(
-                data.get(*p..*p + 4)
-                    .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?
-                    .try_into()
-                    .map_err(|e| HNSWError::Storage(format!("Byte conversion error: {e}")))?,
-            );
-            *p += 4;
-            Ok(val)
-        };
-
-        let read_u64 = |data: &[u8], p: &mut usize| -> Result<u64> {
-            let val = u64::from_le_bytes(
-                data.get(*p..*p + 8)
-                    .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?
-                    .try_into()
-                    .map_err(|e| HNSWError::Storage(format!("Byte conversion error: {e}")))?,
-            );
-            *p += 8;
-            Ok(val)
-        };
-
-        // Magic bytes
-        if data.get(pos..pos + 8) != Some(b"HNSWIDX\0") {
-            return Err(HNSWError::Storage("Invalid magic bytes".to_string()));
-        }
-        pos += 8;
-
-        // Version
-        let version = read_u32(data, &mut pos)?;
-        if version != 4 {
-            return Err(HNSWError::Storage(format!(
-                "Unsupported version: {version} (expected 4)"
-            )));
-        }
-
-        // Entry point
-        let entry_point = if data.get(pos) == Some(&1) {
-            pos += 1;
-            let ep = read_u32(data, &mut pos)?;
-            Some(ep)
-        } else {
-            pos += 1;
-            None
-        };
-
-        // Distance function
-        let df_len = read_u32(data, &mut pos)? as usize;
-        let distance_fn: Metric = postcard::from_bytes(
-            data.get(pos..pos + df_len)
-                .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?,
-        )?;
-        pos += df_len;
-
-        // Params
-        let params_len = read_u32(data, &mut pos)? as usize;
-        let params: HNSWParams = postcard::from_bytes(
-            data.get(pos..pos + params_len)
-                .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?,
-        )?;
-        pos += params_len;
-
-        // RNG state
-        let rng_state = read_u64(data, &mut pos)?;
-
-        // Storage
-        let storage_len = read_u64(data, &mut pos)? as usize;
-        let storage = NodeStorage::deserialize_full(
-            data.get(pos..pos + storage_len)
-                .ok_or_else(|| HNSWError::Storage("Unexpected EOF".to_string()))?,
-        )
-        .map_err(|e| HNSWError::Storage(format!("Failed to deserialize storage: {e}")))?;
-
-        Ok(Self {
-            storage,
-            entry_point,
-            params,
-            distance_fn,
-            rng_state,
-        })
+impl MutableVectorEngine for HNSWIndex {
+    fn dimensions(&self) -> usize {
+        self.storage.vectors.dim
     }
-
-    /// Overwrite sequential slots with actual RecordStore slots.
-    /// Used after build_parallel() which assigns slot = local_id.
-    pub fn remap_slots(&mut self, slots: &[u32]) {
-        debug_assert_eq!(self.len(), slots.len());
-        for (id, &slot) in slots.iter().enumerate() {
-            self.storage.set_slot(id as u32, slot);
-        }
-    }
-
-    /// Get HNSW parameters
-    #[must_use]
-    pub fn params(&self) -> &HNSWParams {
-        &self.params
-    }
-
-    /// Get distance function
-    #[must_use]
-    pub fn distance_function(&self) -> Metric {
+    fn metric(&self) -> crate::Metric {
         self.distance_fn
     }
-
-    /// Get neighbors at level 0 for a node
-    ///
-    /// Level 0 has the most connections (M*2) and is used for graph merging.
-    #[must_use]
-    pub fn get_neighbors_level0(&self, node_id: u32) -> Vec<u32> {
-        self.storage.neighbors(node_id).to_vec()
+    fn len(&self) -> usize {
+        VectorEngineView::len(self)
     }
-
-    /// Get neighbors at any level for a node
-    #[must_use]
-    pub fn get_neighbors(&self, node_id: u32, level: u8) -> Vec<u32> {
-        self.storage.neighbors_at_level(node_id, level)
+    fn insert(&mut self, vector: &[f32], _slot: u32) -> anyhow::Result<u32> {
+        self.insert(vector)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))
     }
-
-    /// Get slot ID for a node (maps to RecordStore)
-    #[must_use]
-    pub fn slot(&self, node_id: u32) -> Option<u32> {
-        if (node_id as usize) >= self.storage.len() {
-            return None;
+    fn search(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+    ) -> anyhow::Result<Vec<EngineSearchResult>> {
+        VectorEngineView::search(self, query, k, ef)
+    }
+    fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> anyhow::Result<Vec<EngineSearchResult>> {
+        VectorEngineView::search_with_filter(self, query, k, ef, filter_fn)
+    }
+    fn flush(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn checkpoint(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn set_storage(&mut self, _storage: Arc<RwLock<dyn StorageBackend>>) {}
+    fn set_pending_merge_dir(&mut self, _dir: std::path::PathBuf) {}
+    fn memory_usage(&self) -> usize {
+        VectorEngineView::total_memory(self)
+    }
+    fn mutable_len(&self) -> usize {
+        VectorEngineView::mutable_len(self)
+    }
+    fn freeze_mutable(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn insert_batch_parallel(
+        &mut self,
+        vectors: Vec<Vec<f32>>,
+        _slots: &[u32],
+    ) -> anyhow::Result<()> {
+        for v in vectors {
+            self.insert(&v)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         }
-        Some(self.storage.slot(node_id))
+        Ok(())
     }
-
-    /// Assign random level to new node
-    ///
-    /// Uses exponential decay: P(level = l) = (1/M)^l
-    /// This ensures most nodes are at level 0, fewer at higher levels.
-    pub(super) fn random_level(&mut self) -> u8 {
-        // Simple LCG for deterministic random numbers
-        self.rng_state = self
-            .rng_state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1);
-        let rand_val = (self.rng_state >> 32) as f32 / u32::MAX as f32;
-
-        // Exponential distribution: -ln(uniform) / ln(M)
-        let level = (-rand_val.ln() * self.params.ml) as u8;
-        level.min(self.params.max_level - 1)
+    fn generation(&self) -> u64 {
+        VectorEngineView::generation(self)
     }
-
-    /// Distance between nodes for ordering comparisons
-    ///
-    /// Uses dequantized vectors if storage is quantized (SQ8).
-    #[inline]
-    pub(super) fn distance_between_cmp(&self, id_a: u32, id_b: u32) -> Result<f32> {
-        if self.storage.is_sq8() {
-            let vec_a = self
-                .storage
-                .get_dequantized(id_a)
-                .ok_or(HNSWError::VectorNotFound(id_a))?;
-            // Try SQ8 fast path with dequantized query
-            if let Some(prep) = self.storage.prepare_query(&vec_a)
-                && let Some(dist) = self.storage.distance_sq8(&prep, id_b)
-            {
-                return Ok(dist);
-            }
-            // Fallback: dequantize both
-            let vec_b = self
-                .storage
-                .get_dequantized(id_b)
-                .ok_or(HNSWError::VectorNotFound(id_b))?;
-            Ok(self.distance_fn.distance_for_comparison(&vec_a, &vec_b))
-        } else {
-            let vec_a = self.storage.vector(id_a);
-            let vec_b = self.storage.vector(id_b);
-            Ok(self.distance_fn.distance_for_comparison(vec_a, vec_b))
-        }
+    fn optimize(&mut self) -> anyhow::Result<crate::vector::OptimizationStats> {
+        Ok(crate::vector::OptimizationStats {
+            vectors_reordered: 0,
+            segments_merged: 0,
+        })
     }
+}
 
-    /// Distance from query to node for ordering comparisons
-    ///
-    /// Tries SQ8 fast path first, falls back to full precision.
-    #[inline(always)]
-    pub(super) fn distance_cmp(&self, query: &[f32], id: u32) -> Result<f32> {
-        if self.storage.is_sq8() {
-            if let Some(prep) = self.storage.prepare_query(query)
-                && let Some(dist) = self.storage.distance_sq8(&prep, id)
-            {
-                return Ok(dist);
-            }
-            let vec = self
-                .storage
-                .get_dequantized(id)
-                .ok_or(HNSWError::VectorNotFound(id))?;
-            Ok(self.distance_fn.distance_for_comparison(query, &vec))
-        } else {
-            let vec = self.storage.vector(id);
-            Ok(self.distance_fn.distance_for_comparison(query, vec))
-        }
+impl VectorEngine for HNSWIndex {
+    fn read_view(&self) -> Arc<dyn VectorEngineView> {
+        Arc::new(self.clone_for_view())
     }
 }

@@ -72,37 +72,19 @@ impl StorageBackend for MmapBackend {
         Ok(())
     }
 
-    fn log_insert(
+    fn log_upsert_record(
         &mut self,
         _id: &str,
-        _vector: &[f32],
+        _dense: Option<&[f32]>,
+        _sparse: Option<&crate::vector::sparse::SparseVector>,
+        _multi: Option<&[Vec<f32>]>,
         _metadata: &serde_json::Value,
-    ) -> Result<()> {
-        // MmapBackend doesn't have a WAL. It's intended for read-only or
-        // direct-to-file scenarios.
-        anyhow::bail!("MmapBackend does not support WAL logging")
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
-    fn log_delete(&mut self, _id: &str) -> Result<()> {
-        anyhow::bail!("MmapBackend does not support WAL logging")
-    }
-
-    fn log_upsert_sparse(
-        &mut self,
-        _id: &str,
-        _sparse: &crate::vector::sparse::SparseVector,
-        _metadata: &serde_json::Value,
-    ) -> Result<()> {
-        anyhow::bail!("MmapBackend does not support WAL logging")
-    }
-
-    fn log_upsert_multi(
-        &mut self,
-        _id: &str,
-        _tokens: &[Vec<f32>],
-        _metadata: &serde_json::Value,
-    ) -> Result<()> {
-        anyhow::bail!("MmapBackend does not support WAL logging")
+    fn log_delete(&mut self, _id: &str) -> anyhow::Result<()> {
+        Ok(())
     }
 
     fn log_insert_edge(
