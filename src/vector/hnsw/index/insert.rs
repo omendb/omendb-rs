@@ -11,11 +11,18 @@ impl HNSWIndex {
     /// Insert a vector into the index.
     #[instrument(skip(self, vector))]
     pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
-        if vector.len() != self.dimensions() {
+        if vector.len() != self.storage.vectors.dim {
             return Err(HNSWError::DimensionMismatch {
-                expected: self.dimensions(),
+                expected: self.storage.vectors.dim,
                 actual: vector.len(),
             });
+        }
+
+        // Validate vector for NaN and Infinity
+        for &val in vector {
+            if !val.is_finite() {
+                return Err(HNSWError::InvalidVector);
+            }
         }
 
         let level = self.random_level();
@@ -116,10 +123,7 @@ impl HNSWIndex {
         }
 
         while let Some(Reverse(current)) = frontier.pop() {
-            if candidates
-                .peek()
-                .is_some_and(|f| current.distance > f.distance)
-            {
+            if candidates.len() >= ef && current.distance > candidates.peek().unwrap().distance {
                 break;
             }
 
@@ -161,13 +165,22 @@ impl HNSWIndex {
         Ok(top_m.iter().take(m).map(|c| c.node_id).collect())
     }
 
-    fn random_level(&mut self) -> u8 {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+    pub fn random_level(&mut self) -> u8 {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(self.rng_state);
         let mut level = 0;
-        while level < self.params.max_level && rng.r#gen::<f32>() < self.params.ml {
-            level += 1;
+        // Correct HNSW random level: while rand < p, level++
+        // ml = 1 / ln(1/p). For p=1/M, ml = 1/ln(M).
+        // Standard impl: level = -ln(uniform) * ml
+        let f: f32 = rng.r#gen();
+        if f > 0.0 {
+            let l = (-f.ln() * self.params.ml) as u8;
+            level = l.min(self.params.max_level);
         }
+
+        self.rng_state = rng.r#gen();
         level
     }
 }

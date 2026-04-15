@@ -99,6 +99,8 @@ impl VectorStore {
         };
 
         text_index.index_document(id, text)?;
+        text_index.commit()?;
+        let _ = text_index;
         self.set(id, vector, metadata)
     }
 
@@ -127,6 +129,8 @@ impl VectorStore {
         for (id, _, text, _) in &batch {
             text_index.index_document(id, text)?;
         }
+        text_index.commit()?;
+        let _ = text_index;
 
         let vector_batch: Vec<(String, Vector, JsonValue)> = batch
             .into_iter()
@@ -151,7 +155,8 @@ impl VectorStore {
         let Some(text_index) = text_index.as_mut() else {
             anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
         };
-        text_index.index_document(id, text)
+        text_index.index_document(id, text)?;
+        text_index.commit()
     }
 
     /// Search text index only (BM25 scoring).

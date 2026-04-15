@@ -3,7 +3,7 @@
 //! Contiguous memory access and speculative prefetching.
 
 use super::HNSWIndex;
-use crate::vector::hnsw::error::Result;
+use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::storage::HNSWStorage;
 use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
 use crate::vector::hnsw::visited::VisitedList;
@@ -36,15 +36,67 @@ impl HNSWIndex {
     /// Search for k nearest neighbors.
     #[instrument(skip(self, query))]
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
+        if query.len() != self.dimensions() {
+            return Err(HNSWError::DimensionMismatch {
+                expected: self.dimensions(),
+                actual: query.len(),
+            });
+        }
+
+        // Validate query for NaN and Infinity
+        for &val in query {
+            if !val.is_finite() {
+                return Err(HNSWError::InvalidVector);
+            }
+        }
+
+        if self.entry_point.is_none() || k == 0 {
+            return Ok(Vec::new());
+        }
+
+        if ef < k {
+            return Err(HNSWError::InvalidSearchParams { k, ef });
+        }
+
+        if ef == 0 {
+            return Err(HNSWError::InvalidSearchParams { k, ef });
+        }
+
+        dispatch_distance!(self.distance_fn, D => {
+            D::validate_query(query)?;
+            let ctx = DistanceContext::<D>::new(query, &self.storage);
+            let mut visited = VisitedList::new(self.len() + 1);
+
+            self.search_internal::<D>(query, k, ef, &ctx, &mut visited)
+        })
+    }
+
+    /// Search for k nearest neighbors with a filter.
+    #[instrument(skip(self, query, filter_fn))]
+    pub fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> Result<Vec<SearchResult>> {
+        if query.len() != self.dimensions() {
+            return Err(HNSWError::DimensionMismatch {
+                expected: self.dimensions(),
+                actual: query.len(),
+            });
+        }
+
         if self.entry_point.is_none() || k == 0 {
             return Ok(Vec::new());
         }
 
         dispatch_distance!(self.distance_fn, D => {
+            D::validate_query(query)?;
             let ctx = DistanceContext::<D>::new(query, &self.storage);
             let mut visited = VisitedList::new(self.len() + 1);
 
-            self.search_internal::<D>(query, k, ef, &ctx, &mut visited)
+            self.search_internal_filtered::<D>(query, k, ef, &ctx, &mut visited, filter_fn)
         })
     }
 
@@ -93,9 +145,9 @@ impl HNSWIndex {
         visited.mark_visited(nearest_node);
 
         while let Some(Reverse(current)) = frontier.pop() {
-            if candidates
-                .peek()
-                .is_some_and(|f| current.distance > f.distance)
+            if !candidates.is_empty()
+                && candidates.len() >= ef
+                && current.distance > candidates.peek().unwrap().distance
             {
                 break;
             }
@@ -129,7 +181,112 @@ impl HNSWIndex {
         let mut results = Vec::with_capacity(k);
         while let Some(c) = candidates.pop() {
             results.push(SearchResult {
-                id: c.node_id,
+                slot: c.node_id,
+                distance: c.distance.into_inner(),
+            });
+        }
+        results.reverse();
+        results.truncate(k);
+        Ok(results)
+    }
+
+    fn search_internal_filtered<D: Distance>(
+        &self,
+        _query: &[f32],
+        k: usize,
+        ef: usize,
+        ctx: &DistanceContext<D>,
+        visited: &mut VisitedList,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> Result<Vec<SearchResult>> {
+        let entry_point = self.entry_point.unwrap();
+        let mut nearest_node = entry_point;
+        let mut nearest_dist = ctx.compute(entry_point);
+
+        let entry_level = self.storage.get_node_level(entry_point);
+
+        // 1. Greedy descent to layer 0
+        for level in (1..=entry_level).rev() {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                self.storage
+                    .with_neighbors(nearest_node, level, |neighbors| {
+                        for &neighbor_id in neighbors {
+                            let dist = ctx.compute(neighbor_id);
+                            if dist < nearest_dist {
+                                nearest_dist = dist;
+                                nearest_node = neighbor_id;
+                                changed = true;
+                            }
+                        }
+                    });
+            }
+        }
+
+        // 2. Beam search at layer 0 with filter
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
+        let mut frontier = BinaryHeap::new();
+        let mut candidates = BinaryHeap::new();
+
+        let initial_dist = ctx.compute(nearest_node);
+        frontier.push(Reverse(Candidate::new(nearest_node, initial_dist)));
+        if filter_fn(nearest_node) {
+            candidates.push(Candidate::new(nearest_node, initial_dist));
+        }
+        visited.mark_visited(nearest_node);
+
+        // Keep track of the ef-th best distance found so far (regardless of filter)
+        // to prune the search effectively while strictly filtering candidates.
+        let mut top_dists = BinaryHeap::new();
+        top_dists.push(Candidate::new(nearest_node, initial_dist));
+
+        while let Some(Reverse(current)) = frontier.pop() {
+            if top_dists.len() >= ef && current.distance > top_dists.peek().unwrap().distance {
+                break;
+            }
+
+            self.storage
+                .with_neighbors(current.node_id, 0, |neighbors| {
+                    for (i, &neighbor_id) in neighbors.iter().enumerate() {
+                        if visited.is_visited(neighbor_id) {
+                            continue;
+                        }
+                        visited.mark_visited(neighbor_id);
+
+                        // Speculative Prefetching (VSAG style)
+                        if i + 2 < neighbors.len() {
+                            self.storage.neighbors.prefetch(neighbors[i + 2], 0);
+                        }
+
+                        let dist = ctx.compute(neighbor_id);
+                        if top_dists.len() < ef || dist < *top_dists.peek().unwrap().distance {
+                            let candidate = Candidate::new(neighbor_id, dist);
+                            frontier.push(Reverse(candidate));
+
+                            top_dists.push(candidate);
+                            if top_dists.len() > ef {
+                                top_dists.pop();
+                            }
+
+                            // Only add to result candidates if it passes the filter
+                            if filter_fn(neighbor_id) {
+                                candidates.push(candidate);
+                                if candidates.len() > k {
+                                    candidates.pop();
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+
+        let mut results = Vec::with_capacity(k);
+        while let Some(c) = candidates.pop() {
+            results.push(SearchResult {
+                slot: c.node_id,
                 distance: c.distance.into_inner(),
             });
         }

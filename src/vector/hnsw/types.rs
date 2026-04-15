@@ -266,6 +266,12 @@ pub trait Distance: Copy + Clone + Send + Sync + 'static {
 
     /// Get the enum variant for runtime dispatch when needed
     fn as_enum() -> Metric;
+
+    /// Validate query vector (e.g. non-zero norm for cosine)
+    fn validate_query(query: &[f32]) -> Result<(), crate::vector::hnsw::error::HNSWError> {
+        let _ = query;
+        Ok(())
+    }
 }
 
 /// L2 (Euclidean) distance
@@ -313,6 +319,16 @@ impl Distance for Cosine {
     fn as_enum() -> Metric {
         Metric::Cosine
     }
+
+    fn validate_query(query: &[f32]) -> Result<(), crate::vector::hnsw::error::HNSWError> {
+        let nsq = crate::distance::norm_squared(query);
+        if nsq == 0.0 {
+            return Err(crate::vector::hnsw::error::HNSWError::InvalidParams(
+                "Cosine distance requires a non-zero norm vector".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Negative dot product (for maximum inner product search)
@@ -357,16 +373,16 @@ impl Candidate {
 }
 
 /// HNSW-internal search result (node ID + distance)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
-    pub id: u32,
+    pub slot: u32,
     pub distance: f32,
 }
 
 impl SearchResult {
     #[must_use]
-    pub fn new(id: u32, distance: f32) -> Self {
-        Self { id, distance }
+    pub fn new(slot: u32, distance: f32) -> Self {
+        Self { slot, distance }
     }
 }
 

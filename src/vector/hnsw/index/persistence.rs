@@ -77,9 +77,10 @@ impl HNSWIndex {
         let mut magic = [0u8; 8];
         reader.read_exact(&mut magic)?;
         if &magic != b"HNSWIDX\0" {
-            return Err(HNSWError::InvalidParams(
-                "Not an HNSW index file".to_string(),
-            ));
+            return Err(HNSWError::Storage(format!(
+                "Invalid magic: expected HNSWIDX\\0, got {:?}",
+                magic
+            )));
         }
 
         let mut version_bytes = [0u8; 4];
@@ -87,9 +88,9 @@ impl HNSWIndex {
         let version = u32::from_le_bytes(version_bytes);
 
         if version != FORMAT_VERSION {
-            return Err(HNSWError::InvalidParams(format!(
-                "Unsupported version: {}",
-                version
+            return Err(HNSWError::Storage(format!(
+                "Unsupported version: expected {}, got {}",
+                FORMAT_VERSION, version
             )));
         }
 
@@ -127,8 +128,10 @@ impl HNSWIndex {
         let storage_len = u64::from_le_bytes(storage_len_bytes) as usize;
         let mut storage_bytes = vec![0u8; storage_len];
         reader.read_exact(&mut storage_bytes)?;
-        let storage: HNSWStorage = postcard::from_bytes(&storage_bytes)
+        let mut storage: HNSWStorage = postcard::from_bytes(&storage_bytes)
             .map_err(|e| HNSWError::Serialization(e.to_string()))?;
+
+        storage.restore_locks();
 
         Ok(Self {
             storage,

@@ -110,7 +110,7 @@ impl WalEntry {
         level: u8,
         dense: Option<&[f32]>,
         sparse: Option<(&[u32], &[f32])>,
-        multi: Option<&[Vec<f32>]>,
+        multi: Option<&[&[f32]]>,
         metadata: Option<&[u8]>,
     ) -> Self {
         let meta_bytes = metadata.unwrap_or(&[]);
@@ -123,7 +123,7 @@ impl WalEntry {
             capacity += 4 + idx.len() * 4 + 4 + val.len() * 4;
         }
         if let Some(tokens) = multi {
-            let token_values: usize = tokens.iter().map(Vec::len).sum();
+            let token_values: usize = tokens.iter().map(|t| t.len()).sum();
             capacity += 4 + 4 + token_values * 4; // 4 for token_count, 4 for token_dim
         }
 

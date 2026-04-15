@@ -18,6 +18,18 @@ pub enum HNSWError {
     Internal(String),
     #[error("Storage error: {0}")]
     Storage(String),
+    #[error("Invalid search parameters: k={k}, ef={ef}")]
+    InvalidSearchParams { k: usize, ef: usize },
+    #[error("Node not found: {0}")]
+    NodeNotFound(u32),
+    #[error("Vector not found: {0}")]
+    VectorNotFound(u32),
+    #[error("Index is empty")]
+    EmptyIndex,
+    #[error("Invalid level: {level} exceeds max_levels {max_levels}")]
+    InvalidLevel { level: usize, max_levels: usize },
+    #[error("Invalid batch size: {0}")]
+    InvalidBatchSize(usize),
 }
 
 impl HNSWError {

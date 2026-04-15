@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-const CHUNK_SIZE: usize = 16; // 64 bytes (1 count + 15 neighbors)
+const CHUNK_SIZE: usize = 128; // Support M up to 127
 
 /// High-performance flat vector matrix.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -201,6 +201,11 @@ impl HNSWStorage {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn restore_locks(&mut self) {
+        let num_nodes = self.len();
+        self.neighbors.locks = (0..num_nodes).map(|_| Mutex::new(())).collect();
     }
 }
 

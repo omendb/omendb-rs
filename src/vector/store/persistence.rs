@@ -327,8 +327,41 @@ impl VectorStore {
             } else {
                 &wal_modified_slots
             };
-            let engine =
+            let mut engine =
                 Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
+
+            // CRITICAL: If engine was rebuilt from scratch (Slow path in initialize_segments),
+            // it already contains all dense_slots.
+            // BUT if it was LOADED, we must ensure WAL-modified slots are inserted.
+            // initialize_segments handles the "LOADED + insert delta" case now.
+
+            // ONE MORE THING: Multi-vector stores also need their FDE vectors indexed.
+            // If this is a multi-vector store AND we just replayed WAL, some FDE vectors
+            // might be missing from the index if they were only in the WAL.
+            if let Some(ref mut engine) = engine {
+                if let Some(ref mv_cfg) = ctx.snapshot.multivec_config {
+                    let config = crate::vector::muvera::MultiVectorConfig {
+                        repetitions: mv_cfg.repetitions,
+                        partition_bits: mv_cfg.partition_bits,
+                        seed: mv_cfg.seed,
+                        d_proj: mv_cfg.d_proj,
+                        pool_factor: mv_cfg.pool_factor,
+                        max_tokens: mv_cfg.max_tokens,
+                    };
+                    let muvera_encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
+                    for &slot in modified_slots {
+                        if records.is_live(slot) {
+                            if let Some(tokens) = records.get_multi(slot) {
+                                let token_refs: Vec<&[f32]> =
+                                    tokens.iter().map(|v| v.as_slice()).collect();
+                                let fde = muvera_encoder
+                                    .encode(&token_refs, crate::vector::muvera::AggMode::Sum);
+                                engine.insert_with_slot(&fde, slot)?;
+                            }
+                        }
+                    }
+                }
+            }
 
             // Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
             let ancillary = Self::initialize_ancillary_indexes(
@@ -972,7 +1005,6 @@ impl VectorStore {
             match entry.header.entry_type {
                 WalEntryType::UpsertRecord => match parse_wal_upsert_record(&entry.data) {
                     Ok(upsert_data) => {
-                        println!("DEBUG: Replaying WAL upsert for ID: {}", upsert_data.id);
                         let metadata: Option<JsonValue> = upsert_data
                             .metadata
                             .as_ref()
@@ -1001,8 +1033,8 @@ impl VectorStore {
                         let slot = records.upsert(record)?;
                         wal_modified_slots.push(slot);
                     }
-                    Err(e) => {
-                        println!("DEBUG: Failed to parse WAL upsert record: {}", e);
+                    Err(_e) => {
+                        // Failed to parse record
                     }
                 },
                 WalEntryType::DeleteNode => {
@@ -1225,26 +1257,40 @@ impl VectorStore {
                 };
                 let encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
 
-                // Load persisted helper bytes, then rebuild helper state from RecordStore.
+                // Rebuild MultiVecStorage from RecordStore (including WAL entries)
                 let token_dim = mv_cfg.token_dim;
-                let storage = match (&snapshot.multivec_bytes, &snapshot.multivec_offsets) {
+                let mut storage = match (&snapshot.multivec_bytes, &snapshot.multivec_offsets) {
                     (Some(vec_bytes), Some(off_bytes)) => {
                         match MultiVecStorage::from_bytes(vec_bytes, off_bytes, token_dim) {
-                            Ok(s) => Some(s),
+                            Ok(s) => s,
                             Err(e) => {
                                 tracing::warn!(
                                     "Failed to restore MultiVecStorage, creating empty: {}",
                                     e
                                 );
-                                Some(MultiVecStorage::new(token_dim))
+                                MultiVecStorage::new(token_dim)
                             }
                         }
                     }
-                    _ => Some(MultiVecStorage::new(token_dim)),
+                    _ => MultiVecStorage::new(token_dim),
                 };
 
+                // CRITICAL: Add any tokens from RecordStore that are NOT in storage yet
+                // (This handles WAL recovery of multi-vector docs)
+                for (slot, record) in records.iter_live() {
+                    if let Some(ref tokens) = record.multi {
+                        // Ensure storage has enough slots to accommodate the record slot
+                        storage.reserve_slots(slot as usize + 1);
+
+                        let token_refs: Vec<&[f32]> = tokens.iter().map(|v| v.as_slice()).collect();
+                        storage.update(slot, &token_refs).map_err(|e| {
+                            anyhow::anyhow!("Failed to update recovered tokens: {e}")
+                        })?;
+                    }
+                }
+
                 // FDEs use inner product
-                (Some(encoder), storage, Metric::InnerProduct)
+                (Some(encoder), Some(storage), Metric::InnerProduct)
             } else {
                 (None, None, base_distance_metric)
             };
@@ -1280,9 +1326,7 @@ impl VectorStore {
             });
 
         if sparse_index.is_some() {
-            println!("DEBUG: Recovery initialized sparse index");
         } else {
-            println!("DEBUG: Recovery did NOT initialize sparse index");
         }
 
         // Reconstruct edge store: start from persisted snapshot, then apply WAL delta

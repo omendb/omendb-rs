@@ -5,6 +5,7 @@ pub mod types;
 pub mod visited;
 
 use crate::omen::StorageBackend;
+use crate::vector::hnsw::types::SearchResult;
 use crate::vector::{EngineSearchResult, MutableVectorEngine, VectorEngine, VectorEngineView};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -15,12 +16,8 @@ pub struct SegmentManager {
 }
 
 impl SegmentManager {
-    pub fn new(_config: SegmentConfig) -> Self {
-        let index = HNSWIndex::new(
-            0,
-            HNSWParams::default(),
-            crate::vector::hnsw::types::Metric::L2,
-        );
+    pub fn new(config: SegmentConfig) -> Self {
+        let index = HNSWIndex::new(config.dim, config.params, config.metric);
         Self { index }
     }
 
@@ -66,6 +63,16 @@ impl SegmentManager {
     pub fn insert_with_slot(&mut self, vector: &[f32], slot: u32) -> Result<u32> {
         self.index.insert_with_slot(vector, slot)
     }
+
+    pub fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> Result<Vec<SearchResult>> {
+        self.index.search_with_filter(query, k, ef, filter_fn)
+    }
 }
 
 impl MutableVectorEngine for SegmentManager {
@@ -87,8 +94,20 @@ impl MutableVectorEngine for SegmentManager {
         k: usize,
         ef: usize,
     ) -> anyhow::Result<Vec<EngineSearchResult>> {
-        MutableVectorEngine::search(&self.index, query, k, ef)
+        self.index
+            .search(query, k, ef)
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(|r| EngineSearchResult {
+                        slot: r.slot,
+                        distance: r.distance,
+                    })
+                    .collect()
+            })
+            .map_err(anyhow::Error::from)
     }
+
     fn search_with_filter(
         &self,
         query: &[f32],
@@ -96,8 +115,20 @@ impl MutableVectorEngine for SegmentManager {
         ef: usize,
         filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
     ) -> anyhow::Result<Vec<EngineSearchResult>> {
-        MutableVectorEngine::search_with_filter(&self.index, query, k, ef, filter_fn)
+        self.index
+            .search_with_filter(query, k, ef, filter_fn)
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(|r| EngineSearchResult {
+                        slot: r.slot,
+                        distance: r.distance,
+                    })
+                    .collect()
+            })
+            .map_err(anyhow::Error::from)
     }
+
     fn flush(&mut self) -> anyhow::Result<()> {
         MutableVectorEngine::flush(&mut self.index)
     }
@@ -147,6 +178,26 @@ pub struct PublishedSegmentView {
     pub(crate) index: HNSWIndex,
 }
 
+impl PublishedSegmentView {
+    pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
+        self.index.search(query, k, ef)
+    }
+
+    pub fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
+    ) -> Result<Vec<SearchResult>> {
+        self.index.search_with_filter(query, k, ef, filter_fn)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.index.len() == 0
+    }
+}
+
 impl VectorEngineView for PublishedSegmentView {
     fn total_memory(&self) -> usize {
         VectorEngineView::total_memory(&self.index)
@@ -172,8 +223,20 @@ impl VectorEngineView for PublishedSegmentView {
         k: usize,
         ef: usize,
     ) -> anyhow::Result<Vec<EngineSearchResult>> {
-        VectorEngineView::search(&self.index, query, k, ef)
+        self.index
+            .search(query, k, ef)
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(|r| EngineSearchResult {
+                        slot: r.slot,
+                        distance: r.distance,
+                    })
+                    .collect()
+            })
+            .map_err(anyhow::Error::from)
     }
+
     fn search_with_filter(
         &self,
         query: &[f32],
@@ -181,25 +244,44 @@ impl VectorEngineView for PublishedSegmentView {
         ef: usize,
         filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
     ) -> anyhow::Result<Vec<EngineSearchResult>> {
-        VectorEngineView::search_with_filter(&self.index, query, k, ef, filter_fn)
+        self.index
+            .search_with_filter(query, k, ef, filter_fn)
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(|r| EngineSearchResult {
+                        slot: r.slot,
+                        distance: r.distance,
+                    })
+                    .collect()
+            })
+            .map_err(anyhow::Error::from)
     }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct SegmentConfig {
+    pub dim: usize,
+    pub params: HNSWParams,
+    pub metric: Metric,
     pub capacity: usize,
 }
 
 impl SegmentConfig {
-    pub fn new(_dim: usize) -> Self {
+    pub fn new(dim: usize) -> Self {
         Self {
+            dim,
+            params: HNSWParams::default(),
+            metric: Metric::L2,
             capacity: usize::MAX,
         }
     }
-    pub fn with_params(self, _params: crate::vector::hnsw::types::HNSWParams) -> Self {
+    pub fn with_params(mut self, params: HNSWParams) -> Self {
+        self.params = params;
         self
     }
-    pub fn with_distance(self, _metric: crate::Metric) -> Self {
+    pub fn with_distance(mut self, metric: Metric) -> Self {
+        self.metric = metric;
         self
     }
     pub fn with_quantization(self, _enabled: bool) -> Self {

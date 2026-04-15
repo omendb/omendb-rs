@@ -126,8 +126,11 @@ impl HNSWIndex {
     }
 
     pub fn clone_for_view(&self) -> Self {
+        let mut storage: HNSWStorage =
+            postcard::from_bytes(&postcard::to_allocvec(&self.storage).unwrap()).unwrap();
+        storage.restore_locks();
         Self {
-            storage: postcard::from_bytes(&postcard::to_allocvec(&self.storage).unwrap()).unwrap(),
+            storage,
             entry_point: self.entry_point,
             params: self.params.clone(),
             distance_fn: self.distance_fn,
@@ -156,6 +159,48 @@ impl HNSWIndex {
 
     pub fn len(&self) -> usize {
         self.storage.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.storage.is_empty()
+    }
+
+    pub fn node_level(&self, node_id: u32) -> Result<u8> {
+        if node_id >= self.len() as u32 {
+            return Err(HNSWError::NodeNotFound(node_id));
+        }
+        Ok(self.storage.get_node_level(node_id))
+    }
+
+    pub fn neighbor_count(&self, node_id: u32, level: u8) -> usize {
+        self.storage.with_neighbors(node_id, level, |n| n.len())
+    }
+
+    pub fn batch_insert(&mut self, vectors: Vec<Vec<f32>>) -> Result<()> {
+        for v in vectors {
+            self.insert(&v)?;
+        }
+        Ok(())
+    }
+
+    pub fn optimize_cache_locality(&mut self) -> Result<Vec<u32>> {
+        // BFS reordering placeholder
+        Ok((0..self.len() as u32).collect())
+    }
+
+    pub fn get_vector_dequantized(&self, node_id: u32) -> Result<Vec<f32>> {
+        if node_id >= self.len() as u32 {
+            return Err(HNSWError::VectorNotFound(node_id));
+        }
+        Ok(self.storage.vector(node_id).to_vec())
+    }
+
+    pub fn is_sq8(&self) -> bool {
+        false // Unified storage currently f32
+    }
+
+    pub fn params(&self) -> &HNSWParams {
+        &self.params
     }
 }
 
@@ -190,7 +235,7 @@ impl VectorEngineView for HNSWIndex {
         Ok(results
             .into_iter()
             .map(|r| EngineSearchResult {
-                slot: r.id as u32,
+                slot: r.slot as u32,
                 distance: r.distance,
             })
             .collect())

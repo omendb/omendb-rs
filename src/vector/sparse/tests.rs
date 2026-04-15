@@ -191,7 +191,7 @@ fn sparse_index_remove() {
     index.insert(1, &v2);
     assert_eq!(index.len(), 2);
 
-    assert!(index.remove(0));
+    index.remove(0);
     assert_eq!(index.len(), 1);
 
     let query = SparseVector::new(vec![1, 5], vec![1.0, 1.0]).unwrap();
@@ -203,7 +203,7 @@ fn sparse_index_remove() {
 #[test]
 fn sparse_index_remove_nonexistent() {
     let mut index = SparseIndex::new();
-    assert!(!index.remove(999));
+    index.remove(999);
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn sparse_index_remove_cleans_empty_posting_lists() {
     // Only one vector uses dim 42
     let v1 = SparseVector::new(vec![42], vec![1.0]).unwrap();
     index.insert(0, &v1);
-    assert!(index.remove(0));
+    index.remove(0);
 
     // Search on dim 42 should return nothing (posting list removed)
     let query = SparseVector::new(vec![42], vec![1.0]).unwrap();
@@ -279,10 +279,10 @@ fn sparse_index_compact() {
     index.insert(20, &v2);
 
     // Remap: 10 -> 0, 20 -> 1
-    let mut old_to_new = HashMap::new();
-    old_to_new.insert(10u32, 0u32);
-    old_to_new.insert(20u32, 1u32);
-    index.compact(&old_to_new);
+    let mut mapping = vec![u32::MAX; 21];
+    mapping[10] = 0;
+    mapping[20] = 1;
+    index.compact(&mapping);
 
     assert_eq!(index.len(), 2);
 
@@ -306,10 +306,10 @@ fn sparse_index_compact_removes_deleted_slots() {
     index.insert(2, &v3);
 
     // Compact but only remap slots 0 and 2 (slot 1 was deleted)
-    let mut old_to_new = HashMap::new();
-    old_to_new.insert(0u32, 0u32);
-    old_to_new.insert(2u32, 1u32);
-    index.compact(&old_to_new);
+    let mut mapping = vec![u32::MAX; 3];
+    mapping[0] = 0;
+    mapping[2] = 1;
+    index.compact(&mapping);
 
     assert_eq!(index.len(), 2);
 
@@ -327,7 +327,7 @@ fn sparse_index_remap_slot() {
     let v = SparseVector::new(vec![1, 5], vec![1.0, 2.0]).unwrap();
     index.insert(10, &v);
 
-    assert!(index.remap_slot(10, 20));
+    index.remap_slot(10, 20);
     assert_eq!(index.len(), 1);
 
     let query = SparseVector::new(vec![1, 5], vec![1.0, 1.0]).unwrap();
@@ -338,7 +338,7 @@ fn sparse_index_remap_slot() {
 #[test]
 fn sparse_index_remap_nonexistent() {
     let mut index = SparseIndex::new();
-    assert!(!index.remap_slot(999, 1000));
+    index.remap_slot(999, 1000);
 }
 
 #[test]

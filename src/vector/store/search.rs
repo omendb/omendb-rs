@@ -8,7 +8,6 @@ use super::record_store::RecordStore;
 use super::{MetadataFilter, SearchResult};
 use crate::distance::{cosine_distance_precomputed, dot_product, l2_distance, norm_squared};
 use crate::omen::Metric;
-use crate::vector::VectorEngineView;
 use crate::vector::hnsw::PublishedSegmentView;
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;

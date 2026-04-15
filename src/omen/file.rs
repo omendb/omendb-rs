@@ -571,7 +571,10 @@ impl crate::omen::StorageBackend for OmenFile {
     ) -> anyhow::Result<()> {
         let metadata_bytes = serde_json::to_vec(metadata)?;
         let sparse_tuple = sparse.map(|s| (s.indices(), s.values()));
-        let multi_ref = multi;
+
+        let multi_refs: Option<Vec<&[f32]>> =
+            multi.map(|m| m.iter().map(|v| v.as_slice()).collect());
+        let multi_slice: Option<&[&[f32]]> = multi_refs.as_deref();
 
         self.wal.append(crate::omen::wal::WalEntry::upsert_record(
             0, // timestamp will be set in append
@@ -579,7 +582,7 @@ impl crate::omen::StorageBackend for OmenFile {
             0, // level not directly used here or handled inside Wal
             dense,
             sparse_tuple,
-            multi_ref,
+            multi_slice,
             Some(&metadata_bytes),
         ))?;
         Ok(())

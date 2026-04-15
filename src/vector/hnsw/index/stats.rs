@@ -9,11 +9,13 @@ impl HNSWIndex {
         let mut level_distribution = vec![0; self.params.max_level as usize + 1];
         let mut total_neighbors = 0;
         let mut max_neighbors_l0 = 0;
+        let mut max_level_used = 0;
 
         for i in 0..num_vectors {
             let level = self.storage.get_node_level(i as u32);
             if (level as usize) < level_distribution.len() {
                 level_distribution[level as usize] += 1;
+                max_level_used = max_level_used.max(level);
             }
 
             self.storage.with_neighbors(i as u32, 0, |neighbors| {
@@ -32,14 +34,14 @@ impl HNSWIndex {
             num_vectors,
             dimensions: self.storage.vectors.dim,
             entry_point: self.entry_point,
-            max_level: self.params.max_level,
+            max_level: if num_vectors > 0 { max_level_used } else { 0 },
             level_distribution,
             avg_neighbors_l0,
             max_neighbors_l0,
             memory_bytes: VectorEngineView::total_memory(self),
             params: self.params.clone(),
             distance_function: self.distance_fn,
-            quantization_enabled: false, // Unified flat storage is currently f32
+            quantization_enabled: self.is_sq8(),
         }
     }
 }

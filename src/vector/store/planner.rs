@@ -140,6 +140,10 @@ impl<'a> QueryPlanner<'a> {
             .text_engine
             .ok_or_else(|| anyhow::anyhow!("Text search not enabled"))?;
 
+        if k == 0 {
+            anyhow::bail!("k=0 is not supported for search");
+        }
+
         // 1. Fetch candidates from both engines
         // We fetch more candidates than k to improve fusion quality
         let fetch_k = if params.filter.is_some() {
@@ -155,15 +159,22 @@ impl<'a> QueryPlanner<'a> {
                 .and_then(|idx| filter.evaluate_bitmap(idx));
 
             if let Some(bitmap) = filter_bitmap {
-                let filter_fn = move |slot: u32| -> bool { bitmap.contains(slot) };
+                let filter_fn = move |slot: u32| -> bool {
+                    self.records.is_live(slot) && bitmap.contains(slot)
+                };
                 self.vector_engine
                     .search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
             } else {
                 let filter_fn = |slot: u32| -> bool {
+                    if !self.records.is_live(slot) {
+                        return false;
+                    }
                     if let Some(rec) = self.records.get_by_slot(slot)
                         && let Some(ref meta) = rec.metadata
                     {
-                        return filter.matches(meta);
+                        let matches = filter.matches(meta);
+                        if matches {}
+                        return matches;
                     }
                     false
                 };
@@ -179,7 +190,9 @@ impl<'a> QueryPlanner<'a> {
         // Apply metadata filter to text results if present
         if let Some(ref filter) = params.filter {
             text_results.retain(|r| {
-                if let Some(rec) = self.records.get(&r.id)
+                if let Some(slot) = self.records.get_slot(&r.id)
+                    && self.records.is_live(slot)
+                    && let Some(rec) = self.records.get_by_slot(slot)
                     && let Some(ref meta) = rec.metadata
                 {
                     return filter.matches(meta);
@@ -249,15 +262,22 @@ impl<'a> QueryPlanner<'a> {
                 .and_then(|idx| filter.evaluate_bitmap(idx));
 
             if let Some(bitmap) = filter_bitmap {
-                let filter_fn = move |slot: u32| -> bool { bitmap.contains(slot) };
+                let filter_fn = move |slot: u32| -> bool {
+                    self.records.is_live(slot) && bitmap.contains(slot)
+                };
                 self.vector_engine
                     .search_with_filter(query_vector, fetch_k, ef, &filter_fn)?
             } else {
                 let filter_fn = |slot: u32| -> bool {
+                    if !self.records.is_live(slot) {
+                        return false;
+                    }
                     if let Some(rec) = self.records.get_by_slot(slot)
                         && let Some(ref meta) = rec.metadata
                     {
-                        return filter.matches(meta);
+                        let matches = filter.matches(meta);
+                        if matches {}
+                        return matches;
                     }
                     false
                 };
@@ -272,7 +292,9 @@ impl<'a> QueryPlanner<'a> {
 
         if let Some(ref filter) = params.filter {
             text_results.retain(|r| {
-                if let Some(rec) = self.records.get(&r.id)
+                if let Some(slot) = self.records.get_slot(&r.id)
+                    && self.records.is_live(slot)
+                    && let Some(rec) = self.records.get_by_slot(slot)
                     && let Some(ref meta) = rec.metadata
                 {
                     return filter.matches(meta);

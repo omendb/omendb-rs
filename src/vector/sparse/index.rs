@@ -214,12 +214,20 @@ impl SparseIndex {
     pub fn compact(&mut self, mapping: &[u32]) {
         let mut new_slots = RoaringBitmap::new();
         for list in self.postings.values_mut() {
-            for element in &mut list.elements {
-                let new_id = mapping[element.id as usize];
-                element.id = new_id;
-                new_slots.insert(new_id);
-            }
+            list.elements.retain_mut(|element| {
+                let old_id = element.id as usize;
+                if old_id < mapping.len() && mapping[old_id] != u32::MAX {
+                    let new_id = mapping[old_id];
+                    element.id = new_id;
+                    new_slots.insert(new_id);
+                    true
+                } else {
+                    false
+                }
+            });
         }
+        // Cleanup empty posting lists
+        self.postings.retain(|_, list| !list.elements.is_empty());
         self.slots = new_slots;
     }
 

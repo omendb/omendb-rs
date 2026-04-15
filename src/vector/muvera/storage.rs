@@ -78,6 +78,82 @@ impl MultiVecStorage {
         Ok(slot)
     }
 
+    /// Update tokens for an existing slot.
+    ///
+    /// # Errors
+    /// Returns error if slot is out of bounds or if updating would cause offset/count overflow.
+    ///
+    /// NOTE: This is O(N) where N is total number of tokens after the updated slot,
+    /// as it must shift subsequent token vectors in the flat buffer.
+    pub fn update(&mut self, slot: u32, tokens: &[&[f32]]) -> Result<(), &'static str> {
+        let slot_idx = slot as usize;
+        if slot_idx >= self.offsets.len() {
+            return Err("Slot index out of bounds");
+        }
+
+        let (old_start, old_count) = self.offsets[slot_idx];
+        let new_count = u16::try_from(tokens.len())
+            .map_err(|_| "Token count overflow (>65K tokens per doc)")?;
+
+        let old_tokens_len = old_count as usize * self.dim;
+        let new_tokens_len = new_count as usize * self.dim;
+        let diff = (new_tokens_len as isize) - (old_tokens_len as isize);
+
+        let start_idx = old_start as usize * self.dim;
+        let end_idx = start_idx + old_tokens_len;
+
+        if diff != 0 {
+            // Shift subsequent vectors
+            if diff > 0 {
+                let additional = diff as usize;
+                self.vectors.reserve(additional);
+                unsafe {
+                    self.vectors.set_len(self.vectors.len() + additional);
+                }
+                let src = end_idx;
+                let dst = end_idx + additional;
+                let len = self.vectors.len() - dst;
+                if len > 0 {
+                    self.vectors.copy_within(src..src + len, dst);
+                }
+            } else {
+                let reduction = (-diff) as usize;
+                let src = end_idx;
+                let dst = end_idx - reduction;
+                let len = self.vectors.len() - src;
+                if len > 0 {
+                    self.vectors.copy_within(src..src + len, dst);
+                }
+                self.vectors.truncate(self.vectors.len() - reduction);
+            }
+
+            // Update subsequent offsets
+            let offset_diff = (diff / self.dim as isize) as i32;
+            for i in (slot_idx + 1)..self.offsets.len() {
+                let (start, _count) = &mut self.offsets[i];
+                *start = (*start as i32 + offset_diff) as u32;
+            }
+        }
+
+        // Copy new tokens
+        for (i, token) in tokens.iter().enumerate() {
+            let offset = start_idx + i * self.dim;
+            self.vectors[offset..offset + self.dim].copy_from_slice(token);
+        }
+
+        self.offsets[slot_idx] = (old_start, new_count);
+        Ok(())
+    }
+
+    /// Ensure capacity for up to `num_docs` slots.
+    /// New slots are initialized with zero tokens.
+    pub fn reserve_slots(&mut self, num_docs: usize) {
+        if num_docs > self.offsets.len() {
+            let current_len = self.vectors.len() / self.dim;
+            self.offsets.resize(num_docs, (current_len as u32, 0));
+        }
+    }
+
     /// Get tokens for a document by slot ID.
     ///
     /// Returns an iterator over token slices.
