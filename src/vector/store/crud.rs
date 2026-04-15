@@ -56,7 +56,7 @@ impl VectorStore {
         );
 
         self.records.with_vector_by_slot(slot as u32, |vector| {
-            self.with_engine_mut(|engine| {
+            self.with_engine_mut(|engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
                 if let Some(engine) = engine.as_mut()
                     && let Some(vector) = vector
                 {
@@ -144,7 +144,7 @@ impl VectorStore {
         if !updates.is_empty() {
             let mut metadata_index = self.metadata_index.write();
             let mut sparse_index = self.sparse_index.write();
-            self.with_engine_mut(|engine| {
+            self.with_engine_mut(|engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
                 for (old_slot, id, vector, metadata) in updates {
                     let new_slot =
                         self.records
@@ -192,14 +192,15 @@ impl VectorStore {
                 }
 
                 self.records.with_vectors_by_slots(&slots, |vectors| {
-                    self.with_engine_mut(|engine| {
-                        if let Some(engine) = engine.as_mut() {
-                            engine.insert_batch_parallel_from_refs(vectors, &slots)?;
-                        }
-                        Ok(())
-                    })
+                    self.with_engine_mut(
+                        |engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
+                            if let Some(engine) = engine.as_mut() {
+                                engine.insert_batch_parallel_from_refs(&vectors, &slots)?;
+                            }
+                            Ok(())
+                        },
+                    )
                 })?;
-
                 result_indices.extend(slots.iter().map(|&s| s as usize));
             } else {
                 let dimensions = self.resolve_dimensions(inserts[0].1.dim())?;

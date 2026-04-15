@@ -17,6 +17,7 @@ use crate::omen::{
     parse_wal_delete, parse_wal_delete_edge, parse_wal_insert_edge, parse_wal_upsert_record,
 };
 use crate::text::{TextIndex, TextSearchConfig};
+use crate::vector::MutableVectorEngine;
 use crate::vector::VectorEngineView;
 use crate::vector::hnsw::{HNSWParams, SegmentConfig, SegmentManager};
 use crate::vector::metadata::MetadataIndex;
@@ -1328,7 +1329,7 @@ impl VectorStore {
 
     /// Flush HNSW engine to disk and update generation in storage.
     fn flush_engine(&self) -> Result<()> {
-        self.with_engine_mut(|engine| {
+        self.with_engine_mut(|engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
             if let Some(engine) = engine.as_mut() {
                 // Flush pending changes
                 engine.flush()?;

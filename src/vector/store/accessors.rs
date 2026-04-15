@@ -283,8 +283,8 @@ impl VectorStore {
             .filter_map(|(_, r)| r.vector.map(|vector| vector.as_slice().len() * 4))
             .sum::<usize>();
 
-        let (frozen_count, mutable_vecs, graph_bytes, segment_capacity) =
-            self.with_segment_view(|engine_view| {
+        let (frozen_count, mutable_vecs, graph_bytes, segment_capacity) = self.with_segment_view(
+            |engine_view: Option<std::sync::Arc<crate::vector::hnsw::PublishedSegmentView>>| {
                 if let Some(engine_view) = engine_view {
                     let total_mem = engine_view.total_memory();
                     let graph = total_mem.saturating_sub(vector_bytes);
@@ -297,7 +297,8 @@ impl VectorStore {
                 } else {
                     (0, 0, 0, 0)
                 }
-            });
+            },
+        );
 
         let wal_entries = self.storage.as_ref().map_or(0, |s| s.read().wal_len());
 

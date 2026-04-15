@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use super::VectorStore;
 use super::{MetadataIndex, Vector};
+use crate::vector::MutableVectorEngine;
 use crate::vector::hnsw::SegmentManager;
 
 impl VectorStore {
@@ -42,9 +43,9 @@ impl VectorStore {
 
         if self.has_engine() {
             self.records.with_vectors_by_slots(&slots, |vectors| {
-                self.with_engine_mut(|engine| {
+                self.with_engine_mut(|engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
                     if let Some(engine) = engine.as_mut() {
-                        engine.insert_batch_parallel_from_refs(vectors, &slots)?;
+                        engine.insert_batch_parallel_from_refs(&vectors, &slots)?;
                     }
                     Ok(())
                 })
@@ -114,7 +115,7 @@ impl VectorStore {
             segs.set_storage(Arc::clone(storage));
         }
 
-        self.with_engine_mut(|engine| {
+        self.with_engine_mut(|engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
             *engine = Some(segs);
             Ok(())
         })
@@ -129,8 +130,7 @@ impl VectorStore {
         self.with_engine_mut(|guard| {
             if guard.is_none() {
                 let config = self.segment_config(resolved_dims);
-                let mut segs = SegmentManager::new(config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create segment manager: {e}"))?;
+                let mut segs = SegmentManager::new(config);
                 if let Some(ref path) = self.storage_path {
                     segs.set_pending_merge_dir(super::persistence::segments_dir_for(path));
                 }
@@ -263,7 +263,7 @@ impl VectorStore {
             self.compact_locked()?;
         }
 
-        self.with_engine_mut(|engine| {
+        self.with_engine_mut(|engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
             if let Some(engine) = engine.as_mut() {
                 // Flush engine first
                 engine.flush()?;
@@ -347,7 +347,12 @@ impl VectorStore {
 
         // Compact sparse index if present
         if let Some(ref mut sparse_index) = *self.sparse_index.write() {
-            sparse_index.compact(&old_to_new);
+            let max_id = old_to_new.keys().copied().max().unwrap_or(0) as usize;
+            let mut mapping = vec![0u32; max_id + 1];
+            for (&old, &new) in &old_to_new {
+                mapping[old as usize] = new;
+            }
+            sparse_index.compact(&mapping);
         }
 
         // GC orphaned edges (safety net after slot reassignment)
@@ -362,7 +367,7 @@ impl VectorStore {
 
         // Rebuild engine with new contiguous slots
         if self.records.is_empty() {
-            self.with_engine_mut(|engine| {
+            self.with_engine_mut(|engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
                 *engine = None;
                 Ok(())
             })?;

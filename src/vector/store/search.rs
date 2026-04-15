@@ -114,7 +114,10 @@ pub(crate) fn knn_search_core(
     ef: usize,
     metric: Metric,
 ) -> Result<Vec<(usize, f32)>> {
-    let has_data = !records.is_empty() || engine.as_ref().is_some_and(|e| !e.is_empty());
+    let has_data = !records.is_empty()
+        || engine.as_ref().is_some_and(
+            |e: &std::sync::Arc<crate::vector::hnsw::PublishedSegmentView>| e.index.len() > 0,
+        );
 
     if !has_data {
         return Ok(Vec::new());

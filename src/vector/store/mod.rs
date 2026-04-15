@@ -45,6 +45,7 @@ use crate::catalog::{
     QuantizationMode,
 };
 use crate::text::{TextIndex, TextSearchConfig};
+use crate::vector::MutableVectorEngine;
 use crate::vector::metadata::MetadataIndex;
 use anyhow::Result;
 use arc_swap::ArcSwap;
@@ -411,15 +412,16 @@ impl VectorStore {
     /// heap usage while allowing large datasets.
     fn check_memory_pressure(&self) {
         if let Some(limit) = self.max_memory_bytes {
-            let _ = self.with_engine_mut(|engine| {
-                if let Some(engine) = engine.as_mut() {
-                    let estimated = engine.total_memory();
-                    if estimated > limit && engine.mutable_len() > 0 {
-                        let _ = engine.freeze_mutable();
+            let _ =
+                self.with_engine_mut(|engine: &mut Option<crate::vector::hnsw::SegmentManager>| {
+                    if let Some(engine) = engine.as_mut() {
+                        let estimated = engine.memory_usage();
+                        if estimated > limit && engine.mutable_len() > 0 {
+                            let _ = engine.freeze_mutable();
+                        }
                     }
-                }
-                Ok(())
-            });
+                    Ok(())
+                });
         }
     }
 
@@ -461,16 +463,18 @@ impl VectorStore {
             (k, false)
         };
 
-        let results = self.with_segment_view(|engine_view| {
-            search::knn_search_core(
-                &self.records,
-                engine_view,
-                &query.data,
-                search_k,
-                ef,
-                self.distance_metric,
-            )
-        })?;
+        let results = self.with_segment_view(
+            |engine_view: Option<std::sync::Arc<crate::vector::hnsw::PublishedSegmentView>>| {
+                search::knn_search_core(
+                    &self.records,
+                    engine_view,
+                    &query.data,
+                    search_k,
+                    ef,
+                    self.distance_metric,
+                )
+            },
+        )?;
 
         if needs_rescore {
             Ok(search::rescore_results(
@@ -510,18 +514,20 @@ impl VectorStore {
         let effective_ef =
             helpers::compute_effective_ef(ef, self.hnsw_ef_search.load(Ordering::Relaxed), k);
 
-        self.with_segment_view(|engine_view| {
-            search::knn_search_filtered_core(
-                &self.records,
-                &self.metadata_index.read(),
-                engine_view,
-                &query.data,
-                k,
-                effective_ef,
-                filter,
-                self.distance_metric,
-            )
-        })
+        self.with_segment_view(
+            |engine_view: Option<std::sync::Arc<crate::vector::hnsw::PublishedSegmentView>>| {
+                search::knn_search_filtered_core(
+                    &self.records,
+                    &self.metadata_index.read(),
+                    engine_view,
+                    &query.data,
+                    k,
+                    effective_ef,
+                    filter,
+                    self.distance_metric,
+                )
+            },
+        )
     }
 
     /// Search with optional filter (convenience method)
