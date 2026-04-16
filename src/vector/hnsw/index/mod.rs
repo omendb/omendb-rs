@@ -27,7 +27,6 @@ mod persistence;
 mod search;
 mod stats;
 
-#[cfg(test)]
 mod tests;
 
 pub use parallel::ParallelBuilder;

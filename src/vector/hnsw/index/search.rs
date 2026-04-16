@@ -96,7 +96,9 @@ impl HNSWIndex {
             let ctx = DistanceContext::<D>::new(query, &self.storage);
             let mut visited = VisitedList::new(self.len() + 1);
 
-            self.search_internal_filtered::<D>(query, k, ef, &ctx, &mut visited, filter_fn)
+            // Boost ef for filtered search to improve recall
+            let boosted_ef = ef.max(k * 4).max(100);
+            self.search_internal_filtered::<D>(query, k, boosted_ef, &ctx, &mut visited, filter_fn)
         })
     }
 
@@ -229,21 +231,19 @@ impl HNSWIndex {
         use std::collections::BinaryHeap;
 
         let mut frontier = BinaryHeap::new();
-        let mut candidates = BinaryHeap::new();
+        let mut candidates = BinaryHeap::new(); // Results (filter-passing)
+        let mut top_dists = BinaryHeap::new(); // Search threshold (all-pass)
 
         let initial_dist = ctx.compute(nearest_node);
         frontier.push(Reverse(Candidate::new(nearest_node, initial_dist)));
         if filter_fn(nearest_node) {
             candidates.push(Candidate::new(nearest_node, initial_dist));
         }
+        top_dists.push(Candidate::new(nearest_node, initial_dist));
         visited.mark_visited(nearest_node);
 
-        // Keep track of the ef-th best distance found so far (regardless of filter)
-        // to prune the search effectively while strictly filtering candidates.
-        let mut top_dists = BinaryHeap::new();
-        top_dists.push(Candidate::new(nearest_node, initial_dist));
-
         while let Some(Reverse(current)) = frontier.pop() {
+            // Standard HNSW termination: current best is worse than our ef-th best overall
             if top_dists.len() >= ef && current.distance > top_dists.peek().unwrap().distance {
                 break;
             }
@@ -262,17 +262,22 @@ impl HNSWIndex {
                         }
 
                         let dist = ctx.compute(neighbor_id);
+                        let candidate = Candidate::new(neighbor_id, dist);
+
+                        // If this node is better than the global threshold, we add it to frontier
+                        // even if it fails the filter (this is the key to ACORN-style jumping)
                         if top_dists.len() < ef || dist < *top_dists.peek().unwrap().distance {
-                            let candidate = Candidate::new(neighbor_id, dist);
                             frontier.push(Reverse(candidate));
 
                             top_dists.push(candidate);
                             if top_dists.len() > ef {
                                 top_dists.pop();
                             }
+                        }
 
-                            // Only add to result candidates if it passes the filter
-                            if filter_fn(neighbor_id) {
+                        // But ONLY add to results if it passes the filter
+                        if filter_fn(neighbor_id) {
+                            if candidates.len() < k || dist < *candidates.peek().unwrap().distance {
                                 candidates.push(candidate);
                                 if candidates.len() > k {
                                     candidates.pop();
