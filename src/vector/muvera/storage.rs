@@ -97,6 +97,7 @@ impl MultiVecStorage {
 
         let old_tokens_len = old_count as usize * self.dim;
         let new_tokens_len = new_count as usize * self.dim;
+        #[allow(clippy::cast_possible_wrap)]
         let diff = (new_tokens_len as isize) - (old_tokens_len as isize);
 
         let start_idx = old_start as usize * self.dim;
@@ -106,10 +107,8 @@ impl MultiVecStorage {
             // Shift subsequent vectors
             if diff > 0 {
                 let additional = diff as usize;
-                self.vectors.reserve(additional);
-                unsafe {
-                    self.vectors.set_len(self.vectors.len() + additional);
-                }
+                self.vectors
+                    .resize(self.vectors.len() + additional, Default::default());
                 let src = end_idx;
                 let dst = end_idx + additional;
                 let len = self.vectors.len() - dst;
@@ -128,10 +127,14 @@ impl MultiVecStorage {
             }
 
             // Update subsequent offsets
+            #[allow(clippy::cast_possible_wrap)]
             let offset_diff = (diff / self.dim as isize) as i32;
             for i in (slot_idx + 1)..self.offsets.len() {
                 let (start, _count) = &mut self.offsets[i];
-                *start = (*start as i32 + offset_diff) as u32;
+                #[allow(clippy::cast_possible_wrap)]
+                {
+                    *start = (*start as i32 + offset_diff) as u32;
+                }
             }
         }
 

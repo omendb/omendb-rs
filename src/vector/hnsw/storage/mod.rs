@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-const CHUNK_SIZE: usize = 128; // Support M up to 127
+const CHUNK_SIZE: usize = 256; // Support M0 up to 255
 
 /// High-performance flat vector matrix.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -36,8 +36,24 @@ impl VectorMatrix {
 
     #[inline(always)]
     pub fn get(&self, id: u32) -> &[f32] {
-        let start = id as usize * self.dim;
-        &self.data[start..start + self.dim]
+        let base = id as usize * self.dim;
+        &self.data[base..base + self.dim]
+    }
+
+    #[inline(always)]
+    pub fn prefetch(&self, id: u32) {
+        let base = id as usize * self.dim;
+        if base < self.data.len() {
+            let ptr = &self.data[base] as *const f32 as *const u8;
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                std::arch::x86_64::_mm_prefetch(ptr.cast::<i8>(), std::arch::x86_64::_MM_HINT_T0);
+            }
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                std::arch::asm!("prfm pldl1keep, [{ptr}]", ptr = in(reg) ptr, options(nostack, preserves_flags));
+            }
+        }
     }
 
     pub fn add(&mut self, vector: &[f32]) -> u32 {
@@ -120,6 +136,9 @@ impl NeighborMatrix {
 
     #[inline(always)]
     pub fn prefetch(&self, node_id: u32, level: u8) {
+        if !crate::vector::hnsw::prefetch::PrefetchConfig::enabled() {
+            return;
+        }
         let base = node_id as usize * self.stride + level as usize * CHUNK_SIZE;
         if base < self.data.len() {
             let ptr = &self.data[base] as *const AtomicU32 as *const u8;
@@ -156,6 +175,11 @@ impl HNSWStorage {
     #[inline(always)]
     pub fn vector(&self, id: u32) -> &[f32] {
         self.vectors.get(id)
+    }
+
+    #[inline(always)]
+    pub fn prefetch_vector(&self, id: u32) {
+        self.vectors.prefetch(id);
     }
 
     #[inline(always)]
@@ -211,10 +235,13 @@ impl HNSWStorage {
 
 impl NeighborMatrix {
     pub fn get_neighbors(&self, node_id: u32, level: u8) -> Vec<u32> {
-        self.with_neighbors(node_id, level, |n| n.to_vec())
+        self.with_neighbors(node_id, level, <[u32]>::to_vec)
     }
 
     pub fn contains_neighbor(&self, node_id: u32, level: u8, neighbor: u32) -> bool {
         self.with_neighbors(node_id, level, |n| n.contains(&neighbor))
     }
 }
+
+#[cfg(test)]
+mod tests_stride;

@@ -573,7 +573,7 @@ impl crate::omen::StorageBackend for OmenFile {
         let sparse_tuple = sparse.map(|s| (s.indices(), s.values()));
 
         let multi_refs: Option<Vec<&[f32]>> =
-            multi.map(|m| m.iter().map(|v| v.as_slice()).collect());
+            multi.map(|m| m.iter().map(std::vec::Vec::as_slice).collect());
         let multi_slice: Option<&[&[f32]]> = multi_refs.as_deref();
 
         self.wal.append(crate::omen::wal::WalEntry::upsert_record(

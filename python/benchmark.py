@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import subprocess
 import tempfile
@@ -92,6 +93,46 @@ def print_metadata(metadata: dict):
     print(f"Platform: {metadata['platform']}")
     print(f"CPU:      {metadata['cpu']}")
     print(f"Time:     {metadata['timestamp']}")
+
+
+def _find_blocking_omendb_processes() -> list[tuple[int, str]]:
+    """Return active omendb test/bench processes that can contaminate results."""
+    current_pid = os.getpid()
+    output = subprocess.check_output(
+        ["ps", "-axo", "pid=,command="], text=True, stderr=subprocess.DEVNULL
+    )
+    blockers: list[tuple[int, str]] = []
+
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        pid_str, command = line.split(maxsplit=1)
+        pid = int(pid_str)
+        if pid == current_pid:
+            continue
+
+        if "cargo test --lib" in command:
+            blockers.append((pid, command))
+            continue
+
+        if "target/debug/deps/omendb-" in command or "target/release/deps/omendb-" in command:
+            blockers.append((pid, command))
+
+    return blockers
+
+
+def ensure_quiescent_benchmark_environment():
+    """Refuse to benchmark while other omendb Rust test binaries are active."""
+    blockers = _find_blocking_omendb_processes()
+    if not blockers:
+        return
+
+    print("Refusing to run benchmark while omendb test processes are active:")
+    for pid, command in blockers:
+        print(f"  {pid}: {command}")
+    raise SystemExit(1)
 
 
 def generate_vectors(n: int, dim: int, seed: int = 42) -> np.ndarray:
@@ -721,6 +762,7 @@ def main():
     print("OmenDB Performance Benchmark")
     print("=" * 60)
 
+    ensure_quiescent_benchmark_environment()
     metadata = get_benchmark_metadata()
     print_metadata(metadata)
 

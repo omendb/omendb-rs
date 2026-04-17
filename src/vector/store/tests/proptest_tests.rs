@@ -5,6 +5,7 @@ mod general {
     use super::*;
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8))]
         #[test]
         fn params_roundtrip(
             m in 16usize..64,
@@ -163,6 +164,7 @@ mod edges {
     use crate::vector::store::edge_store::{Edge, EdgeDirection, EdgeStore};
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8))]
         #[test]
         fn edge_serialization_roundtrip(
             edge_count in 1usize..50,

@@ -78,8 +78,7 @@ impl HNSWIndex {
         reader.read_exact(&mut magic)?;
         if &magic != b"HNSWIDX\0" {
             return Err(HNSWError::Storage(format!(
-                "Invalid magic: expected HNSWIDX\\0, got {:?}",
-                magic
+                "Invalid magic: expected HNSWIDX\\0, got {magic:?}"
             )));
         }
 
@@ -89,8 +88,7 @@ impl HNSWIndex {
 
         if version != FORMAT_VERSION {
             return Err(HNSWError::Storage(format!(
-                "Unsupported version: expected {}, got {}",
-                FORMAT_VERSION, version
+                "Unsupported version: expected {FORMAT_VERSION}, got {version}"
             )));
         }
 

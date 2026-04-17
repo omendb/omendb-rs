@@ -287,7 +287,7 @@ class TestCrashRecoveryEdgeCases:
         # Try to insert 10K vectors then crash
         run_child_process(child_insert_and_crash, (temp_db_path, dims, 10000, "sigkill"), 60)
 
-        # Original data must survive (seerdb may also persist crash data via WAL)
+        # Original data must survive (may also persist crash data via WAL)
         db2 = open_with_lock_retry(temp_db_path, dims)
         assert len(db2) >= 100, f"Lost data during large batch crash: {len(db2)}"
 

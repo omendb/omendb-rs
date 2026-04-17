@@ -173,7 +173,7 @@ impl<'a> QueryPlanner<'a> {
                         && let Some(ref meta) = rec.metadata
                     {
                         let matches = filter.matches(meta);
-                        if matches {}
+
                         return matches;
                     }
                     false
@@ -276,7 +276,7 @@ impl<'a> QueryPlanner<'a> {
                         && let Some(ref meta) = rec.metadata
                     {
                         let matches = filter.matches(meta);
-                        if matches {}
+
                         return matches;
                     }
                     false

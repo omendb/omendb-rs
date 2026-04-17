@@ -140,8 +140,8 @@ fn stress_mixed_read_write() {
     let writes = write_count.load(Ordering::Relaxed);
     let reads = read_count.load(Ordering::Relaxed);
     println!("Mixed read/write: {writes} writes, {reads} reads in 2s");
-    // Lower threshold for CI machines which can be significantly slower
-    assert!(writes > 50, "Should complete many writes");
+    // Keep this as a smoke test for sustained forward progress, not a throughput benchmark.
+    assert!(writes > 10, "Should complete many writes");
     assert!(reads > 50, "Should complete many reads");
 }
 

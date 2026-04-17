@@ -6,7 +6,7 @@ use super::HNSWIndex;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::storage::HNSWStorage;
 use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
-use crate::vector::hnsw::visited::VisitedList;
+use crate::vector::hnsw::visited::{VisitedList, with_visited_list};
 use tracing::instrument;
 
 /// Context for distance computation during search.
@@ -65,9 +65,10 @@ impl HNSWIndex {
         dispatch_distance!(self.distance_fn, D => {
             D::validate_query(query)?;
             let ctx = DistanceContext::<D>::new(query, &self.storage);
-            let mut visited = VisitedList::new(self.len() + 1);
 
-            self.search_internal::<D>(query, k, ef, &ctx, &mut visited)
+            Ok(with_visited_list(self.len() + 1, |visited| {
+                self.search_internal::<D>(query, k, ef, &ctx, visited)
+            }))
         })
     }
 
@@ -94,11 +95,12 @@ impl HNSWIndex {
         dispatch_distance!(self.distance_fn, D => {
             D::validate_query(query)?;
             let ctx = DistanceContext::<D>::new(query, &self.storage);
-            let mut visited = VisitedList::new(self.len() + 1);
 
             // Boost ef for filtered search to improve recall
             let boosted_ef = ef.max(k * 4).max(100);
-            self.search_internal_filtered::<D>(query, k, boosted_ef, &ctx, &mut visited, filter_fn)
+            Ok(with_visited_list(self.len() + 1, |visited| {
+                self.search_internal_filtered::<D>(query, k, boosted_ef, &ctx, visited, filter_fn)
+            }))
         })
     }
 
@@ -109,7 +111,7 @@ impl HNSWIndex {
         ef: usize,
         ctx: &DistanceContext<D>,
         visited: &mut VisitedList,
-    ) -> Result<Vec<SearchResult>> {
+    ) -> Vec<SearchResult> {
         let entry_point = self.entry_point.unwrap();
         let mut nearest_node = entry_point;
         let mut nearest_dist = ctx.compute(entry_point);
@@ -163,8 +165,10 @@ impl HNSWIndex {
                         visited.mark_visited(neighbor_id);
 
                         // Speculative Prefetching (VSAG style)
-                        if i + 2 < neighbors.len() {
-                            self.storage.neighbors.prefetch(neighbors[i + 2], 0);
+                        let stride = crate::vector::hnsw::prefetch::PrefetchConfig::stride();
+                        if i + stride < neighbors.len() {
+                            self.storage.neighbors.prefetch(neighbors[i + stride], 0);
+                            self.storage.prefetch_vector(neighbors[i + stride]);
                         }
 
                         let dist = ctx.compute(neighbor_id);
@@ -189,7 +193,7 @@ impl HNSWIndex {
         }
         results.reverse();
         results.truncate(k);
-        Ok(results)
+        results
     }
 
     fn search_internal_filtered<D: Distance>(
@@ -200,7 +204,7 @@ impl HNSWIndex {
         ctx: &DistanceContext<D>,
         visited: &mut VisitedList,
         filter_fn: &(dyn Fn(u32) -> bool + Sync + Send),
-    ) -> Result<Vec<SearchResult>> {
+    ) -> Vec<SearchResult> {
         let entry_point = self.entry_point.unwrap();
         let mut nearest_node = entry_point;
         let mut nearest_dist = ctx.compute(entry_point);
@@ -257,8 +261,10 @@ impl HNSWIndex {
                         visited.mark_visited(neighbor_id);
 
                         // Speculative Prefetching (VSAG style)
-                        if i + 2 < neighbors.len() {
-                            self.storage.neighbors.prefetch(neighbors[i + 2], 0);
+                        let stride = crate::vector::hnsw::prefetch::PrefetchConfig::stride();
+                        if i + stride < neighbors.len() {
+                            self.storage.neighbors.prefetch(neighbors[i + stride], 0);
+                            self.storage.prefetch_vector(neighbors[i + stride]);
                         }
 
                         let dist = ctx.compute(neighbor_id);
@@ -276,12 +282,12 @@ impl HNSWIndex {
                         }
 
                         // But ONLY add to results if it passes the filter
-                        if filter_fn(neighbor_id) {
-                            if candidates.len() < k || dist < *candidates.peek().unwrap().distance {
-                                candidates.push(candidate);
-                                if candidates.len() > k {
-                                    candidates.pop();
-                                }
+                        if filter_fn(neighbor_id)
+                            && (candidates.len() < k || dist < *candidates.peek().unwrap().distance)
+                        {
+                            candidates.push(candidate);
+                            if candidates.len() > k {
+                                candidates.pop();
                             }
                         }
                     }
@@ -297,6 +303,6 @@ impl HNSWIndex {
         }
         results.reverse();
         results.truncate(k);
-        Ok(results)
+        results
     }
 }

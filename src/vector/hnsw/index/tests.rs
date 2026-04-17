@@ -1,5 +1,6 @@
 #![allow(clippy::float_cmp, clippy::field_reassign_with_default)]
 
+#[allow(unused_imports)]
 use super::*;
 
 #[test]
@@ -874,6 +875,7 @@ fn bench_vectorstore_qps() {
 ///
 /// Run with: cargo test --release `profile_persistence` -- --ignored --nocapture
 #[test]
+#[cfg(feature = "profile")]
 #[ignore = "profiling - run manually with --ignored"]
 fn profile_persistence() {
     profile_persistence_impl(100_000);
@@ -1085,6 +1087,7 @@ fn profile_persistence_comprehensive() {
     println!("\n✓ Results written to: {}", output_path.display());
 }
 
+#[cfg(feature = "profile")]
 fn profile_persistence_impl(_n: usize) {
     use crate::vector::{Vector, VectorStore};
     use rand::Rng;

@@ -8,8 +8,13 @@ use std::collections::HashMap;
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::*;
-use tantivy::tokenizer::*;
+use tantivy::schema::{
+    Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
+};
+use tantivy::tokenizer::{
+    LowerCaser, RawTokenizer, SimpleTokenizer, TextAnalyzer, Token, TokenFilter, TokenStream,
+    Tokenizer,
+};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, doc};
 
 /// Tokenizer presets for different content types.
@@ -74,7 +79,7 @@ impl std::fmt::Debug for TextIndex {
         f.debug_struct("TextIndex")
             .field("id_field", &self.id_field)
             .field("text_field", &self.text_field)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -285,7 +290,7 @@ struct CamelCaseTokenStream<'a, T: TokenStream> {
     _phantom: std::marker::PhantomData<&'a ()>,
 }
 
-impl<'a, T: TokenStream> TokenStream for CamelCaseTokenStream<'a, T> {
+impl<T: TokenStream> TokenStream for CamelCaseTokenStream<'_, T> {
     fn advance(&mut self) -> bool {
         if let Some(token) = self.stack.pop() {
             *self.tail.token_mut() = token;
@@ -346,13 +351,7 @@ fn split_camel_case_segments(text: &str) -> Vec<(usize, usize)> {
             || (prev == '_');
 
         if boundary {
-            let end = if curr == '_' {
-                indices[i]
-            } else if prev == '_' {
-                indices[i]
-            } else {
-                indices[i]
-            };
+            let end = indices[i];
             if start < end {
                 segments.push((start, end));
             }
@@ -366,12 +365,6 @@ fn split_camel_case_segments(text: &str) -> Vec<(usize, usize)> {
 
     if start < text.len() {
         segments.push((start, text.len()));
-    }
-
-    // Also include original if it was split
-    if segments.len() > 1 {
-        // We'll let the tokenizer decide whether to keep the original.
-        // For now just return segments.
     }
 
     segments.retain(|(f, t)| f < t);

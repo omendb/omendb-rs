@@ -1,5 +1,6 @@
 mod error;
 mod index;
+pub mod prefetch;
 pub mod storage;
 pub mod types;
 pub mod visited;
@@ -136,10 +137,10 @@ impl MutableVectorEngine for SegmentManager {
         MutableVectorEngine::checkpoint(&mut self.index, path)
     }
     fn set_storage(&mut self, storage: Arc<RwLock<dyn StorageBackend>>) {
-        MutableVectorEngine::set_storage(&mut self.index, storage)
+        MutableVectorEngine::set_storage(&mut self.index, storage);
     }
     fn set_pending_merge_dir(&mut self, dir: std::path::PathBuf) {
-        MutableVectorEngine::set_pending_merge_dir(&mut self.index, dir)
+        MutableVectorEngine::set_pending_merge_dir(&mut self.index, dir);
     }
     fn memory_usage(&self) -> usize {
         MutableVectorEngine::memory_usage(&self.index)
@@ -276,17 +277,24 @@ impl SegmentConfig {
             capacity: usize::MAX,
         }
     }
+    #[must_use]
     pub fn with_params(mut self, params: HNSWParams) -> Self {
         self.params = params;
         self
     }
+
+    #[must_use]
     pub fn with_distance(mut self, metric: Metric) -> Self {
         self.metric = metric;
         self
     }
+
+    #[must_use]
     pub fn with_quantization(self, _enabled: bool) -> Self {
         self
     }
+
+    #[must_use]
     pub fn with_capacity(mut self, cap: usize) -> Self {
         self.capacity = cap;
         self

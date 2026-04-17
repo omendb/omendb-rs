@@ -338,27 +338,27 @@ impl VectorStore {
             // ONE MORE THING: Multi-vector stores also need their FDE vectors indexed.
             // If this is a multi-vector store AND we just replayed WAL, some FDE vectors
             // might be missing from the index if they were only in the WAL.
-            if let Some(ref mut engine) = engine {
-                if let Some(ref mv_cfg) = ctx.snapshot.multivec_config {
-                    let config = crate::vector::muvera::MultiVectorConfig {
-                        repetitions: mv_cfg.repetitions,
-                        partition_bits: mv_cfg.partition_bits,
-                        seed: mv_cfg.seed,
-                        d_proj: mv_cfg.d_proj,
-                        pool_factor: mv_cfg.pool_factor,
-                        max_tokens: mv_cfg.max_tokens,
-                    };
-                    let muvera_encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
-                    for &slot in modified_slots {
-                        if records.is_live(slot) {
-                            if let Some(tokens) = records.get_multi(slot) {
-                                let token_refs: Vec<&[f32]> =
-                                    tokens.iter().map(|v| v.as_slice()).collect();
-                                let fde = muvera_encoder
-                                    .encode(&token_refs, crate::vector::muvera::AggMode::Sum);
-                                engine.insert_with_slot(&fde, slot)?;
-                            }
-                        }
+            if let Some(ref mut engine) = engine
+                && let Some(ref mv_cfg) = ctx.snapshot.multivec_config
+            {
+                let config = crate::vector::muvera::MultiVectorConfig {
+                    repetitions: mv_cfg.repetitions,
+                    partition_bits: mv_cfg.partition_bits,
+                    seed: mv_cfg.seed,
+                    d_proj: mv_cfg.d_proj,
+                    pool_factor: mv_cfg.pool_factor,
+                    max_tokens: mv_cfg.max_tokens,
+                };
+                let muvera_encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
+                for &slot in modified_slots {
+                    if records.is_live(slot)
+                        && let Some(tokens) = records.get_multi(slot)
+                    {
+                        let token_refs: Vec<&[f32]> =
+                            tokens.iter().map(std::vec::Vec::as_slice).collect();
+                        let fde =
+                            muvera_encoder.encode(&token_refs, crate::vector::muvera::AggMode::Sum);
+                        engine.insert_with_slot(&fde, slot)?;
                     }
                 }
             }
@@ -1282,7 +1282,8 @@ impl VectorStore {
                         // Ensure storage has enough slots to accommodate the record slot
                         storage.reserve_slots(slot as usize + 1);
 
-                        let token_refs: Vec<&[f32]> = tokens.iter().map(|v| v.as_slice()).collect();
+                        let token_refs: Vec<&[f32]> =
+                            tokens.iter().map(std::vec::Vec::as_slice).collect();
                         storage.update(slot, &token_refs).map_err(|e| {
                             anyhow::anyhow!("Failed to update recovered tokens: {e}")
                         })?;
@@ -1325,9 +1326,7 @@ impl VectorStore {
                 }
             });
 
-        if sparse_index.is_some() {
-        } else {
-        }
+        // Nothing to do for sparse_index
 
         // Reconstruct edge store: start from persisted snapshot, then apply WAL delta
         let edge_store = {

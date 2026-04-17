@@ -271,18 +271,12 @@ impl RecordStore {
                     let final_dims = self.dimensions.load(Ordering::SeqCst);
                     if vec_len != final_dims {
                         anyhow::bail!(
-                            "Vector dimension mismatch: expected {}, got {}",
-                            final_dims,
-                            vec_len
+                            "Vector dimension mismatch: expected {final_dims}, got {vec_len}"
                         );
                     }
                 }
             } else if vec_len != current_dims {
-                anyhow::bail!(
-                    "Vector dimension mismatch: expected {}, got {}",
-                    current_dims,
-                    vec_len
-                );
+                anyhow::bail!("Vector dimension mismatch: expected {current_dims}, got {vec_len}");
             }
         }
 

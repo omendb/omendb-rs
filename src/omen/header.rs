@@ -20,21 +20,12 @@ pub enum QuantizationCode {
     F32 = 0,
     /// SQ8 scalar quantization (4x compression)
     Sq8 = 1,
-    /// RaBitQ 1-bit with FFHT (32x compression)
-    RaBitQ = 2,
-    /// Extended-RaBitQ 4-bit with FFHT (8x compression)
-    RaBitQ4 = 3,
-    /// Product Quantization (legacy, no longer supported at runtime)
-    Pq = 4,
 }
 
 impl From<u8> for QuantizationCode {
     fn from(v: u8) -> Self {
         match v {
             1 => Self::Sq8,
-            2 => Self::RaBitQ,
-            3 => Self::RaBitQ4,
-            4 => Self::Pq,
             _ => Self::F32,
         }
     }
@@ -49,7 +40,7 @@ impl QuantizationCode {
 
     /// Convert to runtime bool (true = SQ8 enabled).
     ///
-    /// Returns `false` for `F32` (no quantization) or unsupported legacy codes (RaBitQ, PQ).
+    /// Returns `false` for `F32` (no quantization).
     #[must_use]
     pub fn to_runtime(self) -> bool {
         matches!(self, Self::Sq8)

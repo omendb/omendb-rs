@@ -77,6 +77,12 @@ pub struct HNSWIndexBuilder {
     metric: Metric,
 }
 
+impl Default for HNSWIndexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HNSWIndexBuilder {
     pub fn new() -> Self {
         Self {
@@ -85,18 +91,25 @@ impl HNSWIndexBuilder {
             metric: Metric::L2,
         }
     }
+    #[must_use]
     pub fn dimensions(mut self, d: usize) -> Self {
         self.dimensions = Some(d);
         self
     }
+
+    #[must_use]
     pub fn m(mut self, m: usize) -> Self {
         self.params.m = m;
         self
     }
+
+    #[must_use]
     pub fn ef_construction(mut self, ef: usize) -> Self {
         self.params.ef_construction = ef;
         self
     }
+
+    #[must_use]
     pub fn metric(mut self, m: Metric) -> Self {
         self.metric = m;
         self
@@ -124,6 +137,7 @@ impl HNSWIndex {
         HNSWIndexBuilder::new()
     }
 
+    #[must_use]
     pub fn clone_for_view(&self) -> Self {
         let mut storage: HNSWStorage =
             postcard::from_bytes(&postcard::to_allocvec(&self.storage).unwrap()).unwrap();
@@ -131,7 +145,7 @@ impl HNSWIndex {
         Self {
             storage,
             entry_point: self.entry_point,
-            params: self.params.clone(),
+            params: self.params,
             distance_fn: self.distance_fn,
             rng_state: self.rng_state,
         }
@@ -172,7 +186,7 @@ impl HNSWIndex {
     }
 
     pub fn neighbor_count(&self, node_id: u32, level: u8) -> usize {
-        self.storage.with_neighbors(node_id, level, |n| n.len())
+        self.storage.with_neighbors(node_id, level, <[u32]>::len)
     }
 
     pub fn batch_insert(&mut self, vectors: Vec<Vec<f32>>) -> Result<()> {
@@ -234,7 +248,7 @@ impl VectorEngineView for HNSWIndex {
         Ok(results
             .into_iter()
             .map(|r| EngineSearchResult {
-                slot: r.slot as u32,
+                slot: r.slot,
                 distance: r.distance,
             })
             .collect())

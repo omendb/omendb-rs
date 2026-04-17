@@ -220,7 +220,7 @@ class TestCollections:
             assert result["metadata"]["age"] >= 40
 
     def test_collection_support_all_dbs(self):
-        """Test that all databases support collections (seerdb is always persistent)."""
+        """Test that all databases support collections."""
         with tempfile.TemporaryDirectory() as tmp:
             path = f"{tmp}/mydb"
             db = create_dense_db(path, 128)

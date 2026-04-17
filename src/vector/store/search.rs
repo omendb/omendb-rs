@@ -115,7 +115,7 @@ pub(crate) fn knn_search_core(
 ) -> Result<Vec<(usize, f32)>> {
     let has_data = !records.is_empty()
         || engine.as_ref().is_some_and(
-            |e: &std::sync::Arc<crate::vector::hnsw::PublishedSegmentView>| e.index.len() > 0,
+            |e: &std::sync::Arc<crate::vector::hnsw::PublishedSegmentView>| !e.index.is_empty(),
         );
 
     if !has_data {

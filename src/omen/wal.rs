@@ -163,7 +163,9 @@ impl WalEntry {
         // Multi (Option)
         if let Some(tokens) = multi {
             data.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
-            if !tokens.is_empty() {
+            if tokens.is_empty() {
+                data.extend_from_slice(&0u32.to_le_bytes());
+            } else {
                 let token_dim = tokens[0].len();
                 data.extend_from_slice(&(token_dim as u32).to_le_bytes());
                 for t in tokens {
@@ -172,8 +174,6 @@ impl WalEntry {
                     };
                     data.extend_from_slice(bytes);
                 }
-            } else {
-                data.extend_from_slice(&0u32.to_le_bytes());
             }
         } else {
             data.extend_from_slice(&0u32.to_le_bytes());
@@ -744,10 +744,7 @@ pub fn parse_wal_upsert_record(data: &[u8]) -> io::Result<WalUpsertData> {
         if vec_len > MAX_VECTOR_DIM {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "Vector dimension {} exceeds maximum {}",
-                    vec_len, MAX_VECTOR_DIM
-                ),
+                format!("Vector dimension {vec_len} exceeds maximum {MAX_VECTOR_DIM}"),
             ));
         }
         let byte_len = vec_len.checked_mul(4).ok_or_else(|| {

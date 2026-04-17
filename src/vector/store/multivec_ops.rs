@@ -226,7 +226,9 @@ impl VectorStore {
                 let vec_data = self.records.get_vector(*slot as u32);
                 storage.log_upsert_record(
                     &wal_batch[i].0,
-                    vec_data.as_ref().map(|v| v.as_slice()),
+                    vec_data
+                        .as_ref()
+                        .map(super::record_store::VectorData::as_slice),
                     self.records.get_sparse(*slot as u32).as_ref(),
                     Some(&pooled_and_fdes[i].0),
                     &wal_batch[i].1,
@@ -619,7 +621,9 @@ impl VectorStore {
             let vec_data = self.records.get_vector(slot as u32);
             storage.log_upsert_record(
                 id,
-                vec_data.as_ref().map(|v| v.as_slice()),
+                vec_data
+                    .as_ref()
+                    .map(super::record_store::VectorData::as_slice),
                 self.records.get_sparse(slot as u32).as_ref(),
                 Some(&pooled_tokens),
                 &metadata,
@@ -1007,7 +1011,7 @@ impl VectorStore {
     /// Internal: get multi-vector tokens.
     fn get_tokens_internal(&self, id: &str) -> Option<(Vec<Vec<f32>>, JsonValue)> {
         let slot = self.records.get_slot(id)?;
-        let tokens = self.records.get_multi(slot as u32)?;
+        let tokens = self.records.get_multi(slot)?;
         let metadata = self
             .records
             .get(id)?

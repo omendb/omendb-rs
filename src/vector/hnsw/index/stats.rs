@@ -39,7 +39,7 @@ impl HNSWIndex {
             avg_neighbors_l0,
             max_neighbors_l0,
             memory_bytes: VectorEngineView::total_memory(self),
-            params: self.params.clone(),
+            params: self.params,
             distance_function: self.distance_fn,
             quantization_enabled: self.is_sq8(),
         }

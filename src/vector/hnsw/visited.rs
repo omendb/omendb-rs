@@ -3,6 +3,8 @@
 //! Provides O(1) constant-time lookup and generation-based reset.
 //! This is a key component for SOTA HNSW performance.
 
+use std::cell::RefCell;
+
 /// A visited list that uses a generation counter to avoid clearing the entire bitset.
 #[derive(Debug)]
 pub struct VisitedList {
@@ -59,4 +61,23 @@ impl VisitedList {
             self.visited.resize(capacity, 0);
         }
     }
+}
+
+thread_local! {
+    /// Thread-local visited list pool.
+    /// Avoids allocating a new Vec<u32> for every search query or insertion layer.
+    static VISITED_POOL: RefCell<VisitedList> = RefCell::new(VisitedList::new(0));
+}
+
+/// Executes a closure with a thread-local, generation-incremented visited list.
+pub fn with_visited_list<F, R>(capacity: usize, f: F) -> R
+where
+    F: FnOnce(&mut VisitedList) -> R,
+{
+    VISITED_POOL.with(|pool| {
+        let mut visited = pool.borrow_mut();
+        visited.ensure_capacity(capacity);
+        visited.next_generation();
+        f(&mut visited)
+    })
 }

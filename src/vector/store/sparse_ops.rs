@@ -58,12 +58,14 @@ impl VectorStore {
 
             if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
-                let vec_data = self.records.get_vector(slot as u32);
+                let vec_data = self.records.get_vector(slot);
                 storage.log_upsert_record(
                     id,
-                    vec_data.as_ref().map(|v| v.as_slice()),
+                    vec_data
+                        .as_ref()
+                        .map(super::record_store::VectorData::as_slice),
                     Some(&sparse),
-                    self.records.get_multi(slot as u32).as_deref(),
+                    self.records.get_multi(slot).as_deref(),
                     &metadata,
                 )?;
                 storage.sync()?;
@@ -82,12 +84,14 @@ impl VectorStore {
             self.metadata_index.write().index_json(slot, &metadata);
             if let Some(ref storage) = self.storage {
                 let mut storage = storage.write();
-                let vec_data = self.records.get_vector(slot as u32);
+                let vec_data = self.records.get_vector(slot);
                 storage.log_upsert_record(
                     id,
-                    vec_data.as_ref().map(|v| v.as_slice()),
+                    vec_data
+                        .as_ref()
+                        .map(super::record_store::VectorData::as_slice),
                     Some(&sparse),
-                    self.records.get_multi(slot as u32).as_deref(),
+                    self.records.get_multi(slot).as_deref(),
                     &metadata,
                 )?;
                 storage.sync()?;
@@ -138,12 +142,14 @@ impl VectorStore {
 
         if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
-            let vec_data = self.records.get_vector(slot as u32);
+            let vec_data = self.records.get_vector(slot);
             storage.log_upsert_record(
                 id,
-                vec_data.as_ref().map(|v| v.as_slice()),
+                vec_data
+                    .as_ref()
+                    .map(super::record_store::VectorData::as_slice),
                 Some(&sparse),
-                self.records.get_multi(slot as u32).as_deref(),
+                self.records.get_multi(slot).as_deref(),
                 &metadata,
             )?;
             storage.sync()?;

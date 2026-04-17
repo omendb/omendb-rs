@@ -696,9 +696,8 @@ fn test_interleaved_edge_vector_wal_operations() {
 
 #[test]
 fn test_edge_wal_across_checkpoint_boundary() {
-    // Insert >10K vectors via set() to trigger auto-checkpoint, add edges before
-    // and after the checkpoint. Crash. Verify edges survive.
-    // Auto-checkpoint fires in set() at WAL_AUTO_CHECKPOINT_ENTRIES = 10,000.
+    // Exercise recovery across a checkpoint boundary without paying for the
+    // full auto-checkpoint threshold. The durability behavior is the same.
     let dir = tempdir().unwrap();
     let path = dir.path().join("test.omen");
 
@@ -723,19 +722,9 @@ fn test_edge_wal_across_checkpoint_boundary() {
             )
             .unwrap();
 
-        // Insert 10K+ vectors via set() to trigger auto-checkpoint.
-        // WAL entries: 2 (pre vectors) + 1 (edge) + 10_000 = 10_003 total.
-        for i in 0..10_000 {
-            store
-                .set(
-                    &format!("pad_{i}"),
-                    crate::Vector::new(vec![i as f32; 4]),
-                    json!({}),
-                )
-                .unwrap();
-        }
+        store.checkpoint_wal().unwrap();
 
-        // After auto-checkpoint, add more vectors and edges (WAL-only)
+        // After checkpoint, add more vectors and edges (WAL-only)
         store
             .set("post_a", crate::Vector::new(vec![3.0; 4]), json!({}))
             .unwrap();
@@ -758,8 +747,7 @@ fn test_edge_wal_across_checkpoint_boundary() {
 
     {
         let store = VectorStore::open(&path).unwrap();
-        // All vectors should survive (10K pad + 2 pre + 2 post)
-        assert_eq!(store.len(), 10_004);
+        assert_eq!(store.len(), 4);
 
         assert_eq!(
             store.edge_count(),

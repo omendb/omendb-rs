@@ -121,13 +121,8 @@ def benchmark_omendb(train, test, neighbors, ef_values):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Build index
-        db = omendb.open(
-            f"{tmpdir}/sift_db",
-            dimensions=dim,
-            m=M,
-            ef_construction=EF_CONSTRUCTION,
-            ef_search=EF_CONSTRUCTION,  # use high ef during build
-        )
+        db = omendb.create(f"{tmpdir}/sift_db", {"dense": {"dim": dim}})
+        db.ef_search = EF_CONSTRUCTION
 
         batch = [{"id": f"{i}", "vector": train[i].tolist()} for i in range(n)]
 

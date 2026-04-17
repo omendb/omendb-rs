@@ -74,7 +74,7 @@ impl HNSWIndex {
             for lc in (0..=level).rev() {
                 let candidates = self.search_layer_for_insertion::<D>(vector, &ep, self.params.ef_construction, lc)?;
                 let m = if lc == 0 { self.params.m * 2 } else { self.params.m };
-                let neighbors = self.select_neighbors_heuristic::<D>(vector, &candidates, m)?;
+                let neighbors = Self::select_neighbors_heuristic(vector, &candidates, m);
 
                 self.storage.neighbors.set_neighbors(node_id, lc, &neighbors);
 
@@ -89,7 +89,7 @@ impl HNSWIndex {
                         for &nn_id in &neighbor_neighbors {
                             cand_vec.push(Candidate::new(nn_id, D::distance(neighbor_vec, self.storage.vector(nn_id))));
                         }
-                        neighbor_neighbors = self.select_neighbors_heuristic::<D>(neighbor_vec, &cand_vec, m)?;
+                        neighbor_neighbors = Self::select_neighbors_heuristic(neighbor_vec, &cand_vec, m);
                     }
                     self.storage.neighbors.set_neighbors(neighbor_id, lc, &neighbor_neighbors);
                 }
@@ -110,59 +110,56 @@ impl HNSWIndex {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
-        let mut visited = crate::vector::hnsw::visited::VisitedList::new(self.len() + 1);
-        let mut frontier = BinaryHeap::new();
-        let mut candidates = BinaryHeap::new();
+        crate::vector::hnsw::visited::with_visited_list(self.len() + 1, |visited| {
+            let mut frontier = BinaryHeap::new();
+            let mut candidates = BinaryHeap::new();
 
-        for &ep in entry_points {
-            let dist = D::distance(query, self.storage.vector(ep));
-            let c = Candidate::new(ep, dist);
-            frontier.push(Reverse(c));
-            candidates.push(c);
-            visited.mark_visited(ep);
-        }
-
-        while let Some(Reverse(current)) = frontier.pop() {
-            if candidates.len() >= ef && current.distance > candidates.peek().unwrap().distance {
-                break;
+            for &ep in entry_points {
+                let dist = D::distance(query, self.storage.vector(ep));
+                let c = Candidate::new(ep, dist);
+                frontier.push(Reverse(c));
+                candidates.push(c);
+                visited.mark_visited(ep);
             }
 
-            self.storage
-                .with_neighbors(current.node_id, level, |neighbors| {
-                    for &neighbor_id in neighbors {
-                        if visited.is_visited(neighbor_id) {
-                            continue;
-                        }
-                        visited.mark_visited(neighbor_id);
+            while let Some(Reverse(current)) = frontier.pop() {
+                if candidates.len() >= ef && current.distance > candidates.peek().unwrap().distance
+                {
+                    break;
+                }
 
-                        let dist = D::distance(query, self.storage.vector(neighbor_id));
-                        if candidates.len() < ef
-                            || ordered_float::OrderedFloat(dist)
-                                < candidates.peek().unwrap().distance
-                        {
-                            let candidate = Candidate::new(neighbor_id, dist);
-                            frontier.push(Reverse(candidate));
-                            candidates.push(candidate);
-                            if candidates.len() > ef {
-                                candidates.pop();
+                self.storage
+                    .with_neighbors(current.node_id, level, |neighbors| {
+                        for &neighbor_id in neighbors {
+                            if visited.is_visited(neighbor_id) {
+                                continue;
+                            }
+                            visited.mark_visited(neighbor_id);
+
+                            let dist = D::distance(query, self.storage.vector(neighbor_id));
+                            if candidates.len() < ef
+                                || ordered_float::OrderedFloat(dist)
+                                    < candidates.peek().unwrap().distance
+                            {
+                                let candidate = Candidate::new(neighbor_id, dist);
+                                frontier.push(Reverse(candidate));
+                                candidates.push(candidate);
+                                if candidates.len() > ef {
+                                    candidates.pop();
+                                }
                             }
                         }
-                    }
-                });
-        }
+                    });
+            }
 
-        Ok(candidates.into_iter().collect())
+            Ok(candidates.into_iter().collect())
+        })
     }
 
-    fn select_neighbors_heuristic<D: Distance>(
-        &self,
-        _query: &[f32],
-        candidates: &[Candidate],
-        m: usize,
-    ) -> Result<Vec<u32>> {
+    fn select_neighbors_heuristic(_query: &[f32], candidates: &[Candidate], m: usize) -> Vec<u32> {
         let mut top_m = candidates.to_vec();
         top_m.sort_by_key(|c| c.distance);
-        Ok(top_m.iter().take(m).map(|c| c.node_id).collect())
+        top_m.iter().take(m).map(|c| c.node_id).collect()
     }
 
     pub fn random_level(&mut self) -> u8 {
