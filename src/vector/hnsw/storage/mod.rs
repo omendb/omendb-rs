@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-const CHUNK_SIZE: usize = 256; // Support M0 up to 255
+const MAX_LEVEL_CAPACITY: usize = 256; // Count slot + up to 255 neighbors
 
 /// High-performance flat vector matrix.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -67,7 +67,7 @@ impl VectorMatrix {
 /// High-performance flat neighbor matrix.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NeighborMatrix {
-    /// Contiguous data: [node_id * stride + level * CHUNK_SIZE]
+    /// Contiguous data with a wider level-0 row and compact upper levels.
     pub data: Vec<AtomicU32>,
     pub stride: usize,
     pub m: usize,
@@ -79,14 +79,29 @@ pub struct NeighborMatrix {
 
 impl NeighborMatrix {
     pub fn new(max_levels: usize, m: usize) -> Self {
-        let stride = (max_levels + 1) * CHUNK_SIZE;
+        let m0 = m * 2;
+        let stride = (m0 + 1) + max_levels * (m + 1);
         Self {
             data: Vec::new(),
             stride,
             m,
-            m0: m * 2,
+            m0,
             max_levels,
             locks: Vec::new(),
+        }
+    }
+
+    #[inline(always)]
+    fn level_capacity(&self, level: u8) -> usize {
+        if level == 0 { self.m0 + 1 } else { self.m + 1 }
+    }
+
+    #[inline(always)]
+    fn level_offset(&self, level: u8) -> usize {
+        if level == 0 {
+            0
+        } else {
+            (self.m0 + 1) + (level as usize - 1) * (self.m + 1)
         }
     }
 
@@ -112,11 +127,13 @@ impl NeighborMatrix {
             return f(&[]);
         }
 
-        let base = node_idx * self.stride + level_idx * CHUNK_SIZE;
+        let slot_capacity = self.level_capacity(level);
+        debug_assert!(slot_capacity <= MAX_LEVEL_CAPACITY);
+        let base = node_idx * self.stride + self.level_offset(level);
         let count = self.data[base].load(Ordering::Acquire) as usize;
-        let n = count.min(CHUNK_SIZE - 1);
+        let n = count.min(slot_capacity - 1);
 
-        let mut buf = [0u32; CHUNK_SIZE];
+        let mut buf = [0u32; MAX_LEVEL_CAPACITY];
         for i in 0..n {
             buf[i] = self.data[base + 1 + i].load(Ordering::Relaxed);
         }
@@ -125,8 +142,9 @@ impl NeighborMatrix {
 
     pub fn set_neighbors(&self, node_id: u32, level: u8, neighbors: &[u32]) {
         let _lock = self.locks[node_id as usize].lock();
-        let base = node_id as usize * self.stride + level as usize * CHUNK_SIZE;
-        let n = neighbors.len().min(CHUNK_SIZE - 1);
+        let slot_capacity = self.level_capacity(level);
+        let base = node_id as usize * self.stride + self.level_offset(level);
+        let n = neighbors.len().min(slot_capacity - 1);
 
         for i in 0..n {
             self.data[base + 1 + i].store(neighbors[i], Ordering::Relaxed);
@@ -139,7 +157,7 @@ impl NeighborMatrix {
         if !crate::vector::hnsw::prefetch::PrefetchConfig::enabled() {
             return;
         }
-        let base = node_id as usize * self.stride + level as usize * CHUNK_SIZE;
+        let base = node_id as usize * self.stride + self.level_offset(level);
         if base < self.data.len() {
             let ptr = &self.data[base] as *const AtomicU32 as *const u8;
             #[cfg(target_arch = "x86_64")]
@@ -179,7 +197,9 @@ impl HNSWStorage {
 
     #[inline(always)]
     pub fn prefetch_vector(&self, id: u32) {
-        self.vectors.prefetch(id);
+        if crate::vector::hnsw::prefetch::PrefetchConfig::enabled() {
+            self.vectors.prefetch(id);
+        }
     }
 
     #[inline(always)]
