@@ -515,6 +515,22 @@ impl RecordStore {
         Ok(())
     }
 
+    /// Restore sparse payload during recovery without marking the slot dirty.
+    pub(crate) fn restore_sparse_payload(
+        &self,
+        slot: u32,
+        sparse: Option<SparseVector>,
+    ) -> anyhow::Result<()> {
+        let mut slots = self.slots.write();
+        let record = slots
+            .get_mut(slot as usize)
+            .and_then(|r| r.as_mut())
+            .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
+
+        record.sparse = sparse;
+        Ok(())
+    }
+
     /// Get a cloned sparse payload for a slot.
     pub fn get_sparse(&self, slot: u32) -> Option<SparseVector> {
         self.slots
@@ -533,6 +549,22 @@ impl RecordStore {
             .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
 
         self.dirty_slots.write().insert(slot);
+        record.multi = tokens;
+        Ok(())
+    }
+
+    /// Restore multi-vector payload during recovery without marking the slot dirty.
+    pub(crate) fn restore_multi_payload(
+        &self,
+        slot: u32,
+        tokens: Option<Vec<Vec<f32>>>,
+    ) -> anyhow::Result<()> {
+        let mut slots = self.slots.write();
+        let record = slots
+            .get_mut(slot as usize)
+            .and_then(|r| r.as_mut())
+            .ok_or_else(|| anyhow::anyhow!("Slot {slot} not found"))?;
+
         record.multi = tokens;
         Ok(())
     }

@@ -47,7 +47,23 @@ pub(super) fn segments_dir_for(path: &Path) -> PathBuf {
     PathBuf::from(seg_path)
 }
 
-type ReplayedWalData = (Vec<u32>, Option<EdgeStore>, Vec<(String, String, String)>);
+#[derive(Debug, Default)]
+struct WalReplayOutput {
+    modified_record_slots: Vec<u32>,
+    edge_delta: EdgeReplayDelta,
+}
+
+#[derive(Debug, Default)]
+struct EdgeReplayDelta {
+    upserts: Option<EdgeStore>,
+    deletes: Vec<(String, String, String)>,
+}
+
+struct RecoveryState {
+    records: RecordStore,
+    replay: WalReplayOutput,
+    segment_delta_slots: Vec<u32>,
+}
 
 fn tokenizer_preset_from_id(id: u64) -> Result<crate::text::TokenizerPreset> {
     match id {
@@ -308,94 +324,35 @@ impl VectorStore {
         // before we move storage_local into the Arc<RwLock>.
         let (records, engine, ancillary, quantization, hnsw_params, ef_search, _dimensions) = {
             let ctx = Self::load_recovery_context(&mut storage_local)?;
-
-            // Build initial RecordStore from snapshot
-            let mut records = Self::build_initial_records(
-                &ctx.snapshot,
-                ctx.dimensions,
-                ctx.vec_mmap.clone(),
-                ctx.main_mmap.clone(),
-            );
-
-            // Replay WAL entries into RecordStore and collect auxiliary deltas
-            let (wal_modified_slots, wal_edge_store, wal_edge_deletes) =
-                Self::replay_wal_into_records(&mut records, &mut storage_local, &ctx)?;
+            let recovery = Self::recover_records(&mut storage_local, &ctx)?;
 
             // Initialize or rebuild segments (HNSW indexes)
-            let modified_slots = if ctx.slim_snapshot_loaded && !ctx.slim_dirty_slots.is_empty() {
-                &ctx.slim_dirty_slots
-            } else {
-                &wal_modified_slots
-            };
-            let mut engine =
-                Self::initialize_segments(path, &storage_local, &records, modified_slots, &ctx)?;
+            let mut engine = Self::initialize_segments(
+                path,
+                &storage_local,
+                &recovery.records,
+                &recovery.segment_delta_slots,
+                &ctx,
+            )?;
 
-            // CRITICAL: If engine was rebuilt from scratch (Slow path in initialize_segments),
-            // it already contains all dense_slots.
-            // BUT if it was LOADED, we must ensure WAL-modified slots are inserted.
-            // initialize_segments handles the "LOADED + insert delta" case now.
-
-            // ONE MORE THING: Multi-vector stores also need their FDE vectors indexed.
-            // If this is a multi-vector store AND we just replayed WAL, some FDE vectors
-            // might be missing from the index if they were only in the WAL.
-            if let Some(ref mut engine) = engine
-                && let Some(ref mv_cfg) = ctx.snapshot.multivec_config
-            {
-                let config = crate::vector::muvera::MultiVectorConfig {
-                    repetitions: mv_cfg.repetitions,
-                    partition_bits: mv_cfg.partition_bits,
-                    seed: mv_cfg.seed,
-                    d_proj: mv_cfg.d_proj,
-                    pool_factor: mv_cfg.pool_factor,
-                    max_tokens: mv_cfg.max_tokens,
-                };
-                let muvera_encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
-                for &slot in modified_slots {
-                    if records.is_live(slot)
-                        && let Some(tokens) = records.get_multi(slot)
-                    {
-                        let token_refs: Vec<&[f32]> =
-                            tokens.iter().map(std::vec::Vec::as_slice).collect();
-                        let fde =
-                            muvera_encoder.encode(&token_refs, crate::vector::muvera::AggMode::Sum);
-                        engine.insert_with_slot(&fde, slot)?;
-                    }
-                }
-            }
+            Self::apply_multivector_segment_delta(
+                engine.as_mut(),
+                &recovery.records,
+                &recovery.segment_delta_slots,
+                &ctx.snapshot,
+            )?;
 
             // Initialize auxiliary indexes (text, metadata, sparse, edge, muvera)
             let ancillary = Self::initialize_ancillary_indexes(
                 path,
-                &records,
+                &recovery.records,
                 &ctx.snapshot,
-                wal_edge_store,
-                &wal_edge_deletes,
+                recovery.replay.edge_delta,
                 ctx.distance_metric,
                 text_search_config.as_ref(),
             )?;
-            if let Some(ref multivec_storage) = ancillary.multivec_storage {
-                for slot in 0..multivec_storage.len() as u32 {
-                    if let Some(tokens) = multivec_storage.get_tokens(slot) {
-                        let tokens: Vec<Vec<f32>> =
-                            tokens.into_iter().map(<[f32]>::to_vec).collect();
-                        records.update_multi(slot, Some(tokens))?;
-                    }
-                }
-            }
-            let ancillary = if let Some(ref encoder) = ancillary.muvera_encoder {
-                let rebuilt = MultiVecStorage::from_slot_tokens(
-                    encoder.token_dimension(),
-                    &records.iter_multi(),
-                );
-                AncillaryIndexes {
-                    multivec_storage: Some(rebuilt),
-                    ..ancillary
-                }
-            } else {
-                ancillary
-            };
             (
-                records,
+                recovery.records,
                 engine,
                 ancillary,
                 ctx.quantization,
@@ -954,12 +911,73 @@ impl VectorStore {
         records
     }
 
+    fn recover_records(storage: &mut OmenFile, ctx: &RecoveryContext<'_>) -> Result<RecoveryState> {
+        let mut records = Self::build_initial_records(
+            &ctx.snapshot,
+            ctx.dimensions,
+            ctx.vec_mmap.clone(),
+            ctx.main_mmap.clone(),
+        );
+
+        Self::restore_snapshot_payloads(&records, &ctx.snapshot)?;
+        let replay = Self::replay_wal_into_records(&mut records, storage, ctx)?;
+        let segment_delta_slots = if ctx.slim_snapshot_loaded && !ctx.slim_dirty_slots.is_empty() {
+            ctx.slim_dirty_slots.clone()
+        } else {
+            replay.modified_record_slots.clone()
+        };
+
+        Ok(RecoveryState {
+            records,
+            replay,
+            segment_delta_slots,
+        })
+    }
+
+    fn restore_snapshot_payloads(records: &RecordStore, snapshot: &OmenSnapshot<'_>) -> Result<()> {
+        if let Some(ref mv_cfg) = snapshot.multivec_config
+            && let (Some(vec_bytes), Some(off_bytes)) =
+                (&snapshot.multivec_bytes, &snapshot.multivec_offsets)
+        {
+            match MultiVecStorage::from_bytes(vec_bytes, off_bytes, mv_cfg.token_dim) {
+                Ok(storage) => {
+                    for slot in 0..storage.len() as u32 {
+                        if records.is_live(slot)
+                            && let Some(tokens) = storage.get_tokens(slot)
+                        {
+                            records.restore_multi_payload(
+                                slot,
+                                Some(tokens.into_iter().map(<[f32]>::to_vec).collect()),
+                            )?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to restore MultiVecStorage payloads: {e}");
+                }
+            }
+        }
+
+        if let Some(bytes) = snapshot.sparse_index_bytes.as_deref() {
+            let (_index, payloads) =
+                crate::vector::sparse::SparseIndex::from_bytes_with_reconstructed_payloads(bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize SparseIndex: {e}"))?;
+            for (slot, sparse) in payloads {
+                if records.is_live(slot) {
+                    records.restore_sparse_payload(slot, Some(sparse))?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Replay WAL entries directly into RecordStore.
     fn replay_wal_into_records(
         records: &mut RecordStore,
         storage: &mut OmenFile,
         ctx: &RecoveryContext,
-    ) -> Result<ReplayedWalData> {
+    ) -> Result<WalReplayOutput> {
         let current_wal_epoch = storage.wal_truncation_epoch();
         let manifest_wal_cutoff = storage.manifest_wal_replay_cutoff();
 
@@ -989,9 +1007,7 @@ impl VectorStore {
             entries
         };
 
-        let mut wal_modified_slots: Vec<u32> = Vec::new();
-        let mut wal_edge_store: Option<EdgeStore> = None;
-        let mut wal_edge_deletes: Vec<(String, String, String)> = Vec::new();
+        let mut replay = WalReplayOutput::default();
 
         for entry in wal_entries {
             if !entry.verify() {
@@ -1031,7 +1047,7 @@ impl VectorStore {
                         };
 
                         let slot = records.upsert(record)?;
-                        wal_modified_slots.push(slot);
+                        replay.modified_record_slots.push(slot);
                     }
                     Err(_e) => {
                         // Failed to parse record
@@ -1055,7 +1071,9 @@ impl VectorStore {
                                     })
                                     .ok()
                             });
-                        wal_edge_store
+                        replay
+                            .edge_delta
+                            .upserts
                             .get_or_insert_with(EdgeStore::new)
                             .add_edge(Edge {
                                 from_id: data.from_id,
@@ -1068,16 +1086,19 @@ impl VectorStore {
                 }
                 WalEntryType::DeleteEdge => {
                     if let Ok(data) = parse_wal_delete_edge(&entry.data) {
-                        if let Some(ref mut es) = wal_edge_store {
+                        if let Some(ref mut es) = replay.edge_delta.upserts {
                             es.remove_edge(&data.from_id, &data.to_id, &data.edge_type);
                         }
-                        wal_edge_deletes.push((data.from_id, data.to_id, data.edge_type));
+                        replay
+                            .edge_delta
+                            .deletes
+                            .push((data.from_id, data.to_id, data.edge_type));
                     }
                 }
             }
         }
 
-        Ok((wal_modified_slots, wal_edge_store, wal_edge_deletes))
+        Ok(replay)
     }
 
     /// Initialize or rebuild search engine from RecordStore.
@@ -1193,13 +1214,47 @@ impl VectorStore {
         }
     }
 
-    /// Initialize auxiliary indexes (text, metadata, sparse, edge) from snapshot and WAL state.
+    fn apply_multivector_segment_delta(
+        engine: Option<&mut SegmentManager>,
+        records: &RecordStore,
+        delta_slots: &[u32],
+        snapshot: &OmenSnapshot<'_>,
+    ) -> Result<()> {
+        let Some(engine) = engine else {
+            return Ok(());
+        };
+        let Some(ref mv_cfg) = snapshot.multivec_config else {
+            return Ok(());
+        };
+
+        let config = crate::vector::muvera::MultiVectorConfig {
+            repetitions: mv_cfg.repetitions,
+            partition_bits: mv_cfg.partition_bits,
+            seed: mv_cfg.seed,
+            d_proj: mv_cfg.d_proj,
+            pool_factor: mv_cfg.pool_factor,
+            max_tokens: mv_cfg.max_tokens,
+        };
+        let muvera_encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
+        for &slot in delta_slots {
+            if records.is_live(slot)
+                && let Some(tokens) = records.get_multi(slot)
+            {
+                let token_refs: Vec<&[f32]> = tokens.iter().map(std::vec::Vec::as_slice).collect();
+                let fde = muvera_encoder.encode(&token_refs, crate::vector::muvera::AggMode::Sum);
+                engine.insert_with_slot(&fde, slot)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Initialize auxiliary indexes from canonical records plus WAL graph deltas.
     fn initialize_ancillary_indexes(
         path: &Path,
         records: &RecordStore,
         snapshot: &OmenSnapshot<'_>,
-        wal_edge_store: Option<EdgeStore>,
-        wal_edge_deletes: &[(String, String, String)],
+        edge_delta: EdgeReplayDelta,
         base_distance_metric: Metric,
         text_search_config: Option<&TextSearchConfig>,
     ) -> Result<AncillaryIndexes> {
@@ -1215,34 +1270,12 @@ impl VectorStore {
             None
         };
 
-        // Load or rebuild metadata index
-        let metadata_index = if let Some(ref bytes) = snapshot.metadata_index_bytes {
-            match MetadataIndex::from_bytes(bytes) {
-                Ok(index) => {
-                    tracing::debug!("Loaded MetadataIndex from disk");
-                    index
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to deserialize MetadataIndex, rebuilding: {}", e);
-                    let mut index = MetadataIndex::new();
-                    for (slot, record) in records.iter_live() {
-                        if let Some(ref meta) = record.metadata {
-                            index.index_json(slot, meta);
-                        }
-                    }
-                    index
-                }
+        let mut metadata_index = MetadataIndex::new();
+        for (slot, record) in records.iter_live() {
+            if let Some(ref meta) = record.metadata {
+                metadata_index.index_json(slot, meta);
             }
-        } else {
-            // No persisted index, build from scratch
-            let mut index = MetadataIndex::new();
-            for (slot, record) in records.iter_live() {
-                if let Some(ref meta) = record.metadata {
-                    index.index_json(slot, meta);
-                }
-            }
-            index
-        };
+        }
 
         // Reconstruct multi-vector state if config is present
         let (muvera_encoder, multivec_storage, distance_metric) =
@@ -1256,39 +1289,8 @@ impl VectorStore {
                     max_tokens: mv_cfg.max_tokens,
                 };
                 let encoder = MuveraEncoder::new(mv_cfg.token_dim, config)?;
-
-                // Rebuild MultiVecStorage from RecordStore (including WAL entries)
-                let token_dim = mv_cfg.token_dim;
-                let mut storage = match (&snapshot.multivec_bytes, &snapshot.multivec_offsets) {
-                    (Some(vec_bytes), Some(off_bytes)) => {
-                        match MultiVecStorage::from_bytes(vec_bytes, off_bytes, token_dim) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to restore MultiVecStorage, creating empty: {}",
-                                    e
-                                );
-                                MultiVecStorage::new(token_dim)
-                            }
-                        }
-                    }
-                    _ => MultiVecStorage::new(token_dim),
-                };
-
-                // CRITICAL: Add any tokens from RecordStore that are NOT in storage yet
-                // (This handles WAL recovery of multi-vector docs)
-                for (slot, record) in records.iter_live() {
-                    if let Some(ref tokens) = record.multi {
-                        // Ensure storage has enough slots to accommodate the record slot
-                        storage.reserve_slots(slot as usize + 1);
-
-                        let token_refs: Vec<&[f32]> =
-                            tokens.iter().map(std::vec::Vec::as_slice).collect();
-                        storage.update(slot, &token_refs).map_err(|e| {
-                            anyhow::anyhow!("Failed to update recovered tokens: {e}")
-                        })?;
-                    }
-                }
+                let storage =
+                    MultiVecStorage::from_slot_tokens(mv_cfg.token_dim, &records.iter_multi());
 
                 // FDEs use inner product
                 (Some(encoder), Some(storage), Metric::InnerProduct)
@@ -1296,37 +1298,16 @@ impl VectorStore {
                 (None, None, base_distance_metric)
             };
 
-        // Reconstruct sparse index if persisted
-        let sparse_index = snapshot
-            .sparse_index_bytes
-            .as_deref()
-            .map(|bytes| {
-                let (index, payloads) =
-                    crate::vector::sparse::SparseIndex::from_bytes_with_reconstructed_payloads(
-                        bytes,
-                    )
-                    .map_err(|e| anyhow::anyhow!("Failed to deserialize SparseIndex: {e}"))?;
-                for (slot, sparse) in payloads {
-                    records.update_sparse(slot, Some(sparse))?;
-                }
-                tracing::info!(vectors = index.len(), "Loaded SparseIndex from disk");
-                Ok::<_, anyhow::Error>(index)
-            })
-            .transpose()?
-            .or_else(|| {
-                let payloads = records.iter_sparse();
-                if payloads.is_empty() {
-                    None
-                } else {
-                    let mut index = SparseIndex::new();
-                    for (slot, sparse) in payloads {
-                        index.insert(slot, &sparse);
-                    }
-                    Some(index)
-                }
-            });
-
-        // Nothing to do for sparse_index
+        let sparse_payloads = records.iter_sparse();
+        let sparse_index = if sparse_payloads.is_empty() {
+            None
+        } else {
+            let mut index = SparseIndex::new();
+            for (slot, sparse) in sparse_payloads {
+                index.insert(slot, &sparse);
+            }
+            Some(index)
+        };
 
         // Reconstruct edge store: start from persisted snapshot, then apply WAL delta
         let edge_store = {
@@ -1340,15 +1321,15 @@ impl VectorStore {
                 .transpose()?;
 
             // Apply WAL deletions to the manifest base FIRST.
-            if !wal_edge_deletes.is_empty()
+            if !edge_delta.deletes.is_empty()
                 && let Some(ref mut store) = base
             {
-                for (from_id, to_id, edge_type) in wal_edge_deletes {
+                for (from_id, to_id, edge_type) in &edge_delta.deletes {
                     store.remove_edge(from_id, to_id, edge_type);
                 }
             }
 
-            if let Some(wal_es) = wal_edge_store {
+            if let Some(wal_es) = edge_delta.upserts {
                 // Merge WAL edges into base (or use WAL store directly if no base)
                 let merged = base.get_or_insert_with(EdgeStore::new);
                 for edge in wal_es.all_edges() {

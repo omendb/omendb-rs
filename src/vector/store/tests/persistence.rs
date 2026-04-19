@@ -810,6 +810,75 @@ fn test_sparse_wal_recovery_without_checkpoint() {
 }
 
 #[test]
+fn test_sparse_wal_recovery_overlays_persisted_sparse_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("sparse_wal_overlay_recovery");
+
+    {
+        let mut store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store.enable_sparse();
+        store
+            .set_sparse(
+                "persisted_sparse",
+                SparseVector::from_pairs(vec![(7, 1.0)]).unwrap(),
+                serde_json::json!({"phase": "persisted"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+
+        store
+            .set_sparse(
+                "wal_sparse",
+                SparseVector::from_pairs(vec![(42, 2.0)]).unwrap(),
+                serde_json::json!({"phase": "wal"}),
+            )
+            .unwrap();
+    }
+
+    let store = VectorStore::open(&db_path).unwrap();
+    let query = SparseVector::from_pairs(vec![(42, 1.0)]).unwrap();
+    let results = store.sparse_search(&query, 10, None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "wal_sparse");
+    assert_eq!(results[0].metadata["phase"], "wal");
+}
+
+#[test]
+fn test_metadata_wal_recovery_overlays_persisted_metadata_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("metadata_wal_overlay_recovery");
+
+    {
+        let store = VectorStore::open_with_dimensions(&db_path, 4).unwrap();
+        store
+            .set(
+                "persisted",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "persisted"}),
+            )
+            .unwrap();
+        store.flush().unwrap();
+
+        store
+            .set(
+                "wal",
+                Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+                serde_json::json!({"phase": "wal"}),
+            )
+            .unwrap();
+    }
+
+    let store = VectorStore::open(&db_path).unwrap();
+    let filter = MetadataFilter::Eq("phase".to_string(), serde_json::json!("wal"));
+    let results = store
+        .search(&Vector::new(vec![0.0, 1.0, 0.0, 0.0]), 10, Some(&filter))
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "wal");
+    assert_eq!(results[0].metadata["phase"], "wal");
+}
+
+#[test]
 fn test_vector_only_checkpoint_preserves_edges() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("edge_state_recovery");
