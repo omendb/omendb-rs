@@ -5,11 +5,9 @@
 use super::HNSWIndex;
 use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::types::{Candidate, Distance};
-use tracing::instrument;
 
 impl HNSWIndex {
     /// Insert a vector into the index.
-    #[instrument(skip(self, vector))]
     pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
         if vector.len() != self.storage.vectors.dim {
             return Err(HNSWError::DimensionMismatch {

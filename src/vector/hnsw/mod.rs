@@ -23,15 +23,11 @@ impl SegmentManager {
     }
 
     pub fn build_parallel_with_slots_from_refs(
-        _config: SegmentConfig,
+        config: SegmentConfig,
         vectors: Vec<&[f32]>,
         _slots: &[u32],
     ) -> Result<Self> {
-        let mut index = HNSWIndex::new(
-            vectors[0].len(),
-            HNSWParams::default(),
-            crate::vector::hnsw::types::Metric::L2,
-        );
+        let mut index = HNSWIndex::new(config.dim, config.params, config.metric);
         for v in vectors {
             index.insert(v)?;
         }

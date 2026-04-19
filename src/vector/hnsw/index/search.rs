@@ -7,7 +7,6 @@ use crate::vector::hnsw::error::{HNSWError, Result};
 use crate::vector::hnsw::storage::HNSWStorage;
 use crate::vector::hnsw::types::{Candidate, Distance, SearchResult};
 use crate::vector::hnsw::visited::{VisitedList, with_visited_list};
-use tracing::instrument;
 
 /// Context for distance computation during search.
 struct DistanceContext<'a, D: Distance> {
@@ -34,7 +33,6 @@ impl<'a, D: Distance> DistanceContext<'a, D> {
 
 impl HNSWIndex {
     /// Search for k nearest neighbors.
-    #[instrument(skip(self, query))]
     pub fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>> {
         if query.len() != self.dimensions() {
             return Err(HNSWError::DimensionMismatch {
@@ -73,7 +71,6 @@ impl HNSWIndex {
     }
 
     /// Search for k nearest neighbors with a filter.
-    #[instrument(skip(self, query, filter_fn))]
     pub fn search_with_filter(
         &self,
         query: &[f32],
