@@ -162,12 +162,11 @@ impl VectorDatabase {
             let entry = entry
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to read entry: {}", e)))?;
             // Collections are stored as .omen files
-            if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Some(collection_name) = name.strip_suffix(".omen") {
-                        names.push(collection_name.to_string());
-                    }
-                }
+            if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false)
+                && let Some(name) = entry.file_name().to_str()
+                && let Some(collection_name) = name.strip_suffix(".omen")
+            {
+                names.push(collection_name.to_string());
             }
         }
 

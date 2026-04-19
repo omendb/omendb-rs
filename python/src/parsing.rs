@@ -85,16 +85,16 @@ pub(crate) fn parse_batch_items_with_text(items: &Bound<'_, PyList>) -> PyResult
             })?;
 
         // Auto-store text in metadata for retrieval
-        if let Some(ref text_str) = text {
-            if let Some(obj) = metadata_json.as_object_mut() {
-                if obj.contains_key("text") {
-                    return Err(PyValueError::new_err(format!(
-                        "Item '{}': cannot have both 'text' field and 'metadata.text' - use one or the other",
-                        id
-                    )));
-                }
-                obj.insert("text".to_string(), serde_json::json!(text_str));
+        if let Some(ref text_str) = text
+            && let Some(obj) = metadata_json.as_object_mut()
+        {
+            if obj.contains_key("text") {
+                return Err(PyValueError::new_err(format!(
+                    "Item '{}': cannot have both 'text' field and 'metadata.text' - use one or the other",
+                    id
+                )));
             }
+            obj.insert("text".to_string(), serde_json::json!(text_str));
         }
 
         batch.push(ParsedItem {

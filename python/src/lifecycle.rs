@@ -127,7 +127,7 @@ impl VectorDatabase {
             let other_store = other_inner.store()?;
             inner
                 .store_mut()?
-                .merge_from_with_prefix(&other_store, key_prefix)
+                .merge_from_with_prefix(other_store, key_prefix)
                 .map_err(convert_error)
         } else {
             let other_inner = other.inner.read();
@@ -135,7 +135,7 @@ impl VectorDatabase {
             let mut inner = self.inner.write();
             inner
                 .store_mut()?
-                .merge_from_with_prefix(&other_store, key_prefix)
+                .merge_from_with_prefix(other_store, key_prefix)
                 .map_err(convert_error)
         }
     }

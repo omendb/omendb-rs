@@ -4,7 +4,7 @@ use crate::conversions::{
 };
 use crate::database::VectorDatabase;
 use crate::filters::parse_filter;
-use omendb_lib::vector::{SearchResult, Vector, VectorEngineView};
+use omendb_lib::vector::{SearchResult, Vector};
 use omendb_lib::{Rerank, SearchOptions};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -62,18 +62,18 @@ impl VectorDatabase {
         if k == 0 {
             return Err(PyValueError::new_err("k must be greater than 0"));
         }
-        if let Some(ef_val) = ef {
-            if ef_val < k {
-                return Err(PyValueError::new_err(format!(
-                    "ef ({}) must be >= k ({})",
-                    ef_val, k
-                )));
-            }
+        if let Some(ef_val) = ef
+            && ef_val < k
+        {
+            return Err(PyValueError::new_err(format!(
+                "ef ({}) must be >= k ({})",
+                ef_val, k
+            )));
         }
-        if let Some(max_dist) = max_distance {
-            if max_dist < 0.0 {
-                return Err(PyValueError::new_err("max_distance must be non-negative"));
-            }
+        if let Some(max_dist) = max_distance
+            && max_dist < 0.0
+        {
+            return Err(PyValueError::new_err("max_distance must be non-negative"));
         }
 
         let rust_filter = filter.map(parse_filter).transpose()?;
@@ -312,18 +312,18 @@ impl VectorDatabase {
         if k == 0 {
             return Err(PyValueError::new_err("k must be greater than 0"));
         }
-        if let Some(ef_val) = ef {
-            if ef_val < k {
-                return Err(PyValueError::new_err(format!(
-                    "ef ({}) must be >= k ({})",
-                    ef_val, k
-                )));
-            }
+        if let Some(ef_val) = ef
+            && ef_val < k
+        {
+            return Err(PyValueError::new_err(format!(
+                "ef ({}) must be >= k ({})",
+                ef_val, k
+            )));
         }
-        if let Some(max_dist) = max_distance {
-            if max_dist < 0.0 {
-                return Err(PyValueError::new_err("max_distance must be non-negative"));
-            }
+        if let Some(max_dist) = max_distance
+            && max_dist < 0.0
+        {
+            return Err(PyValueError::new_err("max_distance must be non-negative"));
         }
 
         let query_vecs: Vec<Vector> = extract_batch_queries(queries)?

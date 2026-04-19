@@ -143,18 +143,18 @@ impl VectorDatabase {
         if k == 0 {
             return Err(PyValueError::new_err("k must be greater than 0"));
         }
-        if let Some(a) = alpha {
-            if !(0.0..=1.0).contains(&a) {
-                return Err(PyValueError::new_err(format!(
-                    "alpha must be between 0.0 and 1.0, got {}",
-                    a
-                )));
-            }
+        if let Some(a) = alpha
+            && !(0.0..=1.0).contains(&a)
+        {
+            return Err(PyValueError::new_err(format!(
+                "alpha must be between 0.0 and 1.0, got {}",
+                a
+            )));
         }
-        if let Some(rrf) = rrf_k {
-            if rrf == 0 {
-                return Err(PyValueError::new_err("rrf_k must be greater than 0"));
-            }
+        if let Some(rrf) = rrf_k
+            && rrf == 0
+        {
+            return Err(PyValueError::new_err("rrf_k must be greater than 0"));
         }
 
         // Resolve query vector and text
@@ -165,7 +165,7 @@ impl VectorDatabase {
                         "String query requires an embedding function. Pass embedding_fn to open() or provide (vector, text) arguments.",
                     )
                 })?;
-            let embedded = call_embedding_fn(py, emb_fn, &[text.clone()])?;
+            let embedded = call_embedding_fn(py, emb_fn, std::slice::from_ref(&text))?;
             let vec = Vector::new(embedded.into_iter().next().unwrap());
             // Use the string as both vector query (embedded) and text query
             let text_query = query_text.map(String::from).unwrap_or(text);

@@ -468,6 +468,7 @@ def run_benchmark(
             "quantize_bits": quantize_bits,
             "dataset": dataset_name,
             "dataset_family": dataset_family,
+            "api": "python",
         },
         "build": {k: v for k, v in build.items() if k != "db"},
         "search": search,
@@ -597,6 +598,7 @@ def check_regressions(results: list, history_path: Path) -> bool:
             cfg.get("quantize_bits"),
             cfg.get("dataset_family"),
             cfg.get("dataset"),
+            cfg.get("api", "python"),
         )
         prev_by_config[key] = r
 
@@ -610,6 +612,7 @@ def check_regressions(results: list, history_path: Path) -> bool:
             cfg.get("quantize_bits"),
             cfg.get("dataset_family"),
             cfg.get("dataset"),
+            cfg.get("api", "python"),
         )
 
         prev_r = prev_by_config.get(key)

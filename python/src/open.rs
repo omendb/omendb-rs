@@ -20,7 +20,7 @@ use std::sync::Arc;
 fn extract_dict<'py>(value: &'py Bound<'py, PyAny>, label: &str) -> PyResult<Bound<'py, PyDict>> {
     value.cast::<PyDict>()
         .map_err(|_| PyValueError::new_err(format!("{label} must be a dict")))
-        .map(|dict| dict.clone())
+        .cloned()
 }
 
 fn parse_collection_schema(value: &Bound<'_, PyAny>) -> PyResult<CollectionSchema> {
@@ -351,25 +351,25 @@ pub(crate) fn open(
     oversample: Option<f32>,
 ) -> PyResult<VectorDatabase> {
     // Validate optional params
-    if let Some(m_val) = m {
-        if !(4..=64).contains(&m_val) {
-            return Err(PyValueError::new_err(format!(
-                "m must be between 4 and 64, got {}",
-                m_val
-            )));
-        }
+    if let Some(m_val) = m
+        && !(4..=64).contains(&m_val)
+    {
+        return Err(PyValueError::new_err(format!(
+            "m must be between 4 and 64, got {}",
+            m_val
+        )));
     }
 
     // Parse quantization mode
     let quant_mode = parse_quantization(quantization)?;
 
-    if let (Some(ef_val), Some(m_val)) = (ef_construction, m) {
-        if ef_val < m_val {
-            return Err(PyValueError::new_err(format!(
-                "ef_construction ({}) must be >= m ({})",
-                ef_val, m_val
-            )));
-        }
+    if let (Some(ef_val), Some(m_val)) = (ef_construction, m)
+        && ef_val < m_val
+    {
+        return Err(PyValueError::new_err(format!(
+            "ef_construction ({}) must be >= m ({})",
+            ef_val, m_val
+        )));
     }
 
     // Validate metric

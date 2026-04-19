@@ -354,7 +354,7 @@ impl VectorDatabase {
                             "No embedding function configured. Pass embedding_fn to open() or provide vectors directly.",
                         )
                     })?;
-                    let embedded = call_embedding_fn(py, emb_fn, &[doc.clone()])?;
+                    let embedded = call_embedding_fn(py, emb_fn, std::slice::from_ref(doc))?;
                     embedded.into_iter().next().unwrap()
                 } else {
                     vector.ok_or_else(|| {
@@ -834,7 +834,7 @@ impl VectorDatabase {
     ///     ...     print("has data")
     fn __bool__(&self) -> PyResult<bool> {
         let inner = self.inner.read();
-        Ok(inner.store()?.len() > 0)
+        Ok(!inner.store()?.is_empty())
     }
 
     /// Get database dimensions.
@@ -843,13 +843,13 @@ impl VectorDatabase {
     ///     int: Dimensionality of vectors in this database
     #[getter]
     fn dimensions(&self) -> PyResult<usize> {
-        Ok(self.live_dimensions()?)
+        self.live_dimensions()
     }
 
     /// Whether this is a multi-vector store (for ColBERT-style retrieval).
     #[getter]
     fn is_multi_vector(&self) -> PyResult<bool> {
-        Ok(self.live_is_multi_vector()?)
+        self.live_is_multi_vector()
     }
 
     /// The embedding function, if configured.

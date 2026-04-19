@@ -29,6 +29,20 @@ pub enum TokenizerPreset {
     Raw,
 }
 
+impl TokenizerPreset {
+    /// Parse a tokenizer preset from its public string name.
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "default" | "standard" | "natural" => Ok(Self::Default),
+            "code" => Ok(Self::Code),
+            "raw" | "exact" => Ok(Self::Raw),
+            other => {
+                anyhow::bail!("unknown tokenizer preset '{other}'; expected default, code, or raw")
+            }
+        }
+    }
+}
+
 /// Configuration for the text search engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextSearchConfig {
