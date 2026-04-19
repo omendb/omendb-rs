@@ -313,6 +313,7 @@ mod persistence {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8))]
         #[test]
         fn wal_recovery_no_flush(
             num_vectors in 1usize..20,

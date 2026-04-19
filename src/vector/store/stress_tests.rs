@@ -32,6 +32,7 @@ fn random_vector(seed: usize, dim: usize) -> Vec<f32> {
 
 /// Heavy concurrent writes - 8 writers, 1000 vectors each
 #[test]
+#[ignore = "stress lane; run with `cargo test --lib stress_concurrent_writers --release -- --ignored`"]
 fn stress_concurrent_writers() {
     let store = ThreadSafeVectorStore::new(128);
     let num_writers = 8;
@@ -147,6 +148,7 @@ fn stress_mixed_read_write() {
 
 /// Rapid delete/re-insert same IDs - tests tombstone handling
 #[test]
+#[ignore = "stress lane; run with `cargo test --lib stress_delete_reinsert_cycle --release -- --ignored`"]
 fn stress_delete_reinsert_cycle() {
     let store = ThreadSafeVectorStore::new(64);
     let num_ids = 100;
@@ -280,6 +282,7 @@ fn stress_large_vector_count() {
 
 /// High dimensions - 10K vectors, 768D (typical embedding size)
 #[test]
+#[ignore = "stress lane; run with `cargo test --lib stress_high_dimensions --release -- --ignored`"]
 fn stress_high_dimensions() {
     let store = ThreadSafeVectorStore::new(768);
     let num_vectors = 10_000;
@@ -571,6 +574,7 @@ fn stress_id_collision() {
 /// auto-checkpoint at the 10K WAL threshold. Drops without explicit flush.
 /// Verifies all data recovered on reopen.
 #[test]
+#[ignore = "stress lane; run with `cargo test --lib stress_crash_after_vector_only_checkpoint --release -- --ignored`"]
 fn stress_crash_after_vector_only_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vec_only_ckpt.omen");
@@ -632,6 +636,7 @@ fn stress_crash_after_vector_only_checkpoint() {
 /// past 10K and trigger an auto-checkpoint. Inserts 500 more (WAL-only) and
 /// crashes. On recovery all vectors (checkpointed + WAL-tail) must be present.
 #[test]
+#[ignore = "stress lane; run with `cargo test --lib stress_crash_checkpoint_plus_wal_tail --release -- --ignored`"]
 fn stress_crash_checkpoint_plus_wal_tail() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ckpt_wal_tail.omen");

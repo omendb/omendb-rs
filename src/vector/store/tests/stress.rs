@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::thread;
 
 #[test]
+#[ignore = "stress lane; run with `cargo test --lib test_write_contention_dense_inserts --release -- --ignored`"]
 fn test_write_contention_dense_inserts() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("contention_dense");
@@ -41,6 +42,7 @@ fn test_write_contention_dense_inserts() {
 }
 
 #[test]
+#[ignore = "stress lane; run with `cargo test --lib test_write_contention_mixed_ops --release -- --ignored`"]
 fn test_write_contention_mixed_ops() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("contention_mixed");
