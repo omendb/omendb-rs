@@ -12,8 +12,10 @@ Usage:
 
 import argparse
 import json
+import os
 import platform
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -24,7 +26,34 @@ import h5py
 import hnswlib
 import numpy as np
 
-import omendb
+PYTHON_ROOT = Path(__file__).resolve().parent.parent
+
+
+def rebuild_native_extension(argv: list[str]) -> bool:
+    """Rebuild the editable native extension before importing omendb."""
+    if (
+        "--help" in argv
+        or "-h" in argv
+        or "--no-rebuild-native" in argv
+        or os.environ.get("OMENDB_SKIP_NATIVE_REBUILD") == "1"
+    ):
+        return False
+
+    print("Rebuilding Python native extension before benchmark...", flush=True)
+    env = os.environ.copy()
+    env.setdefault("RUSTC_BOOTSTRAP", "1")
+    subprocess.run(
+        ["uv", "run", "maturin", "develop", "--release"],
+        cwd=PYTHON_ROOT,
+        env=env,
+        check=True,
+    )
+    return True
+
+
+NATIVE_EXTENSION_REBUILT = rebuild_native_extension(sys.argv[1:])
+
+import omendb  # noqa: E402
 
 HF_BASE = "https://huggingface.co/datasets/hhy3/ann-datasets/resolve/main"
 
@@ -110,6 +139,7 @@ def get_metadata() -> dict:
         "python": platform.python_version(),
         "platform": platform.platform(),
         "cpu": platform.processor() or platform.machine(),
+        "native_rebuilt": NATIVE_EXTENSION_REBUILT,
     }
 
 
@@ -274,6 +304,11 @@ def main():
         choices=list(DATASETS.keys()),
         default="sift-10k",
         help="Dataset to benchmark (default: sift-10k)",
+    )
+    parser.add_argument(
+        "--no-rebuild-native",
+        action="store_true",
+        help="Skip the default maturin rebuild before importing the native extension",
     )
     args = parser.parse_args()
 

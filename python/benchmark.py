@@ -21,6 +21,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime
@@ -28,9 +29,35 @@ from pathlib import Path
 
 import numpy as np
 
-import omendb
+PYTHON_ROOT = Path(__file__).resolve().parent
+SIFT_DATA_DIR = PYTHON_ROOT.parent / "benchmarks" / "data"
 
-SIFT_DATA_DIR = Path(__file__).parent.parent / "benchmarks" / "data"
+
+def rebuild_native_extension(argv: list[str]) -> bool:
+    """Rebuild the editable native extension before importing omendb."""
+    if (
+        "--help" in argv
+        or "-h" in argv
+        or "--no-rebuild-native" in argv
+        or os.environ.get("OMENDB_SKIP_NATIVE_REBUILD") == "1"
+    ):
+        return False
+
+    print("Rebuilding Python native extension before benchmark...", flush=True)
+    env = os.environ.copy()
+    env.setdefault("RUSTC_BOOTSTRAP", "1")
+    subprocess.run(
+        ["uv", "run", "maturin", "develop", "--release"],
+        cwd=PYTHON_ROOT,
+        env=env,
+        check=True,
+    )
+    return True
+
+
+NATIVE_EXTENSION_REBUILT = rebuild_native_extension(sys.argv[1:])
+
+import omendb  # noqa: E402
 
 # Map vector count → dataset filename. Add sift-100k.npz / sift-1m.npz when available.
 SIFT_DATASETS: dict[int, str] = {
@@ -82,6 +109,7 @@ def get_benchmark_metadata() -> dict:
         "python": platform.python_version(),
         "platform": platform.platform(),
         "cpu": platform.processor() or platform.machine(),
+        "native_rebuilt": NATIVE_EXTENSION_REBUILT,
     }
 
 
@@ -755,6 +783,11 @@ def main():
         type=int,
         default=1,
         help="Number of full benchmark runs (default: 1, --publish sets to 5)",
+    )
+    parser.add_argument(
+        "--no-rebuild-native",
+        action="store_true",
+        help="Skip the default maturin rebuild before importing the native extension",
     )
     args = parser.parse_args()
 
