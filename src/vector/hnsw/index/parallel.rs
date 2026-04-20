@@ -14,7 +14,7 @@ impl HNSWIndex {
         _use_quantization: bool,
         vectors: Vec<Vec<f32>>,
     ) -> Result<Self> {
-        let mut index = Self::new(dimensions, params, distance_fn);
+        let mut index = Self::with_capacity(dimensions, params, distance_fn, vectors.len());
         for vec in vectors {
             index.insert(&vec)?;
         }
@@ -28,7 +28,7 @@ impl HNSWIndex {
         _use_quantization: bool,
         vectors: Vec<&[f32]>,
     ) -> Result<Self> {
-        let mut index = Self::new(dimensions, params, distance_fn);
+        let mut index = Self::with_capacity(dimensions, params, distance_fn, vectors.len());
         for vec in vectors {
             index.insert(vec)?;
         }

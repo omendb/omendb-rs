@@ -78,18 +78,34 @@ impl HNSWIndex {
 
                 // Add reverse links
                 for &neighbor_id in &neighbors {
-                    let mut neighbor_neighbors = self.storage.neighbors.get_neighbors(neighbor_id, lc);
-                    neighbor_neighbors.push(node_id);
-
-                    if neighbor_neighbors.len() > m {
-                        let neighbor_vec = self.storage.vector(neighbor_id);
-                        let mut cand_vec = Vec::with_capacity(neighbor_neighbors.len());
-                        for &nn_id in &neighbor_neighbors {
-                            cand_vec.push(Candidate::new(nn_id, D::distance(neighbor_vec, self.storage.vector(nn_id))));
+                    self.storage.neighbors.update_neighbors(neighbor_id, lc, |neighbor_neighbors, len| {
+                        if !neighbor_neighbors[..*len].contains(&node_id)
+                            && *len < neighbor_neighbors.len()
+                        {
+                            neighbor_neighbors[*len] = node_id;
+                            *len += 1;
                         }
-                        neighbor_neighbors = Self::select_neighbors_heuristic(neighbor_vec, &cand_vec, m);
-                    }
-                    self.storage.neighbors.set_neighbors(neighbor_id, lc, &neighbor_neighbors);
+
+                        if *len <= m {
+                            return;
+                        }
+
+                        let neighbor_vec = self.storage.vector(neighbor_id);
+                        let mut cand_vec = Vec::with_capacity(*len);
+                        for &nn_id in &neighbor_neighbors[..*len] {
+                            cand_vec.push(Candidate::new(
+                                nn_id,
+                                D::distance(neighbor_vec, self.storage.vector(nn_id)),
+                            ));
+                        }
+                        let selected = Self::select_neighbors_heuristic(neighbor_vec, &cand_vec, m);
+                        for (dst, selected_id) in
+                            neighbor_neighbors.iter_mut().zip(selected.iter())
+                        {
+                            *dst = *selected_id;
+                        }
+                        *len = selected.len();
+                    });
                 }
                 ep = neighbors;
             }
@@ -109,8 +125,8 @@ impl HNSWIndex {
         use std::collections::BinaryHeap;
 
         crate::vector::hnsw::visited::with_visited_list(self.len() + 1, |visited| {
-            let mut frontier = BinaryHeap::new();
-            let mut candidates = BinaryHeap::new();
+            let mut frontier = BinaryHeap::with_capacity(ef);
+            let mut candidates = BinaryHeap::with_capacity(ef);
 
             for &ep in entry_points {
                 let dist = D::distance(query, self.storage.vector(ep));
@@ -156,7 +172,11 @@ impl HNSWIndex {
 
     fn select_neighbors_heuristic(_query: &[f32], candidates: &[Candidate], m: usize) -> Vec<u32> {
         let mut top_m = candidates.to_vec();
-        top_m.sort_by_key(|c| c.distance);
+        if top_m.len() > m {
+            top_m.select_nth_unstable_by_key(m, |c| c.distance);
+            top_m.truncate(m);
+        }
+        top_m.sort_unstable_by_key(|c| c.distance);
         top_m.iter().take(m).map(|c| c.node_id).collect()
     }
 

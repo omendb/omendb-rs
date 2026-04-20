@@ -133,6 +133,26 @@ impl HNSWIndex {
         }
     }
 
+    pub(super) fn with_capacity(
+        dim: usize,
+        params: HNSWParams,
+        distance_fn: Metric,
+        num_nodes: usize,
+    ) -> Self {
+        Self {
+            storage: HNSWStorage::with_capacity(
+                dim,
+                params.max_level as usize,
+                params.m,
+                num_nodes,
+            ),
+            entry_point: None,
+            rng_state: params.seed,
+            params,
+            distance_fn,
+        }
+    }
+
     pub fn builder() -> HNSWIndexBuilder {
         HNSWIndexBuilder::new()
     }

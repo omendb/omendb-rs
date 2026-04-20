@@ -190,6 +190,16 @@ impl HNSWStorage {
         }
     }
 
+    pub fn with_capacity(dim: usize, max_levels: usize, m: usize, num_nodes: usize) -> Self {
+        let mut neighbors = NeighborMatrix::new(max_levels, m);
+        neighbors.ensure_capacity(num_nodes);
+        Self {
+            vectors: VectorMatrix::with_capacity(num_nodes, dim),
+            neighbors,
+            max_levels: Vec::with_capacity(num_nodes),
+        }
+    }
+
     #[inline(always)]
     pub fn vector(&self, id: u32) -> &[f32] {
         self.vectors.get(id)
@@ -256,6 +266,40 @@ impl HNSWStorage {
 impl NeighborMatrix {
     pub fn get_neighbors(&self, node_id: u32, level: u8) -> Vec<u32> {
         self.with_neighbors(node_id, level, <[u32]>::to_vec)
+    }
+
+    pub fn update_neighbors<F>(&self, node_id: u32, level: u8, f: F)
+    where
+        F: FnOnce(&mut [u32; MAX_LEVEL_CAPACITY], &mut usize),
+    {
+        let node_idx = node_id as usize;
+        let level_idx = level as usize;
+
+        if node_idx >= self.locks.len() || level_idx > self.max_levels {
+            return;
+        }
+
+        let _lock = self.locks[node_idx].lock();
+        let slot_capacity = self.level_capacity(level);
+        debug_assert!(slot_capacity <= MAX_LEVEL_CAPACITY);
+        let base = node_idx * self.stride + self.level_offset(level);
+        let mut count = (self.data[base].load(Ordering::Acquire) as usize).min(slot_capacity - 1);
+
+        let mut buf = [0u32; MAX_LEVEL_CAPACITY];
+        for (dst, src) in buf
+            .iter_mut()
+            .zip((0..count).map(|i| self.data[base + 1 + i].load(Ordering::Relaxed)))
+        {
+            *dst = src;
+        }
+
+        f(&mut buf, &mut count);
+
+        let n = count.min(slot_capacity - 1);
+        for (i, neighbor) in buf.iter().take(n).enumerate() {
+            self.data[base + 1 + i].store(*neighbor, Ordering::Relaxed);
+        }
+        self.data[base].store(n as u32, Ordering::Release);
     }
 
     pub fn contains_neighbor(&self, node_id: u32, level: u8, neighbor: u32) -> bool {
