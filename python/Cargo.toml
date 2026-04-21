@@ -3,6 +3,7 @@ name = "omendb-python"
 version = "0.0.36"
 edition = "2024"
 readme = "../README.md"
+license-file = "../LICENSE"
 
 # Exclude from parent workspace
 [workspace]

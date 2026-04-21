@@ -86,7 +86,7 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return,
     };
 
-    let mut store = match VectorStoreOptions::default()
+    let store = match VectorStoreOptions::default()
         .dimensions(DIMENSIONS)
         .open(temp_dir.path())
     {
