@@ -348,6 +348,28 @@ fn test_neighbor_count_limits() {
 }
 
 #[test]
+fn test_neighbor_selection_uses_diversity_heuristic() {
+    use crate::vector::hnsw::types::{Candidate, L2};
+
+    let params = HNSWParams::default();
+    let mut index = HNSWIndex::new(2, params, Metric::L2);
+
+    let near = index.storage.add_node(&[1.0, 0.0], 0);
+    let redundant = index.storage.add_node(&[1.1, 0.0], 0);
+    let diverse = index.storage.add_node(&[0.0, 2.0], 0);
+
+    let candidates = [
+        Candidate::new(near, 1.0),
+        Candidate::new(redundant, 1.21),
+        Candidate::new(diverse, 4.0),
+    ];
+
+    let selected = index.select_neighbors_heuristic::<L2>(&candidates, 2);
+
+    assert_eq!(selected, vec![near, diverse]);
+}
+
+#[test]
 fn test_search_recall_simple() {
     let params = HNSWParams::default();
     let mut index = HNSWIndex::new(3, params, Metric::L2);

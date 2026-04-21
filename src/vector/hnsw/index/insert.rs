@@ -72,7 +72,7 @@ impl HNSWIndex {
             for lc in (0..=level).rev() {
                 let candidates = self.search_layer_for_insertion::<D>(vector, &ep, self.params.ef_construction, lc)?;
                 let m = if lc == 0 { self.params.m * 2 } else { self.params.m };
-                let neighbors = Self::select_neighbors_heuristic(vector, &candidates, m);
+                let neighbors = self.select_neighbors_heuristic::<D>(&candidates, m);
 
                 self.storage.neighbors.set_neighbors(node_id, lc, &neighbors);
 
@@ -98,7 +98,7 @@ impl HNSWIndex {
                                 D::distance(neighbor_vec, self.storage.vector(nn_id)),
                             ));
                         }
-                        let selected = Self::select_neighbors_heuristic(neighbor_vec, &cand_vec, m);
+                        let selected = self.select_neighbors_heuristic::<D>(&cand_vec, m);
                         for (dst, selected_id) in
                             neighbor_neighbors.iter_mut().zip(selected.iter())
                         {
@@ -170,14 +170,42 @@ impl HNSWIndex {
         })
     }
 
-    fn select_neighbors_heuristic(_query: &[f32], candidates: &[Candidate], m: usize) -> Vec<u32> {
-        let mut top_m = candidates.to_vec();
-        if top_m.len() > m {
-            top_m.select_nth_unstable_by_key(m, |c| c.distance);
-            top_m.truncate(m);
+    pub(super) fn select_neighbors_heuristic<D: Distance>(
+        &self,
+        candidates: &[Candidate],
+        m: usize,
+    ) -> Vec<u32> {
+        if candidates.len() <= m {
+            let mut nearest = candidates.to_vec();
+            nearest.sort_unstable_by_key(|c| c.distance);
+            nearest.dedup_by_key(|c| c.node_id);
+            return nearest.into_iter().map(|c| c.node_id).collect();
         }
-        top_m.sort_unstable_by_key(|c| c.distance);
-        top_m.iter().take(m).map(|c| c.node_id).collect()
+
+        let mut nearest = candidates.to_vec();
+        nearest.sort_unstable_by_key(|c| c.distance);
+
+        let mut selected = Vec::with_capacity(m);
+        for candidate in nearest {
+            if selected.contains(&candidate.node_id) {
+                continue;
+            }
+
+            let candidate_vec = self.storage.vector(candidate.node_id);
+            let closer_to_selected = selected.iter().any(|&selected_id| {
+                D::distance(candidate_vec, self.storage.vector(selected_id))
+                    < candidate.distance.into_inner()
+            });
+
+            if !closer_to_selected {
+                selected.push(candidate.node_id);
+                if selected.len() == m {
+                    break;
+                }
+            }
+        }
+
+        selected
     }
 
     pub fn random_level(&mut self) -> u8 {
