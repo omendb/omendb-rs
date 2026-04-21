@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.0.36
+
+### HNSW Performance
+
+- Restore high-recall HNSW neighbor diversity pruning for outgoing and reverse links
+- Restore one-logical-graph parallel bulk construction for large batches without disconnected shard fanout
+- Preallocate search heaps in the exact f32 HNSW hot path to reduce per-query allocation overhead
+- Keep the active flat-storage HNSW path focused by removing stale inactive HNSW segment/merge code
+
+### Recovery and Durability
+
+- Rework reopen recovery around canonical records plus explicit WAL replay output
+- Rebuild metadata, sparse, and multi-vector derived indexes from recovered records instead of patching derived state ad hoc
+- Add checkpoint-plus-WAL-tail regression coverage for dense, sparse, multi-vector, graph, and metadata recovery
+
+### Benchmarks and Validation
+
+- Add Rust SIFT publish benchmarking with build, single-search, batch-search, recall, filtered QPS, and latency metrics
+- Make Python benchmark scripts rebuild the native extension by default to avoid stale binary benchmark results
+- Add SIFT-100K hnswlib comparison support so local comparison runs exercise the parallel build path
+- Bound default Rust persistence proptests and move heavyweight stress checks to explicit ignored stress lanes
+
+### Maintenance
+
+- Fix the search profiling example for the current HNSW constructor
+- Tighten clippy-clean Rust release validation after the focused recovery and HNSW changes
+
 ## v0.0.35
 
 ### Schema-Driven Architecture
