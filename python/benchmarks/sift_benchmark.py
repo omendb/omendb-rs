@@ -59,11 +59,18 @@ HF_BASE = "https://huggingface.co/datasets/hhy3/ann-datasets/resolve/main"
 
 DATASETS = {
     "sift-10k": {
+        "format": "hdf5",
         "url": f"{HF_BASE}/siftsmall-128-euclidean.hdf5",
         "filename": "siftsmall-128-euclidean.hdf5",
         "size_mb": 5,
     },
+    "sift-100k": {
+        "format": "npz",
+        "filename": "sift-100k.npz",
+        "size_mb": 16,
+    },
     "sift-1m": {
+        "format": "hdf5",
         "url": f"{HF_BASE}/sift-128-euclidean.hdf5",
         "filename": "sift-128-euclidean.hdf5",
         "size_mb": 525,
@@ -71,6 +78,7 @@ DATASETS = {
 }
 
 DATA_DIR = Path(__file__).parent / "data"
+ROOT_DATA_DIR = PYTHON_ROOT.parent / "benchmarks" / "data"
 
 # Standard HNSW parameters
 M = 16
@@ -80,8 +88,17 @@ EF_SEARCH_VALUES = [50, 100, 200]
 
 
 def download_dataset(dataset_key: str) -> Path:
-    """Download dataset if not cached. Returns path to HDF5 file."""
+    """Download dataset if not cached. Returns path to dataset file."""
     info = DATASETS[dataset_key]
+    if info["format"] == "npz":
+        path = ROOT_DATA_DIR / info["filename"]
+        if path.exists():
+            print(f"Using cached dataset: {path}")
+            return path
+        raise FileNotFoundError(
+            f"{dataset_key} dataset not found at {path}; generate or download it before benchmarking"
+        )
+
     path = DATA_DIR / info["filename"]
 
     if path.exists():
@@ -101,6 +118,14 @@ def download_dataset(dataset_key: str) -> Path:
 def load_dataset(dataset_key: str):
     """Load dataset: base vectors, queries, ground truth."""
     path = download_dataset(dataset_key)
+
+    if DATASETS[dataset_key]["format"] == "npz":
+        data = np.load(path)
+        train = np.asarray(data["vectors"], dtype=np.float32)
+        test = np.asarray(data["queries"], dtype=np.float32)
+        neighbors = np.asarray(data["ground_truth"])
+        print(f"Loaded: {train.shape[0]:,} base, {test.shape[0]} queries, {train.shape[1]}D")
+        return train, test, neighbors
 
     with h5py.File(path, "r") as f:
         train = np.array(f["train"])
