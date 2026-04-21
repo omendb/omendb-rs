@@ -27,11 +27,13 @@ impl SegmentManager {
         vectors: Vec<&[f32]>,
         _slots: &[u32],
     ) -> Result<Self> {
-        let mut index =
-            HNSWIndex::with_capacity(config.dim, config.params, config.metric, vectors.len());
-        for v in vectors {
-            index.insert(v)?;
-        }
+        let index = HNSWIndex::build_parallel_from_refs(
+            config.dim,
+            config.params,
+            config.metric,
+            false,
+            vectors,
+        )?;
         Ok(Self { index })
     }
 

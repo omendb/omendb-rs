@@ -9,19 +9,7 @@ use crate::vector::hnsw::types::{Candidate, Distance};
 impl HNSWIndex {
     /// Insert a vector into the index.
     pub fn insert(&mut self, vector: &[f32]) -> Result<u32> {
-        if vector.len() != self.storage.vectors.dim {
-            return Err(HNSWError::DimensionMismatch {
-                expected: self.storage.vectors.dim,
-                actual: vector.len(),
-            });
-        }
-
-        // Validate vector for NaN and Infinity
-        for &val in vector {
-            if !val.is_finite() {
-                return Err(HNSWError::InvalidVector);
-            }
-        }
+        self.validate_vector(vector)?;
 
         let level = self.random_level();
         let node_id = self.storage.add_node(vector, level);
@@ -31,18 +19,47 @@ impl HNSWIndex {
             return Ok(node_id);
         }
 
-        self.insert_into_graph(node_id, vector, level)?;
+        let entry_point = self.entry_point.unwrap();
+        self.insert_into_graph_from_entry(
+            node_id,
+            vector,
+            level,
+            entry_point,
+            self.params.ef_construction,
+        )?;
 
-        let ep = self.entry_point.unwrap();
-        if level > self.storage.get_node_level(ep) {
+        if level > self.storage.get_node_level(entry_point) {
             self.entry_point = Some(node_id);
         }
 
         Ok(node_id)
     }
 
-    fn insert_into_graph(&mut self, node_id: u32, vector: &[f32], level: u8) -> Result<()> {
-        let entry_point = self.entry_point.unwrap();
+    pub(super) fn validate_vector(&self, vector: &[f32]) -> Result<()> {
+        if vector.len() != self.storage.vectors.dim {
+            return Err(HNSWError::DimensionMismatch {
+                expected: self.storage.vectors.dim,
+                actual: vector.len(),
+            });
+        }
+
+        for &val in vector {
+            if !val.is_finite() {
+                return Err(HNSWError::InvalidVector);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn insert_into_graph_from_entry(
+        &self,
+        node_id: u32,
+        vector: &[f32],
+        level: u8,
+        entry_point: u32,
+        ef_construction: usize,
+    ) -> Result<()> {
         let mut nearest_node = entry_point;
 
         dispatch_distance!(self.distance_fn, D => {
@@ -70,7 +87,7 @@ impl HNSWIndex {
             // 2. Insert at levels from node's level down to 0
             let mut ep = vec![nearest_node];
             for lc in (0..=level).rev() {
-                let candidates = self.search_layer_for_insertion::<D>(vector, &ep, self.params.ef_construction, lc)?;
+                let candidates = self.search_layer_for_insertion::<D>(vector, &ep, ef_construction, lc)?;
                 let m = if lc == 0 { self.params.m * 2 } else { self.params.m };
                 let neighbors = self.select_neighbors_heuristic::<D>(&candidates, m);
 

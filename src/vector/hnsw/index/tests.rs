@@ -370,6 +370,21 @@ fn test_neighbor_selection_uses_diversity_heuristic() {
 }
 
 #[test]
+fn test_parallel_build_from_refs_creates_searchable_graph() {
+    let params = HNSWParams::default();
+    let vectors: Vec<Vec<f32>> = (0..2048)
+        .map(|i| vec![i as f32, (i % 17) as f32, (i % 31) as f32])
+        .collect();
+    let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+
+    let index = HNSWIndex::build_parallel_from_refs(3, params, Metric::L2, false, refs).unwrap();
+
+    assert_eq!(index.len(), vectors.len());
+    let results = index.search(&vectors[777], 5, 64).unwrap();
+    assert_eq!(results[0].slot, 777);
+}
+
+#[test]
 fn test_search_recall_simple() {
     let params = HNSWParams::default();
     let mut index = HNSWIndex::new(3, params, Metric::L2);
