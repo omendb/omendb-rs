@@ -138,8 +138,8 @@ impl HNSWIndex {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
-        let mut frontier = BinaryHeap::new();
-        let mut candidates = BinaryHeap::new();
+        let mut frontier = BinaryHeap::with_capacity(ef);
+        let mut candidates = BinaryHeap::with_capacity(ef);
 
         frontier.push(Reverse(Candidate::new(nearest_node, nearest_dist)));
         candidates.push(Candidate::new(nearest_node, nearest_dist));
@@ -231,9 +231,9 @@ impl HNSWIndex {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
-        let mut frontier = BinaryHeap::new();
-        let mut candidates = BinaryHeap::new(); // Results (filter-passing)
-        let mut top_dists = BinaryHeap::new(); // Search threshold (all-pass)
+        let mut frontier = BinaryHeap::with_capacity(ef);
+        let mut candidates = BinaryHeap::with_capacity(k); // Results (filter-passing)
+        let mut top_dists = BinaryHeap::with_capacity(ef); // Search threshold (all-pass)
 
         let initial_dist = ctx.compute(nearest_node);
         frontier.push(Reverse(Candidate::new(nearest_node, initial_dist)));
