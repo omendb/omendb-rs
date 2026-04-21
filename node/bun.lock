@@ -9,11 +9,11 @@
         "vitest": "^2.1.0",
       },
       "optionalDependencies": {
-        "@omendb/omendb-darwin-arm64": "0.0.34",
-        "@omendb/omendb-darwin-x64": "0.0.34",
-        "@omendb/omendb-linux-arm64-gnu": "0.0.34",
-        "@omendb/omendb-linux-x64-gnu": "0.0.34",
-        "@omendb/omendb-win32-x64-msvc": "0.0.34",
+        "@omendb/omendb-darwin-arm64": "0.0.36",
+        "@omendb/omendb-darwin-x64": "0.0.36",
+        "@omendb/omendb-linux-arm64-gnu": "0.0.36",
+        "@omendb/omendb-linux-x64-gnu": "0.0.36",
+        "@omendb/omendb-win32-x64-msvc": "0.0.36",
       },
     },
   },
@@ -231,16 +231,6 @@
     "@octokit/rest": ["@octokit/rest@22.0.1", "", { "dependencies": { "@octokit/core": "^7.0.6", "@octokit/plugin-paginate-rest": "^14.0.0", "@octokit/plugin-request-log": "^6.0.0", "@octokit/plugin-rest-endpoint-methods": "^17.0.0" } }, "sha512-Jzbhzl3CEexhnivb1iQ0KJ7s5vvjMWcmRtq5aUsKmKDrRW6z3r84ngmiFKFvpZjpiU/9/S6ITPFRpn5s/3uQJw=="],
 
     "@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
-
-    "@omendb/omendb-darwin-arm64": ["@omendb/omendb-darwin-arm64@0.0.34", "", { "os": "darwin", "cpu": "arm64" }, "sha512-pJkFHzs8qAXBi/nrghAVZbN6PbUAnYo3SlklZTPgdRws3nVWX4r+21Onlu3sZGzRJP0UvEyDuk6WMPN6FHM0ZA=="],
-
-    "@omendb/omendb-darwin-x64": ["@omendb/omendb-darwin-x64@0.0.34", "", { "os": "darwin", "cpu": "x64" }, "sha512-BvMc5ibdsuh3e2QXKBMj+81TUOHf8/626QI8FA4jPmCSsnnT5YIp4qWunA2ESx9+UPM75l81e0OtgW9x7lmQrQ=="],
-
-    "@omendb/omendb-linux-arm64-gnu": ["@omendb/omendb-linux-arm64-gnu@0.0.34", "", { "os": "linux", "cpu": "arm64" }, "sha512-IefFGW2JuPR11COpFy22uHVLbu0LBwIp3Hoz8qqgXjrqj7fR8NSTSuNa9dHsEJ1qGLErM/uCvBDapjW/bC3zOg=="],
-
-    "@omendb/omendb-linux-x64-gnu": ["@omendb/omendb-linux-x64-gnu@0.0.34", "", { "os": "linux", "cpu": "x64" }, "sha512-WPyJCXZrX9l2vmdz/X96zUkFKFb3kVfpz5OspBo/+cKIILsHMC3DmYgaSXCYHnD4qsRqNDXOoOcybZ2bw4z6Yw=="],
-
-    "@omendb/omendb-win32-x64-msvc": ["@omendb/omendb-win32-x64-msvc@0.0.34", "", { "os": "win32", "cpu": "x64" }, "sha512-KTwuKdfO6f8oNJy5aL8BSLpzBZ52C02eTi9Uhm4buqlz3J8VEPI+bDZUPsfSk4YSRafAMinvbTioWByOuWDDlQ=="],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.53.3", "", { "os": "android", "cpu": "arm" }, "sha512-mRSi+4cBjrRLoaal2PnqH82Wqyb+d3HsPUN/W+WslCXsZsyHa9ZeQQX/pQsZaVIWDkPcpV6jJ+3KLbTbgnwv8w=="],
 
