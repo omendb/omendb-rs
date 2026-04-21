@@ -189,10 +189,9 @@ def run_persistence_test(datasets: dict) -> tuple[bool, float, float]:
         db_path = Path(tmpdir) / "test_db"
 
         # Build and save
-        db = omendb.open(
+        db = omendb.create(
             str(db_path),
-            dimensions=dim,
-            metric="l2",
+            {"metric": "l2", "dense": {"dim": dim}},
         )
 
         records = [
@@ -203,7 +202,7 @@ def run_persistence_test(datasets: dict) -> tuple[bool, float, float]:
         # Flush to disk and reopen
         db.flush()
         del db
-        db = omendb.open(str(db_path), dimensions=dim, metric="l2")
+        db = omendb.open(str(db_path))
 
         # Run queries
         start = time.perf_counter()
