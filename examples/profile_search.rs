@@ -28,7 +28,7 @@ fn main() {
     println!("Building index...");
     // Use default M=16 (industry standard)
     let params = HNSWParams::default();
-    let mut index = HNSWIndex::new(dim, params, Metric::L2, false).unwrap();
+    let mut index = HNSWIndex::new(dim, params, Metric::L2);
 
     let build_start = Instant::now();
     for vec in &vectors {
