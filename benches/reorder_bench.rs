@@ -12,9 +12,9 @@ use omendb::vector::hnsw::{HNSWIndex, HNSWParams};
 use rand::Rng;
 
 fn generate_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..n)
-        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>()).collect())
         .collect()
 }
 

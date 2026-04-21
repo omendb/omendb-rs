@@ -234,13 +234,13 @@ impl HNSWIndex {
         // Correct HNSW random level: while rand < p, level++
         // ml = 1 / ln(1/p). For p=1/M, ml = 1/ln(M).
         // Standard impl: level = -ln(uniform) * ml
-        let f: f32 = rng.r#gen();
+        let f: f32 = rng.random();
         if f > 0.0 {
             let l = (-f.ln() * self.params.ml) as u8;
             level = l.min(self.params.max_level);
         }
 
-        self.rng_state = rng.r#gen();
+        self.rng_state = rng.random();
         level
     }
 }

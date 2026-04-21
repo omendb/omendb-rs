@@ -13,7 +13,7 @@ use std::time::Instant;
 fn random_tokens(rng: &mut StdRng, num_tokens: usize, dim: usize) -> Vec<Vec<f32>> {
     (0..num_tokens)
         .map(|_| {
-            let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
+            let v: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() - 0.5).collect();
             normalize(&v)
         })
         .collect()
@@ -130,7 +130,7 @@ fn main() {
     let start = Instant::now();
     let docs: Vec<Vec<Vec<f32>>> = (0..num_docs)
         .map(|_| {
-            let num_tokens = rng.gen_range(tokens_per_doc / 2..tokens_per_doc * 3 / 2);
+            let num_tokens = rng.random_range(tokens_per_doc / 2..tokens_per_doc * 3 / 2);
             random_tokens(&mut rng, num_tokens, dim)
         })
         .collect();
@@ -160,17 +160,17 @@ fn main() {
     let queries: Vec<Vec<Vec<f32>>> = (0..num_queries)
         .map(|_| {
             // Pick a random document to base query on
-            let doc_idx = rng.gen_range(0..num_docs);
+            let doc_idx = rng.random_range(0..num_docs);
             let doc = &docs[doc_idx];
 
             // Sample query_tokens from the document (with some noise)
             let mut query_vecs = Vec::with_capacity(query_tokens);
             for _ in 0..query_tokens {
-                let token_idx = rng.gen_range(0..doc.len());
+                let token_idx = rng.random_range(0..doc.len());
                 // Add small noise to the token
                 let noisy: Vec<f32> = doc[token_idx]
                     .iter()
-                    .map(|&v| v + (rng.r#gen::<f32>() - 0.5) * 0.2)
+                    .map(|&v| v + (rng.random::<f32>() - 0.5) * 0.2)
                     .collect();
                 query_vecs.push(normalize(&noisy));
             }

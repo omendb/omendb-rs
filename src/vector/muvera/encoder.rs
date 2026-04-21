@@ -605,20 +605,20 @@ mod tests {
 
         for _ in 0..num_pairs {
             // Generate random query (5-15 tokens), L2-normalized
-            let num_q = rng.gen_range(5..=15);
+            let num_q = rng.random_range(5..=15);
             let query_vecs: Vec<Vec<f32>> = (0..num_q)
                 .map(|_| {
-                    let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
+                    let v: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() - 0.5).collect();
                     normalize(&v)
                 })
                 .collect();
             let query: Vec<&[f32]> = query_vecs.iter().map(std::vec::Vec::as_slice).collect();
 
             // Generate random document (20-50 tokens), L2-normalized
-            let num_d = rng.gen_range(20..=50);
+            let num_d = rng.random_range(20..=50);
             let doc_vecs: Vec<Vec<f32>> = (0..num_d)
                 .map(|_| {
-                    let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
+                    let v: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() - 0.5).collect();
                     normalize(&v)
                 })
                 .collect();
@@ -682,19 +682,19 @@ mod tests {
         let mut maxsim_scores = Vec::with_capacity(num_pairs);
 
         for _ in 0..num_pairs {
-            let num_q = rng.gen_range(5..=15);
+            let num_q = rng.random_range(5..=15);
             let query_vecs: Vec<Vec<f32>> = (0..num_q)
                 .map(|_| {
-                    let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
+                    let v: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() - 0.5).collect();
                     normalize(&v)
                 })
                 .collect();
             let query: Vec<&[f32]> = query_vecs.iter().map(std::vec::Vec::as_slice).collect();
 
-            let num_d = rng.gen_range(20..=50);
+            let num_d = rng.random_range(20..=50);
             let doc_vecs: Vec<Vec<f32>> = (0..num_d)
                 .map(|_| {
-                    let v: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect();
+                    let v: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() - 0.5).collect();
                     normalize(&v)
                 })
                 .collect();
@@ -839,16 +839,16 @@ mod tests {
 
         // Generate query with 10 tokens
         let query_vecs: Vec<Vec<f32>> = (0..10)
-            .map(|_| (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect())
+            .map(|_| (0..dim).map(|_| rng.random::<f32>() - 0.5).collect())
             .collect();
         let query: Vec<&[f32]> = query_vecs.iter().map(std::vec::Vec::as_slice).collect();
 
         // Generate 50 documents with varying token counts
         let docs: Vec<Vec<Vec<f32>>> = (0..50)
             .map(|_| {
-                let num_tokens = rng.gen_range(5..20);
+                let num_tokens = rng.random_range(5..20);
                 (0..num_tokens)
-                    .map(|_| (0..dim).map(|_| rng.r#gen::<f32>() - 0.5).collect())
+                    .map(|_| (0..dim).map(|_| rng.random::<f32>() - 0.5).collect())
                     .collect()
             })
             .collect();

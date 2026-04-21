@@ -11,9 +11,9 @@ use rand::Rng;
 use serde_json::json;
 
 fn generate_vectors(n: usize, dim: usize) -> Vec<Vector> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..n)
-        .map(|_| Vector::new((0..dim).map(|_| rng.r#gen::<f32>()).collect()))
+        .map(|_| Vector::new((0..dim).map(|_| rng.random::<f32>()).collect()))
         .collect()
 }
 

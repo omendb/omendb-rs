@@ -938,12 +938,12 @@ fn profile_persistence_comprehensive() {
     println!("\n=== Comprehensive Persistence Profile ({n} vectors) ===\n");
 
     // Generate random vectors
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let vectors: Vec<Vec<f32>> = (0..n)
-        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>()).collect())
         .collect();
     let query_vecs: Vec<Vec<f32>> = (0..queries)
-        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>()).collect())
         .collect();
 
     println!("=== 1. In-Memory Mode (no persistence) ===");
@@ -1137,12 +1137,12 @@ fn profile_persistence_impl(_n: usize) {
     println!("\n=== Persistence Profile ({n} vectors, {queries} queries) ===\n");
 
     // Generate random vectors
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let vectors: Vec<Vec<f32>> = (0..n)
-        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>()).collect())
         .collect();
     let query_vecs: Vec<Vec<f32>> = (0..queries)
-        .map(|_| (0..dim).map(|_| rng.r#gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>()).collect())
         .collect();
 
     // Create VectorStore with persistence
@@ -1210,12 +1210,12 @@ fn test_sq8_recall_regression() {
 
     // Generate vectors in typical SIFT-like range
     let vectors: Vec<Vec<f32>> = (0..n_vectors)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     // Generate queries
     let queries: Vec<Vec<f32>> = (0..n_queries)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     // Create SQ8 index and insert vectors
@@ -1285,12 +1285,12 @@ fn test_sq8_recall_10k() {
 
     // Generate vectors in typical SIFT-like range
     let vectors: Vec<Vec<f32>> = (0..n_vectors)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     // Generate queries
     let queries: Vec<Vec<f32>> = (0..n_queries)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     // Create SQ8 index and insert vectors
@@ -1355,7 +1355,7 @@ fn test_sq8_distance_consistency() {
 
     // Generate vectors
     let vectors: Vec<Vec<f32>> = (0..n_vectors)
-        .map(|_| (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(-1.0..1.0)).collect())
         .collect();
 
     // Create SQ8 index and insert vectors
@@ -1367,7 +1367,7 @@ fn test_sq8_distance_consistency() {
     }
 
     // Generate query
-    let query: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+    let query: Vec<f32> = (0..dim).map(|_| rng.random_range(-1.0..1.0)).collect();
 
     // Search and get results with distances
     let results = index.search(&query, 10, 100).unwrap();
@@ -1405,7 +1405,7 @@ fn test_sq8_distance_accuracy() {
 
     // Generate SIFT-like vectors (values in 0-255 range)
     let vectors: Vec<Vec<f32>> = (0..n_vectors)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     // Create SQ8 index
@@ -1417,7 +1417,7 @@ fn test_sq8_distance_accuracy() {
     }
 
     // Generate query
-    let query: Vec<f32> = (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect();
+    let query: Vec<f32> = (0..dim).map(|_| rng.random_range(0.0..255.0)).collect();
 
     // Search and compare against brute force
     let results = index.search(&query, 10, 100).unwrap();
@@ -1476,12 +1476,12 @@ fn test_optimize_maintains_recall() {
 
     // Generate vectors
     let vectors: Vec<Vec<f32>> = (0..n_vectors)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     // Generate queries
     let queries: Vec<Vec<f32>> = (0..n_queries)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     // Create index and insert vectors
@@ -1577,11 +1577,11 @@ fn test_optimize_maintains_recall_sq8() {
     let mut rng = StdRng::seed_from_u64(123);
 
     let vectors: Vec<Vec<f32>> = (0..n_vectors)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     let queries: Vec<Vec<f32>> = (0..n_queries)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect();
 
     // Create SQ8 index

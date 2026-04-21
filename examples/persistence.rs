@@ -32,6 +32,7 @@ fn main() -> anyhow::Result<()> {
                 sparse: None,
                 multi: None,
                 text: None,
+                graph: None,
             },
         )?;
 

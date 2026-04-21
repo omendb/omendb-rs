@@ -13,9 +13,9 @@ use omendb::distance::{dot_product, l2_distance_squared};
 use rand::Rng;
 
 fn generate_random_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..n)
-        .map(|_| (0..dim).map(|_| rng.gen_range(0.0..255.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(0.0..255.0)).collect())
         .collect()
 }
 

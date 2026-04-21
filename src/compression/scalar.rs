@@ -515,12 +515,12 @@ mod tests {
 
         let dim = 128;
         let n_vectors = 100;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Generate normalized vectors (common in embeddings)
         let vectors: Vec<Vec<f32>> = (0..n_vectors)
             .map(|_| {
-                let v: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+                let v: Vec<f32> = (0..dim).map(|_| rng.random_range(-1.0..1.0)).collect();
                 let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
                 v.iter().map(|x| x / norm).collect()
             })
