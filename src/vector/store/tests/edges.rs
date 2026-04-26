@@ -1146,6 +1146,39 @@ fn test_add_edges_wal_recovery() {
 }
 
 #[test]
+fn test_edge_auto_checkpoint_does_not_deadlock() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("edge_auto_checkpoint.omen");
+
+    {
+        let mut store = VectorStore::create(&path, dense_graph_schema(4)).unwrap();
+        store
+            .set("a", crate::Vector::new(vec![1.0; 4]), json!({}))
+            .unwrap();
+        store
+            .set("b", crate::Vector::new(vec![2.0; 4]), json!({}))
+            .unwrap();
+        store
+            .set("c", crate::Vector::new(vec![3.0; 4]), json!({}))
+            .unwrap();
+        store.flush().unwrap();
+
+        let previous_threshold = store.set_wal_auto_checkpoint_entries_for_tests(2);
+        store.add_edge("a", "b", "link", 0.5, None).unwrap();
+        store.add_edge("b", "c", "link", 0.7, None).unwrap();
+        assert_eq!(store.info().wal_entries, 0);
+        store.set_wal_auto_checkpoint_entries_for_tests(previous_threshold);
+    }
+
+    {
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(store.edge_count(), 2);
+        assert_eq!(store.get_edge("a", "b", "link").unwrap().weight, 0.5);
+        assert_eq!(store.get_edge("b", "c", "link").unwrap().weight, 0.7);
+    }
+}
+
+#[test]
 fn test_edge_types() {
     let mut store = EdgeStore::new();
     store.add_edge(Edge {

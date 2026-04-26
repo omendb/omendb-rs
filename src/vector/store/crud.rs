@@ -380,7 +380,7 @@ impl VectorStore {
             }
         }
 
-        if let Some(ref storage) = self.storage {
+        let needs_checkpoint = if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
             for (from_id, to_id, edge_type) in &edge_deletes {
                 storage.log_delete_edge(from_id, to_id, edge_type)?;
@@ -391,11 +391,19 @@ impl VectorStore {
             if !valid_ids.is_empty() {
                 storage.sync()?;
             }
-        }
+            storage.wal_len() >= self.wal_auto_checkpoint_entries()
+        } else {
+            false
+        };
         for id in &valid_ids {
             if let Some(ref mut text_index) = *self.text_index.write() {
                 let _ = text_index.delete_document(id);
             }
+        }
+
+        if needs_checkpoint {
+            drop(_lock);
+            self.checkpoint_wal()?;
         }
 
         Ok(valid_ids.len())

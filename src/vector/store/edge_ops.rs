@@ -93,12 +93,15 @@ impl VectorStore {
     ) -> Result<()> {
         self.ensure_edges_enabled()?;
 
-        if let Some(ref storage) = self.storage {
+        let needs_checkpoint = if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
             let meta_bytes = metadata.as_ref().map(serde_json::to_vec).transpose()?;
             storage.log_insert_edge(from_id, to_id, edge_type, weight, meta_bytes.as_deref())?;
             storage.sync()?;
-        }
+            storage.wal_len() >= self.wal_auto_checkpoint_entries()
+        } else {
+            false
+        };
 
         self.edge_store
             .write()
@@ -111,6 +114,10 @@ impl VectorStore {
                 weight,
                 metadata,
             });
+
+        if needs_checkpoint {
+            self.checkpoint_wal()?;
+        }
 
         Ok(())
     }
@@ -134,10 +141,17 @@ impl VectorStore {
             .expect("checked above")
             .remove_edge(from_id, to_id, edge_type);
 
-        if removed && let Some(ref storage) = self.storage {
+        let needs_checkpoint = if removed && let Some(ref storage) = self.storage {
             let mut storage = storage.write();
             storage.log_delete_edge(from_id, to_id, edge_type)?;
             storage.sync()?;
+            storage.wal_len() >= self.wal_auto_checkpoint_entries()
+        } else {
+            false
+        };
+
+        if needs_checkpoint {
+            self.checkpoint_wal()?;
         }
 
         Ok(removed)
@@ -286,7 +300,7 @@ impl VectorStore {
         }
         self.ensure_edges_enabled()?;
 
-        if let Some(ref storage) = self.storage {
+        let needs_checkpoint = if let Some(ref storage) = self.storage {
             let mut storage = storage.write();
             for edge in &edges {
                 let meta_bytes = edge.metadata.as_ref().map(serde_json::to_vec).transpose()?;
@@ -299,7 +313,10 @@ impl VectorStore {
                 )?;
             }
             storage.sync()?;
-        }
+            storage.wal_len() >= self.wal_auto_checkpoint_entries()
+        } else {
+            false
+        };
 
         let added = self
             .edge_store
@@ -307,6 +324,10 @@ impl VectorStore {
             .as_mut()
             .expect("ensure_edges_enabled() was just called")
             .add_edges(edges);
+
+        if needs_checkpoint {
+            self.checkpoint_wal()?;
+        }
 
         Ok(added)
     }

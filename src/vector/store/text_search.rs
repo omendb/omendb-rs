@@ -93,14 +93,15 @@ impl VectorStore {
         self.require_dense_schema("set_with_text")?;
         self.require_text_schema("set_with_text")?;
 
-        let mut text_index = self.text_index.write();
-        let Some(text_index) = text_index.as_mut() else {
-            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
-        };
+        {
+            let mut text_index = self.text_index.write();
+            let Some(text_index) = text_index.as_mut() else {
+                anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+            };
 
-        text_index.index_document(id, text)?;
-        text_index.commit()?;
-        let _ = text_index;
+            text_index.index_document(id, text)?;
+            text_index.commit()?;
+        }
         self.set(id, vector, metadata)
     }
 
@@ -115,22 +116,23 @@ impl VectorStore {
         self.require_dense_schema("set_batch_with_text")?;
         self.require_text_schema("set_batch_with_text")?;
 
-        let mut text_index = self.text_index.write();
-        let Some(text_index) = text_index.as_mut() else {
-            anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
-        };
-
         // Convert IDs and text to String up front
         let batch: Vec<(String, Vector, String, JsonValue)> = batch
             .into_iter()
             .map(|(id, vector, text, metadata)| (id.into(), vector, text.into(), metadata))
             .collect();
 
-        for (id, _, text, _) in &batch {
-            text_index.index_document(id, text)?;
+        {
+            let mut text_index = self.text_index.write();
+            let Some(text_index) = text_index.as_mut() else {
+                anyhow::bail!("Text search not enabled. Call enable_text_search() first.");
+            };
+
+            for (id, _, text, _) in &batch {
+                text_index.index_document(id, text)?;
+            }
+            text_index.commit()?;
         }
-        text_index.commit()?;
-        let _ = text_index;
 
         let vector_batch: Vec<(String, Vector, JsonValue)> = batch
             .into_iter()

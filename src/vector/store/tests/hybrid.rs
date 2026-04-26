@@ -1,6 +1,8 @@
 use super::super::*;
 use crate::catalog::{CollectionSchema, SparseIndexKind, SparseSchema, TextSchema};
 use crate::text::TokenizerPreset;
+use crate::vector::sparse::SparseVector;
+use tempfile::tempdir;
 
 #[test]
 fn test_enable_text_search() {
@@ -41,6 +43,40 @@ fn test_set_with_text() {
     let results = store.search_text("machine", 10).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].0, "doc1");
+}
+
+#[test]
+fn test_set_with_text_full_checkpoint_does_not_deadlock() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("set_with_text_full_checkpoint");
+
+    let mut store = VectorStore::new(4).persist(&path).unwrap();
+    store.enable_text_search().unwrap();
+    let previous_threshold = store.set_wal_auto_checkpoint_entries_for_tests(2);
+
+    store
+        .set_sparse(
+            "sparse-doc",
+            SparseVector::from_pairs(vec![(1, 1.0)]).unwrap(),
+            serde_json::json!({"kind": "sparse"}),
+        )
+        .unwrap();
+
+    store
+        .set_with_text(
+            "dense-text-doc",
+            Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+            "checkpoint guard ordering",
+            serde_json::json!({"kind": "dense-text"}),
+        )
+        .unwrap();
+
+    assert_eq!(store.len(), 2);
+    let results = store.search_text("checkpoint", 10).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "dense-text-doc");
+
+    store.set_wal_auto_checkpoint_entries_for_tests(previous_threshold);
 }
 
 #[test]

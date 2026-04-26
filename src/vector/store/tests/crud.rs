@@ -1,5 +1,6 @@
 use super::super::*;
 use super::{dense_schema, random_vector};
+use tempfile::tempdir;
 
 #[test]
 fn test_vector_store_insert() {
@@ -284,6 +285,45 @@ fn test_delete() {
 
     // get should return None for deleted
     assert!(store.get("doc1").is_none());
+}
+
+#[test]
+fn test_delete_batch_auto_checkpoint_does_not_deadlock() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("delete_batch_auto_checkpoint");
+
+    let store = VectorStore::new(4).persist(&path).unwrap();
+    store
+        .set_batch(vec![
+            (
+                "doc0",
+                Vector::new(vec![1.0, 0.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            ),
+            (
+                "doc1",
+                Vector::new(vec![0.0, 1.0, 0.0, 0.0]),
+                serde_json::json!({}),
+            ),
+            (
+                "doc2",
+                Vector::new(vec![0.0, 0.0, 1.0, 0.0]),
+                serde_json::json!({}),
+            ),
+        ])
+        .unwrap();
+    store.flush().unwrap();
+
+    let previous_threshold = store.set_wal_auto_checkpoint_entries_for_tests(2);
+    assert_eq!(store.delete_batch(&["doc0", "doc1"]).unwrap(), 2);
+    assert_eq!(store.info().wal_entries, 0);
+    store.set_wal_auto_checkpoint_entries_for_tests(previous_threshold);
+
+    drop(store);
+    let reopened = VectorStore::open(&path).unwrap();
+    assert!(!reopened.contains("doc0"));
+    assert!(!reopened.contains("doc1"));
+    assert!(reopened.contains("doc2"));
 }
 
 #[test]
