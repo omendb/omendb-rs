@@ -21,4 +21,4 @@ Example (LangChain):
 from omendb.omendb import VectorDatabase, create, open
 
 __all__ = ["open", "create", "VectorDatabase"]
-__version__ = "0.0.36"
+__version__ = "0.0.37"

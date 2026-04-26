@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.37
+
+### Recovery and Durability
+
+- Fix WAL auto-checkpoint self-deadlock for persistent multi-vector and text ingestion workloads
+- Release maintenance guards before checkpointing so auto-checkpoint can safely reacquire the store maintenance lock
+- Apply the same checkpoint hygiene to text writes, batch deletes, and graph edge WAL writers
+- Add low-threshold regression coverage for multi-vector text ingestion, text full checkpoints, batch deletes, and edge checkpoints
+
 ## v0.0.36
 
 ### HNSW Performance

@@ -1,6 +1,6 @@
 [package]
 name = "omendb-python"
-version = "0.0.36"
+version = "0.0.37"
 edition = "2024"
 readme = "../README.md"
 license = "Elastic-2.0"
