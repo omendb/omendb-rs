@@ -437,6 +437,7 @@ impl VectorStore {
             oversample: (3.0f32.to_bits()).into(),
             max_memory_bytes: None,
             auto_compact_threshold: (0.25f32.to_bits()).into(),
+            wal_auto_checkpoint_entries: (super::WAL_AUTO_CHECKPOINT_ENTRIES as usize).into(),
             write_lock: RwLock::new(()),
         })
     }

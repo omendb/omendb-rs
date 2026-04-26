@@ -234,13 +234,14 @@ impl VectorStore {
                     &wal_batch[i].1,
                 )?;
                 storage.sync()?;
-                needs_checkpoint |=
-                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize;
+                needs_checkpoint |= storage.wal_len() >= self.wal_auto_checkpoint_entries();
             }
         }
 
+        drop(multivec_storage_guard);
+
         if needs_checkpoint {
-            self.checkpoint_wal_locked()?;
+            self.checkpoint_wal()?;
         }
 
         Ok(())
@@ -629,7 +630,7 @@ impl VectorStore {
                 &metadata,
             )?;
             storage.sync()?;
-            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
+            storage.wal_len() >= self.wal_auto_checkpoint_entries()
         } else {
             false
         };
@@ -650,8 +651,10 @@ impl VectorStore {
             );
         }
 
+        drop(multivec_storage_guard);
+
         if needs_checkpoint {
-            self.checkpoint_wal_locked()?;
+            self.checkpoint_wal()?;
         }
 
         Ok(())

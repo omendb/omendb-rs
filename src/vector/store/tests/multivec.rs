@@ -1430,4 +1430,37 @@ mod persistence_tests {
         assert_eq!(text_results.len(), 1);
         assert_eq!(text_results[0].0, "doc1");
     }
+
+    #[test]
+    fn test_store_with_text_auto_checkpoint_does_not_deadlock() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("store_with_text_auto_checkpoint");
+
+        let mut store = VectorStore::multi_vector_with(4, small_dim_config())
+            .unwrap()
+            .persist(&path)
+            .unwrap();
+        let previous_threshold = store.set_wal_auto_checkpoint_entries_for_tests(8);
+        store.enable_text_search().unwrap();
+
+        for i in 0..20 {
+            let tokens = [
+                [1.0, 0.0, 0.0, i as f32 * 0.00001],
+                [0.0, 1.0, 0.0, i as f32 * 0.00001],
+            ];
+            let token_refs: Vec<&[f32]> = tokens.iter().map(|token| token.as_slice()).collect();
+
+            store
+                .store_with_text(
+                    &format!("doc{i}"),
+                    token_refs,
+                    &format!("document {i} checkpoint repro"),
+                    serde_json::json!({"i": i}),
+                )
+                .unwrap();
+        }
+
+        assert_eq!(store.len(), 20);
+        store.set_wal_auto_checkpoint_entries_for_tests(previous_threshold);
+    }
 }

@@ -195,6 +195,9 @@ pub struct VectorStore {
     /// Range: 0.0–1.0. Default: 0.25 (compact when >25% of slots are tombstones).
     auto_compact_threshold: AtomicU32,
 
+    /// WAL entry threshold for auto-checkpoint.
+    wal_auto_checkpoint_entries: AtomicUsize,
+
     /// Serializes slow maintenance operations (flush, compact, optimize)
     /// while allowing concurrent CRUD mutations (set, delete).
     pub(crate) write_lock: RwLock<()>,
@@ -245,8 +248,19 @@ impl VectorStore {
             oversample: AtomicU32::new(3.0f32.to_bits()),
             max_memory_bytes: None,
             auto_compact_threshold: AtomicU32::new(0.25f32.to_bits()),
+            wal_auto_checkpoint_entries: AtomicUsize::new(WAL_AUTO_CHECKPOINT_ENTRIES as usize),
             write_lock: RwLock::new(()),
         }
+    }
+
+    pub(crate) fn wal_auto_checkpoint_entries(&self) -> usize {
+        self.wal_auto_checkpoint_entries.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_wal_auto_checkpoint_entries_for_tests(&self, entries: usize) -> usize {
+        self.wal_auto_checkpoint_entries
+            .swap(entries, Ordering::Relaxed)
     }
 
     /// Create new vector store

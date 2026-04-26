@@ -92,16 +92,15 @@ impl VectorStore {
                     &metadata,
                 )?;
                 storage.sync()?;
-                Ok::<bool, anyhow::Error>(
-                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize,
-                )
+                Ok::<bool, anyhow::Error>(storage.wal_len() >= self.wal_auto_checkpoint_entries())
             } else {
                 Ok(false)
             }
         })?;
 
         if needs_checkpoint {
-            self.checkpoint_wal_locked()?;
+            drop(_lock);
+            self.checkpoint_wal()?;
         }
 
         self.check_memory_pressure();
@@ -234,9 +233,10 @@ impl VectorStore {
         let needs_checkpoint = self
             .storage
             .as_ref()
-            .is_some_and(|s| s.read().wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize);
+            .is_some_and(|s| s.read().wal_len() >= self.wal_auto_checkpoint_entries());
         if needs_checkpoint {
-            self.checkpoint_wal_locked()?;
+            drop(_lock);
+            self.checkpoint_wal()?;
         }
 
         Ok(result_indices)
@@ -285,7 +285,7 @@ impl VectorStore {
                         new_metadata,
                     )?;
                     storage.sync()?;
-                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
+                    storage.wal_len() >= self.wal_auto_checkpoint_entries()
                 } else {
                     false
                 }
@@ -298,7 +298,8 @@ impl VectorStore {
             self.records.update_metadata(slot, new_metadata.clone())?;
 
             if needs_checkpoint {
-                self.checkpoint_wal_locked()?;
+                drop(_lock);
+                self.checkpoint_wal()?;
             }
         }
 
@@ -338,7 +339,7 @@ impl VectorStore {
             }
             storage.log_delete(id)?;
             storage.sync()?;
-            storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize
+            storage.wal_len() >= self.wal_auto_checkpoint_entries()
         } else {
             false
         };
@@ -348,7 +349,8 @@ impl VectorStore {
         }
 
         if needs_checkpoint {
-            self.checkpoint_wal_locked()?;
+            drop(_lock);
+            self.checkpoint_wal()?;
         }
 
         Ok(())

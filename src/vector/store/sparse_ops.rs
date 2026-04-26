@@ -71,7 +71,7 @@ impl VectorStore {
                 storage.sync()?;
                 (
                     slot,
-                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize,
+                    storage.wal_len() >= self.wal_auto_checkpoint_entries(),
                 )
             } else {
                 (slot, false)
@@ -97,7 +97,7 @@ impl VectorStore {
                 storage.sync()?;
                 (
                     slot,
-                    storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize,
+                    storage.wal_len() >= self.wal_auto_checkpoint_entries(),
                 )
             } else {
                 (slot, false)
@@ -111,7 +111,7 @@ impl VectorStore {
             .insert(slot, &sparse);
 
         if needs_checkpoint {
-            self.checkpoint_wal_locked()?;
+            self.checkpoint_wal()?;
         }
         Ok(())
     }
@@ -153,9 +153,9 @@ impl VectorStore {
                 &metadata,
             )?;
             storage.sync()?;
-            if storage.wal_len() >= super::WAL_AUTO_CHECKPOINT_ENTRIES as usize {
+            if storage.wal_len() >= self.wal_auto_checkpoint_entries() {
                 drop(storage);
-                self.checkpoint_wal_locked()?;
+                self.checkpoint_wal()?;
             }
         }
 
