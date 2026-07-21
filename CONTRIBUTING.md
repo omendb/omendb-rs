@@ -18,8 +18,8 @@ By submitting a pull request, you agree to the following:
 
 ```bash
 # Clone
-git clone https://github.com/omendb/omendb.git
-cd omendb
+git clone https://github.com/omendb/omendb-rs.git
+cd omendb-rs
 
 # Install repo hooks
 ./scripts/install-hooks.sh
@@ -61,4 +61,4 @@ Open an issue with:
 
 ## License
 
-OmenDB is licensed under [Elastic License 2.0](LICENSE). By contributing, you agree that your contributions will be licensed under the project's CLA terms.
+OmenDB is licensed under [AGPL-3.0-only](LICENSE). By contributing, you agree that your contributions will be licensed under the project's CLA terms.

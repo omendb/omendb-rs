@@ -394,4 +394,4 @@ Older Apple M3 Max wrapper numbers were local reference points only and are no l
 
 ## License
 
-[Elastic License 2.0](../LICENSE)
+[AGPL-3.0-only](../LICENSE). Contact for commercial AGPL-free licensing.

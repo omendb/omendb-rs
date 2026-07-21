@@ -3,7 +3,8 @@ name = "omendb-python"
 version = "0.0.37"
 edition = "2024"
 readme = "../README.md"
-license = "Elastic-2.0"
+license = "AGPL-3.0-only"
+repository = "https://github.com/omendb/omendb-rs"
 
 # Exclude from parent workspace
 [workspace]

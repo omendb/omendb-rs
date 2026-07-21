@@ -6,7 +6,7 @@
   "types": "index.d.ts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/omendb/omendb"
+    "url": "https://github.com/omendb/omendb-rs"
   },
   "keywords": [
     "vector",
@@ -20,7 +20,7 @@
     "rust"
   ],
   "author": "Nick Jaru",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "AGPL-3.0-only",
   "engines": {
     "node": ">= 18"
   },

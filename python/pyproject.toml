@@ -8,12 +8,12 @@ dynamic = ["version"]
 readme = "README.md"
 description = "Fast embedded vector database with HNSW + ACORN-1 filtered search"
 authors = [{ name = "OmenDB Team" }]
-license = { text = "Elastic-2.0" }
+license = { text = "AGPL-3.0-only" }
 requires-python = ">=3.9"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -36,8 +36,8 @@ llamaindex = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/omendb/omendb"
-Repository = "https://github.com/omendb/omendb"
+Homepage = "https://github.com/omendb/omendb-rs"
+Repository = "https://github.com/omendb/omendb-rs"
 
 [tool.maturin]
 # Build options - mixed Rust/Python package

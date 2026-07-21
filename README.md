@@ -2,9 +2,20 @@
 
 [![PyPI](https://img.shields.io/pypi/v/omendb)](https://pypi.org/project/omendb/)
 [![npm](https://img.shields.io/npm/v/omendb)](https://www.npmjs.com/package/omendb)
-[![License](https://img.shields.io/badge/License-Elastic_2.0-blue.svg)](https://github.com/omendb/omendb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](https://github.com/omendb/omendb-rs/blob/main/LICENSE)
 
 Embedded vector database for Python and Node.js. No server, no setup, just install.
+
+> This repository contains OmenDB's Rust implementation and reference line.
+> The active Mojo engine is developed in [`omendb/omendb`](https://github.com/omendb/omendb).
+> The current source and future releases are AGPL-3.0-only. Previously
+> published versions retain the license under which they were released.
+
+The performance figures below are historical reference measurements for the Rust
+line, not results for the active Mojo preview.
+
+The performance figures below are historical reference measurements for the Rust
+line, not results for the active Mojo preview.
 
 - **7,600 QPS** single / **64,000 QPS** batch search, 99.8% recall (SIFT-100K)
 - **60K vec/s** insert throughput
@@ -430,4 +441,4 @@ response = index.as_query_engine().query("What is OmenDB?")
 
 ## License
 
-[Elastic License 2.0](LICENSE) -- Free to use, modify, and embed. The only restriction: you can't offer OmenDB as a managed service to third parties.
+[AGPL-3.0-only](LICENSE). Contact for commercial AGPL-free licensing.
